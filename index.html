@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Retention Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◆</span>
+      <span class="brand-name">Retention Console</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="themeToggle" class="theme-toggle" title="Switch appearance" aria-label="Switch appearance">
+        <span class="theme-icon sun">☀</span>
+        <span class="theme-icon moon">☾</span>
+      </button>
+      <button id="refreshBtn" class="icon-btn" title="Refresh active chats" aria-label="Refresh">⟳</button>
+    </div>
+  </header>
+
+  <div id="statusBar" class="status-bar">Preview mode — showing sample chats until connected to LiveChat.</div>
+
+  <main id="chatList" class="chat-list"></main>
+
+  <footer class="footer">
+    <a href="#" id="openSettings">Settings</a>
+    <span class="footer-divider">·</span>
+    <a href="#" id="dumpRaw">Console diagnostics</a>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,246 @@
+/* ---------- Tokens ---------- */
+:root[data-theme="dark"] {
+  --bg: #101216;
+  --surface: #191c22;
+  --surface-2: #21252d;
+  --border: #2a2e37;
+  --text: #eef0f3;
+  --text-muted: #8991a1;
+  --text-faint: #5c6472;
+  --gold: #e3b341;
+  --gold-soft: #3a331f;
+  --teal: #35d0a8;
+  --teal-soft: #163a32;
+  --blue: #4f8cf0;
+  --danger: #ea6363;
+  --shadow: 0 8px 24px rgba(0,0,0,0.28);
+}
+:root[data-theme="light"] {
+  --bg: #f3f4f7;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --border: #e2e4ea;
+  --text: #1b1e24;
+  --text-muted: #6b7280;
+  --text-faint: #9aa1ad;
+  --gold: #9a6b0f;
+  --gold-soft: #fbf0d9;
+  --teal: #128a6b;
+  --teal-soft: #e2f7f1;
+  --blue: #2f68c4;
+  --danger: #c93f3f;
+  --shadow: 0 8px 24px rgba(20,20,30,0.08);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+/* ---------- Topbar ---------- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.brand { display: flex; align-items: center; gap: 8px; }
+.brand-mark { color: var(--gold); font-size: 14px; }
+.brand-name {
+  font-family: "Space Grotesk", sans-serif; font-weight: 600;
+  font-size: 14px; letter-spacing: 0.01em;
+}
+.topbar-actions { display: flex; align-items: center; gap: 6px; }
+
+.icon-btn, .theme-toggle {
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 7px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 14px; transition: border-color 0.15s ease, color 0.15s ease;
+}
+.icon-btn:hover, .theme-toggle:hover { border-color: var(--gold); color: var(--gold); }
+
+.theme-toggle { position: relative; }
+.theme-icon { position: absolute; transition: opacity 0.15s ease, transform 0.15s ease; }
+:root[data-theme="dark"] .theme-icon.sun { opacity: 0; transform: scale(0.6) rotate(45deg); }
+:root[data-theme="dark"] .theme-icon.moon { opacity: 1; transform: scale(1) rotate(0); }
+:root[data-theme="light"] .theme-icon.sun { opacity: 1; transform: scale(1) rotate(0); }
+:root[data-theme="light"] .theme-icon.moon { opacity: 0; transform: scale(0.6) rotate(-45deg); }
+
+/* ---------- Status ---------- */
+.status-bar {
+  padding: 7px 16px; font-size: 11.5px; color: var(--text-muted);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.status-bar.error { color: var(--danger); }
+.status-bar.success { color: var(--teal); }
+
+/* ---------- Chat list ---------- */
+.chat-list { padding: 14px; display: flex; flex-direction: column; gap: 12px; max-width: 480px; margin: 0 auto; }
+
+.chat-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; box-shadow: var(--shadow);
+}
+.chat-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.chat-name { font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 14px; }
+.chat-link {
+  font-size: 11px; color: var(--text-faint); text-decoration: none; display: flex; align-items: center; gap: 3px;
+}
+.chat-link:hover { color: var(--blue); }
+
+.field-label {
+  display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-faint); margin: 12px 0 5px;
+}
+.hint { text-transform: none; letter-spacing: 0; color: var(--text-faint); font-size: 10.5px; }
+.auto-tag {
+  text-transform: none; letter-spacing: 0; font-size: 10px; font-weight: 600;
+  color: var(--teal); background: var(--teal-soft); padding: 1px 6px; border-radius: 20px;
+  margin-left: 5px; vertical-align: middle;
+}
+
+/* ---------- Inquiry tag picker ---------- */
+.tag-picker {
+  display: flex; flex-wrap: wrap; gap: 6px; max-height: 118px; overflow-y: auto;
+  padding: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+}
+.tag-check {
+  display: flex; align-items: center; gap: 5px; font-size: 11px; padding: 4px 9px;
+  border-radius: 20px; border: 1px solid var(--border); background: var(--surface); cursor: pointer;
+  color: var(--text-muted); user-select: none; transition: all 0.12s ease;
+}
+.tag-check input { display: none; }
+.tag-check.active { background: var(--blue); border-color: var(--blue); color: white; }
+.tag-check:hover:not(.active) { border-color: var(--blue); color: var(--blue); }
+.tag-check.disabled { opacity: 0.35; pointer-events: none; }
+
+/* ---------- Auto-derived fields ---------- */
+.auto-grid { display: flex; gap: 8px; margin-top: 10px; }
+.auto-field {
+  flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+}
+.auto-value { margin-top: 4px; font-size: 13px; font-weight: 600; }
+.input, select {
+  width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 7px 9px; font-size: 12.5px; font-family: inherit;
+}
+.input:focus, select:focus { outline: none; border-color: var(--blue); }
+
+.username-row { display: flex; gap: 6px; }
+.username-row .input { flex: 1; }
+.lookup-btn {
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 7px; padding: 0 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.lookup-btn:hover { border-color: var(--gold); color: var(--gold); }
+.lookup-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Player info (auto-filled on match) ---------- */
+.player-info {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px;
+  font-size: 11.5px; color: var(--text-muted);
+}
+.pi-label {
+  text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.05em;
+  color: var(--text-faint); margin-right: 3px;
+}
+
+/* ---------- Bonus ticket ---------- */
+.ticket-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ticket {
+  position: relative; background: var(--gold-soft);
+  border: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent);
+  border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 10px;
+  overflow: visible;
+}
+.ticket::before, .ticket::after {
+  content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--surface); top: 50%; transform: translateY(-50%);
+}
+.ticket::before { left: -7px; }
+.ticket::after { right: -7px; }
+.ticket-icon { font-size: 18px; color: var(--gold); }
+.ticket-body { flex: 1; min-width: 0; }
+.ticket-name { font-weight: 600; font-size: 12.5px; color: var(--text); }
+.ticket-meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.ticket-meta .amount { font-family: "IBM Plex Mono", monospace; color: var(--gold); font-weight: 600; }
+.claim-btn {
+  background: none; border: 1px solid var(--gold); color: var(--gold);
+  border-radius: 6px; padding: 5px 10px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+  white-space: nowrap;
+}
+.claim-btn:hover { background: var(--gold); color: var(--surface); }
+.claim-btn.claimed {
+  background: var(--teal); border-color: var(--teal); color: var(--surface); cursor: default;
+}
+.ticket.empty {
+  border-style: solid; color: var(--text-faint); font-size: 11.5px; justify-content: center;
+  background: var(--surface-2); margin-top: 10px;
+}
+.ticket.locked { opacity: 0.45; }
+.ticket-note {
+  font-size: 10.5px; color: var(--text-faint); margin-top: 6px; text-align: center;
+}
+
+/* Special tickets (Ang Pao / Redeem Code) — red, to visually separate
+   one-off/manual bonuses from the 5 regular recurring programs (gold). */
+.ticket.ticket-special {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.ticket.ticket-special .ticket-icon { color: var(--danger); }
+.ticket-meta.code { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; color: var(--danger); }
+.claim-btn.special { border-color: var(--danger); color: var(--danger); }
+.claim-btn.special:hover { background: var(--danger); color: white; }
+.claim-btn.special.claimed { background: var(--teal); border-color: var(--teal); color: var(--surface); }
+.ticket.empty::before, .ticket.empty::after { display: none; }
+
+/* ---------- Toggle row (Telegram) ---------- */
+.toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.toggle-row .field-label { margin: 0; }
+.switch { position: relative; width: 34px; height: 19px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute; inset: 0; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 20px; cursor: pointer; transition: background 0.15s ease;
+}
+.slider::before {
+  content: ""; position: absolute; width: 13px; height: 13px; left: 2px; top: 2px;
+  background: var(--text-faint); border-radius: 50%; transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch input:checked + .slider { background: var(--teal-soft); border-color: var(--teal); }
+.switch input:checked + .slider::before { transform: translateX(15px); background: var(--teal); }
+
+/* ---------- Submit ---------- */
+.submit-btn {
+  margin-top: 14px; width: 100%; background: var(--blue); color: white; border: none;
+  padding: 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  font-family: "Space Grotesk", sans-serif; letter-spacing: 0.01em;
+}
+.submit-btn:hover { filter: brightness(1.08); }
+.submit-btn:disabled { background: var(--surface-2); color: var(--text-faint); cursor: not-allowed; }
+
+.logged-badge {
+  display: flex; align-items: center; gap: 6px; margin-top: 14px;
+  background: var(--teal-soft); color: var(--teal); font-size: 12px; font-weight: 600;
+  padding: 8px 10px; border-radius: 8px;
+}
+
+/* ---------- Footer / empty ---------- */
+.footer {
+  padding: 12px 16px; border-top: 1px solid var(--border); text-align: center; background: var(--surface);
+}
+.footer a { color: var(--text-faint); font-size: 11.5px; text-decoration: none; }
+.footer a:hover { color: var(--blue); }
+.footer-divider { color: var(--text-faint); margin: 0 6px; font-size: 11px; }
+
+.empty-state {
+  padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 12.5px; max-width: 480px; margin: 0 auto;
+}
