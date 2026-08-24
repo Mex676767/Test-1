@@ -1,11 +1,6 @@
 const {
-  searchRecords,
-  createRecord,
-  getRecord,
-  toDisplay,
-  TABLE_CUSTOMER_APPROACHING,
-  TABLE_ANG_PAO,
-  TABLE_REDEEM_CODE,
+  searchRecords, createRecord, getRecord, toDisplay,
+  TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE,
 } = require("./lib/lark");
 
 const F = {
@@ -29,31 +24,27 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 exports.handler = async function (event) {
   try {
-    const { username, brand, link, telegram } = JSON.parse(event.body || "{}");
+    const { username, brand, picName } = JSON.parse(event.body || "{}");
     if (!username || !brand) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "username and brand are required" }) };
     }
     const uname = username.trim();
     const brandVal = brand.trim();
 
-    // ALWAYS create a fresh record for every new lookup — each Look Up is a
-    // new case interaction, not a read of history. The bonus lookup columns
-    // (Risk Player, Grace Period, etc.) only populate once a row exists, so
-    // creating first is also what makes the bonus data appear.
+    // Always create a fresh record — each Look Up is a new case.
+    // Include PIC so the agent is logged immediately.
     const created = await createRecord(TABLE_CUSTOMER_APPROACHING, {
       [F.username]: uname,
       [F.brand]: brandVal,
+      [F.pic]: picName || "",
     });
 
     const caRecordId = created.record_id;
-
-    // Wait for Lark to resolve any formula/lookup columns before reading back.
     await wait(1500);
     const freshRecord = await getRecord(TABLE_CUSTOMER_APPROACHING, caRecordId);
     const f = freshRecord.fields;
 
-    // Username-only search so we can warn CS if this username exists under
-    // other brands — helps catch "wrong chat" mistakes.
+    // Warn CS if username exists under other brands
     const caUsernameOnly = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
       { field_name: F.username, operator: "is", value: [uname] },
     ]);
@@ -63,17 +54,25 @@ exports.handler = async function (event) {
         .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
     )];
 
-    const angPaoMatches = await searchRecords(TABLE_ANG_PAO, [
-      { field_name: F.usernameUid, operator: "is", value: [uname] },
-      { field_name: F.brand, operator: "is", value: [brandVal] },
-    ]);
-    const angPaoRow = angPaoMatches[angPaoMatches.length - 1] || null;
+    // Ang Pao + Redeem Code are separate tables — search them non-fatally
+    // since their field names may differ or the tables may be empty/restructured.
+    let angPaoRow = null;
+    try {
+      const angPaoMatches = await searchRecords(TABLE_ANG_PAO, [
+        { field_name: F.usernameUid, operator: "is", value: [uname] },
+        { field_name: F.brand, operator: "is", value: [brandVal] },
+      ]);
+      angPaoRow = angPaoMatches[angPaoMatches.length - 1] || null;
+    } catch (_) { /* non-fatal */ }
 
-    const redeemMatches = await searchRecords(TABLE_REDEEM_CODE, [
-      { field_name: F.usernameUid, operator: "is", value: [uname] },
-      { field_name: F.brand, operator: "is", value: [brandVal] },
-    ]);
-    const redeemRow = redeemMatches[redeemMatches.length - 1] || null;
+    let redeemRow = null;
+    try {
+      const redeemMatches = await searchRecords(TABLE_REDEEM_CODE, [
+        { field_name: F.usernameUid, operator: "is", value: [uname] },
+        { field_name: F.brand, operator: "is", value: [brandVal] },
+      ]);
+      redeemRow = redeemMatches[redeemMatches.length - 1] || null;
+    } catch (_) { /* non-fatal */ }
 
     return {
       statusCode: 200,
