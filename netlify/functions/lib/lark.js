@@ -91,11 +91,28 @@ async function createRecord(tableId, fields) {
   return data.data.record;
 }
 
+// Lark field values aren't always plain strings — Lookup, Link, and Person
+// field types return objects or arrays (e.g. [{text: "..."}], [{name: "..."}]).
+// This flattens any of those shapes down to a plain display string so the
+// frontend never has to guess the field type.
+function toDisplay(v) {
+  if (v === null || v === undefined) return "";
+  if (Array.isArray(v)) return v.map(toDisplay).filter(Boolean).join(", ");
+  if (typeof v === "object") {
+    if ("text" in v) return String(v.text);
+    if ("name" in v) return String(v.name);
+    if ("link" in v) return String(v.link);
+    return JSON.stringify(v);
+  }
+  return String(v);
+}
+
 module.exports = {
   getTenantToken,
   searchRecords,
   updateRecord,
   createRecord,
+  toDisplay,
   TABLE_CUSTOMER_APPROACHING,
   TABLE_ANG_PAO,
   TABLE_REDEEM_CODE,
