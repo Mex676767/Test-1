@@ -1,21 +1,22 @@
 const { updateRecord, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
 
-// Called on "Record to Lark Base". By this point Look Up has already created
-// the row (that's what makes the bonus lookup columns populate) — so this
-// UPDATES that same record with the fields CS filled in manually, rather
-// than inserting a second row.
+// Called on "Record to Lark Base". Look Up already created the row, so this
+// UPDATES it with the fields CS filled in manually.
+// PIC = the agent's selected name from settings (passed as picName).
+// Hardcoded to "mexha" for testing — once the settings panel is live,
+// picName will come from the frontend and replace this.
 exports.handler = async function (event) {
   try {
     const body = JSON.parse(event.body || "{}");
-    const { recordId, agentName, inquiry, status, link, telegram, releasedAmount, claimSecret } = body;
+    const { recordId, picName, inquiry, status, link, telegram, releasedAmount, claimSecret } = body;
 
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
     }
 
     const fields = {
-      "PIC": agentName || "",
-      "Inquiry": inquiry, // multi-select field expects an array
+      "PIC": picName || "mexha", // temp hardcode for testing — settings panel will supply this
+      "Inquiry": inquiry,
       "Status": status,
       "Link": link || "",
       "Telegram": !!telegram,

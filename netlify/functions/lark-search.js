@@ -1,14 +1,13 @@
 const {
   searchRecords,
   createRecord,
+  getRecord,
   toDisplay,
   TABLE_CUSTOMER_APPROACHING,
   TABLE_ANG_PAO,
   TABLE_REDEEM_CODE,
 } = require("./lib/lark");
 
-// Field names — must match Lark exactly (case-sensitive). Customer Approaching
-// uses "Username"; Ang Pao / Redeem Code use "Username/UID" instead.
 const F = {
   username: "Username",
   usernameUid: "Username/UID",
@@ -37,32 +36,26 @@ exports.handler = async function (event) {
     const uname = username.trim();
     const brandVal = brand.trim();
 
-    let caMatches = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
-      { field_name: F.username, operator: "is", value: [uname] },
-      { field_name: F.brand, operator: "is", value: [brandVal] },
-    ]);
+    // ALWAYS create a fresh record for every new lookup — each Look Up is a
+    // new case interaction, not a read of history. The bonus lookup columns
+    // (Risk Player, Grace Period, etc.) only populate once a row exists, so
+    // creating first is also what makes the bonus data appear.
+    const created = await createRecord(TABLE_CUSTOMER_APPROACHING, {
+      [F.username]: uname,
+      [F.brand]: brandVal,
+      "Link": link || "",
+      "Telegram": !!telegram,
+    });
 
-    // The bonus lookup columns (Risk Player, Grace Period, etc.) only
-    // populate once a row exists for this Username+Brand — so if there's no
-    // row yet, create the minimal "log" entry first, then re-read it.
-    let justCreated = false;
-    if (!caMatches.length) {
-      await createRecord(TABLE_CUSTOMER_APPROACHING, {
-        [F.username]: uname,
-        [F.brand]: brandVal,
-        "Link": link || "",
-        "Telegram": !!telegram,
-      });
-      justCreated = true;
-      await wait(1200); // give Lark a moment to resolve any linked lookups
-      caMatches = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
-        { field_name: F.username, operator: "is", value: [uname] },
-        { field_name: F.brand, operator: "is", value: [brandVal] },
-      ]);
-    }
+    const caRecordId = created.record_id;
 
-    // Username-only search (no brand filter) so we can tell CS "found under a
-    // different brand" instead of a flat "not found" when they're in the wrong chat.
+    // Wait for Lark to resolve any formula/lookup columns before reading back.
+    await wait(1500);
+    const freshRecord = await getRecord(TABLE_CUSTOMER_APPROACHING, caRecordId);
+    const f = freshRecord.fields;
+
+    // Username-only search so we can warn CS if this username exists under
+    // other brands — helps catch "wrong chat" mistakes.
     const caUsernameOnly = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
       { field_name: F.username, operator: "is", value: [uname] },
     ]);
@@ -71,14 +64,6 @@ exports.handler = async function (event) {
         .map((r) => toDisplay(r.fields[F.brand]))
         .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
     )];
-
-    if (!caMatches.length) {
-      // Shouldn't normally happen since we just created it, but guard anyway.
-      return { statusCode: 200, body: JSON.stringify({ ok: true, row: null, otherBrands }) };
-    }
-
-    const caRow = caMatches[caMatches.length - 1];
-    const f = caRow.fields;
 
     const angPaoMatches = await searchRecords(TABLE_ANG_PAO, [
       { field_name: F.usernameUid, operator: "is", value: [uname] },
@@ -97,8 +82,8 @@ exports.handler = async function (event) {
       body: JSON.stringify({
         ok: true,
         otherBrands,
-        justCreated,
-        caRecordId: caRow.record_id, // needed later so "Record to Lark Base" UPDATES this same row
+        justCreated: true,
+        caRecordId,
         row: {
           pic: toDisplay(f[F.pic]),
           tier: toDisplay(f[F.tier]),
