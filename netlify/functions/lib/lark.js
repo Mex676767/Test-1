@@ -92,13 +92,14 @@ async function createRecord(tableId, fields) {
 }
 
 // Lark field values aren't always plain strings — Lookup, Link, and Person
-// field types return objects or arrays (e.g. [{text: "..."}], [{name: "..."}]).
-// This flattens any of those shapes down to a plain display string so the
-// frontend never has to guess the field type.
+// field types return objects or arrays, and Formula/Lookup results are
+// double-wrapped: {type: 1, value: [{type: "text", text: "..."}]}. This
+// recursively unwraps any of those shapes down to a plain display string.
 function toDisplay(v) {
   if (v === null || v === undefined) return "";
   if (Array.isArray(v)) return v.map(toDisplay).filter(Boolean).join(", ");
   if (typeof v === "object") {
+    if ("value" in v) return toDisplay(v.value); // Formula/Lookup wrapper
     if ("text" in v) return String(v.text);
     if ("name" in v) return String(v.name);
     if ("link" in v) return String(v.link);
