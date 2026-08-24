@@ -114,11 +114,11 @@ function isClaimableValue(v) {
 // BOTH Username AND Brand, never username alone. This now also LOGS the
 // case (creates the Customer Approaching row) if one doesn't exist yet —
 // that's what makes Lark's bonus lookup columns actually populate.
-async function fetchBonusRow(username, brand, link, telegram) {
+async function fetchBonusRow(username, brand, link, telegram, picName) {
   const res = await fetch("/.netlify/functions/lark-search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, brand, link, telegram }),
+    body: JSON.stringify({ username, brand, link, telegram, picName }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Lookup failed");
@@ -130,12 +130,15 @@ const SAMPLE_CHATS = [
   { chatId: "c2", customerName: "MAX39 Priority", link: "https://my.livechatinc.com/chats/c2", isTelegram: true, groupName: "MAX39 Priority Support" },
 ];
 
-// Every LiveChat group is named "<BRAND> Priority Support" — strip only the
-// "Priority Support" suffix, keep the full brand name including numbers.
-// "VS96 Priority Support" → "VS96", "MAX39 Priority Support" → "MAX39".
+// Every LiveChat group is named "<BRAND><DIGITS> Priority Support".
+// Lark stores just the letters — "VS96 Priority Support" → "VS",
+// "MAX39 Priority Support" → "MAX", "PP96 Priority Support" → "PP".
 function deriveBrandFromGroup(groupName) {
   if (!groupName) return "";
-  return groupName.replace(/\s*priority support\s*/i, "").trim();
+  return groupName
+    .replace(/\s*priority support\s*/i, "")
+    .replace(/\d+/g, "")
+    .trim();
 }
 
 // NOTE: this list is large and clearly still growing on the Lark side (the
@@ -373,7 +376,7 @@ chatListEl.addEventListener("click", async (e) => {
     btn.disabled = true;
     btn.textContent = "…";
     try {
-      const { row, otherBrands, caRecordId, justCreated } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow);
+      const { row, otherBrands, caRecordId, justCreated } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow, selectedAgent);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
       s.caRecordId = caRecordId;
