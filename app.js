@@ -220,6 +220,7 @@ function renderChats(chats) {
       state[chat.chatId] = {
         username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
         brand: deriveBrandFromGroup(chat.groupName),
+        agentName: "",
         inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
         releasedBonusAmount: "", claimSecret: false,
       };
@@ -248,6 +249,9 @@ function renderChats(chats) {
 
       <label class="field-label">Brand <span class="auto-tag">auto-detected</span></label>
       <input type="text" class="input brand-input" value="${s.brand}" placeholder="Brand" />
+
+      <label class="field-label">Your Name <span class="hint">(CS agent handling this case)</span></label>
+      <input type="text" class="input agent-input" value="${s.agentName}" placeholder="e.g. 96 Edwin" />
 
       <label class="field-label">Inquiry <span class="hint">(select all that apply)</span></label>
       <div class="tag-picker">${renderInquiryPicker(chat.chatId)}</div>
@@ -367,15 +371,18 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "submit") {
     const brand = card.querySelector(".brand-input").value.trim();
     const status = card.querySelector(".status-select").value;
+    const agentName = card.querySelector(".agent-input").value.trim();
     if (!brand || !s.inquiry.length || !status) {
       setStatus("Pick a brand, at least one inquiry, and a status before recording.", "error");
       return;
     }
+    if (!agentName) { setStatus("Enter your agent name before recording.", "error"); return; }
     if (!s.username) { setStatus("Enter the username before recording.", "error"); return; }
     if (!s.caRecordId) { setStatus("Look up the username first before recording.", "error"); return; }
 
     s.brand = brand;
     s.status = status;
+    s.agentName = agentName;
 
     const chatDef = SAMPLE_CHATS.find((c) => c.chatId === chatId);
 
@@ -387,6 +394,7 @@ chatListEl.addEventListener("click", async (e) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           recordId: s.caRecordId,
+          agentName: s.agentName,
           inquiry: s.inquiry,
           status: s.status,
           link: chatDef?.link || "",
