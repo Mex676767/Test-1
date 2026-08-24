@@ -50,7 +50,7 @@ exports.handler = async function (event) {
       await createRecord(TABLE_CUSTOMER_APPROACHING, {
         [F.username]: uname,
         [F.brand]: brandVal,
-        "link": link || "",
+        "Link": link || "",
         "Telegram": !!telegram,
       });
       justCreated = true;

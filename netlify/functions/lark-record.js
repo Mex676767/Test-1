@@ -7,16 +7,17 @@ const { updateRecord, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
 exports.handler = async function (event) {
   try {
     const body = JSON.parse(event.body || "{}");
-    const { recordId, inquiry, status, link, telegram, releasedAmount, claimSecret } = body;
+    const { recordId, agentName, inquiry, status, link, telegram, releasedAmount, claimSecret } = body;
 
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
     }
 
     const fields = {
+      "PIC": agentName || "",
       "Inquiry": inquiry, // multi-select field expects an array
       "Status": status,
-      "link": link || "",
+      "Link": link || "",
       "Telegram": !!telegram,
       "Released amount": releasedAmount || "",
       "Claim Secret": !!claimSecret,
