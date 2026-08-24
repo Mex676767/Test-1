@@ -31,7 +31,8 @@ const BONUS_PROGRAMS = [
 ];
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 function isClaimableValue(v) {
-  return !!(v && v.trim() && !NO_BONUS_PATTERN.test(v));
+  const s = String(v || "");
+  return !!(s.trim() && !NO_BONUS_PATTERN.test(s));
 }
 
 // Ang Pao (Special Reload Event) and Redeem Code live in their own tables
@@ -40,23 +41,24 @@ function isClaimableValue(v) {
 // Redeem Code's "Status" column holds the literal code when available, or
 // the word "Claimed" when it's used up.
 function isHiddenStatus(v) {
-  const t = (v || "").trim().toLowerCase();
+  const t = String(v || "").trim().toLowerCase();
   return t === "expired" || t === "claimed";
 }
 
 // Simulates the real Lark base: same username can exist under multiple
 // brands with completely different bonus states — matching must require
-// BOTH Username AND Brand, never username alone. Now live — this calls the
-// real Netlify Function, which searches Lark filtered on both fields.
-async function fetchBonusRow(username, brand) {
+// BOTH Username AND Brand, never username alone. This now also LOGS the
+// case (creates the Customer Approaching row) if one doesn't exist yet —
+// that's what makes Lark's bonus lookup columns actually populate.
+async function fetchBonusRow(username, brand, link, telegram) {
   const res = await fetch("/.netlify/functions/lark-search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, brand }),
+    body: JSON.stringify({ username, brand, link, telegram }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Lookup failed");
-  return { row: data.row, otherBrands: data.otherBrands || [] };
+  return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated };
 }
 
 const SAMPLE_CHATS = [
@@ -149,7 +151,7 @@ function renderTickets(chatId) {
     defs.push({ key: "angPao", kind: "special", label: "Ang Pao (Special Reload Event)", display: r.angPao.status });
   }
 
-  if (r.redeemCode && r.redeemCode.status.trim().toLowerCase() !== "claimed") {
+  if (r.redeemCode && String(r.redeemCode.status || "").trim().toLowerCase() !== "claimed") {
     defs.push({ key: "redeemCode", kind: "special", label: "Redeem Code", display: r.redeemCode.status, isCode: true });
   }
 
@@ -216,7 +218,7 @@ function renderChats(chats) {
   for (const chat of chats) {
     if (!state[chat.chatId]) {
       state[chat.chatId] = {
-        username: "", matchedRow: undefined, otherBrandMatches: [], claimedPrograms: {},
+        username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
         brand: deriveBrandFromGroup(chat.groupName),
         inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
         releasedBonusAmount: "", claimSecret: false,
@@ -289,16 +291,23 @@ chatListEl.addEventListener("click", async (e) => {
     const brand = card.querySelector(".brand-input").value.trim();
     if (!brand) { setStatus("Brand couldn't be detected — check it before looking up.", "error"); return; }
     s.username = username;
+    const chatDef = SAMPLE_CHATS.find((c) => c.chatId === chatId);
+    const telegramNow = card.querySelector(".tg-check").checked;
     btn.disabled = true;
     btn.textContent = "…";
     try {
-      const { row, otherBrands } = await fetchBonusRow(username, brand);
+      const { row, otherBrands, caRecordId, justCreated } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
+      s.caRecordId = caRecordId;
       s.claimedPrograms = {};
       s.releasedBonusAmount = "";
       s.claimSecret = false;
-      setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
+      setStatus(
+        justCreated
+          ? `Logged ${username} under ${brand} — bonuses now loading.`
+          : row ? `Found ${username} under ${brand}.` : "No record found."
+      );
     } catch (err) {
       setStatus("Lookup failed: " + err.message, "error");
     }
@@ -363,6 +372,7 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
     if (!s.username) { setStatus("Enter the username before recording.", "error"); return; }
+    if (!s.caRecordId) { setStatus("Look up the username first before recording.", "error"); return; }
 
     s.brand = brand;
     s.status = status;
@@ -376,9 +386,7 @@ chatListEl.addEventListener("click", async (e) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: s.username,
-          nameCustomer: s.matchedRow?.nameCustomer || "",
-          brand: s.brand,
+          recordId: s.caRecordId,
           inquiry: s.inquiry,
           status: s.status,
           link: chatDef?.link || "",
