@@ -16,6 +16,73 @@ themeToggle.addEventListener("click", () => {
 });
 
 /* ============================================================
+   AGENT SETTINGS
+   Agent name is stored in localStorage and required before
+   any lookup or submit. On first load, settings panel opens
+   automatically if no agent is saved.
+   ============================================================ */
+const AGENT_KEY = "rc-agent-name";
+let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
+let agentOptions = [];
+
+async function fetchAgentOptions() {
+  try {
+    const res = await fetch("/.netlify/functions/lark-pic-list");
+    const data = await res.json();
+    if (data.ok) agentOptions = data.pics || [];
+  } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
+}
+
+function saveAgent(name) {
+  selectedAgent = name.trim();
+  localStorage.setItem(AGENT_KEY, selectedAgent);
+}
+
+// Settings panel — overlaid on top of the widget, blocking interaction
+// until an agent is chosen.
+function openSettingsPanel() {
+  document.getElementById("settingsOverlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "settingsOverlay";
+  overlay.className = "settings-overlay";
+  overlay.innerHTML = `
+    <div class="settings-panel">
+      <div class="settings-head">
+        <span>⚙ Agent Settings</span>
+        ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
+      </div>
+      <p class="settings-hint">Select your name before handling any case. This will be logged as the PIC for every record you submit.</p>
+      ${agentOptions.length
+        ? `<select class="input settings-select" id="agentSelect">
+             <option value="">— choose your name —</option>
+             ${agentOptions.map((a) => `<option value="${a}" ${a === selectedAgent ? "selected" : ""}>${a}</option>`).join("")}
+           </select>`
+        : `<input type="text" class="input settings-text" id="agentSelect" placeholder="Type your name (e.g. 96 Edwin)" value="${selectedAgent}" />`
+      }
+      <button class="submit-btn" id="settingsSave" style="margin-top:10px">Save &amp; Continue</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  document.getElementById("settingsSave").addEventListener("click", () => {
+    const val = document.getElementById("agentSelect").value.trim();
+    if (!val) { setStatus("Choose your name before continuing.", "error"); return; }
+    saveAgent(val);
+    overlay.remove();
+    updateAgentBadge();
+    setStatus(`Agent set to ${selectedAgent}.`, "success");
+  });
+
+  document.getElementById("settingsClose")?.addEventListener("click", () => overlay.remove());
+}
+
+function updateAgentBadge() {
+  const badge = document.getElementById("agentBadge");
+  if (badge) badge.textContent = selectedAgent ? `◉ ${selectedAgent}` : "⚠ No agent set";
+  if (badge) badge.className = `agent-badge ${selectedAgent ? "set" : "unset"}`;
+}
+
+/* ============================================================
    SAMPLE DATA (stand-in until this is wired to LiveChat + Lark)
    ============================================================ */
 
@@ -30,19 +97,16 @@ const BONUS_PROGRAMS = [
   { key: "vipBooster", label: "12h VIP Deposit Booster" },
 ];
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
-function isClaimableValue(v) {
-  const s = String(v || "");
-  return !!(s.trim() && !NO_BONUS_PATTERN.test(s));
-}
 
-// Ang Pao (Special Reload Event) and Redeem Code live in their own tables
-// (tblxxz5EUdRbR4qk / tbl6cMG2f036Bn5E), matched by Username + Brand — not
-// columns on the Customer Approaching row. Both hide on Expired/Claimed;
-// Redeem Code's "Status" column holds the literal code when available, or
-// the word "Claimed" when it's used up.
 function isHiddenStatus(v) {
   const t = String(v || "").trim().toLowerCase();
   return t === "expired" || t === "claimed";
+}
+
+// Excludes: empty, "XD No Bonus" pattern, and Expired/Claimed
+function isClaimableValue(v) {
+  const s = String(v || "").trim();
+  return !!(s && !NO_BONUS_PATTERN.test(s) && !isHiddenStatus(s));
 }
 
 // Simulates the real Lark base: same username can exist under multiple
@@ -66,17 +130,12 @@ const SAMPLE_CHATS = [
   { chatId: "c2", customerName: "MAX39 Priority", link: "https://my.livechatinc.com/chats/c2", isTelegram: true, groupName: "MAX39 Priority Support" },
 ];
 
-// Every LiveChat group is named "<BRAND><NUMBERS> Priority Support" — the
-// Brand field in Lark stores just the letters (e.g. "VS96 Priority Support"
-// -> "VS", "ACE33 Priority Support" -> "ACE"). Strip trailing digits AND the
-// "Priority Support" suffix. Real version reads group_id from the LiveChat
-// API and checks a Lark override table first, falling back to this parser.
+// Every LiveChat group is named "<BRAND> Priority Support" — strip only the
+// "Priority Support" suffix, keep the full brand name including numbers.
+// "VS96 Priority Support" → "VS96", "MAX39 Priority Support" → "MAX39".
 function deriveBrandFromGroup(groupName) {
   if (!groupName) return "";
-  return groupName
-    .replace(/priority support/i, "")
-    .replace(/\d+/g, "")
-    .trim();
+  return groupName.replace(/\s*priority support\s*/i, "").trim();
 }
 
 // NOTE: this list is large and clearly still growing on the Lark side (the
@@ -84,19 +143,36 @@ function deriveBrandFromGroup(groupName) {
 // the real build should fetch these live from Lark's field metadata so new
 // tags show up automatically without a redeploy.
 const inquiryOptions = [
-  "Free Spin", "Ang Pao", "Deposit Challenge", "Feedback", "Complain",
-  "Ask free credit", "WD/DP problem", "Angpao request", "Game Tips",
-  "System problem", "Promotion", "Referral Bonus", "Bank problem",
-  "Technical Issue", "Betting inquiries", "Others", "Unknown",
-  "Account Inquiries", "Rebate", "Game Bonus", "Pg Maintenance",
-  "VIP Salary", "Unable to Access Game", "Bonus Checking", "Unrelated",
-  "Unable Log In", "RAYA PROMOTION", "No Inquiry", "Sportsbook",
-  "Unable To Access Website", "Reload - Free Spin", "Reload - Ang Pao",
-  "Free Spin Request", "Website Inquiries", "Lucky Wheel", "Plinko",
-  "VIP Upgrade SMS", "Apps Download", "Cashback", "VIP SMS", "Redeem Code",
-  "VVIP COMPLAINT", "KYC", "OTP Failure", "Forgot Username", "Forgot Password",
+  "Free Spin", "Ang Pao", "Deposit Challenge", "Feedback", "TOP P&L",
+  "TOP LTV", "Grace Period", "1D", "3D", "7D", "14D", "19D", "21D",
+  "24D", "30D", "Complain", "Ask free credit", "WD/DP problem",
+  "Angpao request", "Game Tips", "Transition", "System problem",
+  "Promotion", "Referral Bonus", "Bank problem", "Technical Issue",
+  "Betting inquiries", "Others", "Unknown", "Account Inquiries",
+  "Rebate", "Game Bonus", "Pg Maintenance", "VIP Salary",
+  "Unable to Access Game", "Bonus Checking", "Unrelated", "Unable Log In",
+  "RAYA PROMOTION", "No Inquiry", "Sportsbook", "Unable To Access Website",
+  "Reload - Free Spin", "Reload - Ang Pao", "Free Spin Request",
+  "Website Inquiries", "Lucky Wheel", "Plinko", "VIP Upgrade SMS",
+  "Apps Download", "Cashback", "VIP SMS", "Redeem Code",
+  "12hour VIP Deposit Boost", "Telegram RM28", "VVIP COMPLAINT",
+  "KYC", "OTP Failure", "Forgot Username", "Forgot Password",
   "Missing Fund", "Sms Promo", "Telegram", "Birthday", "LuckyDraw",
+  "Goal321", "TO NOT UPDATED", "Rescue Bonus", "TOP Deposit",
+  "Maintenance", "Telegram Transition Message", "Unclear Inquiries", "Unsolved",
 ];
+
+// Maps each bonus program to the closest Inquiry option — auto-selected
+// the moment CS clicks Claim so they don't have to pick it manually.
+const BONUS_INQUIRY_MAP = {
+  riskPlayer: "Bonus Checking",
+  topPnl: "TOP P&L",
+  gracePeriod: "Grace Period",
+  ltvTest: "TOP LTV",
+  vipBooster: "12hour VIP Deposit Boost",
+  angPao: "Ang Pao",
+  redeemCode: "Redeem Code",
+};
 
 const statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
 
@@ -220,7 +296,6 @@ function renderChats(chats) {
       state[chat.chatId] = {
         username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
         brand: deriveBrandFromGroup(chat.groupName),
-        agentName: "",
         inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
         releasedBonusAmount: "", claimSecret: false,
       };
@@ -249,9 +324,6 @@ function renderChats(chats) {
 
       <label class="field-label">Brand <span class="auto-tag">auto-detected</span></label>
       <input type="text" class="input brand-input" value="${s.brand}" placeholder="Brand" />
-
-      <label class="field-label">Your Name <span class="hint">(CS agent handling this case)</span></label>
-      <input type="text" class="input agent-input" value="${s.agentName}" placeholder="e.g. 96 Edwin" />
 
       <label class="field-label">Inquiry <span class="hint">(select all that apply)</span></label>
       <div class="tag-picker">${renderInquiryPicker(chat.chatId)}</div>
@@ -290,6 +362,7 @@ chatListEl.addEventListener("click", async (e) => {
   const s = state[chatId];
 
   if (btn.dataset.action === "lookup") {
+    if (!selectedAgent) { openSettingsPanel(); return; }
     const username = card.querySelector(".username-input").value.trim();
     if (!username) { setStatus("Enter a username before looking up.", "error"); return; }
     const brand = card.querySelector(".brand-input").value.trim();
@@ -351,9 +424,6 @@ chatListEl.addEventListener("click", async (e) => {
     }
 
     s.claimedPrograms[programKey] = true;
-    // Released Amount + Claim Secret auto-fill the moment ANY ticket is
-    // claimed — verbatim text from whichever source matched (regular column,
-    // Ang Pao, or Redeem Code), no guessing at numbers.
     const allSources = [
       ...BONUS_PROGRAMS.map((p) => ({ key: p.key, label: p.label, display: r[p.key] })),
       { key: "angPao", label: "Ang Pao (Special Reload Event)", display: r.angPao?.status },
@@ -364,25 +434,41 @@ chatListEl.addEventListener("click", async (e) => {
       .map((src) => `${src.label}: ${src.display}`);
     s.releasedBonusAmount = claimedEntries.join(" | ");
     s.claimSecret = true;
+
+    // Auto-set inquiry from the bonus type — only the matching inquiry tag,
+    // NOT "Feedback". CS adds Feedback manually if applicable.
+    const mappedInquiry = BONUS_INQUIRY_MAP[programKey];
+    if (mappedInquiry) {
+      s.inquiry = [mappedInquiry];
+    }
+
+    // Status auto-sets to "Given" the moment any bonus is claimed.
+    s.status = "Given";
+
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
+    card.querySelector(".tag-picker").innerHTML = renderInquiryPicker(chatId);
+    const statusSel = card.querySelector(".status-select");
+    if (statusSel) statusSel.value = "Given";
   }
 
   if (btn.dataset.action === "submit") {
+    if (!selectedAgent) {
+      setStatus("Set your agent name in Settings (⚙) before recording.", "error");
+      openSettingsPanel();
+      return;
+    }
     const brand = card.querySelector(".brand-input").value.trim();
     const status = card.querySelector(".status-select").value;
-    const agentName = card.querySelector(".agent-input").value.trim();
     if (!brand || !s.inquiry.length || !status) {
       setStatus("Pick a brand, at least one inquiry, and a status before recording.", "error");
       return;
     }
-    if (!agentName) { setStatus("Enter your agent name before recording.", "error"); return; }
     if (!s.username) { setStatus("Enter the username before recording.", "error"); return; }
     if (!s.caRecordId) { setStatus("Look up the username first before recording.", "error"); return; }
 
     s.brand = brand;
     s.status = status;
-    s.agentName = agentName;
 
     const chatDef = SAMPLE_CHATS.find((c) => c.chatId === chatId);
 
@@ -394,7 +480,7 @@ chatListEl.addEventListener("click", async (e) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           recordId: s.caRecordId,
-          agentName: s.agentName,
+          picName: selectedAgent,
           inquiry: s.inquiry,
           status: s.status,
           link: chatDef?.link || "",
@@ -458,11 +544,19 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
   setStatus("Preview mode — showing sample chats until connected to LiveChat.");
   renderChats(SAMPLE_CHATS);
 });
-document.getElementById("openSettings").addEventListener("click", (e) => e.preventDefault());
+document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
+document.getElementById("openSettings").addEventListener("click", (e) => { e.preventDefault(); openSettingsPanel(); });
 document.getElementById("dumpRaw").addEventListener("click", (e) => {
   e.preventDefault();
   console.log("State:", state);
   setStatus("Current state logged to console (F12 → Console tab).");
 });
 
-renderChats(SAMPLE_CHATS);
+// Boot sequence: fetch agent list, update badge, auto-open settings if no
+// agent saved yet (first time / cleared cache).
+(async () => {
+  await fetchAgentOptions();
+  updateAgentBadge();
+  if (!selectedAgent) openSettingsPanel();
+  renderChats(SAMPLE_CHATS);
+})();
