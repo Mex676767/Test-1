@@ -43,8 +43,6 @@ exports.handler = async function (event) {
     const created = await createRecord(TABLE_CUSTOMER_APPROACHING, {
       [F.username]: uname,
       [F.brand]: brandVal,
-      "Link": link || "",
-      "Telegram": !!telegram,
     });
 
     const caRecordId = created.record_id;
