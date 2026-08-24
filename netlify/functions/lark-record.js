@@ -1,22 +1,19 @@
-const { createRecord, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
+const { updateRecord, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
 
-// Called on "Record to Lark Base" — inserts one new case-log row. NOTE:
-// field names below must match the Customer Approaching table's columns
-// exactly (case-sensitive). If Lark returns an error naming a field, that's
-// almost always a mismatch between this list and the real column name.
+// Called on "Record to Lark Base". By this point Look Up has already created
+// the row (that's what makes the bonus lookup columns populate) — so this
+// UPDATES that same record with the fields CS filled in manually, rather
+// than inserting a second row.
 exports.handler = async function (event) {
   try {
     const body = JSON.parse(event.body || "{}");
-    const { username, nameCustomer, brand, inquiry, status, link, telegram, releasedAmount, claimSecret } = body;
+    const { recordId, inquiry, status, link, telegram, releasedAmount, claimSecret } = body;
 
-    if (!username || !brand || !inquiry || !inquiry.length || !status) {
+    if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
     }
 
     const fields = {
-      "Username": username,
-      "Name customer": nameCustomer || "",
-      "Brand": brand,
       "Inquiry": inquiry, // multi-select field expects an array
       "Status": status,
       "link": link || "",
@@ -25,7 +22,7 @@ exports.handler = async function (event) {
       "Claim Secret": !!claimSecret,
     };
 
-    const record = await createRecord(TABLE_CUSTOMER_APPROACHING, fields);
+    const record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);
     return { statusCode: 200, body: JSON.stringify({ ok: true, record }) };
   } catch (err) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: err.message }) };
