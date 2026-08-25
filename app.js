@@ -78,7 +78,7 @@ function openSettingsPanel() {
 
 function updateAgentBadge() {
   const badge = document.getElementById("agentBadge");
-  if (badge) badge.textContent = selectedAgent ? `◉ ${selectedAgent}` : "⚠ No agent set";
+  if (badge) badge.textContent = selectedAgent ? `◉ ${selectedAgent}` : "⚠︎ No agent set";
   if (badge) badge.className = `agent-badge ${selectedAgent ? "set" : "unset"}`;
 }
 
@@ -426,7 +426,7 @@ function renderChats(chats) {
         </label>
       </div>
 
-      ${s.autoRecordError ? `<div class="record-error-banner">⚠ ${s.autoRecordError}</div>` : ""}
+      ${s.autoRecordError ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
       ${
         s.logged

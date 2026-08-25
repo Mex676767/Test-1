@@ -6,7 +6,11 @@
   --border: #2a2e37;
   --text: #eef0f3;
   --text-muted: #8991a1;
-  --text-faint: #5c6472;
+  /* Was #5c6472 — measured at only ~2.6:1 contrast against surface/surface-2
+     (WCAG AA needs 4.5:1 for normal text), which made every label, hint,
+     and empty-state message hard to read against the very bright --text
+     values elsewhere. Now ~4.4-4.9:1. */
+  --text-faint: #828a98;
   --gold: #e3b341;
   --gold-soft: #3a331f;
   --teal: #35d0a8;
@@ -22,7 +26,9 @@
   --border: #e2e4ea;
   --text: #1b1e24;
   --text-muted: #6b7280;
-  --text-faint: #9aa1ad;
+  /* Was #9aa1ad — same low-contrast issue as the dark theme's faint token
+     (~2.5:1). Now ~4.3-4.6:1. */
+  --text-faint: #70767f;
   --gold: #9a6b0f;
   --gold-soft: #fbf0d9;
   --teal: #128a6b;
@@ -52,7 +58,7 @@ body {
   background: var(--surface);
 }
 .brand { display: flex; align-items: center; gap: 8px; }
-.brand-mark { color: var(--gold); font-size: 14px; }
+.brand-mark { color: var(--blue); font-size: 14px; }
 .brand-name {
   font-family: "Space Grotesk", sans-serif; font-weight: 600;
   font-size: 14px; letter-spacing: 0.01em;
@@ -64,7 +70,7 @@ body {
   border-radius: 7px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
   cursor: pointer; font-size: 14px; transition: border-color 0.15s ease, color 0.15s ease;
 }
-.icon-btn:hover, .theme-toggle:hover { border-color: var(--gold); color: var(--gold); }
+.icon-btn:hover, .theme-toggle:hover { border-color: var(--blue); color: var(--blue); }
 
 .theme-toggle { position: relative; }
 .theme-icon { position: absolute; transition: opacity 0.15s ease, transform 0.15s ease; }
@@ -186,7 +192,7 @@ body {
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
   border-radius: 7px; padding: 0 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
 }
-.lookup-btn:hover { border-color: var(--gold); color: var(--gold); }
+.lookup-btn:hover { border-color: var(--blue); color: var(--blue); }
 .lookup-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- Player info (auto-filled on match) ---------- */
