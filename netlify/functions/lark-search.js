@@ -32,11 +32,9 @@ exports.handler = async function (event) {
     const brandVal = brand.trim();
 
     // Always create a fresh record — each Look Up is a new case.
-    // Include PIC so the agent is logged immediately.
+    // Only send Username on create; Brand is set during Record step.
     const created = await createRecord(TABLE_CUSTOMER_APPROACHING, {
       [F.username]: uname,
-      [F.brand]: brandVal,
-      [F.pic]: picName || "",
     });
 
     const caRecordId = created.record_id;
