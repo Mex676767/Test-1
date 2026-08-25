@@ -234,6 +234,15 @@ const chatListEl = document.getElementById("chatList");
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
 
+// Shared by the initial render and every refresh so the "Select status…"
+// placeholder always gets the same dim styling as Inquiry's real
+// ::placeholder, instead of rendering at full text brightness.
+function renderStatusDisplay(chatId) {
+  const s = state[chatId];
+  const empty = !s.status;
+  return `<span class="status-value ${empty ? "placeholder" : ""}">${s.status || "Select status…"}</span><span class="status-caret">▾</span>`;
+}
+
 // Status is a custom dropdown (not a native <select>) so it matches
 // Inquiry's look exactly — reuses the same .inquiry-option/-check styling,
 // just single-select and with no search box (only 5 fixed options).
@@ -433,7 +442,7 @@ function renderChats(chats) {
       <label class="field-label">Status</label>
       <div class="status-picker">
         <button type="button" class="input status-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
-          <span>${s.status || "Select status…"}</span><span class="status-caret">▾</span>
+          ${renderStatusDisplay(chat.chatId)}
         </button>
         <div class="status-dropdown hidden">${renderStatusDropdown(chat.chatId)}</div>
       </div>
@@ -585,7 +594,7 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
     card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-    card.querySelector(".status-display").innerHTML = `<span>${s.status}</span><span class="status-caret">▾</span>`;
+    card.querySelector(".status-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
   }
 
@@ -636,7 +645,7 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "selectStatus") {
     s.status = btn.dataset.value;
-    card.querySelector(".status-display").innerHTML = `<span>${s.status}</span><span class="status-caret">▾</span>`;
+    card.querySelector(".status-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     card.querySelector(".status-dropdown").classList.add("hidden");
   }

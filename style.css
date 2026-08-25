@@ -187,6 +187,11 @@ body {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 7px; padding: 6px 8px; font-size: 12px; font-family: inherit;
 }
+/* Explicit rather than relying on the browser's default placeholder dimming
+   — that default varies and doesn't necessarily match --text-faint exactly,
+   which is what Status's "Select status…" placeholder-style text uses. */
+.input::placeholder { color: var(--text-faint); opacity: 1; }
+.status-value.placeholder { color: var(--text-faint); }
 .input:focus, select:focus { outline: none; border-color: var(--blue); }
 
 .username-row { display: flex; gap: 6px; }
