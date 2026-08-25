@@ -1,31 +1,27 @@
 const { updateRecord, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
-
-// Called on "Record to Lark Base". Look Up already created the row, so this
-// UPDATES it with the fields CS filled in manually.
-// PIC = the agent's selected name from settings (passed as picName).
-// Hardcoded to "mexha" for testing — once the settings panel is live,
-// picName will come from the frontend and replace this.
 exports.handler = async function (event) {
   try {
-    const body = JSON.parse(event.body || "{}");
-    const { recordId, picName, inquiry, status, link, telegram, releasedAmount, claimSecret } = body;
-
+    var body = JSON.parse(event.body || "{}");
+    var recordId = body.recordId;
+    var agentName = body.agentName || body.picName || "";
+    var inquiry = body.inquiry;
+    var status = body.status;
+    var link = body.link;
+    var telegram = body.telegram;
+    var releasedAmount = body.releasedAmount;
+    var claimSecret = body.claimSecret;
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
     }
-
-    const fields = {
-      "PIC": picName || "mexha", // temp hardcode for testing — settings panel will supply this
+    var fields = {
+      "Agent Name": agentName,
       "Inquiry": inquiry,
       "Status": status,
-      "Link": link || "",
-      "Telegram": !!telegram,
       "Released amount": releasedAmount || "",
-      "Claim Secret": !!claimSecret,
+      "Claim Secret": !!claimSecret
     };
-
-    const record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);
-    return { statusCode: 200, body: JSON.stringify({ ok: true, record }) };
+    var record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);
+    return { statusCode: 200, body: JSON.stringify({ ok: true, record: record }) };
   } catch (err) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: err.message }) };
   }
