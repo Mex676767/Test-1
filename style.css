@@ -116,37 +116,39 @@ body {
 
 /* ---------- Inquiry (searchable dropdown, replaces the old always-open
    tag grid — same max-2 / Feedback-pairing rule, collapsed behind search
-   so the card stays short until it's actually used) ---------- */
+   so the card stays short until it's actually used). Styled plain and
+   muted to match the Status <select> rather than looking like a distinct
+   widget — no solid-color chips, no icons, just a simple bordered list. ---------- */
 .inquiry-select { position: relative; }
 .inquiry-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; min-height: 20px; }
 .inquiry-chips-empty { font-size: 10.5px; color: var(--text-faint); }
 .inquiry-chip {
-  display: flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600;
-  padding: 3px 6px 3px 9px; border-radius: 20px; background: var(--blue); color: white;
+  display: flex; align-items: center; gap: 5px; font-size: 11px;
+  padding: 2px 4px 2px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
 }
 .inquiry-chip-remove {
-  background: none; border: none; color: white; opacity: 0.75; cursor: pointer;
+  background: none; border: none; color: var(--text-faint); cursor: pointer;
   font-size: 10px; line-height: 1; padding: 2px; font-family: inherit;
 }
-.inquiry-chip-remove:hover { opacity: 1; }
+.inquiry-chip-remove:hover { color: var(--danger); }
 
 .inquiry-dropdown {
   position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
-  max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 4px; box-shadow: var(--shadow);
+  max-height: 160px; overflow-y: auto;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px;
+  box-shadow: var(--shadow);
 }
 .inquiry-dropdown.hidden { display: none; }
 .inquiry-option {
-  display: flex; align-items: center; gap: 6px; text-align: left; width: 100%;
-  background: none; border: none; color: var(--text-muted); font-size: 11px;
-  padding: 6px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  display: block; text-align: left; width: 100%;
+  background: none; border: none; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 12px;
+  padding: 7px 9px; cursor: pointer; font-family: inherit;
 }
-.inquiry-option:hover:not(.disabled) { background: var(--surface-2); color: var(--text); }
-.inquiry-option.active { color: var(--blue); font-weight: 600; }
-.inquiry-option.disabled { opacity: 0.35; cursor: not-allowed; }
-.inquiry-option-check { width: 12px; color: var(--blue); flex-shrink: 0; }
-.inquiry-option-empty { padding: 8px; font-size: 11px; color: var(--text-faint); text-align: center; }
+.inquiry-option:last-child { border-bottom: none; }
+.inquiry-option:hover:not(.disabled) { background: var(--surface); color: var(--text); }
+.inquiry-option.active { background: var(--surface); color: var(--blue); font-weight: 600; }
+.inquiry-option.disabled { opacity: 0.4; cursor: not-allowed; }
+.inquiry-option-empty { padding: 9px; font-size: 12px; color: var(--text-faint); text-align: center; }
 
 /* ---------- Auto-derived fields (Brand / Released Amount / Claim Secret) ---------- */
 .auto-grid { display: flex; gap: 6px; margin-top: 8px; }

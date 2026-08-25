@@ -312,7 +312,7 @@ function renderInquiryDropdown(chatId, query) {
     return `
     <button type="button" class="inquiry-option ${active ? "active" : ""} ${disabled ? "disabled" : ""}"
       data-action="toggleInquiry" data-chat="${chatId}" data-value="${opt}" ${disabled ? "disabled" : ""}>
-      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${opt}
+      ${opt}
     </button>`;
   }).join("");
 }
@@ -393,7 +393,7 @@ function renderChats(chats) {
       <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
       <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
 
-      <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
+      <label class="field-label">Inquiry <span class="hint">(max 2)</span></label>
       <div class="inquiry-select">
         <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
         <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
