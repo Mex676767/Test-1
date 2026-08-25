@@ -218,8 +218,18 @@ const chatListEl = document.getElementById("chatList");
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
 
-function optionTags(list, placeholder) {
-  return `<option value="">${placeholder}</option>` + list.map((v) => `<option value="${v}">${v}</option>`).join("");
+// Status is a custom dropdown (not a native <select>) so it matches
+// Inquiry's look exactly — reuses the same .inquiry-option/-check styling,
+// just single-select and with no search box (only 5 fixed options).
+function renderStatusDropdown(chatId) {
+  const s = state[chatId];
+  return statusOptions.map((opt) => {
+    const active = s.status === opt;
+    return `
+    <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectStatus" data-chat="${chatId}" data-value="${opt}">
+      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${opt}
+    </button>`;
+  }).join("");
 }
 
 function renderPlayerInfo(chatId) {
@@ -312,7 +322,7 @@ function renderInquiryDropdown(chatId, query) {
     return `
     <button type="button" class="inquiry-option ${active ? "active" : ""} ${disabled ? "disabled" : ""}"
       data-action="toggleInquiry" data-chat="${chatId}" data-value="${opt}" ${disabled ? "disabled" : ""}>
-      ${opt}
+      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${opt}
     </button>`;
   }).join("");
 }
@@ -393,7 +403,7 @@ function renderChats(chats) {
       <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
       <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
 
-      <label class="field-label">Inquiry <span class="hint">(max 2)</span></label>
+      <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
       <div class="inquiry-select">
         <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
         <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
@@ -401,7 +411,12 @@ function renderChats(chats) {
       </div>
 
       <label class="field-label">Status</label>
-      <select class="status-select">${optionTags(statusOptions, "Select status…")}</select>
+      <div class="status-picker">
+        <button type="button" class="input status-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
+          <span>${s.status || "Select status…"}</span><span class="status-caret">▾</span>
+        </button>
+        <div class="status-dropdown hidden">${renderStatusDropdown(chat.chatId)}</div>
+      </div>
 
       <div class="toggle-row">
         <label class="field-label">Telegram chat <span class="auto-tag">auto</span></label>
@@ -423,7 +438,6 @@ function renderChats(chats) {
     `;
 
     chatListEl.appendChild(card);
-    if (s.status) card.querySelector(".status-select").value = s.status;
   }
 }
 
@@ -551,8 +565,8 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
     card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-    const statusSel = card.querySelector(".status-select");
-    if (statusSel) statusSel.value = "Given";
+    card.querySelector(".status-display").innerHTML = `<span>${s.status}</span><span class="status-caret">▾</span>`;
+    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
   }
 
   if (btn.dataset.action === "toggleInquiry" || btn.dataset.action === "removeInquiry") {
@@ -591,6 +605,21 @@ chatListEl.addEventListener("click", async (e) => {
     renderChats(SAMPLE_CHATS);
     await submitRecord(chatId, { auto: true });
   }
+
+  if (btn.dataset.action === "toggleStatusDropdown") {
+    const dropdown = card.querySelector(".status-dropdown");
+    const willOpen = dropdown.classList.contains("hidden");
+    // Only one dropdown open at a time across the whole widget.
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown").forEach((d) => d.classList.add("hidden"));
+    if (willOpen) dropdown.classList.remove("hidden");
+  }
+
+  if (btn.dataset.action === "selectStatus") {
+    s.status = btn.dataset.value;
+    card.querySelector(".status-display").innerHTML = `<span>${s.status}</span><span class="status-caret">▾</span>`;
+    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+    card.querySelector(".status-dropdown").classList.add("hidden");
+  }
 });
 
 // Inquiry dropdown: open on focus, filter as the agent types, close when
@@ -599,6 +628,7 @@ chatListEl.addEventListener("click", async (e) => {
 chatListEl.addEventListener("focusin", (e) => {
   const input = e.target.closest(".inquiry-search");
   if (!input) return;
+  document.querySelectorAll(".status-dropdown").forEach((d) => d.classList.add("hidden"));
   input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
 });
 
@@ -611,8 +641,8 @@ chatListEl.addEventListener("input", (e) => {
 });
 
 document.addEventListener("click", (e) => {
-  document.querySelectorAll(".inquiry-select").forEach((wrap) => {
-    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown")?.classList.add("hidden");
+  document.querySelectorAll(".inquiry-select, .status-picker").forEach((wrap) => {
+    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown, .status-dropdown")?.classList.add("hidden");
   });
 });
 
@@ -639,9 +669,11 @@ async function submitRecord(chatId, { auto } = {}) {
   }
 
   const brand = (card?.querySelector(".brand-input")?.value ?? s.brand ?? "").trim();
-  const status = card?.querySelector(".status-select")?.value ?? s.status ?? "";
+  // Unlike Brand (free text, only synced to state at submit time), Status is
+  // a discrete pick that's written to state the instant it's clicked in the
+  // custom dropdown, so state is always the source of truth here already.
+  const status = s.status || "";
   s.brand = brand;
-  s.status = status;
 
   const missing = [];
   if (!s.username) missing.push("username");
