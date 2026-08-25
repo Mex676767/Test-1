@@ -244,3 +244,35 @@ body {
 .empty-state {
   padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 12.5px; max-width: 480px; margin: 0 auto;
 }
+
+/* ---------- Settings overlay (full-screen) ---------- */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg); display: flex; align-items: center; justify-content: center;
+}
+.settings-panel {
+  width: 100%; max-width: 420px; padding: 32px 24px; text-align: center;
+}
+.settings-head {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: "Space Grotesk", sans-serif; font-size: 18px; font-weight: 700;
+  color: var(--text); margin-bottom: 12px;
+}
+.settings-close {
+  position: absolute; top: 16px; right: 16px;
+  background: none; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 14px;
+}
+.settings-close:hover { border-color: var(--text); color: var(--text); }
+.settings-hint {
+  color: var(--text-muted); font-size: 13px; margin-bottom: 20px; line-height: 1.5;
+}
+.settings-select {
+  width: 100%; padding: 12px 14px; font-size: 15px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  font-family: "Inter", sans-serif; appearance: auto; cursor: pointer;
+}
+.settings-select:focus { border-color: var(--blue); outline: none; }
+.settings-text {
+  width: 100%; padding: 12px 14px; font-size: 15px; border-radius: 8px;
+}

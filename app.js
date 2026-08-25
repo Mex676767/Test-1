@@ -131,8 +131,7 @@ const SAMPLE_CHATS = [
 ];
 
 // Every LiveChat group is named "<BRAND><DIGITS> Priority Support".
-// Lark stores just the letters — "VS96 Priority Support" → "VS",
-// "MAX39 Priority Support" → "MAX", "PP96 Priority Support" → "PP".
+// Lark's Brand lookup strips digits — "VS96 Priority Support" → "VS".
 function deriveBrandFromGroup(groupName) {
   if (!groupName) return "";
   return groupName
@@ -483,11 +482,10 @@ chatListEl.addEventListener("click", async (e) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           recordId: s.caRecordId,
-          picName: selectedAgent,
+          agentName: selectedAgent,
+          brand: s.brand,
           inquiry: s.inquiry,
           status: s.status,
-          link: chatDef?.link || "",
-          telegram: s.telegram,
           releasedAmount: s.releasedBonusAmount,
           claimSecret: s.claimSecret,
         }),
