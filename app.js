@@ -333,6 +333,10 @@ function renderChats(chats) {
         brand: deriveBrandFromGroup(chat.groupName),
         inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
         releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
+        // chatOpen mirrors the LiveChat conversation's open/closed state.
+        // Recording only happens once a chat closes (auto if everything's
+        // filled in, or a manual nudge if not) — see closeChat/submitRecord.
+        chatOpen: true, autoRecordError: "",
       };
     }
     const s = state[chat.chatId];
@@ -344,7 +348,14 @@ function renderChats(chats) {
     card.innerHTML = `
       <div class="chat-card-head">
         <span class="chat-name">${chat.customerName}</span>
-        <a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>
+        <div class="chat-card-head-actions">
+          <a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>
+          ${!s.logged ? `
+          <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
+            title="Simulates the LiveChat 'chat closed' event, until the real widget SDK is wired up">
+            ${s.chatOpen ? "Close chat (sim)" : "Closed"}
+          </button>` : ""}
+        </div>
       </div>
 
       <label class="field-label">Username</label>
@@ -374,10 +385,14 @@ function renderChats(chats) {
         </label>
       </div>
 
+      ${s.autoRecordError ? `<div class="record-error-banner">⚠ ${s.autoRecordError}</div>` : ""}
+
       ${
         s.logged
           ? `<div class="logged-badge">✓ Logged to Lark Base</div>`
-          : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
+          : s.chatOpen
+            ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
+            : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
       }
     `;
 
@@ -514,54 +529,100 @@ chatListEl.addEventListener("click", async (e) => {
   }
 
   if (btn.dataset.action === "submit") {
-    if (!selectedAgent) {
-      setStatus("Set your agent name in Settings (⚙) before recording.", "error");
-      openSettingsPanel();
-      return;
-    }
-    const brand = card.querySelector(".brand-input").value.trim();
-    const status = card.querySelector(".status-select").value;
-    if (!brand || !s.inquiry.length || !status) {
-      setStatus("Pick a brand, at least one inquiry, and a status before recording.", "error");
-      return;
-    }
-    if (!s.username) { setStatus("Enter the username before recording.", "error"); return; }
-    if (!s.caRecordId) { setStatus("Look up the username first before recording.", "error"); return; }
+    await submitRecord(chatId, { auto: false });
+  }
 
-    s.brand = brand;
-    s.status = status;
-
-    const chatDef = SAMPLE_CHATS.find((c) => c.chatId === chatId);
-
-    btn.disabled = true;
-    btn.textContent = "Recording…";
-    try {
-      const res = await fetch("/.netlify/functions/lark-record", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recordId: s.caRecordId,
-          agentName: selectedAgent,
-          brand: s.brand,
-          inquiry: s.inquiry,
-          status: s.status,
-          releasedAmount: s.releasedBonusAmount,
-          releasedAmountRaw: s.releasedAmountRaw,
-          claimSecret: s.claimSecret,
-        }),
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Record failed");
-      s.logged = true;
-      setStatus(`Logged ${s.username} to Lark Base.`, "success");
-      renderChats(SAMPLE_CHATS);
-    } catch (err) {
-      setStatus("Recording failed: " + err.message, "error");
-      btn.disabled = false;
-      btn.textContent = "Record to Lark Base";
-    }
+  if (btn.dataset.action === "closeChat") {
+    // TODO: once the LiveChat Agent App SDK is wired up (currently blocked —
+    // see project notes), replace this manual button with the real
+    // "chat closed" event listener and run these same three lines from
+    // there instead of a click.
+    s.chatOpen = false;
+    renderChats(SAMPLE_CHATS);
+    await submitRecord(chatId, { auto: true });
   }
 });
+
+// Shared by the manual "Record to Lark Base" button and the auto-record
+// triggered when a chat closes. Pulls Brand/Status straight from the DOM
+// since the agent may have edited them after the card was last rendered.
+// Always re-queries the card by chatId rather than taking a DOM reference,
+// since renderChats() can have rebuilt the card (e.g. right before an
+// auto-record call) and made any earlier reference stale.
+async function submitRecord(chatId, { auto } = {}) {
+  const s = state[chatId];
+  if (!s || s.logged) return;
+  const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
+
+  if (!selectedAgent) {
+    if (auto) {
+      s.autoRecordError = "Chat closed, but no agent name is set — open Settings (⚙), then fill in and record manually.";
+      renderChats(SAMPLE_CHATS);
+    } else {
+      setStatus("Set your agent name in Settings (⚙) before recording.", "error");
+      openSettingsPanel();
+    }
+    return;
+  }
+
+  const brand = (card?.querySelector(".brand-input")?.value ?? s.brand ?? "").trim();
+  const status = card?.querySelector(".status-select")?.value ?? s.status ?? "";
+  s.brand = brand;
+  s.status = status;
+
+  const missing = [];
+  if (!s.username) missing.push("username");
+  if (!s.caRecordId) missing.push("look up the username");
+  if (!brand) missing.push("brand");
+  if (!s.inquiry.length) missing.push("inquiry");
+  if (!status) missing.push("status");
+
+  if (missing.length) {
+    if (auto) {
+      s.autoRecordError = `Chat closed but not fully filled in (missing: ${missing.join(", ")}) — complete it and click Record to Lark Base.`;
+      renderChats(SAMPLE_CHATS);
+      setStatus(s.autoRecordError, "error");
+    } else {
+      setStatus(`Missing before recording: ${missing.join(", ")}.`, "error");
+    }
+    return;
+  }
+
+  s.autoRecordError = "";
+  const submitBtn = card?.querySelector('button[data-action="submit"]');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Recording…"; }
+
+  try {
+    const res = await fetch("/.netlify/functions/lark-record", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recordId: s.caRecordId,
+        agentName: selectedAgent,
+        brand: s.brand,
+        inquiry: s.inquiry,
+        status: s.status,
+        releasedAmount: s.releasedBonusAmount,
+        releasedAmountRaw: s.releasedAmountRaw,
+        claimSecret: s.claimSecret,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Record failed");
+    s.logged = true;
+    setStatus(`Logged ${s.username} to Lark Base${auto ? " (auto, on chat close)" : ""}.`, "success");
+    renderChats(SAMPLE_CHATS);
+  } catch (err) {
+    if (auto) {
+      s.autoRecordError = `Auto-record failed (${err.message}) — fill in and click Record to Lark Base manually.`;
+      renderChats(SAMPLE_CHATS);
+    } else if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Record to Lark Base";
+    }
+    setStatus("Recording failed: " + err.message, "error");
+  }
+}
 
 chatListEl.addEventListener("change", (e) => {
   const checkbox = e.target.closest(".tag-picker input[type=checkbox]");
