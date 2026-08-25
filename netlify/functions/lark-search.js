@@ -32,9 +32,15 @@ exports.handler = async function (event) {
     const brandVal = brand.trim();
 
     // Always create a fresh record — each Look Up is a new case.
-    // Only send Username on create; Brand is set during Record step.
+    // Brand must be set at create time, not deferred to the Record step:
+    // the bonus Lookup columns (Grace Period, LTV, etc.) only resolve when
+    // BOTH Username and Brand match the linked table's reference row. The
+    // earlier UserFieldConvFail was caused by also sending PIC (a Person
+    // field) here — PIC is left alone now, so Brand (a Single Select field)
+    // is safe to send as a plain string.
     const created = await createRecord(TABLE_CUSTOMER_APPROACHING, {
       [F.username]: uname,
+      [F.brand]: brandVal,
     });
 
     const caRecordId = created.record_id;
