@@ -5,6 +5,11 @@ const BASE_APP_TOKEN = process.env.LARK_BASE_APP_TOKEN;
 const TABLE_CUSTOMER_APPROACHING = process.env.LARK_TABLE_CUSTOMER_APPROACHING;
 const TABLE_ANG_PAO = process.env.LARK_TABLE_ANG_PAO;
 const TABLE_REDEEM_CODE = process.env.LARK_TABLE_REDEEM_CODE;
+// Source table for Customer Approaching's "Tier" Lookup field. Lark doesn't
+// mirror the Single Select option list onto the Lookup field itself, so
+// resolving option IDs to display text ("Tier V") requires reading the
+// option list straight off this table's own "Tier" field.
+const TABLE_PNL = process.env.LARK_TABLE_PNL;
 
 let cachedToken = null;
 let cachedExpiry = 0;
@@ -139,5 +144,5 @@ async function getFieldOptionMap(tableId, fieldName) {
 module.exports = {
   getTenantToken, searchRecords, getRecord, updateRecord, createRecord,
   listRecords, toDisplay, listFields, getFieldOptionMap,
-  TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE,
+  TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_PNL,
 };
