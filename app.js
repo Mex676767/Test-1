@@ -51,7 +51,7 @@ function openSettingsPanel() {
         <span>⚙ Agent Settings</span>
         ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
-      <p class="settings-hint">Select your name before handling any case. This will be logged as the PIC for every record you submit.</p>
+      <p class="settings-hint">Select your name before handling any case. This will be logged as the Agent Name for every record you submit.</p>
       ${agentOptions.length
         ? `<select class="input settings-select" id="agentSelect">
              <option value="">— choose your name —</option>
@@ -60,6 +60,11 @@ function openSettingsPanel() {
         : `<input type="text" class="input settings-text" id="agentSelect" placeholder="Type your name (e.g. 96 Edwin)" value="${selectedAgent}" />`
       }
       <button class="submit-btn" id="settingsSave" style="margin-top:10px">Save &amp; Continue</button>
+
+      <div class="settings-diagnostics">
+        <div class="settings-diagnostics-head">Diagnostics</div>
+        <div class="settings-diagnostics-list">${renderDiagnosticsLog()}</div>
+      </div>
     </div>
   `;
   document.body.appendChild(overlay);
@@ -74,6 +79,17 @@ function openSettingsPanel() {
   });
 
   document.getElementById("settingsClose")?.addEventListener("click", () => overlay.remove());
+}
+
+// Replaces the old "dump state to browser console" link — a plain-language
+// activity log visible right in Settings, no devtools required. Every
+// setStatus() call (errors and routine confirmations alike) lands here.
+function renderDiagnosticsLog() {
+  if (!diagnosticsLog.length) return `<div class="diag-empty">No activity logged yet.</div>`;
+  return diagnosticsLog.map((e) => `
+    <div class="diag-entry diag-${e.kind}">
+      <span class="diag-time">${e.time.toLocaleTimeString()}</span> ${e.text}
+    </div>`).join("");
 }
 
 function updateAgentBadge() {
@@ -236,9 +252,13 @@ function renderPlayerInfo(chatId) {
   const s = state[chatId];
   if (!s.matchedRow) return "";
   const r = s.matchedRow;
+  // PIC shows the agent actually handling this case, not Lark's own PIC
+  // field — that's a Person field defaulting to "Record Created By", which
+  // is always the Retention Logger bot (every row is created by the app),
+  // never the human agent, so showing it here was meaningless.
   return `
     <div class="player-info">
-      <span><span class="pi-label">PIC</span> ${r.pic}</span>
+      <span><span class="pi-label">PIC</span> ${selectedAgent || "—"}</span>
       <span><span class="pi-label">Tier</span> ${r.tier}</span>
       <span><span class="pi-label">Name</span> ${r.nameCustomer}</span>
       <span><span class="pi-label">D.O.B</span> ${r.dob}</span>
@@ -729,9 +749,31 @@ async function submitRecord(chatId, { auto } = {}) {
   }
 }
 
+// Every status message is logged here regardless of whether it's shown in
+// the compact top bar — Settings → Diagnostics is where an agent (or
+// whoever's troubleshooting) can see the full history without opening
+// devtools. Only errors interrupt the top bar; routine confirmations
+// ("Bonuses ready...", "Logged X to Lark Base") are logged silently since
+// normal CS doesn't need to see them.
+const DIAGNOSTICS_LOG_MAX = 50;
+const diagnosticsLog = [];
+
+function logDiagnostic(text, kind) {
+  diagnosticsLog.unshift({ time: new Date(), text, kind: kind || "info" });
+  if (diagnosticsLog.length > DIAGNOSTICS_LOG_MAX) diagnosticsLog.length = DIAGNOSTICS_LOG_MAX;
+}
+
 function setStatus(text, kind) {
-  statusEl.textContent = text;
-  statusEl.className = "status-bar" + (kind ? " " + kind : "");
+  logDiagnostic(text, kind);
+  if (kind === "error") {
+    statusEl.textContent = text;
+    statusEl.className = "status-bar error";
+  } else {
+    // Not an error — keep the top bar clear/compact rather than showing
+    // routine confirmations. Check Settings → Diagnostics for the log.
+    statusEl.textContent = "";
+    statusEl.className = "status-bar hidden";
+  }
 }
 
 document.getElementById("refreshBtn").addEventListener("click", () => {
@@ -739,16 +781,11 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
   renderChats(SAMPLE_CHATS);
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
-document.getElementById("openSettings").addEventListener("click", (e) => { e.preventDefault(); openSettingsPanel(); });
-document.getElementById("dumpRaw").addEventListener("click", (e) => {
-  e.preventDefault();
-  console.log("State:", state);
-  setStatus("Current state logged to console (F12 → Console tab).");
-});
 
 // Boot sequence: fetch agent list, update badge, auto-open settings if no
 // agent saved yet (first time / cleared cache).
 (async () => {
+  logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
   await fetchAgentOptions();
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
