@@ -125,6 +125,39 @@ async function fetchBonusRow(username, brand, link, telegram, picName) {
   return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated };
 }
 
+// After lark-search.js creates the case row, Lark can take 15-30s on a big
+// base to resolve its Lookup columns — well past what one Netlify function
+// call can wait for. So we poll a lightweight status check every few seconds
+// instead of blocking on a single long request. "Name customer" (itself a
+// Lookup) becoming non-empty is the signal that this row's Lookups are done.
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const POLL_INTERVAL_MS = 2500;
+const POLL_MAX_ATTEMPTS = 20; // ~50s ceiling before giving up
+
+async function pollForBonuses(chatId, recordId, card, onTick) {
+  for (let attempt = 1; attempt <= POLL_MAX_ATTEMPTS; attempt++) {
+    await wait(POLL_INTERVAL_MS);
+    let data;
+    try {
+      const res = await fetch("/.netlify/functions/lark-poll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId }),
+      });
+      data = await res.json();
+    } catch (_) {
+      continue; // transient network hiccup — keep polling
+    }
+    if (!data.ok) continue;
+
+    const s = state[chatId];
+    if (!s || s.caRecordId !== recordId) return; // chat moved on (new lookup started) — abandon this poll
+    s.matchedRow = { ...s.matchedRow, ...data.row };
+    onTick(attempt, data.ready);
+    if (data.ready) return;
+  }
+}
+
 const SAMPLE_CHATS = [
   { chatId: "c1", customerName: "VS96 VIP", link: "https://my.livechatinc.com/chats/c1", isTelegram: false, groupName: "VS96 Priority Support" },
   { chatId: "c2", customerName: "MAX39 Priority", link: "https://my.livechatinc.com/chats/c2", isTelegram: true, groupName: "MAX39 Priority Support" },
@@ -299,7 +332,7 @@ function renderChats(chats) {
         username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
         brand: deriveBrandFromGroup(chat.groupName),
         inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
-        releasedBonusAmount: "", claimSecret: false,
+        releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
       };
     }
     const s = state[chat.chatId];
@@ -381,12 +414,34 @@ chatListEl.addEventListener("click", async (e) => {
       s.caRecordId = caRecordId;
       s.claimedPrograms = {};
       s.releasedBonusAmount = "";
+      s.releasedAmountRaw = "";
       s.claimSecret = false;
-      setStatus(
-        justCreated
-          ? `Logged ${username} under ${brand} — bonuses now loading.`
-          : row ? `Found ${username} under ${brand}.` : "No record found."
-      );
+      card.querySelector(".ticket-slot").innerHTML = `<div class="ticket empty">Checking bonuses — can take up to ~50s on a big base…</div>`;
+      card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
+
+      if (justCreated) {
+        // Keep the button disabled for the whole poll — this is what stops a
+        // second click from creating a duplicate case row while Lark is
+        // still resolving the first one.
+        btn.textContent = "Checking…";
+        setStatus(`Logged ${username} under ${brand} — checking bonuses…`);
+        await pollForBonuses(chatId, caRecordId, card, (attempt, ready) => {
+          card.querySelector(".player-info-slot").innerHTML = renderPlayerInfo(chatId);
+          if (ready) {
+            card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+          } else {
+            setStatus(`Logged ${username} under ${brand} — still checking bonuses (${attempt * (POLL_INTERVAL_MS / 1000)}s)…`);
+          }
+        });
+        setStatus(
+          state[chatId].matchedRow.nameCustomer
+            ? `Bonuses ready for ${username} under ${brand}.`
+            : `Still resolving after ~${POLL_MAX_ATTEMPTS * (POLL_INTERVAL_MS / 1000)}s — hit Look up again if it doesn't settle, or check the row directly in Lark.`,
+          state[chatId].matchedRow.nameCustomer ? "success" : "error"
+        );
+      } else {
+        setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
+      }
     } catch (err) {
       setStatus("Lookup failed: " + err.message, "error");
     }
@@ -431,10 +486,14 @@ chatListEl.addEventListener("click", async (e) => {
       { key: "angPao", label: "Ang Pao (Special Reload Event)", display: r.angPao?.status },
       { key: "redeemCode", label: "Redeem Code", display: r.redeemCode?.status },
     ];
-    const claimedEntries = allSources
-      .filter((src) => s.claimedPrograms[src.key])
-      .map((src) => `${src.label}: ${src.display}`);
-    s.releasedBonusAmount = claimedEntries.join(" | ");
+    const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key]);
+    s.releasedBonusAmount = claimedSources.map((src) => `${src.label}: ${src.display}`).join(" | ");
+    // Raw display text only (no label prefix) for the backend to pull a
+    // number out of — labels like "Top 10 P&L - Test" contain digits of
+    // their own, so parsing the combined string above would grab the wrong
+    // number. Only one bonus can be claimed per case, so this is just that
+    // one entry's display value.
+    s.releasedAmountRaw = claimedSources.map((src) => src.display).join(" | ");
     s.claimSecret = true;
 
     // Auto-set inquiry from the bonus type — only the matching inquiry tag,
@@ -487,6 +546,7 @@ chatListEl.addEventListener("click", async (e) => {
           inquiry: s.inquiry,
           status: s.status,
           releasedAmount: s.releasedBonusAmount,
+          releasedAmountRaw: s.releasedAmountRaw,
           claimSecret: s.claimSecret,
         }),
       });

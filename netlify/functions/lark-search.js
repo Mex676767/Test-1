@@ -1,5 +1,5 @@
 const {
-  searchRecords, createRecord, getRecord, toDisplay,
+  searchRecords, createRecord, toDisplay,
   TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE,
 } = require("./lib/lark");
 
@@ -7,6 +7,7 @@ const F = {
   username: "Username",
   usernameUid: "Username/UID",
   brand: "Brand",
+  agentName: "Agent Name",
   pic: "PIC",
   tier: "Tier",
   nameCustomer: "Name customer",
@@ -20,8 +21,6 @@ const F = {
   angPaoAmount: "Ang Pao Claim",
 };
 
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-
 exports.handler = async function (event) {
   try {
     const { username, brand, picName } = JSON.parse(event.body || "{}");
@@ -30,6 +29,7 @@ exports.handler = async function (event) {
     }
     const uname = username.trim();
     const brandVal = brand.trim();
+    const agentVal = (picName || "").trim();
 
     // Always create a fresh record — each Look Up is a new case.
     // Brand must be set at create time, not deferred to the Record step:
@@ -38,15 +38,18 @@ exports.handler = async function (event) {
     // earlier UserFieldConvFail was caused by also sending PIC (a Person
     // field) here — PIC is left alone now, so Brand (a Single Select field)
     // is safe to send as a plain string.
+    // Agent Name (a plain Text field) is stamped now too — the agent is
+    // already chosen before Look Up can even run (app.js blocks it
+    // otherwise), so there's no reason to leave the row unattributed until
+    // the final Record step. lark-record.js still writes it again at submit
+    // in case the agent changes their name mid-case.
     const created = await createRecord(TABLE_CUSTOMER_APPROACHING, {
       [F.username]: uname,
       [F.brand]: brandVal,
+      [F.agentName]: agentVal,
     });
 
     const caRecordId = created.record_id;
-    await wait(1500);
-    const freshRecord = await getRecord(TABLE_CUSTOMER_APPROACHING, caRecordId);
-    const f = freshRecord.fields;
 
     // Warn CS if username exists under other brands
     const caUsernameOnly = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
@@ -78,23 +81,23 @@ exports.handler = async function (event) {
       redeemRow = redeemMatches[redeemMatches.length - 1] || null;
     } catch (_) { /* non-fatal */ }
 
+    // Note: the gold-ticket bonus columns (pic/tier/nameCustomer/dob and the
+    // 5 bonus Lookups) are NOT read here. On a large base, Lark can take
+    // 15-30s to resolve a freshly-created row's Lookup fields — far past
+    // Netlify's 10s function limit — so we return the record immediately and
+    // let the frontend poll lark-poll.js on its own schedule until they're
+    // ready (signaled by "Name customer" becoming non-empty).
     return {
       statusCode: 200,
       body: JSON.stringify({
         ok: true,
         otherBrands,
         justCreated: true,
+        pending: true,
         caRecordId,
         row: {
-          pic: toDisplay(f[F.pic]),
-          tier: toDisplay(f[F.tier]),
-          nameCustomer: toDisplay(f[F.nameCustomer]),
-          dob: toDisplay(f[F.dob]),
-          riskPlayer: toDisplay(f[F.riskPlayer]),
-          topPnl: toDisplay(f[F.topPnl]),
-          gracePeriod: toDisplay(f[F.gracePeriod]),
-          ltvTest: toDisplay(f[F.ltvTest]),
-          vipBooster: toDisplay(f[F.vipBooster]),
+          pic: "", tier: "", nameCustomer: "", dob: "",
+          riskPlayer: "", topPnl: "", gracePeriod: "", ltvTest: "", vipBooster: "",
           angPao: angPaoRow
             ? { recordId: angPaoRow.record_id, status: toDisplay(angPaoRow.fields[F.status]), amount: toDisplay(angPaoRow.fields[F.angPaoAmount]) }
             : null,

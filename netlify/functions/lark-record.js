@@ -1,5 +1,18 @@
 const { updateRecord, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
 
+// "Released amount" is a Number field in Lark. The frontend's display
+// string (e.g. "LTV - Test: Pass RM18") isn't usable directly — sending it
+// causes NumberFieldConvFail, and worse, label text like "Top 10 P&L - Test"
+// carries digits of its own that a naive number-extraction would grab
+// instead of the real amount. So the frontend also sends releasedAmountRaw
+// (just the source's display value, e.g. "Pass RM18", no label prefix) —
+// pull the number from that. No number found (no bonus claimed, or a
+// non-numeric status like "Claimed") -> write null so the field stays blank.
+function extractAmount(str) {
+  const match = String(str || "").match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+
 exports.handler = async function (event) {
   try {
     var body = JSON.parse(event.body || "{}");
@@ -9,6 +22,7 @@ exports.handler = async function (event) {
     var inquiry = body.inquiry;
     var status = body.status;
     var releasedAmount = body.releasedAmount;
+    var releasedAmountRaw = body.releasedAmountRaw;
     var claimSecret = body.claimSecret;
 
     if (!recordId || !inquiry || !inquiry.length || !status) {
@@ -20,7 +34,7 @@ exports.handler = async function (event) {
       "Brand": brand,
       "Inquiry": inquiry,
       "Status": status,
-      "Released amount": releasedAmount || "",
+      "Released amount": extractAmount(releasedAmountRaw !== undefined ? releasedAmountRaw : releasedAmount),
       "Claim Secret": !!claimSecret
     };
 
