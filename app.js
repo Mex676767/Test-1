@@ -289,24 +289,49 @@ function renderTickets(chatId) {
   }).join("") + `</div>` + (alreadyClaimedOne ? `<div class="ticket-note">Only 1 bonus can be claimed per case</div>` : "");
 }
 
-function renderInquiryPicker(chatId) {
+// Inquiry is a searchable dropdown + chip list instead of a big always-open
+// tag grid — same 70+ option list, same max-2 / Feedback-pairing rule, just
+// collapsed behind a search box so the card stays short until it's used.
+function renderInquiryChips(chatId) {
+  const s = state[chatId];
+  if (!s.inquiry.length) return `<span class="inquiry-chips-empty">No inquiry selected</span>`;
+  return s.inquiry.map((v) => `
+    <span class="inquiry-chip">${v}<button type="button" class="inquiry-chip-remove" data-action="removeInquiry" data-chat="${chatId}" data-value="${v}" aria-label="Remove ${v}">✕</button></span>
+  `).join("");
+}
+
+function renderInquiryDropdown(chatId, query) {
   const s = state[chatId];
   const maxed = s.inquiry.length >= 2;
-  return inquiryOptions.map((opt) => {
+  const q = (query || "").trim().toLowerCase();
+  const filtered = inquiryOptions.filter((opt) => !q || opt.toLowerCase().includes(q));
+  if (!filtered.length) return `<div class="inquiry-option-empty">No matching inquiry</div>`;
+  return filtered.map((opt) => {
     const active = s.inquiry.includes(opt);
-    const disable = maxed && !active;
+    const disabled = maxed && !active;
     return `
-    <label class="tag-check ${active ? "active" : ""} ${disable ? "disabled" : ""}">
-      <input type="checkbox" value="${opt}" ${active ? "checked" : ""} ${disable ? "disabled" : ""} />
-      <span>${opt}</span>
-    </label>`;
+    <button type="button" class="inquiry-option ${active ? "active" : ""} ${disabled ? "disabled" : ""}"
+      data-action="toggleInquiry" data-chat="${chatId}" data-value="${opt}" ${disabled ? "disabled" : ""}>
+      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${opt}
+    </button>`;
   }).join("");
 }
 
 function renderAutoFields(chatId) {
   const s = state[chatId];
+  // Read the Brand box's current DOM value (if it already exists) rather
+  // than always falling back to state — renderAutoFields() re-renders this
+  // slot on every lookup/claim, and state.brand is only synced from the
+  // input at submit time, so blindly using state.brand here would silently
+  // discard an in-progress manual correction the agent typed.
+  const existingCard = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
+  const currentBrand = existingCard?.querySelector(".brand-input")?.value ?? s.brand;
   return `
     <div class="auto-grid">
+      <div class="auto-field">
+        <span class="field-label" style="margin:0">Brand <span class="auto-tag">auto</span></span>
+        <input type="text" class="input mono brand-input" value="${currentBrand}" placeholder="Brand" />
+      </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Released Amount <span class="auto-tag">auto</span></span>
         <div class="auto-value mono">${s.releasedBonusAmount || "—"}</div>
@@ -368,11 +393,12 @@ function renderChats(chats) {
       <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
       <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
 
-      <label class="field-label">Brand <span class="auto-tag">auto-detected</span></label>
-      <input type="text" class="input brand-input" value="${s.brand}" placeholder="Brand" />
-
-      <label class="field-label">Inquiry <span class="hint">(select all that apply)</span></label>
-      <div class="tag-picker">${renderInquiryPicker(chat.chatId)}</div>
+      <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
+      <div class="inquiry-select">
+        <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
+        <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
+        <div class="inquiry-dropdown hidden">${renderInquiryDropdown(chat.chatId, "")}</div>
+      </div>
 
       <label class="field-label">Status</label>
       <select class="status-select">${optionTags(statusOptions, "Select status…")}</select>
@@ -523,9 +549,33 @@ chatListEl.addEventListener("click", async (e) => {
 
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
-    card.querySelector(".tag-picker").innerHTML = renderInquiryPicker(chatId);
+    card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     const statusSel = card.querySelector(".status-select");
     if (statusSel) statusSel.value = "Given";
+  }
+
+  if (btn.dataset.action === "toggleInquiry" || btn.dataset.action === "removeInquiry") {
+    const val = btn.dataset.value;
+    if (s.inquiry.includes(val)) {
+      s.inquiry = s.inquiry.filter((v) => v !== val);
+    } else if (btn.dataset.action === "toggleInquiry") {
+      // Same max-2 / "one must be Feedback" rule as before, just enforced
+      // from a dropdown click instead of a checkbox change event.
+      if (s.inquiry.length >= 2) {
+        setStatus("Only 2 inquiries can be selected per case.", "error");
+      } else if (s.inquiry.length === 1 && s.inquiry[0] !== "Feedback" && val !== "Feedback") {
+        setStatus('When picking 2 inquiries, one of them must be "Feedback".', "error");
+      } else {
+        s.inquiry.push(val);
+      }
+    }
+    const searchInput = card.querySelector(".inquiry-search");
+    card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, searchInput ? searchInput.value : "");
+    // Auto-close once maxed out — nothing left to add without removing a
+    // chip first, and removing happens via the chips row, not the dropdown.
+    if (s.inquiry.length >= 2) card.querySelector(".inquiry-dropdown").classList.add("hidden");
   }
 
   if (btn.dataset.action === "submit") {
@@ -541,6 +591,29 @@ chatListEl.addEventListener("click", async (e) => {
     renderChats(SAMPLE_CHATS);
     await submitRecord(chatId, { auto: true });
   }
+});
+
+// Inquiry dropdown: open on focus, filter as the agent types, close when
+// they click anywhere outside the widget (so a click on a dropdown option,
+// which lives inside .inquiry-select, never closes it prematurely).
+chatListEl.addEventListener("focusin", (e) => {
+  const input = e.target.closest(".inquiry-search");
+  if (!input) return;
+  input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
+});
+
+chatListEl.addEventListener("input", (e) => {
+  const input = e.target.closest(".inquiry-search");
+  if (!input) return;
+  const card = input.closest(".chat-card");
+  const chatId = card.dataset.chatId;
+  card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, input.value);
+});
+
+document.addEventListener("click", (e) => {
+  document.querySelectorAll(".inquiry-select").forEach((wrap) => {
+    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown")?.classList.add("hidden");
+  });
 });
 
 // Shared by the manual "Record to Lark Base" button and the auto-record
@@ -623,39 +696,6 @@ async function submitRecord(chatId, { auto } = {}) {
     setStatus("Recording failed: " + err.message, "error");
   }
 }
-
-chatListEl.addEventListener("change", (e) => {
-  const checkbox = e.target.closest(".tag-picker input[type=checkbox]");
-  if (!checkbox) return;
-  const card = checkbox.closest(".chat-card");
-  const chatId = card.dataset.chatId;
-  const s = state[chatId];
-  const val = checkbox.value;
-
-  if (checkbox.checked) {
-    // Rule: max 2 inquiries per case, and if picking a 2nd, one of the two
-    // must be "Feedback" (e.g. Unknown+Feedback is fine, Unknown+Other is not).
-    if (s.inquiry.length >= 2) {
-      checkbox.checked = false;
-      setStatus("Only 2 inquiries can be selected per case.", "error");
-      return;
-    }
-    if (s.inquiry.length === 1) {
-      const existing = s.inquiry[0];
-      if (existing !== "Feedback" && val !== "Feedback") {
-        checkbox.checked = false;
-        setStatus('When picking 2 inquiries, one of them must be "Feedback".', "error");
-        return;
-      }
-    }
-    s.inquiry.push(val);
-  } else {
-    s.inquiry = s.inquiry.filter((v) => v !== val);
-  }
-
-  // Re-render so unselected boxes grey out once 2 are picked.
-  card.querySelector(".tag-picker").innerHTML = renderInquiryPicker(chatId);
-});
 
 function setStatus(text, kind) {
   statusEl.textContent = text;

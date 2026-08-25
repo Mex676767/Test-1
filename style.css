@@ -114,27 +114,47 @@ body {
   margin-left: 5px; vertical-align: middle;
 }
 
-/* ---------- Inquiry tag picker ---------- */
-.tag-picker {
-  display: flex; flex-wrap: wrap; gap: 5px; max-height: 82px; overflow-y: auto;
-  padding: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+/* ---------- Inquiry (searchable dropdown, replaces the old always-open
+   tag grid — same max-2 / Feedback-pairing rule, collapsed behind search
+   so the card stays short until it's actually used) ---------- */
+.inquiry-select { position: relative; }
+.inquiry-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; min-height: 20px; }
+.inquiry-chips-empty { font-size: 10.5px; color: var(--text-faint); }
+.inquiry-chip {
+  display: flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600;
+  padding: 3px 6px 3px 9px; border-radius: 20px; background: var(--blue); color: white;
 }
-.tag-check {
-  display: flex; align-items: center; gap: 5px; font-size: 10.5px; padding: 3px 8px;
-  border-radius: 20px; border: 1px solid var(--border); background: var(--surface); cursor: pointer;
-  color: var(--text-muted); user-select: none; transition: all 0.12s ease;
+.inquiry-chip-remove {
+  background: none; border: none; color: white; opacity: 0.75; cursor: pointer;
+  font-size: 10px; line-height: 1; padding: 2px; font-family: inherit;
 }
-.tag-check input { display: none; }
-.tag-check.active { background: var(--blue); border-color: var(--blue); color: white; }
-.tag-check:hover:not(.active) { border-color: var(--blue); color: var(--blue); }
-.tag-check.disabled { opacity: 0.35; pointer-events: none; }
+.inquiry-chip-remove:hover { opacity: 1; }
 
-/* ---------- Auto-derived fields ---------- */
+.inquiry-dropdown {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
+  max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px; box-shadow: var(--shadow);
+}
+.inquiry-dropdown.hidden { display: none; }
+.inquiry-option {
+  display: flex; align-items: center; gap: 6px; text-align: left; width: 100%;
+  background: none; border: none; color: var(--text-muted); font-size: 11px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+}
+.inquiry-option:hover:not(.disabled) { background: var(--surface-2); color: var(--text); }
+.inquiry-option.active { color: var(--blue); font-weight: 600; }
+.inquiry-option.disabled { opacity: 0.35; cursor: not-allowed; }
+.inquiry-option-check { width: 12px; color: var(--blue); flex-shrink: 0; }
+.inquiry-option-empty { padding: 8px; font-size: 11px; color: var(--text-faint); text-align: center; }
+
+/* ---------- Auto-derived fields (Brand / Released Amount / Claim Secret) ---------- */
 .auto-grid { display: flex; gap: 6px; margin-top: 8px; }
 .auto-field {
-  flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+  flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
 }
-.auto-value { margin-top: 3px; font-size: 12px; font-weight: 600; }
+.auto-value { margin-top: 3px; font-size: 12px; font-weight: 600; overflow-wrap: break-word; }
+.auto-field .input { background: var(--surface); padding: 4px 6px; font-size: 11px; margin-top: 3px; }
 .input, select {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 7px; padding: 6px 8px; font-size: 12px; font-family: inherit;
