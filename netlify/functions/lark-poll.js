@@ -1,4 +1,4 @@
-const { getRecord, toDisplay, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
+const { getRecord, toDisplay, getFieldOptionMap, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
 
 // Called repeatedly by the frontend after lark-search.js creates a case row.
 // On a large base, Lark can take 15-30s to resolve a freshly-created row's
@@ -31,6 +31,15 @@ exports.handler = async function (event) {
     const f = record.fields;
     const nameCustomer = toDisplay(f[F.nameCustomer]);
 
+    // Tier is a Lookup over a Single Select column, so Lark hands back the
+    // raw option ID (e.g. "optp2Z4fis") instead of "Tier V" — resolve it.
+    // Falls back to the raw value if the option list can't be fetched, so a
+    // metadata hiccup never blocks the rest of the row from showing.
+    let tierMap;
+    try {
+      tierMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, F.tier);
+    } catch (_) { /* non-fatal — tier just shows the raw id/text below */ }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -38,7 +47,7 @@ exports.handler = async function (event) {
         ready: !!nameCustomer,
         row: {
           pic: toDisplay(f[F.pic]),
-          tier: toDisplay(f[F.tier]),
+          tier: toDisplay(f[F.tier], tierMap),
           nameCustomer,
           dob: toDisplay(f[F.dob]),
           riskPlayer: toDisplay(f[F.riskPlayer]),

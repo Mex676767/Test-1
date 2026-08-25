@@ -86,21 +86,58 @@ async function listRecords(tableId, pageSize = 500) {
 
 // Lark returns Lookup/Formula/Link/Person fields as nested objects/arrays.
 // This recursively unwraps any shape down to a plain display string.
-function toDisplay(v) {
+// Pass optionMap (from getFieldOptionMap below) when the field is a Lookup
+// over a Single/Multi Select column — Lark hands back the option's raw ID
+// (e.g. "optp2Z4fis") instead of its display text in that shape, unlike a
+// Select field on the record's own table, which already comes as plain text.
+function toDisplay(v, optionMap) {
   if (v === null || v === undefined) return "";
-  if (Array.isArray(v)) return v.map(toDisplay).filter(Boolean).join(", ");
+  if (Array.isArray(v)) return v.map((x) => toDisplay(x, optionMap)).filter(Boolean).join(", ");
   if (typeof v === "object") {
-    if ("value" in v) return toDisplay(v.value);
-    if ("text" in v) return String(v.text);
+    if ("value" in v) return toDisplay(v.value, optionMap);
+    if ("text" in v) return resolveOption(String(v.text), optionMap);
     if ("name" in v) return String(v.name);
     if ("link" in v) return String(v.link);
     return JSON.stringify(v);
   }
-  return String(v);
+  return resolveOption(String(v), optionMap);
+}
+
+function resolveOption(text, optionMap) {
+  if (optionMap && optionMap.has(text)) return optionMap.get(text);
+  return text;
+}
+
+async function listFields(tableId) {
+  const token = await getTenantToken();
+  const res = await fetch(
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await res.json();
+  if (data.code !== 0) throw new Error(`Lark listFields failed on table ${tableId}: ${data.msg}`);
+  return data.data.items || [];
+}
+
+// Caches id -> name maps per (tableId, fieldName) for 10 minutes — option
+// lists rarely change, and this avoids an extra API round trip on every poll.
+const fieldOptionMapCache = new Map(); // key -> { map, expiry }
+
+async function getFieldOptionMap(tableId, fieldName) {
+  const key = tableId + "::" + fieldName;
+  const cached = fieldOptionMapCache.get(key);
+  if (cached && Date.now() < cached.expiry) return cached.map;
+
+  const fields = await listFields(tableId);
+  const field = fields.find((f) => f.field_name === fieldName);
+  const options = field && field.property && field.property.options;
+  const map = new Map((options || []).map((o) => [o.id, o.name]));
+  fieldOptionMapCache.set(key, { map, expiry: Date.now() + 10 * 60_000 });
+  return map;
 }
 
 module.exports = {
   getTenantToken, searchRecords, getRecord, updateRecord, createRecord,
-  listRecords, toDisplay,
+  listRecords, toDisplay, listFields, getFieldOptionMap,
   TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE,
 };
