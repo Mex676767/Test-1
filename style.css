@@ -95,7 +95,14 @@ body {
 
 .chat-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-  padding: 10px; box-shadow: var(--shadow);
+  padding: 10px; box-shadow: var(--shadow); transition: background 0.15s ease, border-color 0.15s ease;
+}
+/* Chat closed but a required field is still missing — meant to be
+   impossible to miss at a glance, not just the small banner text inside. */
+.chat-card.needs-attention {
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger), var(--shadow);
 }
 .chat-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .chat-card-head-actions { display: flex; align-items: center; gap: 8px; }
@@ -303,8 +310,10 @@ body {
 /* Shown when a chat closed but required fields weren't filled in — the
    agent needs to complete them and click Record to Lark Base manually. */
 .record-error-banner {
+  /* Solid --surface (not a red tint) so it reads as a distinct detail panel
+     against the now-red .needs-attention card, rather than blending into it. */
   margin-top: 10px; font-size: 10.5px; color: var(--danger); line-height: 1.4;
-  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: 8px; padding: 7px 9px;
 }

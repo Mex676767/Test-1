@@ -406,7 +406,10 @@ function renderChats(chats) {
     const s = state[chat.chatId];
 
     const card = document.createElement("div");
-    card.className = "chat-card";
+    // Whole-card red highlight when a chat closed incomplete — meant to be
+    // impossible to miss even at a glance across 6 concurrent chats, not
+    // just a small line of text at the bottom.
+    card.className = "chat-card" + (s.autoRecordError ? " needs-attention" : "");
     card.dataset.chatId = chat.chatId;
 
     card.innerHTML = `
@@ -689,6 +692,7 @@ async function submitRecord(chatId, { auto } = {}) {
   if (!selectedAgent) {
     if (auto) {
       s.autoRecordError = "Chat closed, but no agent name is set — open Settings (⚙), then fill in and record manually.";
+      logDiagnostic(s.autoRecordError, "error");
       renderChats(SAMPLE_CHATS);
     } else {
       setStatus("Set your agent name in Settings (⚙) before recording.", "error");
@@ -713,9 +717,12 @@ async function submitRecord(chatId, { auto } = {}) {
 
   if (missing.length) {
     if (auto) {
+      // Logged, not shown in the top bar — the whole card turning red (see
+      // .chat-card.needs-attention) is the urgency signal now, not a banner
+      // at the top that may not even be about the card the agent is looking at.
       s.autoRecordError = `Chat closed but not fully filled in (missing: ${missing.join(", ")}) — complete it and click Record to Lark Base.`;
+      logDiagnostic(s.autoRecordError, "error");
       renderChats(SAMPLE_CHATS);
-      setStatus(s.autoRecordError, "error");
     } else {
       setStatus(`Missing before recording: ${missing.join(", ")}.`, "error");
     }
@@ -749,12 +756,15 @@ async function submitRecord(chatId, { auto } = {}) {
   } catch (err) {
     if (auto) {
       s.autoRecordError = `Auto-record failed (${err.message}) — fill in and click Record to Lark Base manually.`;
+      logDiagnostic(s.autoRecordError, "error");
       renderChats(SAMPLE_CHATS);
-    } else if (submitBtn) {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Record to Lark Base";
+    } else {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Record to Lark Base";
+      }
+      setStatus("Recording failed: " + err.message, "error");
     }
-    setStatus("Recording failed: " + err.message, "error");
   }
 }
 
