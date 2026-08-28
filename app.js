@@ -238,6 +238,7 @@ let liveWidget = null;
 // can also call this directly for a manual re-sync.
 function applyProfile(profile) {
   if (!profile || !profile.chat || !profile.chat.id) {
+    stopChatStatusPolling();
     activeChats = [];
     renderChats(activeChats);
     return;
@@ -251,6 +252,7 @@ function applyProfile(profile) {
   state[chat.chatId].expanded = true;
   renderChats(activeChats);
   resolveBrandFromGroupId(chat.chatId, profile.chat.groupID);
+  startChatStatusPolling(chat.chatId);
 }
 
 // The SDK only gives us an opaque groupID (chatFromProfile leaves groupName
@@ -276,6 +278,74 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}".`);
     if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
   } catch (_) { /* non-fatal — Brand just stays a manual pick */ }
+}
+
+// Polls LiveChat's Agent Chat API (via livechat-chat-status.js) for the
+// currently active chat's Telegram/open-closed status — there's no push
+// event for either (confirmed for Telegram from the SDK's own types;
+// confirmed for chat-closed from the SDK having no such event at all), so
+// this is the only way to detect them short of a full webhook integration.
+// Manual fallbacks (the Telegram toggle, the Close chat button) stay fully
+// functional alongside this — the field paths this reads are best-effort
+// from docs, not yet verified against a real response.
+let chatStatusPollTimer = null;
+const CHAT_STATUS_POLL_MS = 20_000;
+const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payload every tick
+
+function stopChatStatusPolling() {
+  if (chatStatusPollTimer) {
+    clearInterval(chatStatusPollTimer);
+    chatStatusPollTimer = null;
+  }
+}
+
+function startChatStatusPolling(chatId) {
+  stopChatStatusPolling();
+  checkChatStatus(chatId); // don't wait for the first interval tick
+  chatStatusPollTimer = setInterval(() => checkChatStatus(chatId), CHAT_STATUS_POLL_MS);
+}
+
+async function checkChatStatus(chatId) {
+  const s = state[chatId];
+  // Stop polling once this chat isn't the active one anymore, or it's
+  // already closed/recorded — nothing left to detect.
+  if (!s || activeChats[0]?.chatId !== chatId || !s.chatOpen || s.logged) {
+    stopChatStatusPolling();
+    return;
+  }
+  try {
+    const res = await fetch("/.netlify/functions/livechat-chat-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId }),
+    });
+    const data = await res.json();
+    if (!data.ok) return;
+
+    if (data.error) {
+      logDiagnostic(`Chat status check failed: ${data.error}`, "error");
+      return;
+    }
+
+    if (typeof data.isTelegram === "boolean" && data.isTelegram !== s.telegram) {
+      s.telegram = data.isTelegram;
+      logDiagnostic(`Auto-detected Telegram chat = ${data.isTelegram}.`);
+      if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
+    } else if (data.isActive === null && !rawStatusDebugLoggedFor.has(chatId)) {
+      // Expected fields weren't found — surface the raw response once so
+      // the field paths can be corrected against real data.
+      rawStatusDebugLoggedFor.add(chatId);
+      logDiagnostic("Chat status fields not recognized — raw: " + JSON.stringify(data.raw).slice(0, 500), "warn");
+    }
+
+    if (data.isActive === false && s.chatOpen) {
+      logDiagnostic("Auto-detected chat closed — auto-recording.", "success");
+      stopChatStatusPolling();
+      s.chatOpen = false;
+      renderChats(activeChats);
+      await submitRecord(chatId, { auto: true });
+    }
+  } catch (_) { /* non-fatal — just try again next tick */ }
 }
 
 function initLiveChatSdk() {
