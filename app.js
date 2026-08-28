@@ -207,10 +207,64 @@ async function pollForBonuses(chatId, recordId, card, onTick) {
   }
 }
 
+// Fallback only — used until (or unless) the real LiveChat Agent App SDK
+// connects. See initLiveChatSdk() below.
 const SAMPLE_CHATS = [
   { chatId: "c1", customerName: "VS96 VIP", link: "https://my.livechatinc.com/chats/c1", isTelegram: false, groupName: "VS96 Priority Support" },
   { chatId: "c2", customerName: "MAX39 Priority", link: "https://my.livechatinc.com/chats/c2", isTelegram: true, groupName: "MAX39 Priority Support" },
 ];
+
+// The list renderChats() actually draws from. Starts as the demo data;
+// initLiveChatSdk() replaces it with the one real active chat once (if) the
+// SDK connects. Kept as a list (not a single object) so renderChats/state
+// keying by chatId didn't need to change shape for this swap.
+let activeChats = SAMPLE_CHATS;
+
+// Builds our chat shape from the SDK's ICustomerProfile. Two known gaps,
+// confirmed from the SDK's own type definitions (not just undocumented) —
+// not solvable from this SDK alone:
+//   - no chat permalink/URL  -> link stays "" (Open ↗ link hidden)
+//   - no channel/customVariables data -> isTelegram can't be auto-detected,
+//     Telegram is a manual toggle for now (see .tg-check)
+// A planned companion content script (see project notes) will bridge in
+// richer data the SDK can't expose, since it can't see outside its iframe.
+function chatFromProfile(profile) {
+  return {
+    chatId: profile.chat.id,
+    customerName: profile.name || "Unknown customer",
+    link: "",
+    isTelegram: false,
+    groupName: "", // no group NAME here, only an opaque groupID — Brand is a manual dropdown instead
+  };
+}
+
+function initLiveChatSdk() {
+  if (typeof LiveChat === "undefined" || !LiveChat.createDetailsWidget) {
+    logDiagnostic("LiveChat Agent App SDK script not found — staying in demo/preview mode.");
+    return;
+  }
+  LiveChat.createDetailsWidget().then((widget) => {
+    logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
+
+    const applyProfile = (profile) => {
+      if (!profile || !profile.chat || !profile.chat.id) return;
+      const chat = chatFromProfile(profile);
+      activeChats = [chat];
+      // In live mode there's only ever one chat shown at a time, so a newly-
+      // active chat should always render expanded — collapsing exists to
+      // save space among several chats, which doesn't apply here.
+      ensureChatState(chat);
+      state[chat.chatId].expanded = true;
+      renderChats(activeChats);
+    };
+
+    const existing = widget.getCustomerProfile();
+    if (existing) applyProfile(existing);
+    widget.on("customer_profile", applyProfile);
+  }).catch((err) => {
+    logDiagnostic("LiveChat Agent App SDK failed to connect (" + err.message + ") — staying in demo/preview mode.", "error");
+  });
+}
 
 // Every LiveChat group is named "<BRAND><DIGITS> Priority Support".
 // Lark's Brand lookup strips digits — "VS96 Priority Support" → "VS".
@@ -444,11 +498,11 @@ function renderCollapsedCard(chat) {
       <span class="collapsed-summary summary-${summary.cls}">${summary.text}</span>
     </button>
     <div class="collapsed-actions">
-      <a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>
+      ${chat.link ? `<a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>` : ""}
       ${!s.logged ? `
       <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
-        title="Simulates the LiveChat 'chat closed' event, until the real widget SDK is wired up">
-        ${s.chatOpen ? "Close chat (sim)" : "Closed"}
+        title="Marks this case done — records it if everything's filled in, or flags what's missing">
+        ${s.chatOpen ? "Close chat" : "Closed"}
       </button>` : ""}
       <button class="expand-btn" data-action="toggleExpand" data-chat="${chat.chatId}" title="Expand">▾</button>
     </div>
@@ -461,11 +515,11 @@ function renderExpandedCard(chat) {
     <div class="chat-card-head">
       <span class="chat-name">${chat.customerName}</span>
       <div class="chat-card-head-actions">
-        <a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>
+        ${chat.link ? `<a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>` : ""}
         ${!s.logged ? `
         <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
-          title="Simulates the LiveChat 'chat closed' event, until the real widget SDK is wired up">
-          ${s.chatOpen ? "Close chat (sim)" : "Closed"}
+          title="Marks this case done — records it if everything's filled in, or flags what's missing">
+          ${s.chatOpen ? "Close chat" : "Closed"}
         </button>` : ""}
         <button class="expand-btn expanded" data-action="toggleExpand" data-chat="${chat.chatId}" title="Collapse">▴</button>
       </div>
@@ -508,9 +562,9 @@ function renderExpandedCard(chat) {
     </div>
 
     <div class="toggle-row">
-      <label class="field-label">Telegram chat <span class="auto-tag">auto</span></label>
+      <label class="field-label">Telegram chat <span class="hint">(the SDK can't detect this — flip it yourself)</span></label>
       <label class="switch">
-        <input type="checkbox" class="tg-check" ${s.telegram ? "checked" : ""} disabled />
+        <input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} />
         <span class="slider"></span>
       </label>
     </div>
@@ -527,6 +581,28 @@ function renderExpandedCard(chat) {
   `;
 }
 
+// Full default state shape for a chat we haven't seen before. Factored out
+// so applyProfile() (live SDK mode) can ensure a new chat's state exists
+// with every required field before forcing it expanded, rather than
+// renderChats()'s own init pass silently skipping a partially-built object.
+function ensureChatState(chat) {
+  if (state[chat.chatId]) return;
+  state[chat.chatId] = {
+    username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
+    brand: deriveBrandFromGroup(chat.groupName),
+    inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
+    releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
+    // chatOpen mirrors the LiveChat conversation's open/closed state.
+    // Recording only happens once a chat closes (auto if everything's
+    // filled in, or a manual nudge if not) — see closeChat/submitRecord.
+    chatOpen: true, autoRecordError: "",
+    // Collapsed by default — a card only expands to full detail when the
+    // agent clicks it (see toggleExpand). Keeps up to 6 concurrent chats
+    // glanceable instead of only ~2 fitting on screen at once.
+    expanded: false,
+  };
+}
+
 function renderChats(chats) {
   chatListEl.innerHTML = "";
 
@@ -538,22 +614,7 @@ function renderChats(chats) {
   // Pass 1: make sure every chat has state before deciding defaults below —
   // the "expand the first chat" default needs to see the whole list.
   for (const chat of chats) {
-    if (!state[chat.chatId]) {
-      state[chat.chatId] = {
-        username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
-        brand: deriveBrandFromGroup(chat.groupName),
-        inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
-        releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
-        // chatOpen mirrors the LiveChat conversation's open/closed state.
-        // Recording only happens once a chat closes (auto if everything's
-        // filled in, or a manual nudge if not) — see closeChat/submitRecord.
-        chatOpen: true, autoRecordError: "",
-        // Collapsed by default — a card only expands to full detail when the
-        // agent clicks it (see toggleExpand). Keeps up to 6 concurrent chats
-        // glanceable instead of only ~2 fitting on screen at once.
-        expanded: false,
-      };
-    }
+    ensureChatState(chat);
   }
   // Default: expand exactly one chat (the first) on first load only, so
   // agents land on a usable full card and see how the pattern works. Must
@@ -599,7 +660,7 @@ chatListEl.addEventListener("click", async (e) => {
     const brand = s.brand;
     if (!brand) { setStatus("Pick a brand before looking up.", "error"); return; }
     s.username = username;
-    const chatDef = SAMPLE_CHATS.find((c) => c.chatId === chatId);
+    const chatDef = activeChats.find((c) => c.chatId === chatId);
     const telegramNow = card.querySelector(".tg-check").checked;
     btn.disabled = true;
     btn.textContent = "…";
@@ -657,7 +718,7 @@ chatListEl.addEventListener("click", async (e) => {
     // tickets are read-only lookup columns; they're only logged at submit.
     if (programKey === "angPao" || programKey === "redeemCode") {
       const source = r[programKey];
-      const chatDef = SAMPLE_CHATS.find((c) => c.chatId === chatId);
+      const chatDef = activeChats.find((c) => c.chatId === chatId);
       btn.disabled = true;
       btn.textContent = "…";
       try {
@@ -738,12 +799,13 @@ chatListEl.addEventListener("click", async (e) => {
   }
 
   if (btn.dataset.action === "closeChat") {
-    // TODO: once the LiveChat Agent App SDK is wired up (currently blocked —
-    // see project notes), replace this manual button with the real
-    // "chat closed" event listener and run these same three lines from
-    // there instead of a click.
+    // TODO: the Agent App SDK has no "chat closed" event (confirmed from its
+    // own type definitions) — this manual click is the real trigger for now.
+    // A future companion content script (bridging richer page data into this
+    // widget — see project notes) could detect the "This chat has been
+    // archived" banner and call these same three lines automatically.
     s.chatOpen = false;
-    renderChats(SAMPLE_CHATS);
+    renderChats(activeChats);
     await submitRecord(chatId, { auto: true });
   }
 
@@ -753,7 +815,7 @@ chatListEl.addEventListener("click", async (e) => {
     // collapsed and glanceable instead of the list growing unbounded.
     Object.values(state).forEach((st) => { st.expanded = false; });
     s.expanded = !wasExpanded;
-    renderChats(SAMPLE_CHATS);
+    renderChats(activeChats);
   }
 
   if (btn.dataset.action === "toggleStatusDropdown") {
@@ -811,6 +873,15 @@ chatListEl.addEventListener("input", (e) => {
   }
 });
 
+// Telegram toggle — manual now (see chatFromProfile's comment on why the
+// SDK can't tell us this itself).
+chatListEl.addEventListener("change", (e) => {
+  const check = e.target.closest(".tg-check");
+  if (!check) return;
+  const s = state[check.dataset.chat];
+  if (s) s.telegram = check.checked;
+});
+
 // Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
 // Status/Brand); closes whatever else is open first so only one shows at a
 // time across the whole widget.
@@ -845,7 +916,7 @@ async function submitRecord(chatId, { auto } = {}) {
     if (auto) {
       s.autoRecordError = "Chat closed, but no agent name is set — open Settings (⚙), then fill in and record manually.";
       logDiagnostic(s.autoRecordError, "error");
-      renderChats(SAMPLE_CHATS);
+      renderChats(activeChats);
     } else {
       setStatus("Set your agent name in Settings (⚙) before recording.", "error");
       openSettingsPanel();
@@ -873,7 +944,7 @@ async function submitRecord(chatId, { auto } = {}) {
       // at the top that may not even be about the card the agent is looking at.
       s.autoRecordError = `Chat closed but not fully filled in (missing: ${missing.join(", ")}) — complete it and click Record to Lark Base.`;
       logDiagnostic(s.autoRecordError, "error");
-      renderChats(SAMPLE_CHATS);
+      renderChats(activeChats);
     } else {
       setStatus(`Missing before recording: ${missing.join(", ")}.`, "error");
     }
@@ -903,12 +974,12 @@ async function submitRecord(chatId, { auto } = {}) {
     if (!data.ok) throw new Error(data.error || "Record failed");
     s.logged = true;
     setStatus(`Logged ${s.username} to Lark Base${auto ? " (auto, on chat close)" : ""}.`, "success");
-    renderChats(SAMPLE_CHATS);
+    renderChats(activeChats);
   } catch (err) {
     if (auto) {
       s.autoRecordError = `Auto-record failed (${err.message}) — fill in and click Record to Lark Base manually.`;
       logDiagnostic(s.autoRecordError, "error");
-      renderChats(SAMPLE_CHATS);
+      renderChats(activeChats);
     } else {
       if (submitBtn) {
         submitBtn.disabled = false;
@@ -948,7 +1019,7 @@ function setStatus(text, kind) {
 
 document.getElementById("refreshBtn").addEventListener("click", () => {
   setStatus("Preview mode — showing sample chats until connected to LiveChat.");
-  renderChats(SAMPLE_CHATS);
+  renderChats(activeChats);
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
 
@@ -959,5 +1030,6 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
   await Promise.all([fetchAgentOptions(), fetchBrandOptions()]);
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
-  renderChats(SAMPLE_CHATS);
+  renderChats(activeChats);
+  initLiveChatSdk();
 })();

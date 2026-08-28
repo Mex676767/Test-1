@@ -30,6 +30,12 @@
 
   <main id="chatList" class="chat-list"></main>
 
+  <!-- LiveChat Agent App SDK — provides the currently active chat (customer
+       name, chat ID) when this widget is actually running inside LiveChat's
+       Details sidebar. Loaded before app.js so `LiveChat` is defined by the
+       time app.js checks for it; harmless (just unused) when previewed
+       standalone outside LiveChat, or if this CDN fails to load. -->
+  <script src="https://unpkg.com/@livechat/agent-app-sdk@1.16.0/dist/agentapp.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
