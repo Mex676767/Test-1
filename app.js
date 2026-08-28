@@ -259,6 +259,32 @@ function applyProfile(profile) {
   ensureChatState(chat);
   state[chat.chatId].expanded = true;
   renderChats(activeChats);
+  resolveBrandFromGroupId(chat.chatId, profile.chat.groupID);
+}
+
+// The SDK only gives us an opaque groupID (chatFromProfile leaves groupName
+// blank), so this resolves it server-side via LiveChat's own Groups API
+// (see livechat-group-name.js — no LiveChat PAT configured just means this
+// quietly does nothing) and runs the real name through the same
+// deriveBrandFromGroup() the old demo data used.
+async function resolveBrandFromGroupId(chatId, groupID) {
+  if (!groupID) return;
+  try {
+    const res = await fetch("/.netlify/functions/livechat-group-name", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ groupID }),
+    });
+    const data = await res.json();
+    if (!data.ok || !data.groupName) return;
+    const s = state[chatId];
+    // Bail if the agent already picked a brand manually, or the chat moved
+    // on before this (network-latency) response arrived.
+    if (!s || s.brand) return;
+    s.brand = deriveBrandFromGroup(data.groupName);
+    logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}".`);
+    if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
+  } catch (_) { /* non-fatal — Brand just stays a manual pick */ }
 }
 
 function initLiveChatSdk() {
