@@ -33,6 +33,16 @@ async function fetchAgentOptions() {
   } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
 }
 
+// Backs the Brand dropdown — see renderBrandOptions.
+let brandOptions = [];
+async function fetchBrandOptions() {
+  try {
+    const res = await fetch("/.netlify/functions/lark-brand-list");
+    const data = await res.json();
+    if (data.ok) brandOptions = data.brands || [];
+  } catch (_) { /* non-fatal — dropdown just shows "No matching brand" until it loads */ }
+}
+
 function saveAgent(name) {
   selectedAgent = name.trim();
   localStorage.setItem(AGENT_KEY, selectedAgent);
@@ -382,19 +392,12 @@ function renderInquiryDropdown(chatId, query) {
 
 function renderAutoFields(chatId) {
   const s = state[chatId];
-  // Read the Brand box's current DOM value (if it already exists) rather
-  // than always falling back to state — renderAutoFields() re-renders this
-  // slot on every lookup/claim, and state.brand is only synced from the
-  // input at submit time, so blindly using state.brand here would silently
-  // discard an in-progress manual correction the agent typed.
-  const existingCard = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
-  const currentBrand = existingCard?.querySelector(".brand-input")?.value ?? s.brand;
+  // Brand moved out to its own searchable dropdown section (see
+  // renderBrandDisplay/renderBrandOptions) since auto-detecting it from a
+  // LiveChat group name isn't reliable once real chat data replaces the
+  // demo's hardcoded groupName — back to a plain 2-box row here.
   return `
     <div class="auto-grid">
-      <div class="auto-field">
-        <span class="field-label" style="margin:0">Brand <span class="auto-tag">auto</span></span>
-        <input type="text" class="input mono brand-input" value="${currentBrand}" placeholder="Brand" />
-      </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Released Amount <span class="auto-tag">auto</span></span>
         <div class="auto-value mono">${s.releasedBonusAmount || "—"}</div>
@@ -404,6 +407,32 @@ function renderAutoFields(chatId) {
         <div class="auto-value">${s.claimSecret ? "✓ Ticked" : "— Not ticked"}</div>
       </div>
     </div>`;
+}
+
+// Brand as a searchable single-select dropdown (backed by Lark's real
+// option list — see lark-brand-list.js) instead of free text: a Single
+// Select field in Lark must match one of its configured options exactly,
+// so letting agents type anything risked the same NumberFieldConvFail-style
+// mismatch we hit with Tier. Reuses .inquiry-option/-check for the list
+// (same look as Inquiry/Status) and .status-display/-value for the trigger.
+function renderBrandDisplay(chatId) {
+  const s = state[chatId];
+  const empty = !s.brand;
+  return `<span class="status-value ${empty ? "placeholder" : ""}">${s.brand || "Select brand…"}</span><span class="status-caret">▾</span>`;
+}
+
+function renderBrandOptions(chatId, query) {
+  const s = state[chatId];
+  const q = (query || "").trim().toLowerCase();
+  const filtered = brandOptions.filter((b) => !q || b.toLowerCase().includes(q));
+  if (!filtered.length) return `<div class="inquiry-option-empty">No matching brand</div>`;
+  return filtered.map((b) => {
+    const active = s.brand === b;
+    return `
+    <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectBrand" data-chat="${chatId}" data-value="${b}">
+      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${b}
+    </button>`;
+  }).join("");
 }
 
 function renderCollapsedCard(chat) {
@@ -451,6 +480,17 @@ function renderExpandedCard(chat) {
     <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
     <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
     <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
+
+    <label class="field-label">Brand <span class="hint">(search to filter)</span></label>
+    <div class="brand-picker">
+      <button type="button" class="input status-display" data-action="toggleBrandDropdown" data-chat="${chat.chatId}">
+        ${renderBrandDisplay(chat.chatId)}
+      </button>
+      <div class="brand-dropdown hidden">
+        <input type="text" class="input brand-search" placeholder="Search brand…" autocomplete="off" />
+        <div class="brand-options">${renderBrandOptions(chat.chatId, "")}</div>
+      </div>
+    </div>
 
     <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
     <div class="inquiry-select">
@@ -556,8 +596,8 @@ chatListEl.addEventListener("click", async (e) => {
     if (!selectedAgent) { openSettingsPanel(); return; }
     const username = card.querySelector(".username-input").value.trim();
     if (!username) { setStatus("Enter a username before looking up.", "error"); return; }
-    const brand = card.querySelector(".brand-input").value.trim();
-    if (!brand) { setStatus("Brand couldn't be detected — check it before looking up.", "error"); return; }
+    const brand = s.brand;
+    if (!brand) { setStatus("Pick a brand before looking up.", "error"); return; }
     s.username = username;
     const chatDef = SAMPLE_CHATS.find((c) => c.chatId === chatId);
     const telegramNow = card.querySelector(".tg-check").checked;
@@ -720,7 +760,7 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".status-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown").forEach((d) => d.classList.add("hidden"));
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
     if (willOpen) dropdown.classList.remove("hidden");
   }
 
@@ -730,29 +770,63 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     card.querySelector(".status-dropdown").classList.add("hidden");
   }
+
+  if (btn.dataset.action === "toggleBrandDropdown") {
+    const dropdown = card.querySelector(".brand-dropdown");
+    const willOpen = dropdown.classList.contains("hidden");
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
+    if (willOpen) {
+      // Re-render rather than just un-hiding — brandOptions may have
+      // finished loading (or changed) since this card was last built.
+      const brandSearch = card.querySelector(".brand-search");
+      if (brandSearch) brandSearch.value = "";
+      card.querySelector(".brand-options").innerHTML = renderBrandOptions(chatId, "");
+      dropdown.classList.remove("hidden");
+      brandSearch?.focus();
+    }
+  }
+
+  if (btn.dataset.action === "selectBrand") {
+    s.brand = btn.dataset.value;
+    card.querySelector(".brand-picker .status-display").innerHTML = renderBrandDisplay(chatId);
+    const brandSearch = card.querySelector(".brand-search");
+    if (brandSearch) brandSearch.value = "";
+    card.querySelector(".brand-options").innerHTML = renderBrandOptions(chatId, "");
+    card.querySelector(".brand-dropdown").classList.add("hidden");
+  }
 });
 
-// Inquiry dropdown: open on focus, filter as the agent types, close when
-// they click anywhere outside the widget (so a click on a dropdown option,
-// which lives inside .inquiry-select, never closes it prematurely).
+// Inquiry/Brand search boxes: filter as the agent types.
+chatListEl.addEventListener("input", (e) => {
+  const inquiryInput = e.target.closest(".inquiry-search");
+  if (inquiryInput) {
+    const card = inquiryInput.closest(".chat-card");
+    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
+    return;
+  }
+  const brandInput = e.target.closest(".brand-search");
+  if (brandInput) {
+    const card = brandInput.closest(".chat-card");
+    card.querySelector(".brand-options").innerHTML = renderBrandOptions(card.dataset.chatId, brandInput.value);
+  }
+});
+
+// Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
+// Status/Brand); closes whatever else is open first so only one shows at a
+// time across the whole widget.
 chatListEl.addEventListener("focusin", (e) => {
   const input = e.target.closest(".inquiry-search");
   if (!input) return;
-  document.querySelectorAll(".status-dropdown").forEach((d) => d.classList.add("hidden"));
+  document.querySelectorAll(".status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
   input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
 });
 
-chatListEl.addEventListener("input", (e) => {
-  const input = e.target.closest(".inquiry-search");
-  if (!input) return;
-  const card = input.closest(".chat-card");
-  const chatId = card.dataset.chatId;
-  card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, input.value);
-});
-
+// Click anywhere outside a given dropdown's own wrapper closes it — so a
+// click on one of its own options, which lives inside that same wrapper,
+// never closes it prematurely.
 document.addEventListener("click", (e) => {
-  document.querySelectorAll(".inquiry-select, .status-picker").forEach((wrap) => {
-    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown, .status-dropdown")?.classList.add("hidden");
+  document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker").forEach((wrap) => {
+    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown")?.classList.add("hidden");
   });
 });
 
@@ -779,12 +853,11 @@ async function submitRecord(chatId, { auto } = {}) {
     return;
   }
 
-  const brand = (card?.querySelector(".brand-input")?.value ?? s.brand ?? "").trim();
-  // Unlike Brand (free text, only synced to state at submit time), Status is
-  // a discrete pick that's written to state the instant it's clicked in the
-  // custom dropdown, so state is always the source of truth here already.
+  // Brand and Status are both discrete picks from a dropdown now (no free
+  // text), written to state the instant they're clicked — state is always
+  // the source of truth here, no need to reach into the DOM for either.
+  const brand = s.brand || "";
   const status = s.status || "";
-  s.brand = brand;
 
   const missing = [];
   if (!s.username) missing.push("username");
@@ -883,7 +956,7 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
 // agent saved yet (first time / cleared cache).
 (async () => {
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
-  await fetchAgentOptions();
+  await Promise.all([fetchAgentOptions(), fetchBrandOptions()]);
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
   renderChats(SAMPLE_CHATS);

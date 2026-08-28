@@ -207,7 +207,25 @@ body {
 .status-dropdown::-webkit-scrollbar { display: none; }
 .status-dropdown.hidden { display: none; }
 
-/* ---------- Auto-derived fields (Brand / Released Amount / Claim Secret) ---------- */
+/* ---------- Brand (searchable single-select dropdown, backed by Lark's
+   real option list) — trigger button reuses .status-display/-value/-caret,
+   option list reuses .inquiry-option/-check; only the search box + wrapper
+   are Brand-specific. ---------- */
+.brand-picker { position: relative; }
+.brand-dropdown {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px; box-shadow: var(--shadow);
+}
+.brand-dropdown.hidden { display: none; }
+.brand-search { margin-bottom: 4px; }
+.brand-options {
+  max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  scrollbar-width: none;
+}
+.brand-options::-webkit-scrollbar { display: none; }
+
+/* ---------- Auto-derived fields (Released Amount / Claim Secret) ---------- */
 .auto-grid { display: flex; gap: 6px; margin-top: 8px; }
 .auto-field {
   flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
