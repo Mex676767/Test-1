@@ -4,10 +4,10 @@
 // then runs that name through the existing deriveBrandFromGroup() parser
 // in app.js, same as the old demo data always did.
 //
-// Auth note: LiveChat Personal Access Tokens use HTTP Basic auth, but NOT
-// the standard "base64(user:pass)" shape — per LiveChat's own docs and
-// examples, it's "Basic " + base64(token) alone. Untested against a real
-// account as of writing; if this 401s, that's the first thing to check.
+// Auth note: LIVECHAT_PAT must be the "Base64 Encoded Token" shown on the
+// token-creation screen (base64(AccountID:Token)), NOT the raw "Token"
+// value — LiveChat's console pre-computes it, ready to use as-is. Confirmed
+// directly from that screen, not guessed from docs like the earlier attempt.
 const LIVECHAT_PAT = process.env.LIVECHAT_PAT;
 
 let groupsCache = null;
@@ -17,10 +17,9 @@ async function fetchGroups() {
   const now = Date.now();
   if (groupsCache && now < groupsCacheExpiry) return groupsCache;
 
-  const token = Buffer.from(LIVECHAT_PAT).toString("base64");
   const res = await fetch("https://api.livechatinc.com/v3.6/configuration/action/list_groups", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Basic " + token },
+    headers: { "Content-Type": "application/json", Authorization: "Basic " + LIVECHAT_PAT },
     body: JSON.stringify({}),
   });
   const data = await res.json();
