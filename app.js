@@ -114,6 +114,29 @@ const BONUS_PROGRAMS = [
 ];
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
+// One-line summary shown on a collapsed card — lets an agent glance across
+// several queued chats without expanding each one. Priority order matches
+// what's most actionable: a card needing attention should never be masked
+// by a "Logged" badge from a stale render, etc.
+function hasAnyBonus(chatId) {
+  const r = state[chatId].matchedRow;
+  if (!r) return false;
+  if (BONUS_PROGRAMS.some((p) => isClaimableValue(r[p.key]))) return true;
+  if (r.angPao && !isHiddenStatus(r.angPao.status)) return true;
+  if (r.redeemCode && String(r.redeemCode.status || "").trim().toLowerCase() !== "claimed") return true;
+  return false;
+}
+
+function getChatSummary(chatId) {
+  const s = state[chatId];
+  if (s.autoRecordError) return { text: "⚠︎ Needs attention", cls: "attention" };
+  if (s.logged) return { text: "✓ Logged", cls: "done" };
+  if (s.matchedRow === undefined) return { text: "Not looked up", cls: "neutral" };
+  if (s.matchedRow === null) return { text: "No record found", cls: "neutral" };
+  if (!s.matchedRow.nameCustomer) return { text: "Checking bonuses…", cls: "pending" };
+  return hasAnyBonus(chatId) ? { text: "Bonuses ready", cls: "ready" } : { text: "No active bonuses", cls: "neutral" };
+}
+
 function isHiddenStatus(v) {
   const t = String(v || "").trim().toLowerCase();
   return t === "expired" || t === "claimed";
@@ -233,6 +256,7 @@ const statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
 const chatListEl = document.getElementById("chatList");
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
+let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card on first load
 
 // Shared by the initial render and every refresh so the "Select status…"
 // placeholder always gets the same dim styling as Inquiry's real
@@ -382,6 +406,87 @@ function renderAutoFields(chatId) {
     </div>`;
 }
 
+function renderCollapsedCard(chat) {
+  const s = state[chat.chatId];
+  const summary = getChatSummary(chat.chatId);
+  return `
+    <button type="button" class="chat-card-collapsed-row" data-action="toggleExpand" data-chat="${chat.chatId}">
+      <span class="chat-name">${chat.customerName}</span>
+      <span class="collapsed-summary summary-${summary.cls}">${summary.text}</span>
+    </button>
+    <div class="collapsed-actions">
+      <a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>
+      ${!s.logged ? `
+      <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
+        title="Simulates the LiveChat 'chat closed' event, until the real widget SDK is wired up">
+        ${s.chatOpen ? "Close chat (sim)" : "Closed"}
+      </button>` : ""}
+      <button class="expand-btn" data-action="toggleExpand" data-chat="${chat.chatId}" title="Expand">▾</button>
+    </div>
+  `;
+}
+
+function renderExpandedCard(chat) {
+  const s = state[chat.chatId];
+  return `
+    <div class="chat-card-head">
+      <span class="chat-name">${chat.customerName}</span>
+      <div class="chat-card-head-actions">
+        <a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>
+        ${!s.logged ? `
+        <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
+          title="Simulates the LiveChat 'chat closed' event, until the real widget SDK is wired up">
+          ${s.chatOpen ? "Close chat (sim)" : "Closed"}
+        </button>` : ""}
+        <button class="expand-btn expanded" data-action="toggleExpand" data-chat="${chat.chatId}" title="Collapse">▴</button>
+      </div>
+    </div>
+
+    <label class="field-label">Username</label>
+    <div class="username-row">
+      <input type="text" class="input mono username-input" placeholder="Player username / UID" value="${s.username}" />
+      <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}">Look up</button>
+    </div>
+
+    <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
+    <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
+    <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
+
+    <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
+    <div class="inquiry-select">
+      <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
+      <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
+      <div class="inquiry-dropdown hidden">${renderInquiryDropdown(chat.chatId, "")}</div>
+    </div>
+
+    <label class="field-label">Status</label>
+    <div class="status-picker">
+      <button type="button" class="input status-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
+        ${renderStatusDisplay(chat.chatId)}
+      </button>
+      <div class="status-dropdown hidden">${renderStatusDropdown(chat.chatId)}</div>
+    </div>
+
+    <div class="toggle-row">
+      <label class="field-label">Telegram chat <span class="auto-tag">auto</span></label>
+      <label class="switch">
+        <input type="checkbox" class="tg-check" ${s.telegram ? "checked" : ""} disabled />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    ${s.autoRecordError ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
+
+    ${
+      s.logged
+        ? `<div class="logged-badge">✓ Logged to Lark Base</div>`
+        : s.chatOpen
+          ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
+          : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
+    }
+  `;
+}
+
 function renderChats(chats) {
   chatListEl.innerHTML = "";
 
@@ -390,6 +495,8 @@ function renderChats(chats) {
     return;
   }
 
+  // Pass 1: make sure every chat has state before deciding defaults below —
+  // the "expand the first chat" default needs to see the whole list.
   for (const chat of chats) {
     if (!state[chat.chatId]) {
       state[chat.chatId] = {
@@ -401,73 +508,35 @@ function renderChats(chats) {
         // Recording only happens once a chat closes (auto if everything's
         // filled in, or a manual nudge if not) — see closeChat/submitRecord.
         chatOpen: true, autoRecordError: "",
+        // Collapsed by default — a card only expands to full detail when the
+        // agent clicks it (see toggleExpand). Keeps up to 6 concurrent chats
+        // glanceable instead of only ~2 fitting on screen at once.
+        expanded: false,
       };
     }
+  }
+  // Default: expand exactly one chat (the first) on first load only, so
+  // agents land on a usable full card and see how the pattern works. Must
+  // NOT re-check "is anything expanded" on every render — collapsing the
+  // last open card is a deliberate agent action (e.g. wanting the full
+  // compact queue view) and shouldn't be silently reopened.
+  if (!hasAutoExpandedOnce && chats.length) {
+    state[chats[0].chatId].expanded = true;
+    hasAutoExpandedOnce = true;
+  }
+
+  for (const chat of chats) {
     const s = state[chat.chatId];
 
     const card = document.createElement("div");
     // Whole-card red highlight when a chat closed incomplete — meant to be
     // impossible to miss even at a glance across 6 concurrent chats, not
     // just a small line of text at the bottom.
-    card.className = "chat-card" + (s.autoRecordError ? " needs-attention" : "");
+    card.className = "chat-card"
+      + (s.autoRecordError ? " needs-attention" : "")
+      + (s.expanded ? "" : " collapsed");
     card.dataset.chatId = chat.chatId;
-
-    card.innerHTML = `
-      <div class="chat-card-head">
-        <span class="chat-name">${chat.customerName}</span>
-        <div class="chat-card-head-actions">
-          <a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>
-          ${!s.logged ? `
-          <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
-            title="Simulates the LiveChat 'chat closed' event, until the real widget SDK is wired up">
-            ${s.chatOpen ? "Close chat (sim)" : "Closed"}
-          </button>` : ""}
-        </div>
-      </div>
-
-      <label class="field-label">Username</label>
-      <div class="username-row">
-        <input type="text" class="input mono username-input" placeholder="Player username / UID" value="${s.username}" />
-        <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}">Look up</button>
-      </div>
-
-      <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
-      <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
-      <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
-
-      <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
-      <div class="inquiry-select">
-        <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
-        <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
-        <div class="inquiry-dropdown hidden">${renderInquiryDropdown(chat.chatId, "")}</div>
-      </div>
-
-      <label class="field-label">Status</label>
-      <div class="status-picker">
-        <button type="button" class="input status-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
-          ${renderStatusDisplay(chat.chatId)}
-        </button>
-        <div class="status-dropdown hidden">${renderStatusDropdown(chat.chatId)}</div>
-      </div>
-
-      <div class="toggle-row">
-        <label class="field-label">Telegram chat <span class="auto-tag">auto</span></label>
-        <label class="switch">
-          <input type="checkbox" class="tg-check" ${s.telegram ? "checked" : ""} disabled />
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      ${s.autoRecordError ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
-
-      ${
-        s.logged
-          ? `<div class="logged-badge">✓ Logged to Lark Base</div>`
-          : s.chatOpen
-            ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
-            : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
-      }
-    `;
+    card.innerHTML = s.expanded ? renderExpandedCard(chat) : renderCollapsedCard(chat);
 
     chatListEl.appendChild(card);
   }
@@ -636,6 +705,15 @@ chatListEl.addEventListener("click", async (e) => {
     s.chatOpen = false;
     renderChats(SAMPLE_CHATS);
     await submitRecord(chatId, { auto: true });
+  }
+
+  if (btn.dataset.action === "toggleExpand") {
+    const wasExpanded = s.expanded;
+    // Accordion — only one full card open at a time, so the rest stay
+    // collapsed and glanceable instead of the list growing unbounded.
+    Object.values(state).forEach((st) => { st.expanded = false; });
+    s.expanded = !wasExpanded;
+    renderChats(SAMPLE_CHATS);
   }
 
   if (btn.dataset.action === "toggleStatusDropdown") {
