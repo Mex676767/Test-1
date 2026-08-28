@@ -238,6 +238,29 @@ function chatFromProfile(profile) {
   };
 }
 
+// Set once the SDK actually connects — lets the Refresh button re-sync
+// against the real widget on demand instead of always claiming "preview
+// mode", which stopped being accurate the moment live mode existed.
+let liveWidget = null;
+
+// Top-level (not nested in initLiveChatSdk's closure) so the Refresh button
+// can also call this directly for a manual re-sync.
+function applyProfile(profile) {
+  if (!profile || !profile.chat || !profile.chat.id) {
+    activeChats = [];
+    renderChats(activeChats);
+    return;
+  }
+  const chat = chatFromProfile(profile);
+  activeChats = [chat];
+  // In live mode there's only ever one chat shown at a time, so a newly-
+  // active chat should always render expanded — collapsing exists to save
+  // space among several chats, which doesn't apply here.
+  ensureChatState(chat);
+  state[chat.chatId].expanded = true;
+  renderChats(activeChats);
+}
+
 function initLiveChatSdk() {
   if (typeof LiveChat === "undefined" || !LiveChat.createDetailsWidget) {
     logDiagnostic("LiveChat Agent App SDK script not found — staying in demo/preview mode.");
@@ -245,21 +268,17 @@ function initLiveChatSdk() {
   }
   LiveChat.createDetailsWidget().then((widget) => {
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
-
-    const applyProfile = (profile) => {
-      if (!profile || !profile.chat || !profile.chat.id) return;
-      const chat = chatFromProfile(profile);
-      activeChats = [chat];
-      // In live mode there's only ever one chat shown at a time, so a newly-
-      // active chat should always render expanded — collapsing exists to
-      // save space among several chats, which doesn't apply here.
-      ensureChatState(chat);
-      state[chat.chatId].expanded = true;
-      renderChats(activeChats);
-    };
-
-    const existing = widget.getCustomerProfile();
-    if (existing) applyProfile(existing);
+    liveWidget = widget;
+    // We're definitely embedded in real LiveChat now (this promise only
+    // resolves inside an actual Agent App) — stop showing demo data
+    // immediately, even before we know whether a chat happens to be
+    // selected yet. Previously this only replaced activeChats once a valid
+    // profile arrived, so with nothing selected (getCustomerProfile()
+    // returning null) the sample chats stayed visible forever, looking
+    // like real data when it wasn't.
+    activeChats = [];
+    renderChats(activeChats);
+    applyProfile(widget.getCustomerProfile());
     widget.on("customer_profile", applyProfile);
   }).catch((err) => {
     logDiagnostic("LiveChat Agent App SDK failed to connect (" + err.message + ") — staying in demo/preview mode.", "error");
@@ -607,7 +626,7 @@ function renderChats(chats) {
   chatListEl.innerHTML = "";
 
   if (!chats.length) {
-    chatListEl.innerHTML = `<div class="empty-state">No active chats detected right now. Open a chat and hit refresh.</div>`;
+    chatListEl.innerHTML = `<div class="empty-state">No chat currently open — select a conversation in LiveChat to see it here.</div>`;
     return;
   }
 
@@ -1018,8 +1037,16 @@ function setStatus(text, kind) {
 }
 
 document.getElementById("refreshBtn").addEventListener("click", () => {
-  setStatus("Preview mode — showing sample chats until connected to LiveChat.");
-  renderChats(activeChats);
+  if (liveWidget) {
+    // Live mode — re-sync against the SDK on demand rather than just
+    // re-rendering whatever we already had (which could be stale if a
+    // customer_profile event was somehow missed).
+    applyProfile(liveWidget.getCustomerProfile());
+    setStatus("Refreshed from LiveChat.", "success");
+  } else {
+    setStatus("Preview mode — showing sample chats until connected to LiveChat.");
+    renderChats(activeChats);
+  }
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
 
