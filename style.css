@@ -159,6 +159,14 @@ body {
    so the card stays short until it's actually used) ---------- */
 .inquiry-select { position: relative; }
 .inquiry-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; min-height: 20px; }
+/* Matches .status-caret — signals "opens a dropdown" consistently with
+   Status/Brand, even though this trigger is a search input, not a button. */
+.inquiry-search-wrap { position: relative; }
+.inquiry-search-wrap .inquiry-search { padding-right: 22px; }
+.inquiry-caret {
+  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  color: var(--text-faint); font-size: 10px; pointer-events: none;
+}
 .inquiry-chips-empty { font-size: 10.5px; color: var(--text-faint); }
 .inquiry-chip {
   display: flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600;
@@ -309,6 +317,7 @@ body {
 }
 .switch input:checked + .slider { background: var(--teal-soft); border-color: var(--teal); }
 .switch input:checked + .slider::before { transform: translateX(15px); background: var(--teal); }
+.switch input:disabled + .slider { cursor: default; }
 
 /* ---------- Submit ---------- */
 .submit-btn {

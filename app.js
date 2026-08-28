@@ -211,21 +211,19 @@ const SAMPLE_CHATS = [
 // keying by chatId didn't need to change shape for this swap.
 let activeChats = SAMPLE_CHATS;
 
-// Builds our chat shape from the SDK's ICustomerProfile. Two known gaps,
+// Builds our chat shape from the SDK's ICustomerProfile. One remaining gap,
 // confirmed from the SDK's own type definitions (not just undocumented) —
-// not solvable from this SDK alone:
-//   - no chat permalink/URL  -> link stays "" (Open ↗ link hidden)
-//   - no channel/customVariables data -> isTelegram can't be auto-detected,
-//     Telegram is a manual toggle for now (see .tg-check)
-// A planned companion content script (see project notes) will bridge in
-// richer data the SDK can't expose, since it can't see outside its iframe.
+// not solvable from the SDK alone: no chat permalink/URL, so link stays ""
+// (Open ↗ link hidden). Brand and Telegram both start blank/false here too,
+// but get filled in server-side shortly after (see resolveBrandFromGroupId
+// and checkChatStatus) via LiveChat's own REST API, not from this object.
 function chatFromProfile(profile) {
   return {
     chatId: profile.chat.id,
     customerName: profile.name || "Unknown customer",
     link: "",
     isTelegram: false,
-    groupName: "", // no group NAME here, only an opaque groupID — Brand is a manual dropdown instead
+    groupName: "",
   };
 }
 
@@ -623,7 +621,10 @@ function renderExpandedCard(chat) {
     <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
     <div class="inquiry-select">
       <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
-      <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
+      <div class="inquiry-search-wrap">
+        <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
+        <span class="inquiry-caret">▾</span>
+      </div>
       <div class="inquiry-dropdown hidden">${renderInquiryDropdown(chat.chatId, "")}</div>
     </div>
 
@@ -636,9 +637,9 @@ function renderExpandedCard(chat) {
     </div>
 
     <div class="toggle-row">
-      <label class="field-label">Telegram chat <span class="hint">(the SDK can't detect this — flip it yourself)</span></label>
+      <label class="field-label">Telegram chat <span class="auto-tag">auto</span></label>
       <label class="switch">
-        <input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} />
+        <input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} disabled />
         <span class="slider"></span>
       </label>
     </div>
@@ -914,15 +915,6 @@ chatListEl.addEventListener("input", (e) => {
   if (!inquiryInput) return;
   const card = inquiryInput.closest(".chat-card");
   card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
-});
-
-// Telegram toggle — manual now (see chatFromProfile's comment on why the
-// SDK can't tell us this itself).
-chatListEl.addEventListener("change", (e) => {
-  const check = e.target.closest(".tg-check");
-  if (!check) return;
-  const s = state[check.dataset.chat];
-  if (s) s.telegram = check.checked;
 });
 
 // Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
