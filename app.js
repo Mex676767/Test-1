@@ -322,17 +322,18 @@ async function checkChatStatus(chatId) {
     const data = await res.json();
     if (!data.ok) return;
 
+    // chatId here is actually the thread id (see livechat-chat-status.js
+    // header note) — the backend resolves the real chat id via list_chats
+    // and hands back a ready-to-click chatUrl once it does. Logged wherever
+    // available so the agent can cross-check against LiveChat's own UI.
+    const linkSuffix = data.chatUrl ? ` (${data.chatUrl})` : ` (thread ${chatId}, chat id not yet resolved)`;
+
     if (data.error) {
       // Once per chat — this call runs every 20s, and a persistent error
-      // (e.g. "Chat not found" after archiving) would otherwise spam the
-      // log with the identical line on every tick.
+      // would otherwise spam the log with the identical line on every tick.
       if (!errorLoggedFor.has(chatId)) {
         errorLoggedFor.add(chatId);
-        // Includes the exact chatId queried — "Chat not found" alone gives
-        // no way to check whether the ID we're sending (profile.chat.id
-        // from the Agent App SDK) is even the right kind of ID for this
-        // REST endpoint to recognize.
-        logDiagnostic(`Chat status check failed for chatId "${chatId}": ${data.error}`, "error");
+        logDiagnostic(`Chat status check failed for thread "${chatId}": ${data.error}`, "error");
       }
       return;
     }
@@ -350,18 +351,27 @@ async function checkChatStatus(chatId) {
       return;
     }
 
-    // Confirms get_chat actually reached and recognized this chat at least
-    // once — otherwise a later "Chat not found" (once the chat's archived)
-    // is ambiguous: did it ever work, or was it always broken for this
-    // chat? Logged once, success or not, so that question has an answer.
+    if (data.notFound) {
+      // The thread wasn't among the chats list_chats returned — surfaced
+      // distinctly so it's never mistaken for a confirmed close.
+      if (!rawStatusDebugLoggedFor.has(chatId)) {
+        rawStatusDebugLoggedFor.add(chatId);
+        logDiagnostic(`Chat lookup for thread "${chatId}" found no match in list_chats — raw: ${JSON.stringify(data.raw ?? null)}`, "warn");
+      }
+      return;
+    }
+
+    // Confirms the lookup actually resolved this chat at least once —
+    // otherwise a later miss is ambiguous: did it ever work, or was it
+    // always broken for this chat? Logged once, success or not.
     if (!firstCheckLoggedFor.has(chatId)) {
       firstCheckLoggedFor.add(chatId);
-      logDiagnostic(`First chat status check succeeded: isActive=${data.isActive}, isTelegram=${data.isTelegram}.`);
+      logDiagnostic(`First chat status check succeeded: isActive=${data.isActive}, isTelegram=${data.isTelegram}.${linkSuffix}`);
     }
 
     if (typeof data.isTelegram === "boolean" && data.isTelegram !== s.telegram) {
       s.telegram = data.isTelegram;
-      logDiagnostic(`Auto-detected Telegram chat = ${data.isTelegram}.`);
+      logDiagnostic(`Auto-detected Telegram chat = ${data.isTelegram}.${linkSuffix}`);
       if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
     } else if (data.isActive === null && !rawStatusDebugLoggedFor.has(chatId)) {
       // Expected fields weren't found — surface the raw response once so
@@ -371,7 +381,7 @@ async function checkChatStatus(chatId) {
     }
 
     if (data.isActive === false && s.chatOpen) {
-      logDiagnostic("Auto-detected chat closed — auto-recording.", "success");
+      logDiagnostic(`Auto-detected chat closed — auto-recording.${linkSuffix}`, "success");
       stopChatStatusPolling();
       s.chatOpen = false;
       renderChats(activeChats);
