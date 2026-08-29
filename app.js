@@ -131,6 +131,14 @@ const BONUS_PROGRAMS = [
 ];
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
+// Released Amount only ever applies to these — Risk Player, 12h VIP Booster,
+// Ang Pao, Redeem Code, and Special Reload don't carry a claimable monetary
+// amount. Grace Period is included here for documentation, but never
+// reaches the generic claim flow that reads this set — it has its own
+// separate handling (see the claim handler) since one field packs two very
+// different states.
+const AMOUNT_ELIGIBLE_PROGRAMS = new Set(["topPnl", "ltvTest", "gracePeriod"]);
+
 // One-line summary shown on a collapsed card — lets an agent glance across
 // several queued chats without expanding each one. Priority order matches
 // what's most actionable: a card needing attention should never be masked
@@ -940,7 +948,12 @@ chatListEl.addEventListener("click", async (e) => {
       { key: "redeemCode", label: "Redeem Code", display: r.redeemCode?.status },
       { key: "specialReload", label: "Special Reload (Ang Pao)", display: r.specialReload?.status },
     ];
-    const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key]);
+    // Released Amount only ever applies to Top 10 P&L / LTV (Grace Period
+    // has its own separate handling above) — Risk Player, 12h VIP Booster,
+    // Ang Pao, Redeem Code, and Special Reload don't carry a claimable
+    // monetary amount, so claiming one of those must leave it blank rather
+    // than stuffing its status text in there.
+    const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && AMOUNT_ELIGIBLE_PROGRAMS.has(src.key));
     s.releasedBonusAmount = claimedSources.map((src) => `${src.label}: ${src.display}`).join(" | ");
     // Raw display text only (no label prefix) for the backend to pull a
     // number out of — labels like "Top 10 P&L - Test" contain digits of
