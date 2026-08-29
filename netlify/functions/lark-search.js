@@ -92,10 +92,16 @@ exports.handler = async function (event) {
     ]);
 
     // Grace Period(Day): "SW Check" is both the claim flag (hide only
-    // Claimed/Expired) and the displayed value.
+    // Claimed/Expired) and the displayed value. "SW Check" is a Formula
+    // field, so its raw API value can come back as a segments array rather
+    // than a plain string — hidden() needs toDisplay() first, or it never
+    // matches "claimed"/"expired" and an actually-expired row can slip
+    // through as "claimable" (this was the actual bug: an expired row got
+    // picked over the real one, so the ticket ended up hidden entirely once
+    // isClaimableValue saw "Expired" client-side).
     const graceRow = await findOldestClaimableRow(
       TABLE_GRACE_PERIOD, uname, brandVal,
-      (fields) => !hidden(fields[F.swCheck])
+      (fields) => !hidden(toDisplay(fields[F.swCheck]))
     ).catch(() => null);
 
     // Risk Player(Day): one field ("Status") encodes both which day-tier

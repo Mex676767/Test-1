@@ -540,9 +540,21 @@ function renderTickets(chatId) {
   const defs = [];
 
   BONUS_PROGRAMS.forEach((p) => {
-    if (isClaimableValue(r[p.key])) {
-      defs.push({ key: p.key, kind: "regular", label: p.label, display: r[p.key] });
+    if (!isClaimableValue(r[p.key])) return;
+    const def = { key: p.key, kind: "regular", label: p.label, display: r[p.key] };
+    // Grace Period's one field packs two different states: "Pass ..." means
+    // the offer just needs activating (no money changes hands yet — button
+    // says Activate, doesn't consume the one-claim-per-case slot); "Activated
+    // : ... - Bonus N" means it's now a real, claimable bonus (normal Claim
+    // button/lock behavior). See the claim handler for what each does.
+    if (p.key === "gracePeriod") {
+      const isPass = /^\s*pass\b/i.test(r.gracePeriod);
+      def.claimLabel = isPass ? "Activate" : "Claim";
+      def.doneLabel = isPass ? "✓ Activated" : "✓ Claimed";
+      def.done = isPass ? !!s.gracePeriodActivated : !!s.claimedPrograms.gracePeriod;
+      def.excludeFromLock = isPass;
     }
+    defs.push(def);
   });
 
   if (r.angPao && !isHiddenStatus(r.angPao.status)) {
@@ -564,11 +576,17 @@ function renderTickets(chatId) {
     return `<div class="ticket empty">No active bonuses for this player right now</div>`;
   }
 
-  // Only one bonus can be claimed per case — once any is claimed, the rest lock.
+  // Only one bonus can be claimed per case — once any is claimed, the rest
+  // lock. Grace Period's "Activate" state (def.excludeFromLock) is exempt in
+  // both directions: it doesn't get locked out by another claim, and (since
+  // it never sets s.claimedPrograms.gracePeriod) it never locks other
+  // tickets either — it isn't a monetary claim.
   const alreadyClaimedOne = Object.values(s.claimedPrograms).some(Boolean);
   return `<div class="ticket-stack">` + defs.map((d) => {
-    const claimed = !!s.claimedPrograms[d.key];
-    const locked = alreadyClaimedOne && !claimed;
+    const claimed = d.key === "gracePeriod" ? !!d.done : !!s.claimedPrograms[d.key];
+    const locked = d.excludeFromLock ? false : (alreadyClaimedOne && !claimed);
+    const claimLabel = d.claimLabel || "Claim";
+    const doneLabel = d.doneLabel || "✓ Claimed";
     return `
     <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""}">
       <div class="ticket-icon">◆</div>
@@ -577,7 +595,7 @@ function renderTickets(chatId) {
         <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.display}</div>
       </div>
       <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="claim" data-program="${d.key}" data-chat="${chatId}" ${claimed || locked ? "disabled" : ""}>
-        ${claimed ? "✓ Claimed" : "Claim"}
+        ${claimed ? doneLabel : claimLabel}
       </button>
     </div>`;
   }).join("") + `</div>` + (alreadyClaimedOne ? `<div class="ticket-note">Only 1 bonus can be claimed per case</div>` : "");
@@ -732,6 +750,7 @@ function ensureChatState(chat) {
   if (state[chat.chatId]) return;
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
+    gracePeriodActivated: false,
     brand: deriveBrandFromGroup(chat.groupName),
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "",
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
@@ -816,6 +835,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.otherBrandMatches = otherBrands;
       s.caRecordId = caRecordId;
       s.claimedPrograms = {};
+      s.gracePeriodActivated = false;
       s.releasedBonusAmount = "";
       s.releasedAmountRaw = "";
       s.claimSecret = false;
@@ -833,6 +853,38 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "claim") {
     const programKey = btn.dataset.program;
     const r = s.matchedRow;
+
+    // Grace Period's one field packs two different states (see renderTickets)
+    // and neither follows the generic claim flow below at all: "Pass ..."
+    // just activates the offer — Inquiry/Status only, no amount/claim
+    // secret, and it doesn't consume the one-claim-per-case slot. "Activated
+    // : ... - Bonus N" is the real claim — amount comes from the number
+    // after "Bonus" specifically (not "Deposit"), and it behaves like any
+    // other claim (locks the rest, Claim Secret ticked).
+    if (programKey === "gracePeriod") {
+      const display = r.gracePeriod || "";
+      if (/^\s*pass\b/i.test(display)) {
+        s.gracePeriodActivated = true;
+        s.inquiry = ["Grace Period"];
+        s.status = "Activated";
+      } else {
+        const amountMatch = display.match(/Bonus\s*[:\-]?\s*(-?\d+(?:\.\d+)?)/i);
+        const amount = amountMatch ? amountMatch[1] : "";
+        s.claimedPrograms.gracePeriod = true;
+        s.inquiry = ["Grace Period"];
+        s.status = "Given";
+        s.claimSecret = true;
+        s.releasedBonusAmount = `Grace Period: ${amount || display}`;
+        s.releasedAmountRaw = amount || display;
+      }
+      card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+      card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
+      card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+      card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
+      card.querySelector(".status-display").innerHTML = renderStatusDisplay(chatId);
+      card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+      return;
+    }
 
     // Ang Pao / Redeem Code / Special Reload (Ang Pao) write live to Lark
     // the instant they're claimed — that's what fires the backoffice-

@@ -163,6 +163,17 @@ async function getFieldOptionMap(tableId, fieldName) {
 // of Inspection") should ever surface, so CS works through them in order
 // instead of always seeing the newest. isClaimable receives the record's
 // raw fields object and decides whether that row counts at all.
+// "Time of Inspection" isn't spelled consistently across tables (confirmed:
+// Grace Period(Day) actually has "Time of inspection", lowercase "i") — look
+// it up case-insensitively per row instead of hardcoding one casing, since a
+// silent no-match here doesn't error, it just makes the sort a no-op and can
+// let an actually-expired row (returned in unpredictable order by the search
+// API) get picked over the real claimable one.
+function findTimeOfInspection(fields) {
+  const key = Object.keys(fields).find((k) => k.trim().toLowerCase() === "time of inspection");
+  return key ? fields[key] : 0;
+}
+
 async function findOldestClaimableRow(tableId, username, brand, isClaimable) {
   if (!tableId) return null;
   const matches = await searchRecords(tableId, [
@@ -171,7 +182,7 @@ async function findOldestClaimableRow(tableId, username, brand, isClaimable) {
   ]);
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
-  claimable.sort((a, b) => (a.fields["Time of Inspection"] || 0) - (b.fields["Time of Inspection"] || 0));
+  claimable.sort((a, b) => (findTimeOfInspection(a.fields) || 0) - (findTimeOfInspection(b.fields) || 0));
   return claimable[0];
 }
 
