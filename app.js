@@ -470,7 +470,7 @@ const inquiryOptions = [
 // Maps each bonus program to the closest Inquiry option — auto-selected
 // the moment CS clicks Claim so they don't have to pick it manually.
 const BONUS_INQUIRY_MAP = {
-  riskPlayer: "Bonus Checking",
+  riskPlayer: "Bonus Checking", // fallback only — see resolveInquiryForProgram
   topPnl: "TOP P&L",
   gracePeriod: "Grace Period",
   ltvTest: "TOP LTV",
@@ -478,6 +478,23 @@ const BONUS_INQUIRY_MAP = {
   angPao: "Ang Pao",
   redeemCode: "Redeem Code",
 };
+
+// Risk Player is a single Lark field, but its value encodes which day-tier
+// bonus actually applies for this customer (e.g. "7D 20%", "14D 30%" —
+// "1D No Bonus"/"3D No Bonus" never reach here at all, filtered out earlier
+// by isClaimableValue/NO_BONUS_PATTERN). The Inquiry tag should reflect that
+// specific tier ("7D", "14D", ...), not a generic "Bonus Checking" catch-all
+// — those day-tier tags already exist in inquiryOptions. Falls back to the
+// static map above if the value doesn't start with a recognized day-tier,
+// so this never silently produces no inquiry at all.
+function resolveInquiryForProgram(key, display) {
+  if (key === "riskPlayer") {
+    const match = String(display || "").match(/^\s*(\d+D)\b/i);
+    const tag = match ? match[1].toUpperCase() : null;
+    if (tag && inquiryOptions.includes(tag)) return tag;
+  }
+  return BONUS_INQUIRY_MAP[key];
+}
 
 const statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
 
@@ -893,7 +910,7 @@ chatListEl.addEventListener("click", async (e) => {
 
     // Auto-set inquiry from the bonus type — only the matching inquiry tag,
     // NOT "Feedback". CS adds Feedback manually if applicable.
-    const mappedInquiry = BONUS_INQUIRY_MAP[programKey];
+    const mappedInquiry = resolveInquiryForProgram(programKey, r[programKey]);
     if (mappedInquiry) {
       s.inquiry = [mappedInquiry];
     }
