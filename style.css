@@ -242,10 +242,14 @@ body {
 .status-dropdown::-webkit-scrollbar { display: none; }
 .status-dropdown.hidden { display: none; }
 
-/* ---------- Auto-derived fields (Brand / Released Amount / Claim Secret) ---------- */
-.auto-grid { display: flex; gap: 6px; margin-top: 16px; }
+/* ---------- Auto-derived fields (Brand / D.O.B / Released Amount / Claim Secret) ---------- */
+/* 4 fields now (was 3) — forcing them into one row squeezed "Claim Secret"
+   into wrapping ("— Not / ticked") at real sidebar widths, the same
+   word-breaking bug fixed once before for the 3-column layout. Wraps to
+   2x2 instead once a row can't fit all 4 comfortably. */
+.auto-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
 .auto-field {
-  flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 8px;
+  flex: 1 1 140px; min-width: 140px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 8px;
 }
 .auto-value { margin-top: 4px; font-size: 12px; font-weight: 600; overflow-wrap: break-word; }
 .auto-field .input { background: var(--surface); padding: 5px 7px; font-size: 12px; margin-top: 4px; }
