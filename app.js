@@ -377,6 +377,12 @@ function deriveBrandFromGroup(groupName) {
   return groupName
     .replace(/\s*priority support\s*/i, "")
     .replace(/\d+/g, "")
+    // Strips emoji (e.g. the flag LiveChat group names wrap the brand code
+    // in) — Extended_Pictographic covers most emoji, Regional_Indicator
+    // covers flag pairs specifically (flags aren't pictographic symbols),
+    // ️/‍ are the variation selector/ZWJ used to combine glyphs.
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
