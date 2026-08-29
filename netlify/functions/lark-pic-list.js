@@ -1,26 +1,15 @@
-const { getTenantToken, toDisplay } = require("./lib/lark");
-const BASE_APP_TOKEN = process.env.LARK_BASE_APP_TOKEN;
-const TABLE_AGENT = process.env.LARK_TABLE_AGENT_LIST;
+const { getFieldOptionMap, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
+
+// Agent Name is now a Single Option field directly on Customer Approaching
+// (previously a separate Agent List table, kept in sync by hand). Reusing
+// getFieldOptionMap (same helper Tier resolution uses, already caches for
+// 10 min) means the dropdown here always matches whatever options exist on
+// that field in Lark — add/rename an option there and it shows up on next
+// load, no separate table or LARK_TABLE_AGENT_LIST env var to maintain.
 exports.handler = async function () {
   try {
-    if (!BASE_APP_TOKEN || !TABLE_AGENT) {
-      return { statusCode: 200, body: JSON.stringify({ ok: true, pics: [] }) };
-    }
-    const token = await getTenantToken();
-    const res = await fetch(
-      "https://open.larksuite.com/open-apis/bitable/v1/apps/" + BASE_APP_TOKEN + "/tables/" + TABLE_AGENT + "/records?page_size=500",
-      { headers: { Authorization: "Bearer " + token } }
-    );
-    const data = await res.json();
-    if (data.code !== 0) {
-      return { statusCode: 200, body: JSON.stringify({ ok: true, pics: [] }) };
-    }
-    var names = [];
-    for (var i = 0; i < (data.data.items || []).length; i++) {
-      var name = toDisplay(data.data.items[i].fields["Agent Name"]);
-      if (name) names.push(name);
-    }
-    names.sort();
+    const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Agent Name");
+    const names = Array.from(optionMap.values()).filter(Boolean).sort();
     return { statusCode: 200, body: JSON.stringify({ ok: true, pics: names }) };
   } catch (err) {
     return { statusCode: 200, body: JSON.stringify({ ok: true, pics: [] }) };
