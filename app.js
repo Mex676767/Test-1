@@ -33,6 +33,18 @@ async function fetchAgentOptions() {
   } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
 }
 
+// Brand's dropdown options — real Brand values from Customer Approaching's
+// own field, not free text (see renderAutoFields). Fetched once at boot,
+// same as agentOptions.
+let brandOptions = [];
+async function fetchBrandOptions() {
+  try {
+    const res = await fetch("/.netlify/functions/lark-brand-list");
+    const data = await res.json();
+    if (data.ok) brandOptions = data.brands || [];
+  } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
+}
+
 
 function saveAgent(name) {
   selectedAgent = name.trim();
@@ -633,15 +645,25 @@ function renderInquiryDropdown(chatId, query) {
 // API) but editable now — detection can fail (PAT not configured, API
 // error, unrecognized group) or just be wrong, and submitRecord still
 // requires a Brand to submit at all, so CS needs a way to fix/set it by
-// hand rather than being stuck. Synced to state.brand via the delegated
-// "input" listener below, same pattern as the D.O.B field.
+// hand rather than being stuck. A real dropdown (options from
+// lark-brand-list.js — the Brand field's own Single Select choices on
+// Customer Approaching) rather than free text, so a manual override can
+// only ever be a real Brand value, never a typo that wouldn't match any
+// per-table Brand column. Synced to state.brand via the delegated "change"
+// listener below.
 function renderAutoFields(chatId) {
   const s = state[chatId];
+  // Auto-detection can produce a value that isn't (yet) in brandOptions —
+  // keep it selectable rather than silently dropping it from the dropdown.
+  const options = s.brand && !brandOptions.includes(s.brand) ? [s.brand, ...brandOptions] : brandOptions;
   return `
     <div class="auto-grid">
       <div class="auto-field">
         <span class="field-label" style="margin:0">Brand <span class="auto-tag">auto</span></span>
-        <input type="text" class="input mono auto-value-input brand-input" data-chat="${chatId}" value="${s.brand || ""}" placeholder="—" />
+        <select class="input mono auto-value-input brand-select" data-chat="${chatId}">
+          <option value="" ${!s.brand ? "selected" : ""}>—</option>
+          ${options.map((b) => `<option value="${b}" ${b === s.brand ? "selected" : ""}>${b}</option>`).join("")}
+        </select>
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">D.O.B</span>
@@ -1023,22 +1045,22 @@ chatListEl.addEventListener("input", (e) => {
   if (dobInput) {
     const s = state[dobInput.dataset.chat];
     if (s) s.dob = dobInput.value;
-    return;
-  }
-  // Brand stays auto-filled by default (resolveBrandFromGroupId) but is now
-  // editable — detection can fail or be wrong, and submitRecord requires a
-  // Brand to submit at all, so CS needs a manual override.
-  const brandInput = e.target.closest(".brand-input");
-  if (brandInput) {
-    const s = state[brandInput.dataset.chat];
-    if (s) s.brand = brandInput.value.trim();
   }
 });
 
-// Telegram stays auto-detected by default (checkChatStatus) but is now
-// editable — same reasoning as Brand. Checkboxes fire "change", not
-// "input" reliably across browsers, hence the separate listener.
+// Brand and Telegram both stay auto-filled by default but are now editable
+// — detection can fail or be wrong (Brand), or CS may need to correct it
+// (Telegram), and submitRecord requires a Brand to submit at all. Brand is
+// a <select> (real Brand values from lark-brand-list.js, not free text) and
+// Telegram a checkbox — both fire "change" reliably, unlike "input" for
+// <select>/checkbox across browsers, hence the separate listener.
 chatListEl.addEventListener("change", (e) => {
+  const brandSelect = e.target.closest(".brand-select");
+  if (brandSelect) {
+    const s = state[brandSelect.dataset.chat];
+    if (s) s.brand = brandSelect.value;
+    return;
+  }
   const tgCheck = e.target.closest(".tg-check");
   if (!tgCheck) return;
   const s = state[tgCheck.dataset.chat];
@@ -1136,6 +1158,7 @@ async function submitRecord(chatId, { auto } = {}) {
         claimSecret: s.claimSecret,
         chatLink: activeChats.find((c) => c.chatId === chatId)?.link || "",
         dob: s.dob || "",
+        telegram: !!s.telegram,
       }),
     });
     const data = await res.json();
@@ -1203,7 +1226,7 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
 // agent saved yet (first time / cleared cache).
 (async () => {
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
-  await fetchAgentOptions();
+  await Promise.all([fetchAgentOptions(), fetchBrandOptions()]);
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);

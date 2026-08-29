@@ -36,6 +36,7 @@ exports.handler = async function (event) {
     var claimSecret = body.claimSecret;
     var chatLink = body.chatLink;
     var dob = body.dob;
+    var telegram = body.telegram;
 
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
@@ -59,7 +60,11 @@ exports.handler = async function (event) {
       // Plain field on Customer Approaching itself, filled in by CS directly
       // (not a Lookup from anywhere) — dob is a "YYYY-MM-DD" string from the
       // card's date input, or "" if left blank.
-      "Player D.O.B": toEpochMs(dob)
+      "Player D.O.B": toEpochMs(dob),
+      // Was previously a UI-only toggle with no write path at all — the
+      // card's Telegram switch (auto-detected, but CS-editable) now actually
+      // reaches this Checkbox field on submit.
+      "Telegram": !!telegram
     };
 
     var record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);
