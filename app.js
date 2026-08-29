@@ -281,9 +281,10 @@ async function resolveBrandFromGroupId(chatId, groupID) {
 // event for either (confirmed for Telegram from the SDK's own types;
 // confirmed for chat-closed from the SDK having no such event at all), so
 // this is the only way to detect them short of a full webhook integration.
-// Manual fallbacks (the Telegram toggle, the Close chat button) stay fully
-// functional alongside this — the field paths this reads are best-effort
-// from docs, not yet verified against a real response.
+// The Telegram toggle stays manually overridable alongside this (see the
+// "change" listener below) — chat-closed detection has no manual fallback
+// anymore since the "Close chat" button was removed once this auto-close
+// path proved reliable.
 let chatStatusPollTimer = null;
 const CHAT_STATUS_POLL_MS = 2_000; // worst-case detection latency = this value; avg = half of it
 const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payload every tick
@@ -678,7 +679,7 @@ function renderAutoFields(chatId) {
         <input type="date" class="input auto-value-input dob-input" data-chat="${chatId}" value="${s.dob || ""}" />
       </div>
       <div class="auto-field">
-        <span class="field-label" style="margin:0">Released Amount <span class="auto-tag">auto</span></span>
+        <span class="field-label" style="margin:0">Amount <span class="auto-tag">auto</span></span>
         <div class="auto-value mono">${s.releasedBonusAmount || "—"}</div>
       </div>
       <div class="auto-field">
@@ -698,11 +699,6 @@ function renderCollapsedCard(chat) {
     </button>
     <div class="collapsed-actions">
       ${chat.link ? `<a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>` : ""}
-      ${!s.logged ? `
-      <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
-        title="Marks this case done — records it if everything's filled in, or flags what's missing">
-        ${s.chatOpen ? "Close chat" : "Closed"}
-      </button>` : ""}
       <button class="expand-btn" data-action="toggleExpand" data-chat="${chat.chatId}" title="Expand">▾</button>
     </div>
   `;
@@ -715,11 +711,6 @@ function renderExpandedCard(chat) {
       <span class="chat-name">${chat.customerName}</span>
       <div class="chat-card-head-actions">
         ${chat.link ? `<a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>` : ""}
-        ${!s.logged ? `
-        <button class="chat-close-btn" data-action="closeChat" data-chat="${chat.chatId}" ${!s.chatOpen ? "disabled" : ""}
-          title="Marks this case done — records it if everything's filled in, or flags what's missing">
-          ${s.chatOpen ? "Close chat" : "Closed"}
-        </button>` : ""}
         <button class="expand-btn expanded" data-action="toggleExpand" data-chat="${chat.chatId}" title="Collapse">▴</button>
       </div>
     </div>
@@ -736,9 +727,9 @@ function renderExpandedCard(chat) {
 
     <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
     <div class="inquiry-select">
-      <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
-      <div class="inquiry-search-wrap">
-        <input type="text" class="input inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
+      <div class="inquiry-box">
+        <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
+        <input type="text" class="inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
         <span class="inquiry-caret">▾</span>
       </div>
       <div class="inquiry-dropdown hidden">${renderInquiryDropdown(chat.chatId, "")}</div>
@@ -785,8 +776,9 @@ function ensureChatState(chat) {
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "",
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
     // chatOpen mirrors the LiveChat conversation's open/closed state.
-    // Recording only happens once a chat closes (auto if everything's
-    // filled in, or a manual nudge if not) — see closeChat/submitRecord.
+    // Recording only happens once a chat closes — checkChatStatus flips
+    // this and calls submitRecord automatically once LiveChat reports the
+    // chat inactive; there's no manual close button anymore.
     chatOpen: true, autoRecordError: "",
     // Collapsed by default — a card only expands to full detail when the
     // agent clicks it (see toggleExpand). Keeps up to 6 concurrent chats
@@ -1008,17 +1000,6 @@ chatListEl.addEventListener("click", async (e) => {
     await submitRecord(chatId, { auto: false });
   }
 
-  if (btn.dataset.action === "closeChat") {
-    // TODO: the Agent App SDK has no "chat closed" event (confirmed from its
-    // own type definitions) — this manual click is the real trigger for now.
-    // A future companion content script (bridging richer page data into this
-    // widget — see project notes) could detect the "This chat has been
-    // archived" banner and call these same three lines automatically.
-    s.chatOpen = false;
-    renderChats(activeChats);
-    await submitRecord(chatId, { auto: true });
-  }
-
   if (btn.dataset.action === "toggleExpand") {
     const wasExpanded = s.expanded;
     // Accordion — only one full card open at a time, so the rest stay
@@ -1091,6 +1072,15 @@ chatListEl.addEventListener("focusin", (e) => {
   if (!input) return;
   document.querySelectorAll(".status-dropdown").forEach((d) => d.classList.add("hidden"));
   input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
+});
+
+// Clicking anywhere in the merged box (not just the thin search input
+// itself) focuses it — makes the whole box feel like one clickable control,
+// matching how the whole Status box responds to a click.
+chatListEl.addEventListener("click", (e) => {
+  if (e.target.closest(".inquiry-chip-remove")) return; // don't steal focus from a chip removal click
+  const box = e.target.closest(".inquiry-box");
+  if (box && e.target !== box.querySelector(".inquiry-search")) box.querySelector(".inquiry-search")?.focus();
 });
 
 // Click anywhere outside a given dropdown's own wrapper closes it — so a
