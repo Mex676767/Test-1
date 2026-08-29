@@ -42,6 +42,7 @@
 html, body { height: 100%; }
 body {
   margin: 0;
+  display: flex; flex-direction: column; min-height: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: "Inter", -apple-system, "Segoe UI", sans-serif;
@@ -107,11 +108,18 @@ body {
 /* No max-width — the widget only ever shows one chat at a time now (the
    real active LiveChat conversation), so it should fill whatever width the
    sidebar actually gives it instead of capping out and leaving dead space. */
-.chat-list { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+/* flex:1 so the list fills whatever height body's flex column gives it
+   (viewport minus topbar/status-bar), instead of stopping short and
+   leaving a gap of raw page background below the card. */
+.chat-list { padding: 16px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
 
 .chat-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
   padding: 20px; box-shadow: var(--shadow); transition: background 0.15s ease, border-color 0.15s ease;
+  /* Same reasoning as .chat-list — the card's background/border extends
+     down to fill available space instead of stopping at its content's
+     natural height. Collapsed cards opt out (see .chat-card.collapsed). */
+  flex: 1;
 }
 /* Chat closed but a required field is still missing — meant to be
    impossible to miss at a glance, not just the small banner text inside. */
@@ -137,7 +145,10 @@ body {
 
 /* ---------- Collapsed card (default view — full detail is one click away
    via toggleExpand) ---------- */
-.chat-card.collapsed { padding: 12px 16px; }
+/* Opts out of the base .chat-card's flex:1 — collapsed summary rows should
+   stay compact, not stretch to fill the card list's available height (only
+   an expanded card should visually fill the space). */
+.chat-card.collapsed { padding: 12px 16px; flex: 0 0 auto; }
 .chat-card-collapsed-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   width: 100%; background: none; border: none; padding: 0; margin: 0;
@@ -368,6 +379,7 @@ body {
 }
 
 .empty-state {
+  flex: 1; display: flex; align-items: center; justify-content: center;
   padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px;
 }
 
