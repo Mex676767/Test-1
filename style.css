@@ -45,7 +45,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: "Inter", -apple-system, "Segoe UI", sans-serif;
-  font-size: 12.5px;
+  font-size: 13.5px;
   transition: background 0.2s ease, color 0.2s ease;
 }
 
@@ -54,21 +54,25 @@ body {
 /* ---------- Topbar ---------- */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 9px 14px; border-bottom: 1px solid var(--border);
+  flex-wrap: wrap; row-gap: 6px;
+  padding: 11px 16px; border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
-.brand { display: flex; align-items: center; gap: 8px; }
-.brand-mark { color: var(--blue); font-size: 14px; }
+.brand { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.brand-mark { color: var(--blue); font-size: 15px; }
 .brand-name {
   font-family: "Space Grotesk", sans-serif; font-weight: 600;
-  font-size: 14px; letter-spacing: 0.01em;
+  font-size: 15px; letter-spacing: 0.01em; white-space: nowrap;
 }
-.topbar-actions { display: flex; align-items: center; gap: 6px; }
+/* At real sidebar widths there isn't always room for the name, agent
+   badge, and 3 icon buttons on one line — wraps to a second line instead
+   of letting "Retention Console" itself break mid-word. */
+.topbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 .icon-btn, .theme-toggle {
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
-  border-radius: 7px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
-  cursor: pointer; font-size: 14px; transition: border-color 0.15s ease, color 0.15s ease;
+  border-radius: 7px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 15px; transition: border-color 0.15s ease, color 0.15s ease;
 }
 .icon-btn:hover, .theme-toggle:hover { border-color: var(--blue); color: var(--blue); }
 
@@ -83,7 +87,7 @@ body {
 /* Hidden by default — only errors interrupt the compact top area. Routine
    confirmations are logged silently (see Settings → Diagnostics). */
 .status-bar {
-  padding: 7px 16px; font-size: 11.5px; color: var(--text-muted);
+  padding: 8px 16px; font-size: 12px; color: var(--text-muted);
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
 .status-bar.hidden { display: none; }
@@ -91,11 +95,14 @@ body {
 .status-bar.success { color: var(--teal); }
 
 /* ---------- Chat list ---------- */
-.chat-list { padding: 10px; display: flex; flex-direction: column; gap: 8px; max-width: 460px; margin: 0 auto; }
+/* No max-width — the widget only ever shows one chat at a time now (the
+   real active LiveChat conversation), so it should fill whatever width the
+   sidebar actually gives it instead of capping out and leaving dead space. */
+.chat-list { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 
 .chat-card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-  padding: 10px; box-shadow: var(--shadow); transition: background 0.15s ease, border-color 0.15s ease;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; box-shadow: var(--shadow); transition: background 0.15s ease, border-color 0.15s ease;
 }
 /* Chat closed but a required field is still missing — meant to be
    impossible to miss at a glance, not just the small banner text inside. */
@@ -106,51 +113,51 @@ body {
 }
 .chat-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .chat-card-head-actions { display: flex; align-items: center; gap: 8px; }
-.chat-name { font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 13px; }
+.chat-name { font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 15px; }
 .chat-link {
-  font-size: 10.5px; color: var(--text-faint); text-decoration: none; display: flex; align-items: center; gap: 3px;
+  font-size: 11.5px; color: var(--text-faint); text-decoration: none; display: flex; align-items: center; gap: 3px;
 }
 .chat-link:hover { color: var(--blue); }
 
 .chat-close-btn {
   background: none; border: 1px solid var(--border); color: var(--text-faint);
-  border-radius: 6px; padding: 2px 7px; font-size: 10px; cursor: pointer; white-space: nowrap;
+  border-radius: 6px; padding: 4px 10px; font-size: 11px; cursor: pointer; white-space: nowrap;
 }
 .chat-close-btn:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
 .chat-close-btn:disabled { opacity: 0.45; cursor: default; }
 
 /* ---------- Collapsed card (default view — full detail is one click away
    via toggleExpand) ---------- */
-.chat-card.collapsed { padding: 8px 10px; }
+.chat-card.collapsed { padding: 12px 16px; }
 .chat-card-collapsed-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   width: 100%; background: none; border: none; padding: 0; margin: 0;
   font-family: inherit; text-align: left; cursor: pointer;
 }
 .collapsed-summary {
-  font-size: 10.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .collapsed-summary.summary-neutral { color: var(--text-faint); }
 .collapsed-summary.summary-pending { color: var(--blue); }
 .collapsed-summary.summary-ready { color: var(--gold); }
 .collapsed-summary.summary-done { color: var(--teal); }
 .collapsed-summary.summary-attention { color: var(--danger); }
-.collapsed-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.collapsed-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .expand-btn {
   background: none; border: 1px solid var(--border); color: var(--text-faint);
-  border-radius: 6px; width: 20px; height: 20px; font-size: 11px; cursor: pointer;
+  border-radius: 6px; width: 24px; height: 24px; font-size: 12px; cursor: pointer;
   display: flex; align-items: center; justify-content: center; line-height: 1;
 }
 .expand-btn:hover { border-color: var(--blue); color: var(--blue); }
 
 .field-label {
-  display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-faint); margin: 8px 0 4px;
+  display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-faint); margin: 12px 0 6px;
 }
-.hint { text-transform: none; letter-spacing: 0; color: var(--text-faint); font-size: 10.5px; }
+.hint { text-transform: none; letter-spacing: 0; color: var(--text-faint); font-size: 11px; }
 .auto-tag {
-  text-transform: none; letter-spacing: 0; font-size: 10px; font-weight: 600;
-  color: var(--teal); background: var(--teal-soft); padding: 1px 6px; border-radius: 20px;
+  text-transform: none; letter-spacing: 0; font-size: 10.5px; font-weight: 600;
+  color: var(--teal); background: var(--teal-soft); padding: 2px 7px; border-radius: 20px;
   margin-left: 5px; vertical-align: middle;
 }
 
@@ -158,31 +165,31 @@ body {
    tag grid — same max-2 / Feedback-pairing rule, collapsed behind search
    so the card stays short until it's actually used) ---------- */
 .inquiry-select { position: relative; }
-.inquiry-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; min-height: 20px; }
+.inquiry-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; min-height: 24px; }
 /* Matches .status-caret — signals "opens a dropdown" consistently with
    Status/Brand, even though this trigger is a search input, not a button. */
 .inquiry-search-wrap { position: relative; }
-.inquiry-search-wrap .inquiry-search { padding-right: 22px; }
+.inquiry-search-wrap .inquiry-search { padding-right: 26px; }
 .inquiry-caret {
-  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
-  color: var(--text-faint); font-size: 10px; pointer-events: none;
+  position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+  color: var(--text-faint); font-size: 11px; pointer-events: none;
 }
-.inquiry-chips-empty { font-size: 10.5px; color: var(--text-faint); }
+.inquiry-chips-empty { font-size: 11.5px; color: var(--text-faint); }
 .inquiry-chip {
-  display: flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600;
-  padding: 3px 6px 3px 9px; border-radius: 20px; background: var(--blue); color: white;
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600;
+  padding: 4px 7px 4px 11px; border-radius: 20px; background: var(--blue); color: white;
 }
 .inquiry-chip-remove {
   background: none; border: none; color: white; opacity: 0.75; cursor: pointer;
-  font-size: 10px; line-height: 1; padding: 2px; font-family: inherit;
+  font-size: 11px; line-height: 1; padding: 2px; font-family: inherit;
 }
 .inquiry-chip-remove:hover { opacity: 1; }
 
 .inquiry-dropdown {
-  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
-  max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 4px; box-shadow: var(--shadow);
+  position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 20;
+  max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+  padding: 5px; box-shadow: var(--shadow);
   /* Scroll still works with the wheel/trackpad — just no visible track/thumb,
      since the browser's default scrollbar clashes with the dark theme. */
   scrollbar-width: none;
@@ -190,41 +197,41 @@ body {
 .inquiry-dropdown::-webkit-scrollbar { display: none; }
 .inquiry-dropdown.hidden { display: none; }
 .inquiry-option {
-  display: flex; align-items: center; gap: 6px; text-align: left; width: 100%;
-  background: none; border: none; color: var(--text-muted); font-size: 11px;
-  padding: 6px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  display: flex; align-items: center; gap: 7px; text-align: left; width: 100%;
+  background: none; border: none; color: var(--text-muted); font-size: 12.5px;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer; font-family: inherit;
 }
 .inquiry-option:hover:not(.disabled) { background: var(--surface-2); color: var(--text); }
 .inquiry-option.active { color: var(--blue); font-weight: 600; }
 .inquiry-option.disabled { opacity: 0.35; cursor: not-allowed; }
-.inquiry-option-check { width: 12px; color: var(--blue); flex-shrink: 0; }
-.inquiry-option-empty { padding: 8px; font-size: 11px; color: var(--text-faint); text-align: center; }
+.inquiry-option-check { width: 13px; color: var(--blue); flex-shrink: 0; }
+.inquiry-option-empty { padding: 10px; font-size: 12px; color: var(--text-faint); text-align: center; }
 
 /* ---------- Status (custom dropdown, same look as Inquiry's — reuses
    .inquiry-option/.inquiry-option-check for the list itself) ---------- */
 .status-picker { position: relative; }
 .status-display { display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; }
-.status-caret { color: var(--text-faint); font-size: 10px; margin-left: 6px; }
+.status-caret { color: var(--text-faint); font-size: 11px; margin-left: 6px; }
 .status-dropdown {
-  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
-  max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 4px; box-shadow: var(--shadow);
+  position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 20;
+  max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+  padding: 5px; box-shadow: var(--shadow);
   scrollbar-width: none;
 }
 .status-dropdown::-webkit-scrollbar { display: none; }
 .status-dropdown.hidden { display: none; }
 
 /* ---------- Auto-derived fields (Brand / Released Amount / Claim Secret) ---------- */
-.auto-grid { display: flex; gap: 6px; margin-top: 8px; }
+.auto-grid { display: flex; gap: 8px; margin-top: 10px; }
 .auto-field {
-  flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+  flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 10px;
 }
-.auto-value { margin-top: 3px; font-size: 12px; font-weight: 600; overflow-wrap: break-word; }
-.auto-field .input { background: var(--surface); padding: 4px 6px; font-size: 11px; margin-top: 3px; }
+.auto-value { margin-top: 4px; font-size: 13px; font-weight: 600; overflow-wrap: break-word; }
+.auto-field .input { background: var(--surface); padding: 5px 7px; font-size: 12px; margin-top: 4px; }
 .input, select {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 8px; font-size: 12px; font-family: inherit;
+  border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit;
 }
 /* Explicit rather than relying on the browser's default placeholder dimming
    — that default varies and doesn't necessarily match --text-faint exactly,
@@ -233,31 +240,31 @@ body {
 .status-value.placeholder { color: var(--text-faint); }
 .input:focus, select:focus { outline: none; border-color: var(--blue); }
 
-.username-row { display: flex; gap: 6px; }
+.username-row { display: flex; gap: 8px; }
 .username-row .input { flex: 1; }
 .lookup-btn {
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
-  border-radius: 7px; padding: 0 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+  border-radius: 8px; padding: 0 16px; font-size: 13px; cursor: pointer; white-space: nowrap;
 }
 .lookup-btn:hover { border-color: var(--blue); color: var(--blue); }
 .lookup-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- Player info (auto-filled on match) ---------- */
 .player-info {
-  display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 6px;
-  font-size: 11px; color: var(--text-muted);
+  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px;
+  font-size: 12px; color: var(--text-muted);
 }
 .pi-label {
-  text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.05em;
+  text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;
   color: var(--text-faint); margin-right: 3px;
 }
 
 /* ---------- Bonus ticket ---------- */
-.ticket-stack { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ticket-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .ticket {
   position: relative; background: var(--gold-soft);
   border: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent);
-  border-radius: 9px; padding: 7px 10px; display: flex; align-items: center; gap: 8px;
+  border-radius: 10px; padding: 10px 13px; display: flex; align-items: center; gap: 10px;
   overflow: visible;
 }
 .ticket::before, .ticket::after {
@@ -266,14 +273,14 @@ body {
 }
 .ticket::before { left: -7px; }
 .ticket::after { right: -7px; }
-.ticket-icon { font-size: 15px; color: var(--gold); }
+.ticket-icon { font-size: 18px; color: var(--gold); }
 .ticket-body { flex: 1; min-width: 0; }
-.ticket-name { font-weight: 600; font-size: 12px; color: var(--text); }
-.ticket-meta { font-size: 10.5px; color: var(--text-muted); margin-top: 1px; }
+.ticket-name { font-weight: 600; font-size: 13.5px; color: var(--text); }
+.ticket-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
 .ticket-meta .amount { font-family: "IBM Plex Mono", monospace; color: var(--gold); font-weight: 600; }
 .claim-btn {
   background: none; border: 1px solid var(--gold); color: var(--gold);
-  border-radius: 6px; padding: 4px 9px; font-size: 11px; font-weight: 600; cursor: pointer;
+  border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
   white-space: nowrap;
 }
 .claim-btn:hover { background: var(--gold); color: var(--surface); }
@@ -281,12 +288,12 @@ body {
   background: var(--teal); border-color: var(--teal); color: var(--surface); cursor: default;
 }
 .ticket.empty {
-  border-style: solid; color: var(--text-faint); font-size: 11px; justify-content: center;
-  background: var(--surface-2); margin-top: 8px;
+  border-style: solid; color: var(--text-faint); font-size: 12px; justify-content: center;
+  background: var(--surface-2); margin-top: 10px;
 }
 .ticket.locked { opacity: 0.45; }
 .ticket-note {
-  font-size: 10px; color: var(--text-faint); margin-top: 5px; text-align: center;
+  font-size: 10.5px; color: var(--text-faint); margin-top: 6px; text-align: center;
 }
 
 /* Special tickets (Ang Pao / Redeem Code) — red, to visually separate
@@ -296,48 +303,48 @@ body {
   border-color: color-mix(in srgb, var(--danger) 55%, transparent);
 }
 .ticket.ticket-special .ticket-icon { color: var(--danger); }
-.ticket-meta.code { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; color: var(--danger); }
+.ticket-meta.code { font-size: 15px; font-weight: 700; letter-spacing: 0.04em; color: var(--danger); }
 .claim-btn.special { border-color: var(--danger); color: var(--danger); }
 .claim-btn.special:hover { background: var(--danger); color: white; }
 .claim-btn.special.claimed { background: var(--teal); border-color: var(--teal); color: var(--surface); }
 .ticket.empty::before, .ticket.empty::after { display: none; }
 
 /* ---------- Toggle row (Telegram) ---------- */
-.toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
 .toggle-row .field-label { margin: 0; }
-.switch { position: relative; width: 34px; height: 19px; flex-shrink: 0; }
+.switch { position: relative; width: 38px; height: 21px; flex-shrink: 0; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .slider {
   position: absolute; inset: 0; background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 20px; cursor: pointer; transition: background 0.15s ease;
 }
 .slider::before {
-  content: ""; position: absolute; width: 13px; height: 13px; left: 2px; top: 2px;
+  content: ""; position: absolute; width: 15px; height: 15px; left: 2px; top: 2px;
   background: var(--text-faint); border-radius: 50%; transition: transform 0.15s ease, background 0.15s ease;
 }
 .switch input:checked + .slider { background: var(--teal-soft); border-color: var(--teal); }
-.switch input:checked + .slider::before { transform: translateX(15px); background: var(--teal); }
+.switch input:checked + .slider::before { transform: translateX(17px); background: var(--teal); }
 .switch input:disabled + .slider { cursor: default; }
 
 /* ---------- Submit ---------- */
 .submit-btn {
-  margin-top: 10px; width: 100%; background: var(--blue); color: white; border: none;
-  padding: 7px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+  margin-top: 14px; width: 100%; background: var(--blue); color: white; border: none;
+  padding: 11px; border-radius: 9px; font-size: 13.5px; font-weight: 600; cursor: pointer;
   font-family: "Space Grotesk", sans-serif; letter-spacing: 0.01em;
 }
 .submit-btn:hover { filter: brightness(1.08); }
 .submit-btn:disabled { background: var(--surface-2); color: var(--text-faint); cursor: not-allowed; }
 
 .logged-badge {
-  display: flex; align-items: center; gap: 6px; margin-top: 10px;
-  background: var(--teal-soft); color: var(--teal); font-size: 11.5px; font-weight: 600;
-  padding: 6px 9px; border-radius: 8px;
+  display: flex; align-items: center; gap: 6px; margin-top: 14px;
+  background: var(--teal-soft); color: var(--teal); font-size: 12.5px; font-weight: 600;
+  padding: 9px 12px; border-radius: 9px;
 }
 
 /* Shown while a chat is still open — recording is deferred until it closes. */
 .record-pending-hint {
-  margin-top: 10px; font-size: 10.5px; color: var(--text-faint); text-align: center;
-  padding: 7px; border: 1px dashed var(--border); border-radius: 8px;
+  margin-top: 14px; font-size: 11.5px; color: var(--text-faint); text-align: center;
+  padding: 9px; border: 1px dashed var(--border); border-radius: 9px;
 }
 
 /* Shown when a chat closed but required fields weren't filled in — the
@@ -345,14 +352,14 @@ body {
 .record-error-banner {
   /* Solid --surface (not a red tint) so it reads as a distinct detail panel
      against the now-red .needs-attention card, rather than blending into it. */
-  margin-top: 10px; font-size: 10.5px; color: var(--danger); line-height: 1.4;
+  margin-top: 14px; font-size: 11.5px; color: var(--danger); line-height: 1.5;
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
-  border-radius: 8px; padding: 7px 9px;
+  border-radius: 9px; padding: 9px 12px;
 }
 
 .empty-state {
-  padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 12.5px; max-width: 480px; margin: 0 auto;
+  padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px;
 }
 
 /* ---------- Settings overlay (full-screen) ---------- */
