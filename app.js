@@ -1066,6 +1066,7 @@ async function submitRecord(chatId, { auto } = {}) {
         releasedAmount: s.releasedBonusAmount,
         releasedAmountRaw: s.releasedAmountRaw,
         claimSecret: s.claimSecret,
+        chatLink: activeChats.find((c) => c.chatId === chatId)?.link || "",
       }),
     });
     const data = await res.json();

@@ -24,6 +24,7 @@ exports.handler = async function (event) {
     var releasedAmount = body.releasedAmount;
     var releasedAmountRaw = body.releasedAmountRaw;
     var claimSecret = body.claimSecret;
+    var chatLink = body.chatLink;
 
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
@@ -35,7 +36,12 @@ exports.handler = async function (event) {
       "Inquiry": inquiry,
       "Status": status,
       "Released amount": extractAmount(releasedAmountRaw !== undefined ? releasedAmountRaw : releasedAmount),
-      "Claim Secret": !!claimSecret
+      "Claim Secret": !!claimSecret,
+      // Same field name as the Ang Pao table (lark-claim.js) for consistency.
+      // chatLink comes from activeChats[].link, which app.js only fills in
+      // once livechat-chat-status.js resolves the real chat_id via
+      // list_chats (~2s after a chat opens) — blank if recorded before that.
+      "Live Chat Link": chatLink || ""
     };
 
     var record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);
