@@ -325,6 +325,19 @@ async function checkChatStatus(chatId) {
       return;
     }
 
+    if (data.notConfigured) {
+      // Distinct, unmistakable message — this used to fall through to the
+      // "raw" branch below with no raw payload to show, which crashed
+      // JSON.stringify(undefined).slice(...) and got silently swallowed by
+      // the catch, giving zero diagnostic feedback for the single most
+      // likely misconfiguration (LIVECHAT_PAT missing on this Netlify site).
+      if (!rawStatusDebugLoggedFor.has(chatId)) {
+        rawStatusDebugLoggedFor.add(chatId);
+        logDiagnostic("Telegram/auto-close detection is off — LIVECHAT_PAT isn't set on this site.", "warn");
+      }
+      return;
+    }
+
     if (typeof data.isTelegram === "boolean" && data.isTelegram !== s.telegram) {
       s.telegram = data.isTelegram;
       logDiagnostic(`Auto-detected Telegram chat = ${data.isTelegram}.`);
@@ -333,7 +346,7 @@ async function checkChatStatus(chatId) {
       // Expected fields weren't found — surface the raw response once so
       // the field paths can be corrected against real data.
       rawStatusDebugLoggedFor.add(chatId);
-      logDiagnostic("Chat status fields not recognized — raw: " + JSON.stringify(data.raw).slice(0, 500), "warn");
+      logDiagnostic("Chat status fields not recognized — raw: " + JSON.stringify(data.raw ?? null).slice(0, 500), "warn");
     }
 
     if (data.isActive === false && s.chatOpen) {

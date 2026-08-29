@@ -19,7 +19,9 @@ const LIVECHAT_PAT = process.env.LIVECHAT_PAT;
 exports.handler = async function (event) {
   try {
     if (!LIVECHAT_PAT) {
-      return { statusCode: 200, body: JSON.stringify({ ok: true, isTelegram: null, isActive: null }) };
+      // Distinct from a real API response with unrecognized fields — a
+      // missing PAT should never look like "field paths need adjusting".
+      return { statusCode: 200, body: JSON.stringify({ ok: true, isTelegram: null, isActive: null, notConfigured: true }) };
     }
     const { chatId } = JSON.parse(event.body || "{}");
     if (!chatId) {
