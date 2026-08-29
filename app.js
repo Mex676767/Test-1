@@ -328,7 +328,11 @@ async function checkChatStatus(chatId) {
       // log with the identical line on every tick.
       if (!errorLoggedFor.has(chatId)) {
         errorLoggedFor.add(chatId);
-        logDiagnostic(`Chat status check failed: ${data.error}`, "error");
+        // Includes the exact chatId queried — "Chat not found" alone gives
+        // no way to check whether the ID we're sending (profile.chat.id
+        // from the Agent App SDK) is even the right kind of ID for this
+        // REST endpoint to recognize.
+        logDiagnostic(`Chat status check failed for chatId "${chatId}": ${data.error}`, "error");
       }
       return;
     }
