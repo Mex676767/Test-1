@@ -360,7 +360,10 @@ async function checkChatStatus(chatId) {
       logDiagnostic(`First chat status check succeeded: isActive=${data.isActive}, isTelegram=${data.isTelegram}.${linkSuffix}`);
     }
 
-    if (typeof data.isTelegram === "boolean" && data.isTelegram !== s.telegram) {
+    // Skips overwriting once CS has manually toggled this — otherwise the
+    // next poll tick (every 2s) would just flip a manual correction right
+    // back, making the override effectively impossible to keep.
+    if (typeof data.isTelegram === "boolean" && data.isTelegram !== s.telegram && !s.telegramManual) {
       s.telegram = data.isTelegram;
       logDiagnostic(`Auto-detected Telegram chat = ${data.isTelegram}.${linkSuffix}`);
       if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
@@ -614,18 +617,19 @@ function renderInquiryDropdown(chatId, query) {
   }).join("");
 }
 
-// Brand is fully auto-detected now (resolveBrandFromGroupId, via LiveChat's
-// Groups API) — back to a plain read-only box like Released Amount/Claim
-// Secret, no manual picker. If detection ever fails (PAT not configured,
-// API error, unrecognized group), this just shows "—" with no way to set
-// it from the UI — see submitRecord's validation, which still requires it.
+// Brand is auto-detected (resolveBrandFromGroupId, via LiveChat's Groups
+// API) but editable now — detection can fail (PAT not configured, API
+// error, unrecognized group) or just be wrong, and submitRecord still
+// requires a Brand to submit at all, so CS needs a way to fix/set it by
+// hand rather than being stuck. Synced to state.brand via the delegated
+// "input" listener below, same pattern as the D.O.B field.
 function renderAutoFields(chatId) {
   const s = state[chatId];
   return `
     <div class="auto-grid">
       <div class="auto-field">
         <span class="field-label" style="margin:0">Brand <span class="auto-tag">auto</span></span>
-        <div class="auto-value mono">${s.brand || "—"}</div>
+        <input type="text" class="input mono auto-value-input brand-input" data-chat="${chatId}" value="${s.brand || ""}" placeholder="—" />
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Released Amount <span class="auto-tag">auto</span></span>
@@ -705,7 +709,7 @@ function renderExpandedCard(chat) {
     <div class="toggle-row">
       <label class="field-label">Telegram chat <span class="auto-tag">auto</span></label>
       <label class="switch">
-        <input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} disabled />
+        <input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} />
         <span class="slider"></span>
       </label>
     </div>
@@ -731,7 +735,7 @@ function ensureChatState(chat) {
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     brand: deriveBrandFromGroup(chat.groupName),
-    inquiry: [], status: "", telegram: chat.isTelegram, logged: false, dob: "",
+    inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "",
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
     // chatOpen mirrors the LiveChat conversation's open/closed state.
     // Recording only happens once a chat closes (auto if everything's
@@ -969,6 +973,28 @@ chatListEl.addEventListener("input", (e) => {
   if (dobInput) {
     const s = state[dobInput.dataset.chat];
     if (s) s.dob = dobInput.value;
+    return;
+  }
+  // Brand stays auto-filled by default (resolveBrandFromGroupId) but is now
+  // editable — detection can fail or be wrong, and submitRecord requires a
+  // Brand to submit at all, so CS needs a manual override.
+  const brandInput = e.target.closest(".brand-input");
+  if (brandInput) {
+    const s = state[brandInput.dataset.chat];
+    if (s) s.brand = brandInput.value.trim();
+  }
+});
+
+// Telegram stays auto-detected by default (checkChatStatus) but is now
+// editable — same reasoning as Brand. Checkboxes fire "change", not
+// "input" reliably across browsers, hence the separate listener.
+chatListEl.addEventListener("change", (e) => {
+  const tgCheck = e.target.closest(".tg-check");
+  if (!tgCheck) return;
+  const s = state[tgCheck.dataset.chat];
+  if (s) {
+    s.telegram = tgCheck.checked;
+    s.telegramManual = true; // stops the auto-poll from overwriting this
   }
 });
 
