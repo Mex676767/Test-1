@@ -13,6 +13,16 @@ function extractAmount(str) {
   return match ? Number(match[0]) : null;
 }
 
+// Lark Date fields expect a millisecond epoch number over the API, not a
+// "YYYY-MM-DD" string (same category of mismatch as the earlier
+// NumberFieldConvFail/UserFieldConvFail issues on this table) — the card's
+// <input type="date"> gives "YYYY-MM-DD", so convert it here.
+function toEpochMs(dateStr) {
+  if (!dateStr) return null;
+  const ms = Date.parse(dateStr + "T00:00:00Z");
+  return Number.isNaN(ms) ? null : ms;
+}
+
 exports.handler = async function (event) {
   try {
     var body = JSON.parse(event.body || "{}");
@@ -25,6 +35,7 @@ exports.handler = async function (event) {
     var releasedAmountRaw = body.releasedAmountRaw;
     var claimSecret = body.claimSecret;
     var chatLink = body.chatLink;
+    var dob = body.dob;
 
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
@@ -44,7 +55,11 @@ exports.handler = async function (event) {
       // from activeChats[].link, which app.js only fills in once
       // livechat-chat-status.js resolves the real chat_id via list_chats
       // (~2s after a chat opens) — null if recorded before that resolves.
-      "link": chatLink ? { link: chatLink, text: chatLink } : null
+      "link": chatLink ? { link: chatLink, text: chatLink } : null,
+      // Plain field on Customer Approaching itself, filled in by CS directly
+      // (not a Lookup from anywhere) — dob is a "YYYY-MM-DD" string from the
+      // card's date input, or "" if left blank.
+      "Player D.O.B": toEpochMs(dob)
     };
 
     var record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);

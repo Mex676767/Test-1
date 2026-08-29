@@ -8,8 +8,23 @@ const TABLE_REDEEM_CODE = process.env.LARK_TABLE_REDEEM_CODE;
 // Source table for Customer Approaching's "Tier" Lookup field. Lark doesn't
 // mirror the Single Select option list onto the Lookup field itself, so
 // resolving option IDs to display text ("Tier V") requires reading the
-// option list straight off this table's own "Tier" field.
+// option list straight off this table's own "Tier" field. Also now queried
+// directly (by Username + Brand) for Tier itself — see lark-search.js.
 const TABLE_PNL = process.env.LARK_TABLE_PNL;
+
+// Each of these is its own bonus-program table (2026-08-29 rearchitecture —
+// previously all 5 were read as Lookup columns on Customer Approaching,
+// which took 15-30s to resolve on a big base; now queried directly by
+// Username/UID + Brand, which is immediate). Every brand technically lives
+// in its own "sheet" (a Lark view) within each table, but every record also
+// carries a plain Brand field, so filtering on Username/UID + Brand together
+// scopes to exactly that brand's rows without needing a view ID.
+const TABLE_GRACE_PERIOD = process.env.LARK_TABLE_GRACE_PERIOD;
+const TABLE_TOP_PNL_NIGHT = process.env.LARK_TABLE_TOP_PNL_NIGHT;
+const TABLE_LTV_DAY = process.env.LARK_TABLE_LTV_DAY;
+const TABLE_RISK_PLAYER = process.env.LARK_TABLE_RISK_PLAYER;
+const TABLE_SPECIAL_RELOAD = process.env.LARK_TABLE_SPECIAL_RELOAD;
+const TABLE_VIP_BOOSTER = process.env.LARK_TABLE_VIP_BOOSTER;
 
 let cachedToken = null;
 let cachedExpiry = 0;
@@ -141,8 +156,29 @@ async function getFieldOptionMap(tableId, fieldName) {
   return map;
 }
 
+// Finds the single claimable row for a per-brand bonus table (Risk Player,
+// Grace Period, Top 10 P&L, LTV, 12hour VIP Booster, Special Reload Event).
+// Multiple claimable rows can exist at once (e.g. several day-tiers still
+// unclaimed, or several unclaimed nights) but only the OLDEST one (by "Time
+// of Inspection") should ever surface, so CS works through them in order
+// instead of always seeing the newest. isClaimable receives the record's
+// raw fields object and decides whether that row counts at all.
+async function findOldestClaimableRow(tableId, username, brand, isClaimable) {
+  if (!tableId) return null;
+  const matches = await searchRecords(tableId, [
+    { field_name: "Username/UID", operator: "is", value: [username] },
+    { field_name: "Brand", operator: "is", value: [brand] },
+  ]);
+  const claimable = matches.filter((r) => isClaimable(r.fields));
+  if (!claimable.length) return null;
+  claimable.sort((a, b) => (a.fields["Time of Inspection"] || 0) - (b.fields["Time of Inspection"] || 0));
+  return claimable[0];
+}
+
 module.exports = {
   getTenantToken, searchRecords, getRecord, updateRecord, createRecord,
-  listRecords, toDisplay, listFields, getFieldOptionMap,
+  listRecords, toDisplay, listFields, getFieldOptionMap, findOldestClaimableRow,
   TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_PNL,
+  TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
+  TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
 };

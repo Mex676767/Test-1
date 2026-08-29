@@ -103,14 +103,18 @@ function updateAgentBadge() {
    SAMPLE DATA (stand-in until this is wired to LiveChat + Lark)
    ============================================================ */
 
-// Real bonus data lives as 5 columns on the same Customer Approaching base
-// (not a separate table) — one per program. Each becomes its own ticket if
-// it has a claimable value. Values like "1D No Bonus" render nothing.
+// Each of these is its own bonus-program table in Lark (not columns on
+// Customer Approaching) — lark-search.js already applies each table's own
+// claim/hide rule and picks the single oldest still-claimable row, so by the
+// time it gets here r[key] is either "" (nothing to show) or the one display
+// value to render. Special Reload Event, Ang Pao, and Redeem Code aren't
+// listed here — they're "special" (instant claim-writes-to-Lark) tickets,
+// handled separately below.
 const BONUS_PROGRAMS = [
   { key: "riskPlayer", label: "Risk Player" },
-  { key: "topPnl", label: "Top 10 P&L - Test" },
-  { key: "gracePeriod", label: "Grace Period 0.1" },
-  { key: "ltvTest", label: "LTV - Test" },
+  { key: "topPnl", label: "Top 10 P&L" },
+  { key: "gracePeriod", label: "Grace Period" },
+  { key: "ltvTest", label: "LTV" },
   { key: "vipBooster", label: "12h VIP Deposit Booster" },
 ];
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
@@ -124,7 +128,8 @@ function hasAnyBonus(chatId) {
   if (!r) return false;
   if (BONUS_PROGRAMS.some((p) => isClaimableValue(r[p.key]))) return true;
   if (r.angPao && !isHiddenStatus(r.angPao.status)) return true;
-  if (r.redeemCode && String(r.redeemCode.status || "").trim().toLowerCase() !== "claimed") return true;
+  if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
+  if (r.specialReload) return true; // lark-search.js already filtered to only "Eligible Angpao"
   return false;
 }
 
@@ -134,7 +139,6 @@ function getChatSummary(chatId) {
   if (s.logged) return { text: "✓ Logged", cls: "done" };
   if (s.matchedRow === undefined) return { text: "Not looked up", cls: "neutral" };
   if (s.matchedRow === null) return { text: "No record found", cls: "neutral" };
-  if (!s.matchedRow.nameCustomer) return { text: "Checking bonuses…", cls: "pending" };
   return hasAnyBonus(chatId) ? { text: "Bonuses ready", cls: "ready" } : { text: "No active bonuses", cls: "neutral" };
 }
 
@@ -165,38 +169,12 @@ async function fetchBonusRow(username, brand, link, telegram, picName) {
   return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated };
 }
 
-// After lark-search.js creates the case row, Lark can take 15-30s on a big
-// base to resolve its Lookup columns — well past what one Netlify function
-// call can wait for. So we poll a lightweight status check every few seconds
-// instead of blocking on a single long request. "Name customer" (itself a
-// Lookup) becoming non-empty is the signal that this row's Lookups are done.
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const POLL_INTERVAL_MS = 2500;
-const POLL_MAX_ATTEMPTS = 20; // ~50s ceiling before giving up
-
-async function pollForBonuses(chatId, recordId, card, onTick) {
-  for (let attempt = 1; attempt <= POLL_MAX_ATTEMPTS; attempt++) {
-    await wait(POLL_INTERVAL_MS);
-    let data;
-    try {
-      const res = await fetch("/.netlify/functions/lark-poll", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recordId }),
-      });
-      data = await res.json();
-    } catch (_) {
-      continue; // transient network hiccup — keep polling
-    }
-    if (!data.ok) continue;
-
-    const s = state[chatId];
-    if (!s || s.caRecordId !== recordId) return; // chat moved on (new lookup started) — abandon this poll
-    s.matchedRow = { ...s.matchedRow, ...data.row };
-    onTick(attempt, data.ready);
-    if (data.ready) return;
-  }
-}
+// 2026-08-29: lark-search.js now queries every bonus's own source table
+// directly (Username/UID + Brand) instead of waiting on Customer
+// Approaching's Lookup columns to resolve — that Lookup delay (15-30s on a
+// big base) was the entire reason the poll-and-wait dance below used to
+// exist. lark-search.js's response is now already final, so there's nothing
+// left to poll for.
 
 // Fallback only — used until (or unless) the real LiveChat Agent App SDK
 // connects. See initLiveChatSdk() below.
@@ -477,6 +455,7 @@ const BONUS_INQUIRY_MAP = {
   vipBooster: "12hour VIP Deposit Boost",
   angPao: "Ang Pao",
   redeemCode: "Redeem Code",
+  specialReload: "Reload - Ang Pao",
 };
 
 // Risk Player is a single Lark field, but its value encodes which day-tier
@@ -529,20 +508,20 @@ function renderStatusDropdown(chatId) {
   }).join("");
 }
 
+// PIC dropped entirely — it's always the Retention Logger bot (every row is
+// created by the app, never a human agent), so it carried no information.
+// Name customer dropped too — no longer fetched (P&L is only queried for
+// Tier now). D.O.B isn't a Lookup from anywhere; it's just a plain field on
+// Customer Approaching that CS fills in by hand, so it's a real input here,
+// synced to state.dob and written at Record submit time (lark-record.js).
 function renderPlayerInfo(chatId) {
   const s = state[chatId];
   if (!s.matchedRow) return "";
   const r = s.matchedRow;
-  // PIC shows the agent actually handling this case, not Lark's own PIC
-  // field — that's a Person field defaulting to "Record Created By", which
-  // is always the Retention Logger bot (every row is created by the app),
-  // never the human agent, so showing it here was meaningless.
   return `
     <div class="player-info">
-      <span><span class="pi-label">PIC</span> ${selectedAgent || "—"}</span>
-      <span><span class="pi-label">Tier</span> ${r.tier}</span>
-      <span><span class="pi-label">Name</span> ${r.nameCustomer}</span>
-      <span><span class="pi-label">D.O.B</span> ${r.dob}</span>
+      <span><span class="pi-label">Tier</span> ${r.tier || "—"}</span>
+      <span class="pi-dob"><span class="pi-label">D.O.B</span> <input type="date" class="input dob-input" data-chat="${chatId}" value="${s.dob || ""}" /></span>
     </div>`;
 }
 
@@ -570,11 +549,18 @@ function renderTickets(chatId) {
   });
 
   if (r.angPao && !isHiddenStatus(r.angPao.status)) {
-    defs.push({ key: "angPao", kind: "special", label: "Ang Pao (Special Reload Event)", display: r.angPao.status });
+    defs.push({ key: "angPao", kind: "special", label: "Ang Pao", display: r.angPao.status });
   }
 
-  if (r.redeemCode && String(r.redeemCode.status || "").trim().toLowerCase() !== "claimed") {
+  if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) {
     defs.push({ key: "redeemCode", kind: "special", label: "Redeem Code", display: r.redeemCode.status, isCode: true });
+  }
+
+  // Distinct from the standalone "Ang Pao" ticket above — this is the
+  // Special Reload Event table's Ang Pao variant (its Free Spin variant is
+  // retired). Already pre-filtered server-side to only "Eligible Angpao".
+  if (r.specialReload) {
+    defs.push({ key: "specialReload", kind: "special", label: "Special Reload (Ang Pao)", display: r.specialReload.status });
   }
 
   if (!defs.length) {
@@ -745,7 +731,7 @@ function ensureChatState(chat) {
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     brand: deriveBrandFromGroup(chat.groupName),
-    inquiry: [], status: "", telegram: chat.isTelegram, logged: false,
+    inquiry: [], status: "", telegram: chat.isTelegram, logged: false, dob: "",
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
     // chatOpen mirrors the LiveChat conversation's open/closed state.
     // Recording only happens once a chat closes (auto if everything's
@@ -820,7 +806,10 @@ chatListEl.addEventListener("click", async (e) => {
     btn.disabled = true;
     btn.textContent = "…";
     try {
-      const { row, otherBrands, caRecordId, justCreated } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow, selectedAgent);
+      // lark-search.js resolves every bonus's own source table directly now
+      // (no more Customer Approaching Lookup-column delay) — this response
+      // is already final, nothing left to poll for.
+      const { row, otherBrands, caRecordId } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow, selectedAgent);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
       s.caRecordId = caRecordId;
@@ -828,32 +817,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.releasedBonusAmount = "";
       s.releasedAmountRaw = "";
       s.claimSecret = false;
-      card.querySelector(".ticket-slot").innerHTML = `<div class="ticket empty">Checking bonuses — can take up to ~50s on a big base…</div>`;
-      card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
-
-      if (justCreated) {
-        // Keep the button disabled for the whole poll — this is what stops a
-        // second click from creating a duplicate case row while Lark is
-        // still resolving the first one.
-        btn.textContent = "Checking…";
-        setStatus(`Logged ${username} under ${brand} — checking bonuses…`);
-        await pollForBonuses(chatId, caRecordId, card, (attempt, ready) => {
-          card.querySelector(".player-info-slot").innerHTML = renderPlayerInfo(chatId);
-          if (ready) {
-            card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
-          } else {
-            setStatus(`Logged ${username} under ${brand} — still checking bonuses (${attempt * (POLL_INTERVAL_MS / 1000)}s)…`);
-          }
-        });
-        setStatus(
-          state[chatId].matchedRow.nameCustomer
-            ? `Bonuses ready for ${username} under ${brand}.`
-            : `Still resolving after ~${POLL_MAX_ATTEMPTS * (POLL_INTERVAL_MS / 1000)}s — hit Look up again if it doesn't settle, or check the row directly in Lark.`,
-          state[chatId].matchedRow.nameCustomer ? "success" : "error"
-        );
-      } else {
-        setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
-      }
+      setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
     } catch (err) {
       setStatus("Lookup failed: " + err.message, "error");
     }
@@ -868,10 +832,11 @@ chatListEl.addEventListener("click", async (e) => {
     const programKey = btn.dataset.program;
     const r = s.matchedRow;
 
-    // Ang Pao / Redeem Code write live to Lark the instant they're claimed —
-    // that's what fires the backoffice-approval workflow. Regular (gold)
-    // tickets are read-only lookup columns; they're only logged at submit.
-    if (programKey === "angPao" || programKey === "redeemCode") {
+    // Ang Pao / Redeem Code / Special Reload (Ang Pao) write live to Lark
+    // the instant they're claimed — that's what fires the backoffice-
+    // approval workflow. Regular (gold) tickets are read-only source-table
+    // rows; they're only logged at submit.
+    if (programKey === "angPao" || programKey === "redeemCode" || programKey === "specialReload") {
       const source = r[programKey];
       const chatDef = activeChats.find((c) => c.chatId === chatId);
       btn.disabled = true;
@@ -895,8 +860,9 @@ chatListEl.addEventListener("click", async (e) => {
     s.claimedPrograms[programKey] = true;
     const allSources = [
       ...BONUS_PROGRAMS.map((p) => ({ key: p.key, label: p.label, display: r[p.key] })),
-      { key: "angPao", label: "Ang Pao (Special Reload Event)", display: r.angPao?.status },
+      { key: "angPao", label: "Ang Pao", display: r.angPao?.status },
       { key: "redeemCode", label: "Redeem Code", display: r.redeemCode?.status },
+      { key: "specialReload", label: "Special Reload (Ang Pao)", display: r.specialReload?.status },
     ];
     const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key]);
     s.releasedBonusAmount = claimedSources.map((src) => `${src.label}: ${src.display}`).join(" | ");
@@ -992,9 +958,18 @@ chatListEl.addEventListener("click", async (e) => {
 // Inquiry search box: filter as the agent types.
 chatListEl.addEventListener("input", (e) => {
   const inquiryInput = e.target.closest(".inquiry-search");
-  if (!inquiryInput) return;
-  const card = inquiryInput.closest(".chat-card");
-  card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
+  if (inquiryInput) {
+    const card = inquiryInput.closest(".chat-card");
+    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
+    return;
+  }
+  // D.O.B is a plain field on Customer Approaching CS fills in by hand — no
+  // re-render needed, just keep state in sync so submitRecord can read it.
+  const dobInput = e.target.closest(".dob-input");
+  if (dobInput) {
+    const s = state[dobInput.dataset.chat];
+    if (s) s.dob = dobInput.value;
+  }
 });
 
 // Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
@@ -1084,6 +1059,7 @@ async function submitRecord(chatId, { auto } = {}) {
         releasedAmountRaw: s.releasedAmountRaw,
         claimSecret: s.claimSecret,
         chatLink: activeChats.find((c) => c.chatId === chatId)?.link || "",
+        dob: s.dob || "",
       }),
     });
     const data = await res.json();
