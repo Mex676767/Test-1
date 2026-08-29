@@ -328,6 +328,19 @@ async function checkChatStatus(chatId) {
     // available so the agent can cross-check against LiveChat's own UI.
     const linkSuffix = data.chatUrl ? ` (${data.chatUrl})` : ` (thread ${chatId}, chat id not yet resolved)`;
 
+    // Feeds back into activeChats[].link — the same field the "Open ↗"
+    // button reads and that gets sent as "Live Chat Link" to Lark on claim
+    // (lark-claim.js). Previously always "" (chatFromProfile has no way to
+    // get a permalink from the SDK alone), so that Lark field and the Open
+    // button were both silently blank for every real chat until now.
+    if (data.chatUrl) {
+      const chatEntry = activeChats.find((c) => c.chatId === chatId);
+      if (chatEntry && chatEntry.link !== data.chatUrl) {
+        chatEntry.link = data.chatUrl;
+        if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
+      }
+    }
+
     if (data.error) {
       // Once per chat — this call runs every 20s, and a persistent error
       // would otherwise spam the log with the identical line on every tick.
