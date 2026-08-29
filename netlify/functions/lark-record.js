@@ -37,11 +37,14 @@ exports.handler = async function (event) {
       "Status": status,
       "Released amount": extractAmount(releasedAmountRaw !== undefined ? releasedAmountRaw : releasedAmount),
       "Claim Secret": !!claimSecret,
-      // Same field name as the Ang Pao table (lark-claim.js) for consistency.
-      // chatLink comes from activeChats[].link, which app.js only fills in
-      // once livechat-chat-status.js resolves the real chat_id via
-      // list_chats (~2s after a chat opens) — blank if recorded before that.
-      "Live Chat Link": chatLink || ""
+      // Field is named exactly "link" (lowercase) on Customer Approaching,
+      // and is Lark's Link field type — NOT plain text, so it needs the
+      // {link, text} object shape or Lark rejects it, same as the earlier
+      // Number/Select field-type mismatches on this table. chatLink comes
+      // from activeChats[].link, which app.js only fills in once
+      // livechat-chat-status.js resolves the real chat_id via list_chats
+      // (~2s after a chat opens) — null if recorded before that resolves.
+      "link": chatLink ? { link: chatLink, text: chatLink } : null
     };
 
     var record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);
