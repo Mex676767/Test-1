@@ -289,6 +289,8 @@ async function resolveBrandFromGroupId(chatId, groupID) {
 let chatStatusPollTimer = null;
 const CHAT_STATUS_POLL_MS = 20_000;
 const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payload every tick
+const firstCheckLoggedFor = new Set(); // one confirmation per chat that get_chat succeeded at all
+const errorLoggedFor = new Set(); // avoid spamming the same persistent error every 20s
 
 function stopChatStatusPolling() {
   if (chatStatusPollTimer) {
@@ -321,7 +323,13 @@ async function checkChatStatus(chatId) {
     if (!data.ok) return;
 
     if (data.error) {
-      logDiagnostic(`Chat status check failed: ${data.error}`, "error");
+      // Once per chat — this call runs every 20s, and a persistent error
+      // (e.g. "Chat not found" after archiving) would otherwise spam the
+      // log with the identical line on every tick.
+      if (!errorLoggedFor.has(chatId)) {
+        errorLoggedFor.add(chatId);
+        logDiagnostic(`Chat status check failed: ${data.error}`, "error");
+      }
       return;
     }
 
@@ -336,6 +344,15 @@ async function checkChatStatus(chatId) {
         logDiagnostic("Telegram/auto-close detection is off — LIVECHAT_PAT isn't set on this site.", "warn");
       }
       return;
+    }
+
+    // Confirms get_chat actually reached and recognized this chat at least
+    // once — otherwise a later "Chat not found" (once the chat's archived)
+    // is ambiguous: did it ever work, or was it always broken for this
+    // chat? Logged once, success or not, so that question has an answer.
+    if (!firstCheckLoggedFor.has(chatId)) {
+      firstCheckLoggedFor.add(chatId);
+      logDiagnostic(`First chat status check succeeded: isActive=${data.isActive}, isTelegram=${data.isTelegram}.`);
     }
 
     if (typeof data.isTelegram === "boolean" && data.isTelegram !== s.telegram) {
