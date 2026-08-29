@@ -165,7 +165,7 @@ body {
 
 .field-label {
   display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-faint); margin: 18px 0 7px;
+  color: var(--text-faint); margin: 14px 0 6px;
 }
 /* Any label carrying an "auto" badge (Brand/Amount/Claim Secret in the
    auto-grid, Telegram Chat in its toggle row) gets flex + align-items:center
@@ -456,3 +456,12 @@ body {
   font-family: "IBM Plex Mono", monospace; color: var(--text-faint); font-size: 10px; margin-right: 6px;
 }
 .diag-empty { font-size: 11px; color: var(--text-faint); text-align: center; padding: 4px; }
+
+/* ---------- Escalation Ticket (C9MYR CS-PYM) ---------- */
+.escalation-slot { margin-top: 8px; }
+.escalation-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.escalation-field { flex: 1 1 160px; min-width: 160px; }
+.escalation-field .field-label { margin: 0 0 6px; }
+.escalation-field-wide { flex-basis: 100%; }
+.escalation-field-wide textarea.input { resize: vertical; min-height: 44px; }
+.escalation-submit-btn { margin-top: 14px; }

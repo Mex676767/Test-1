@@ -45,6 +45,23 @@ async function fetchBrandOptions() {
   } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
 }
 
+// Escalation Ticket dropdown options (Brand/Queries/Payment Gateway/VIP
+// Level) — from the C9MYR CS-PYM ESCALATION table's own fields, same
+// fetch-once-at-boot pattern.
+let escalationOptions = { brand: [], queries: [], paymentGateway: [], vipLevel: [] };
+async function fetchEscalationOptions() {
+  try {
+    const res = await fetch("/.netlify/functions/lark-escalation-options");
+    const data = await res.json();
+    if (data.ok) {
+      escalationOptions = {
+        brand: data.brand || [], queries: data.queries || [],
+        paymentGateway: data.paymentGateway || [], vipLevel: data.vipLevel || [],
+      };
+    }
+  } catch (_) { /* non-fatal — Escalation Ticket dropdowns just show empty until retried */ }
+}
+
 
 function saveAgent(name) {
   selectedAgent = name.trim();
@@ -271,6 +288,10 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     // on before this (network-latency) response arrived.
     if (!s || s.brand) return;
     s.brand = deriveBrandFromGroup(data.groupName);
+    // Full code (with digits) for the Escalation Ticket section's own Brand
+    // field, which expects e.g. "VS96" not "VS" -- only fills in if blank,
+    // same as Brand itself, so a manual pick there sticks too.
+    if (!s.escalation.brand) s.escalation.brand = deriveFullBrandCode(data.groupName);
     logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}".`);
     if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
   } catch (_) { /* non-fatal — Brand just stays a manual pick */ }
@@ -440,6 +461,18 @@ function deriveBrandFromGroup(groupName) {
     // in) — Extended_Pictographic covers most emoji, Regional_Indicator
     // covers flag pairs specifically (flags aren't pictographic symbols),
     // ️/‍ are the variation selector/ZWJ used to combine glyphs.
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Same cleanup as deriveBrandFromGroup, but keeps the digits -- the
+// escalation ticket's own Brand field expects the full brand+number code
+// ("VS96", not "VS"; confirmed from the real table's Brand column values).
+function deriveFullBrandCode(groupName) {
+  if (!groupName) return "";
+  return groupName
+    .replace(/\s*priority support\s*/i, "")
     .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -760,6 +793,70 @@ function renderExpandedCard(chat) {
           ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
           : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
     }
+
+    <div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>
+  `;
+}
+
+// C9MYR CS-PYM Escalation Ticket — writes straight to that department's own
+// Lark table (lark-escalation-submit.js), completely separate from the
+// Record-to-Lark-Base flow above. Only the fields that exist on the real
+// form are included; Attachment is deliberately left out for now (needs a
+// separate Lark file-upload step this doesn't do yet), and Ticket No. is a
+// formula field on their table we never touch. PIC Name isn't an input
+// here at all — always mirrors the agent name chosen in Settings.
+function renderEscalationSection(chatId) {
+  const s = state[chatId];
+  if (s.escalationSubmitted) {
+    return `
+      <label class="field-label">Escalation Ticket <span class="hint">(C9MYR CS-PYM)</span></label>
+      <div class="logged-badge">✓ Escalation ticket submitted</div>`;
+  }
+  const e = s.escalation;
+  const opt = (list, current) => {
+    const all = current && !list.includes(current) ? [current, ...list] : list;
+    return `<option value="" ${!current ? "selected" : ""}>Please select</option>`
+      + all.map((v) => `<option value="${v}" ${v === current ? "selected" : ""}>${v}</option>`).join("");
+  };
+  return `
+    <label class="field-label">Escalation Ticket <span class="hint">(C9MYR CS-PYM)</span></label>
+    <div class="escalation-grid">
+      <div class="escalation-field">
+        <label class="field-label">Member/User ID *</label>
+        <input type="text" class="input mono esc-input" data-chat="${chatId}" data-field="memberUserId" value="${e.memberUserId}" placeholder="Type here" />
+      </div>
+      <div class="escalation-field">
+        <label class="field-label">Brand *</label>
+        <select class="input esc-select" data-chat="${chatId}" data-field="brand">${opt(escalationOptions.brand, e.brand)}</select>
+      </div>
+      <div class="escalation-field">
+        <label class="field-label">Queries *</label>
+        <select class="input esc-select" data-chat="${chatId}" data-field="queries">${opt(escalationOptions.queries, e.queries)}</select>
+      </div>
+      <div class="escalation-field">
+        <label class="field-label">Transaction ID</label>
+        <input type="text" class="input mono esc-input" data-chat="${chatId}" data-field="transactionId" value="${e.transactionId}" placeholder="Type here" />
+      </div>
+      <div class="escalation-field">
+        <label class="field-label">Payment Gateway</label>
+        <select class="input esc-select" data-chat="${chatId}" data-field="paymentGateway">${opt(escalationOptions.paymentGateway, e.paymentGateway)}</select>
+      </div>
+      <div class="escalation-field">
+        <label class="field-label">VIP Level</label>
+        <select class="input esc-select" data-chat="${chatId}" data-field="vipLevel">${opt(escalationOptions.vipLevel, e.vipLevel)}</select>
+      </div>
+      <div class="escalation-field">
+        <label class="field-label">Amount</label>
+        <input type="number" step="0.01" class="input mono esc-input" data-chat="${chatId}" data-field="amount" value="${e.amount}" placeholder="Round to 2 decimal places" />
+      </div>
+      <div class="escalation-field escalation-field-wide">
+        <label class="field-label">Remarks (CS - PYM)</label>
+        <textarea class="input esc-input" data-chat="${chatId}" data-field="remarks" placeholder="Type here" rows="2">${e.remarks}</textarea>
+      </div>
+    </div>
+    <div class="hint" style="margin:6px 0 10px">Attachment isn't supported here yet — attach it directly in Lark if needed.</div>
+    ${s.escalationError ? `<div class="record-error-banner">⚠︎ ${s.escalationError}</div>` : ""}
+    <button class="submit-btn escalation-submit-btn" data-action="submitEscalation" data-chat="${chatId}">Submit Escalation Ticket</button>
   `;
 }
 
@@ -773,6 +870,17 @@ function ensureChatState(chat) {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     gracePeriodActivated: false,
     brand: deriveBrandFromGroup(chat.groupName),
+    // C9MYR CS-PYM Escalation Ticket -- a separate Lark base/table entirely,
+    // filled in and submitted independently of the Customer Approaching
+    // record above. memberUserId auto-fills from s.username once looked up,
+    // brand from deriveFullBrandCode (keeps the digits, e.g. "VS96" vs
+    // "VS"), amount from whatever bonus gets claimed -- all editable, none
+    // of them overwrite a value the agent already typed/picked.
+    escalation: {
+      memberUserId: "", brand: deriveFullBrandCode(chat.groupName), queries: "",
+      transactionId: "", paymentGateway: "", remarks: "", vipLevel: "", amount: "",
+    },
+    escalationSubmitted: false, escalationError: "",
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "",
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
     // chatOpen mirrors the LiveChat conversation's open/closed state.
@@ -844,6 +952,7 @@ chatListEl.addEventListener("click", async (e) => {
     const brand = s.brand;
     if (!brand) { setStatus("Brand hasn't been auto-detected yet for this chat — try again in a moment.", "error"); return; }
     s.username = username;
+    if (!s.escalation.memberUserId) s.escalation.memberUserId = username;
     const chatDef = activeChats.find((c) => c.chatId === chatId);
     const telegramNow = card.querySelector(".tg-check").checked;
     btn.disabled = true;
@@ -898,6 +1007,7 @@ chatListEl.addEventListener("click", async (e) => {
         s.claimSecret = true;
         s.releasedBonusAmount = `Grace Period: ${amount || display}`;
         s.releasedAmountRaw = amount || display;
+        if (!s.escalation.amount && amount) s.escalation.amount = amount;
       }
       card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
       card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
@@ -954,6 +1064,10 @@ chatListEl.addEventListener("click", async (e) => {
     // one entry's display value.
     s.releasedAmountRaw = claimedSources.map((src) => src.display).join(" | ");
     s.claimSecret = true;
+    if (!s.escalation.amount && s.releasedAmountRaw) {
+      const numMatch = s.releasedAmountRaw.match(/-?\d+(?:\.\d+)?/);
+      if (numMatch) s.escalation.amount = numMatch[0];
+    }
 
     // Auto-set inquiry from the bonus type — only the matching inquiry tag,
     // NOT "Feedback". CS adds Feedback manually if applicable.
@@ -1000,6 +1114,32 @@ chatListEl.addEventListener("click", async (e) => {
     await submitRecord(chatId, { auto: false });
   }
 
+  if (btn.dataset.action === "submitEscalation") {
+    const e = s.escalation;
+    if (!e.memberUserId || !e.brand || !e.queries) {
+      s.escalationError = "Member/User ID, Brand, and Queries are required.";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = "…";
+    try {
+      const res = await fetch("/.netlify/functions/lark-escalation-submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...e, picName: selectedAgent }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Submit failed");
+      s.escalationSubmitted = true;
+      s.escalationError = "";
+      setStatus("Escalation ticket submitted.", "success");
+    } catch (err) {
+      s.escalationError = "Escalation submit failed: " + err.message;
+    }
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+  }
+
   if (btn.dataset.action === "toggleExpand") {
     const wasExpanded = s.expanded;
     // Accordion — only one full card open at a time, so the rest stay
@@ -1039,6 +1179,14 @@ chatListEl.addEventListener("input", (e) => {
   if (dobInput) {
     const s = state[dobInput.dataset.chat];
     if (s) s.dob = dobInput.value;
+    return;
+  }
+  // Escalation Ticket text/number/textarea fields — same no-re-render,
+  // just-sync-state pattern as D.O.B.
+  const escInput = e.target.closest(".esc-input");
+  if (escInput) {
+    const s = state[escInput.dataset.chat];
+    if (s) s.escalation[escInput.dataset.field] = escInput.value;
   }
 });
 
@@ -1056,11 +1204,18 @@ chatListEl.addEventListener("change", (e) => {
     return;
   }
   const tgCheck = e.target.closest(".tg-check");
-  if (!tgCheck) return;
-  const s = state[tgCheck.dataset.chat];
-  if (s) {
-    s.telegram = tgCheck.checked;
-    s.telegramManual = true; // stops the auto-poll from overwriting this
+  if (tgCheck) {
+    const s = state[tgCheck.dataset.chat];
+    if (s) {
+      s.telegram = tgCheck.checked;
+      s.telegramManual = true; // stops the auto-poll from overwriting this
+    }
+    return;
+  }
+  const escSelect = e.target.closest(".esc-select");
+  if (escSelect) {
+    const s = state[escSelect.dataset.chat];
+    if (s) s.escalation[escSelect.dataset.field] = escSelect.value;
   }
 });
 
@@ -1229,7 +1384,7 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
 // agent saved yet (first time / cleared cache).
 (async () => {
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
-  await Promise.all([fetchAgentOptions(), fetchBrandOptions()]);
+  await Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchEscalationOptions()]);
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);

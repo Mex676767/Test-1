@@ -26,6 +26,15 @@ const TABLE_RISK_PLAYER = process.env.LARK_TABLE_RISK_PLAYER;
 const TABLE_SPECIAL_RELOAD = process.env.LARK_TABLE_SPECIAL_RELOAD;
 const TABLE_VIP_BOOSTER = process.env.LARK_TABLE_VIP_BOOSTER;
 
+// Escalation tickets (C9MYR CS-PYM ESCALATION) live on an entirely separate
+// Lark base from everything above — a different department's base, granted
+// to this same app as a collaborator (2026-08-30). Every function below
+// that touches a specific base now takes an optional baseToken override,
+// defaulting to BASE_APP_TOKEN, so this second base doesn't need its own
+// copy of every helper.
+const ESCALATION_BASE_TOKEN = process.env.LARK_ESCALATION_BASE_TOKEN;
+const TABLE_ESCALATION = process.env.LARK_ESCALATION_TABLE;
+
 let cachedToken = null;
 let cachedExpiry = 0;
 
@@ -81,10 +90,10 @@ async function updateRecord(tableId, recordId, fields) {
   return data.data.record;
 }
 
-async function createRecord(tableId, fields) {
+async function createRecord(tableId, fields, baseToken) {
   const token = await getTenantToken();
   const res = await fetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records`,
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records`,
     { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ fields }) }
   );
@@ -128,10 +137,10 @@ function resolveOption(text, optionMap) {
   return text;
 }
 
-async function listFields(tableId) {
+async function listFields(tableId, baseToken) {
   const token = await getTenantToken();
   const res = await fetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`,
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const data = await res.json();
@@ -139,16 +148,21 @@ async function listFields(tableId) {
   return data.data.items || [];
 }
 
-// Caches id -> name maps per (tableId, fieldName) for 10 minutes — option
-// lists rarely change, and this avoids an extra API round trip on every poll.
+// Caches id -> name maps per (baseToken, tableId, fieldName) for 10 minutes
+// — option lists rarely change, and this avoids an extra API round trip on
+// every poll.
 const fieldOptionMapCache = new Map(); // key -> { map, expiry }
 
-async function getFieldOptionMap(tableId, fieldName) {
-  const key = tableId + "::" + fieldName;
+// Returns the full option list (id -> name) for any Single/Multi Select
+// field. Most callers only want the plain names (Array.from(map.values())),
+// but the map form is also what resolves a Lookup's raw option ID back to
+// its display text (see toDisplay/resolveOption above).
+async function getFieldOptionMap(tableId, fieldName, baseToken) {
+  const key = (baseToken || BASE_APP_TOKEN) + "::" + tableId + "::" + fieldName;
   const cached = fieldOptionMapCache.get(key);
   if (cached && Date.now() < cached.expiry) return cached.map;
 
-  const fields = await listFields(tableId);
+  const fields = await listFields(tableId, baseToken);
   const field = fields.find((f) => f.field_name === fieldName);
   const options = field && field.property && field.property.options;
   const map = new Map((options || []).map((o) => [o.id, o.name]));
@@ -192,4 +206,5 @@ module.exports = {
   TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
+  ESCALATION_BASE_TOKEN, TABLE_ESCALATION,
 };
