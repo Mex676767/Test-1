@@ -287,7 +287,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
 // functional alongside this — the field paths this reads are best-effort
 // from docs, not yet verified against a real response.
 let chatStatusPollTimer = null;
-const CHAT_STATUS_POLL_MS = 20_000;
+const CHAT_STATUS_POLL_MS = 2_000; // worst-case detection latency = this value; avg = half of it
 const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payload every tick
 const firstCheckLoggedFor = new Set(); // one confirmation per chat that get_chat succeeded at all
 const errorLoggedFor = new Set(); // avoid spamming the same persistent error every 20s
