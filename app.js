@@ -514,16 +514,17 @@ function renderStatusDropdown(chatId) {
 // PIC dropped entirely — it's always the Retention Logger bot (every row is
 // created by the app, never a human agent), so it carried no information.
 // Name customer dropped too — no longer fetched (P&L is only queried for
-// Tier now). D.O.B isn't a Lookup from anywhere; it's just a plain field on
-// Customer Approaching that CS fills in by hand, so it's a real input here,
-// synced to state.dob and written at Record submit time (lark-record.js).
+// Tier now). D.O.B isn't a Lookup from anywhere and has nothing to do with
+// the bonus lookup — it's just a plain field on Customer Approaching that
+// CS fills in by hand, synced to state.dob and written at Record submit
+// time (lark-record.js). So unlike Tier, it must NOT be gated behind
+// s.matchedRow existing — it needs to be fillable before a Look up too.
 function renderPlayerInfo(chatId) {
   const s = state[chatId];
-  if (!s.matchedRow) return "";
-  const r = s.matchedRow;
+  const tier = s.matchedRow ? (s.matchedRow.tier || "—") : null;
   return `
     <div class="player-info">
-      <span><span class="pi-label">Tier</span> ${r.tier || "—"}</span>
+      ${tier !== null ? `<span><span class="pi-label">Tier</span> ${tier}</span>` : ""}
       <span class="pi-dob"><span class="pi-label">D.O.B</span> <input type="date" class="input dob-input" data-chat="${chatId}" value="${s.dob || ""}" /></span>
     </div>`;
 }
