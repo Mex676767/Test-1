@@ -13,6 +13,7 @@ const F = {
   tier: "Tier",
   status: "Status",
   swCheck: "SW Check",
+  swChecker: "SW Checker", // LTV(Day)'s equivalent field is spelled differently from Top 10 P&L(Night)'s — confirmed from a real row, not a guess
   claimedCopy: "Claimed Copy",
   angPaoAmount: "Ang Pao Claim",
 };
@@ -71,12 +72,23 @@ exports.handler = async function (event) {
       }
     } catch (_) { /* non-fatal — tier just shows blank */ }
 
-    // Top 10 P&L(Night) / LTV(Day): "Claimed Copy" checkbox is the claim
-    // flag (unticked = still claimable); displayed value is "SW Check".
-    const claimedCopyPredicate = (fields) => fields[F.claimedCopy] !== true && !!toDisplay(fields[F.swCheck]);
+    // Top 10 P&L(Night): "Claimed Copy" checkbox is the claim flag
+    // (unticked = still claimable); displayed value is "SW Check".
     const [topPnlRow, ltvRow] = await Promise.all([
-      findOldestClaimableRow(TABLE_TOP_PNL_NIGHT, uname, brandVal, claimedCopyPredicate).catch(() => null),
-      findOldestClaimableRow(TABLE_LTV_DAY, uname, brandVal, claimedCopyPredicate).catch(() => null),
+      findOldestClaimableRow(
+        TABLE_TOP_PNL_NIGHT, uname, brandVal,
+        (fields) => fields[F.claimedCopy] !== true && !!toDisplay(fields[F.swCheck])
+      ).catch(() => null),
+      // LTV(Day) has no "Claimed Copy" field at all — confirmed from a real
+      // row, not the same table structure as Top 10 P&L(Night) despite
+      // looking similar at a glance. It follows Grace Period's pattern
+      // instead: "Status" hides Claimed/Expired, display comes from
+      // "SW Checker" (note the different spelling from Top 10 P&L's
+      // "SW Check").
+      findOldestClaimableRow(
+        TABLE_LTV_DAY, uname, brandVal,
+        (fields) => !hidden(toDisplay(fields[F.status])) && !!toDisplay(fields[F.swChecker])
+      ).catch(() => null),
     ]);
 
     // Grace Period(Day): "SW Check" is both the claim flag (hide only
@@ -142,7 +154,7 @@ exports.handler = async function (event) {
         row: {
           tier,
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
-          ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swCheck]) : "",
+          ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",
           riskPlayer: riskRow ? toDisplay(riskRow.fields[F.status]) : "",
           vipBooster: vipRow ? "Eligible" : "",
