@@ -652,6 +652,29 @@ function renderStatusDropdown(chatId) {
   }).join("");
 }
 
+// Brand, same custom-dropdown treatment as Status — a native <select>'s
+// own dropdown chrome (including its scrollbar) can't be restyled via CSS
+// in any browser, so this is the only way to actually theme it.
+function renderBrandDisplay(chatId) {
+  const s = state[chatId];
+  const empty = !s.brand;
+  return `<span class="status-value ${empty ? "placeholder" : ""}">${s.brand || "Select brand…"}</span><span class="status-caret">▾</span>`;
+}
+
+function renderBrandDropdown(chatId) {
+  const s = state[chatId];
+  // Auto-detection can produce a value that isn't (yet) in brandOptions —
+  // keep it selectable rather than silently dropping it from the list.
+  const options = s.brand && !brandOptions.includes(s.brand) ? [s.brand, ...brandOptions] : brandOptions;
+  return options.map((b) => {
+    const active = s.brand === b;
+    return `
+    <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectBrand" data-chat="${chatId}" data-value="${b}">
+      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${b}
+    </button>`;
+  }).join("");
+}
+
 // PIC dropped entirely — it's always the Retention Logger bot (every row is
 // created by the app, never a human agent), so it carried no information.
 // Name customer dropped too — no longer fetched (P&L is only queried for
@@ -790,21 +813,21 @@ function renderInquiryDropdown(chatId, query) {
 // lark-brand-list.js — the Brand field's own Single Select choices on
 // Customer Approaching) rather than free text, so a manual override can
 // only ever be a real Brand value, never a typo that wouldn't match any
-// per-table Brand column. Synced to state.brand via the delegated "change"
-// listener below.
+// per-table Brand column. Custom dropdown (not a native <select>) so it
+// can actually be themed — see renderBrandDisplay/renderBrandDropdown and
+// the toggleBrandDropdown/selectBrand action handlers.
 function renderAutoFields(chatId) {
   const s = state[chatId];
-  // Auto-detection can produce a value that isn't (yet) in brandOptions —
-  // keep it selectable rather than silently dropping it from the dropdown.
-  const options = s.brand && !brandOptions.includes(s.brand) ? [s.brand, ...brandOptions] : brandOptions;
   return `
     <div class="auto-grid">
       <div class="auto-field">
         <span class="field-label" style="margin:0">Brand <span class="auto-tag">auto</span></span>
-        <select class="input mono auto-value-input brand-select" data-chat="${chatId}">
-          <option value="" ${!s.brand ? "selected" : ""}>—</option>
-          ${options.map((b) => `<option value="${b}" ${b === s.brand ? "selected" : ""}>${b}</option>`).join("")}
-        </select>
+        <div class="brand-picker">
+          <button type="button" class="input status-display brand-display" data-action="toggleBrandDropdown" data-chat="${chatId}">
+            ${renderBrandDisplay(chatId)}
+          </button>
+          <div class="brand-dropdown hidden">${renderBrandDropdown(chatId)}</div>
+        </div>
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">D.O.B</span>
@@ -1269,7 +1292,7 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".status-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown").forEach((d) => d.classList.add("hidden"));
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
     if (willOpen) dropdown.classList.remove("hidden");
   }
 
@@ -1278,6 +1301,21 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".status-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     card.querySelector(".status-dropdown").classList.add("hidden");
+  }
+
+  if (btn.dataset.action === "toggleBrandDropdown") {
+    const dropdown = card.querySelector(".brand-dropdown");
+    const willOpen = dropdown.classList.contains("hidden");
+    // Only one dropdown open at a time across the whole widget.
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
+    if (willOpen) dropdown.classList.remove("hidden");
+  }
+
+  if (btn.dataset.action === "selectBrand") {
+    s.brand = btn.dataset.value;
+    card.querySelector(".brand-display").innerHTML = renderBrandDisplay(chatId);
+    card.querySelector(".brand-dropdown").innerHTML = renderBrandDropdown(chatId);
+    card.querySelector(".brand-dropdown").classList.add("hidden");
   }
 });
 
@@ -1317,19 +1355,12 @@ chatListEl.addEventListener("input", (e) => {
   }
 });
 
-// Brand and Telegram both stay auto-filled by default but are now editable
-// — detection can fail or be wrong (Brand), or CS may need to correct it
-// (Telegram), and submitRecord requires a Brand to submit at all. Brand is
-// a <select> (real Brand values from lark-brand-list.js, not free text) and
-// Telegram a checkbox — both fire "change" reliably, unlike "input" for
-// <select>/checkbox across browsers, hence the separate listener.
+// Telegram stays auto-detected by default but is now editable — CS may
+// need to correct it, and checkboxes fire "change" reliably, unlike
+// "input", across browsers. (Brand's own editing now goes through the
+// selectBrand action handler above, since it's a custom dropdown, not a
+// native <select>, anymore.)
 chatListEl.addEventListener("change", (e) => {
-  const brandSelect = e.target.closest(".brand-select");
-  if (brandSelect) {
-    const s = state[brandSelect.dataset.chat];
-    if (s) s.brand = brandSelect.value;
-    return;
-  }
   const tgCheck = e.target.closest(".tg-check");
   if (tgCheck) {
     const s = state[tgCheck.dataset.chat];
@@ -1352,7 +1383,7 @@ chatListEl.addEventListener("change", (e) => {
 chatListEl.addEventListener("focusin", (e) => {
   const input = e.target.closest(".inquiry-search");
   if (!input) return;
-  document.querySelectorAll(".status-dropdown").forEach((d) => d.classList.add("hidden"));
+  document.querySelectorAll(".status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
   input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
 });
 
@@ -1369,8 +1400,8 @@ chatListEl.addEventListener("click", (e) => {
 // click on one of its own options, which lives inside that same wrapper,
 // never closes it prematurely.
 document.addEventListener("click", (e) => {
-  document.querySelectorAll(".inquiry-select, .status-picker").forEach((wrap) => {
-    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown, .status-dropdown")?.classList.add("hidden");
+  document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker").forEach((wrap) => {
+    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown")?.classList.add("hidden");
   });
 });
 

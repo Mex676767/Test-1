@@ -243,20 +243,27 @@ body {
 .inquiry-option-check { width: 13px; color: var(--blue); flex-shrink: 0; }
 .inquiry-option-empty { padding: 10px; font-size: 12px; color: var(--text-faint); text-align: center; }
 
-/* ---------- Status (custom dropdown, same look as Inquiry's — reuses
-   .inquiry-option/.inquiry-option-check for the list itself) ---------- */
-.status-picker { position: relative; }
-.status-display { display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; }
+/* ---------- Status / Brand (custom dropdowns, same look as Inquiry's —
+   reuses .inquiry-option/.inquiry-option-check for the list itself). Brand
+   used to be a native <select> — its own dropdown chrome, scrollbar
+   included, can't be restyled via CSS in any browser, which is the whole
+   reason it's a custom dropdown now instead. .brand-picker/-display/
+   -dropdown are separate classes from .status-*, not just reused directly
+   — several call sites do `card.querySelector(".status-dropdown")`
+   expecting exactly one match per card, which a shared class would break
+   now that both exist on the same card. ---------- */
+.status-picker, .brand-picker { position: relative; }
+.status-display, .brand-display { display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; }
 .status-caret { color: var(--text-faint); font-size: 11px; margin-left: 6px; }
-.status-dropdown {
+.status-dropdown, .brand-dropdown {
   position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 20;
   max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
   padding: 5px; box-shadow: var(--shadow);
   scrollbar-width: none;
 }
-.status-dropdown::-webkit-scrollbar { display: none; }
-.status-dropdown.hidden { display: none; }
+.status-dropdown::-webkit-scrollbar, .brand-dropdown::-webkit-scrollbar { display: none; }
+.status-dropdown.hidden, .brand-dropdown.hidden { display: none; }
 
 /* ---------- Auto-derived fields (Brand / D.O.B / Released Amount / Claim Secret) ---------- */
 /* 4 fields now (was 3) — forcing them into one row squeezed "Claim Secret"
@@ -269,6 +276,12 @@ body {
 }
 .auto-value { margin-top: 4px; font-size: 12px; font-weight: 600; overflow-wrap: break-word; }
 .auto-field .input { background: var(--surface); padding: 5px 7px; font-size: 12px; margin-top: 4px; }
+/* The date input's own calendar-picker icon is the one part of it CSS can
+   actually reach — the popup grid itself is native OS/browser chrome with
+   no styling hook in any browser, dark theme or not. Default icon renders
+   near-black, invisible against this field's dark background; inverting
+   it in dark mode is the full extent of what's fixable here. */
+:root[data-theme="dark"] .dob-input::-webkit-calendar-picker-indicator { filter: invert(1); }
 .input, select {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit;
