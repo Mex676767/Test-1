@@ -675,6 +675,88 @@ function renderBrandDropdown(chatId) {
   }).join("");
 }
 
+// D.O.B. — a fully custom calendar, not <input type="date">. The native
+// picker's popup calendar grid is OS/browser chrome with no CSS styling
+// hook in any browser (unlike the icon, which is at least reachable) —
+// this is the only way to actually theme it. dob is stored/read exactly
+// like before ("YYYY-MM-DD", parsed by lark-record.js's toEpochMs).
+const DOB_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DOB_WEEKDAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+const pad2 = (n) => String(n).padStart(2, "0");
+const dobKey = (y, m, day) => `${y}-${pad2(m + 1)}-${pad2(day)}`;
+
+function formatDobDisplay(dob) {
+  if (!dob) return "";
+  const [y, m, d] = dob.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function renderDobDisplay(chatId) {
+  const s = state[chatId];
+  const empty = !s.dob;
+  return `<span class="status-value ${empty ? "placeholder" : ""}">${empty ? "dd/mm/yyyy" : formatDobDisplay(s.dob)}</span><span class="status-caret">▾</span>`;
+}
+
+// Builds exactly 6 rows (42 cells) so the grid is always the same height —
+// leading/trailing cells spill into the adjacent month, shown dimmed but
+// still clickable (a common calendar-UX convenience, not just filler).
+function buildDobCalendarDays(year, month) {
+  const firstWeekday = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7; // 0=Mon..6=Sun
+  const daysInThisMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const daysInPrevMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const prevY = month === 0 ? year - 1 : year, prevM = month === 0 ? 11 : month - 1;
+  const nextY = month === 11 ? year + 1 : year, nextM = month === 11 ? 0 : month + 1;
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) {
+    cells.push({ y: prevY, m: prevM, day: daysInPrevMonth - firstWeekday + i + 1, otherMonth: true });
+  }
+  for (let d = 1; d <= daysInThisMonth; d++) cells.push({ y: year, m: month, day: d, otherMonth: false });
+  let nextDay = 1;
+  while (cells.length < 42) cells.push({ y: nextY, m: nextM, day: nextDay++, otherMonth: true });
+  return cells;
+}
+
+// s.dobView (the month/year currently displayed — separate from s.dob, the
+// actually-selected date) is lazily initialized here: starts on the
+// selected date's month if one's set, otherwise today's.
+function renderDobCalendar(chatId) {
+  const s = state[chatId];
+  const today = new Date();
+  const todayY = today.getFullYear(), todayM = today.getMonth(), todayD = today.getDate();
+  if (!s.dobView) {
+    if (s.dob) {
+      const [y, m] = s.dob.split("-").map(Number);
+      s.dobView = { year: y, month: m - 1 };
+    } else {
+      s.dobView = { year: todayY, month: todayM };
+    }
+  }
+  const { year, month } = s.dobView;
+  const cells = buildDobCalendarDays(year, month);
+  const rows = [];
+  for (let r = 0; r < 6; r++) rows.push(cells.slice(r * 7, r * 7 + 7));
+  return `
+    <div class="dob-cal-header">
+      <button type="button" class="dob-cal-nav" data-action="dobNavYear" data-chat="${chatId}" data-dir="-1" title="Previous year">«</button>
+      <button type="button" class="dob-cal-nav" data-action="dobNavMonth" data-chat="${chatId}" data-dir="-1" title="Previous month">‹</button>
+      <span class="dob-cal-title">${DOB_MONTH_NAMES[month]} ${year}</span>
+      <button type="button" class="dob-cal-nav" data-action="dobNavMonth" data-chat="${chatId}" data-dir="1" title="Next month">›</button>
+      <button type="button" class="dob-cal-nav" data-action="dobNavYear" data-chat="${chatId}" data-dir="1" title="Next year">»</button>
+    </div>
+    <div class="dob-cal-weekdays">${DOB_WEEKDAY_LABELS.map((w) => `<span>${w}</span>`).join("")}</div>
+    <div class="dob-cal-grid">${rows.map((row) => row.map((cell) => {
+      const key = dobKey(cell.y, cell.m, cell.day);
+      const isToday = cell.y === todayY && cell.m === todayM && cell.day === todayD;
+      const isSelected = s.dob === key;
+      return `<button type="button" class="dob-cal-day ${cell.otherMonth ? "other-month" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" data-action="selectDobDay" data-chat="${chatId}" data-value="${key}">${cell.day}</button>`;
+    }).join("")).join("")}</div>
+    <div class="dob-cal-footer">
+      <button type="button" class="dob-cal-link" data-action="dobClear" data-chat="${chatId}">Clear</button>
+      <button type="button" class="dob-cal-link" data-action="dobToday" data-chat="${chatId}">Today</button>
+    </div>
+  `;
+}
+
 // PIC dropped entirely — it's always the Retention Logger bot (every row is
 // created by the app, never a human agent), so it carried no information.
 // Name customer dropped too — no longer fetched (P&L is only queried for
@@ -831,7 +913,12 @@ function renderAutoFields(chatId) {
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">D.O.B</span>
-        <input type="date" class="input auto-value-input dob-input" data-chat="${chatId}" value="${s.dob || ""}" />
+        <div class="dob-picker">
+          <button type="button" class="input status-display dob-display" data-action="toggleDobCalendar" data-chat="${chatId}">
+            ${renderDobDisplay(chatId)}
+          </button>
+          <div class="dob-calendar hidden"></div>
+        </div>
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Amount <span class="auto-tag">auto</span></span>
@@ -1009,7 +1096,7 @@ function ensureChatState(chat) {
     // is the visible "Checking…" state shown until it resolves.
     lastUsernameStarted: false, lastUsernameLoading: false,
     lastUsernameChecked: false, lastUsernameFound: false, lastUsernameValue: "",
-    inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "",
+    inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "", dobView: null,
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
     // chatOpen mirrors the LiveChat conversation's open/closed state.
     // Recording only happens once a chat closes — checkChatStatus flips
@@ -1292,7 +1379,7 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".status-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
     if (willOpen) dropdown.classList.remove("hidden");
   }
 
@@ -1307,7 +1394,7 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".brand-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
     if (willOpen) dropdown.classList.remove("hidden");
   }
 
@@ -1317,6 +1404,55 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".brand-dropdown").innerHTML = renderBrandDropdown(chatId);
     card.querySelector(".brand-dropdown").classList.add("hidden");
   }
+
+  if (btn.dataset.action === "toggleDobCalendar") {
+    const cal = card.querySelector(".dob-calendar");
+    const willOpen = cal.classList.contains("hidden");
+    // Only one dropdown open at a time across the whole widget.
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
+    if (willOpen) {
+      cal.innerHTML = renderDobCalendar(chatId); // fresh each open — reflects any dob change since last shown
+      cal.classList.remove("hidden");
+    }
+  }
+
+  if (btn.dataset.action === "dobNavMonth") {
+    if (!s.dobView) renderDobCalendar(chatId); // side effect: lazily initializes s.dobView
+    let { year, month } = s.dobView;
+    month += Number(btn.dataset.dir);
+    if (month < 0) { month = 11; year--; }
+    if (month > 11) { month = 0; year++; }
+    s.dobView = { year, month };
+    card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
+  }
+
+  if (btn.dataset.action === "dobNavYear") {
+    if (!s.dobView) renderDobCalendar(chatId);
+    s.dobView = { year: s.dobView.year + Number(btn.dataset.dir), month: s.dobView.month };
+    card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
+  }
+
+  if (btn.dataset.action === "selectDobDay") {
+    s.dob = btn.dataset.value;
+    const [y, m] = s.dob.split("-").map(Number);
+    s.dobView = { year: y, month: m - 1 };
+    card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
+    card.querySelector(".dob-calendar").classList.add("hidden");
+  }
+
+  if (btn.dataset.action === "dobClear") {
+    s.dob = "";
+    card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
+    card.querySelector(".dob-calendar").classList.add("hidden");
+  }
+
+  if (btn.dataset.action === "dobToday") {
+    const t = new Date();
+    s.dob = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
+    s.dobView = { year: t.getFullYear(), month: t.getMonth() };
+    card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
+    card.querySelector(".dob-calendar").classList.add("hidden");
+  }
 });
 
 // Inquiry search box: filter as the agent types.
@@ -1325,14 +1461,6 @@ chatListEl.addEventListener("input", (e) => {
   if (inquiryInput) {
     const card = inquiryInput.closest(".chat-card");
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
-    return;
-  }
-  // D.O.B is a plain field on Customer Approaching CS fills in by hand — no
-  // re-render needed, just keep state in sync so submitRecord can read it.
-  const dobInput = e.target.closest(".dob-input");
-  if (dobInput) {
-    const s = state[dobInput.dataset.chat];
-    if (s) s.dob = dobInput.value;
     return;
   }
   // Escalation Ticket text/number/textarea fields — same no-re-render,
@@ -1383,7 +1511,7 @@ chatListEl.addEventListener("change", (e) => {
 chatListEl.addEventListener("focusin", (e) => {
   const input = e.target.closest(".inquiry-search");
   if (!input) return;
-  document.querySelectorAll(".status-dropdown, .brand-dropdown").forEach((d) => d.classList.add("hidden"));
+  document.querySelectorAll(".status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
   input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
 });
 
@@ -1399,9 +1527,21 @@ chatListEl.addEventListener("click", (e) => {
 // Click anywhere outside a given dropdown's own wrapper closes it — so a
 // click on one of its own options, which lives inside that same wrapper,
 // never closes it prematurely.
+//
+// Uses composedPath(), not wrap.contains(e.target): chatListEl's own click
+// handler runs first (closer ancestor, fires earlier in bubbling) and some
+// actions (dobNavMonth/dobNavYear) replace their container's innerHTML to
+// reflect the new month/year — which detaches the very button that was
+// clicked from the document. By the time this handler runs, e.target is a
+// detached node, and wrap.contains(detachedNode) is always false — every
+// wrapper reads as "clicked outside," closing the calendar right as it
+// tries to update instead of navigate. composedPath() is captured at
+// dispatch time, before any handler can mutate the DOM, so it still lists
+// the original ancestors regardless of what ran before this.
 document.addEventListener("click", (e) => {
-  document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker").forEach((wrap) => {
-    if (!wrap.contains(e.target)) wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown")?.classList.add("hidden");
+  const path = e.composedPath();
+  document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker, .dob-picker").forEach((wrap) => {
+    if (!path.includes(wrap)) wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar")?.classList.add("hidden");
   });
 });
 

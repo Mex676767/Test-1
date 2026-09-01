@@ -276,12 +276,44 @@ body {
 }
 .auto-value { margin-top: 4px; font-size: 12px; font-weight: 600; overflow-wrap: break-word; }
 .auto-field .input { background: var(--surface); padding: 5px 7px; font-size: 12px; margin-top: 4px; }
-/* The date input's own calendar-picker icon is the one part of it CSS can
-   actually reach — the popup grid itself is native OS/browser chrome with
-   no styling hook in any browser, dark theme or not. Default icon renders
-   near-black, invisible against this field's dark background; inverting
-   it in dark mode is the full extent of what's fixable here. */
-:root[data-theme="dark"] .dob-input::-webkit-calendar-picker-indicator { filter: invert(1); }
+
+/* ---------- D.O.B. custom calendar (replaces <input type="date"> — its
+   native popup grid is OS/browser chrome with no CSS styling hook in any
+   browser, which the icon-only fix couldn't get around) ---------- */
+.dob-picker { position: relative; }
+.dob-calendar {
+  position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; width: 232px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+  padding: 10px; box-shadow: var(--shadow);
+}
+.dob-calendar.hidden { display: none; }
+.dob-cal-header { display: flex; align-items: center; gap: 2px; margin-bottom: 8px; }
+.dob-cal-title { flex: 1; text-align: center; font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 12.5px; }
+.dob-cal-nav {
+  flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 6px; width: 22px; height: 22px; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+}
+.dob-cal-nav:hover { border-color: var(--blue); color: var(--blue); }
+.dob-cal-weekdays {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 4px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); text-align: center;
+}
+.dob-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.dob-cal-day {
+  background: none; border: none; color: var(--text); border-radius: 6px; cursor: pointer;
+  font-size: 12px; padding: 6px 0; font-family: inherit; font-variant-numeric: tabular-nums;
+}
+.dob-cal-day:hover:not(.selected) { background: var(--surface-2); }
+.dob-cal-day.other-month { color: var(--text-faint); }
+.dob-cal-day.today { color: var(--blue); font-weight: 600; }
+.dob-cal-day.selected { background: var(--blue); color: white; font-weight: 600; }
+.dob-cal-footer {
+  display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.dob-cal-link { background: none; border: none; color: var(--blue); font-size: 12px; cursor: pointer; font-family: inherit; padding: 2px 4px; }
+.dob-cal-link:hover { text-decoration: underline; }
 .input, select {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit;
