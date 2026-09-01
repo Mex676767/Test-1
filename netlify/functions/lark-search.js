@@ -1,5 +1,5 @@
 const {
-  searchRecords, createRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow,
+  searchRecords, createRecord, deleteRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow,
   TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
@@ -25,13 +25,24 @@ function hidden(v) {
 
 exports.handler = async function (event) {
   try {
-    const { username, brand, picName } = JSON.parse(event.body || "{}");
+    const { username, brand, picName, previousRecordId } = JSON.parse(event.body || "{}");
     if (!username || !brand) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "username and brand are required" }) };
     }
     const uname = username.trim();
     const brandVal = brand.trim();
     const agentVal = (picName || "").trim();
+
+    // One Customer Approaching row per chat, not one per Look Up click —
+    // if the agent looks up again for the same chat (typo fix, re-check,
+    // etc.), the frontend passes back the record it created last time here
+    // so it can be deleted first. Non-fatal: if the delete fails (already
+    // gone, etc.) the old row just lingers rather than blocking the new
+    // lookup. Only ever sent for a chat that hasn't been logged yet (see
+    // app.js) -- a completed case is never deleted by a stray re-lookup.
+    if (previousRecordId) {
+      try { await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId); } catch (_) { /* non-fatal */ }
+    }
 
     // Always create a fresh record — each Look Up is a new case. This row
     // is only a target for the final Record submit now (Agent Name, Brand,
@@ -57,8 +68,12 @@ exports.handler = async function (event) {
     )];
 
     // Tier comes straight from the P&L "master file" table (Username +
-    // Brand match) — not from Customer Approaching's Tier Lookup.
+    // Brand match) — not from Customer Approaching's Tier Lookup. P&L is
+    // the full VIP player list, so no match at all means this username
+    // isn't a VIP under this brand — surfaced to the frontend as notVip
+    // rather than just silently leaving Tier blank.
     let tier = "";
+    let notVip = false;
     try {
       if (TABLE_PNL) {
         const pnlMatches = await searchRecords(TABLE_PNL, [
@@ -68,9 +83,11 @@ exports.handler = async function (event) {
         if (pnlMatches.length) {
           const tierMap = await getFieldOptionMap(TABLE_PNL, F.tier);
           tier = toDisplay(pnlMatches[0].fields[F.tier], tierMap);
+        } else {
+          notVip = true;
         }
       }
-    } catch (_) { /* non-fatal — tier just shows blank */ }
+    } catch (_) { /* non-fatal — tier just shows blank, notVip stays false */ }
 
     // Top 10 P&L(Night): "Claimed Copy" checkbox is the claim flag
     // (unticked = still claimable); displayed value is "SW Check". This
@@ -163,6 +180,7 @@ exports.handler = async function (event) {
         ok: true,
         otherBrands,
         justCreated: true,
+        notVip,
         caRecordId,
         row: {
           tier,

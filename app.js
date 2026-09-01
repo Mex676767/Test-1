@@ -195,15 +195,15 @@ function isClaimableValue(v) {
 // BOTH Username AND Brand, never username alone. This now also LOGS the
 // case (creates the Customer Approaching row) if one doesn't exist yet —
 // that's what makes Lark's bonus lookup columns actually populate.
-async function fetchBonusRow(username, brand, link, telegram, picName) {
+async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId) {
   const res = await fetch("/.netlify/functions/lark-search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, brand, link, telegram, picName }),
+    body: JSON.stringify({ username, brand, link, telegram, picName, previousRecordId }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Lookup failed");
-  return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated };
+  return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated, notVip: data.notVip };
 }
 
 // 2026-08-29: lark-search.js now queries every bonus's own source table
@@ -294,7 +294,59 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     if (!s.escalation.brand) s.escalation.brand = deriveFullBrandCode(data.groupName);
     logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}".`);
     if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
+    checkLastUsername(chatId); // brand is one of the two things this needs — try now that it's ready
   } catch (_) { /* non-fatal — Brand just stays a manual pick */ }
+}
+
+// LiveChat's URL is /chats/{chat_id}/{thread_id} — chat_id stays the same
+// across every reopen of a given customer's conversation, thread_id is
+// unique to each individual chat session (confirmed via the auto-close
+// investigation). Only chat_id can ever match a *previous* chat's link.
+function extractStableChatId(link) {
+  const m = String(link || "").match(/\/chats\/([^/]+)\/[^/]+/);
+  return m ? m[1] : "";
+}
+
+// Looks up P&L's "Last Livechat Link" field for a row whose link contains
+// THIS chat's stable chat_id — if this exact customer chatted before and
+// that case got recorded, this recognizes them before the agent even asks.
+// Needs both Brand (to scope the search — never search another brand's
+// players) and the resolved chat link (only available once
+// livechat-chat-status.js resolves the real chat_id, ~a poll tick after the
+// chat opens) — safe to call from either place, since it no-ops until both
+// are ready and only ever runs once per chat.
+async function checkLastUsername(chatId) {
+  const s = state[chatId];
+  if (!s || s.lastUsernameChecked) return;
+  const chatDef = activeChats.find((c) => c.chatId === chatId);
+  const stableId = extractStableChatId(chatDef?.link);
+  if (!stableId || !s.brand) return;
+  s.lastUsernameChecked = true;
+  try {
+    const res = await fetch("/.netlify/functions/lark-last-username", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId: stableId, brand: s.brand }),
+    });
+    const data = await res.json();
+    if (data.ok && data.found) {
+      s.lastUsernameFound = true;
+      s.lastUsernameValue = data.username;
+      logDiagnostic(`Recognized this chat — last recorded username was "${data.username}".`, "success");
+      // Semi-auto: only fills the box if the agent hasn't already typed
+      // something themselves — never overwrites a manual entry.
+      if (!s.username) s.username = data.username;
+    } else {
+      s.lastUsernameFound = false;
+    }
+    const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
+    if (card) {
+      const usernameInput = card.querySelector(".username-input");
+      if (usernameInput && !usernameInput.value && s.username) usernameInput.value = s.username;
+      const slot = card.querySelector(".player-info-slot");
+      if (slot) slot.innerHTML = renderPlayerInfo(chatId);
+    }
+  } catch (_) { /* non-fatal — just no "last username" hint shown */ }
 }
 
 // Polls LiveChat's Agent Chat API (via livechat-chat-status.js) for the
@@ -358,6 +410,7 @@ async function checkChatStatus(chatId) {
       if (chatEntry && chatEntry.link !== data.chatUrl) {
         chatEntry.link = data.chatUrl;
         if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
+        checkLastUsername(chatId); // the chat link is the other thing this needs — try now that it's ready
       }
     }
 
@@ -569,11 +622,21 @@ function renderStatusDropdown(chatId) {
 // created by the app, never a human agent), so it carried no information.
 // Name customer dropped too — no longer fetched (P&L is only queried for
 // Tier now). D.O.B moved into the auto-grid next to Brand (see
-// renderAutoFields) — this now only ever shows Tier, once matched.
+// renderAutoFields). "Last username recorded" shows as soon as
+// checkLastUsername resolves — before any Look Up, unlike Tier, which
+// still only shows once matched.
 function renderPlayerInfo(chatId) {
   const s = state[chatId];
-  if (!s.matchedRow) return "";
-  return `<div class="player-info"><span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span></div>`;
+  const parts = [];
+  if (s.lastUsernameChecked) {
+    parts.push(s.lastUsernameFound
+      ? `<span><span class="pi-label">Last username recorded</span> ${s.lastUsernameValue}</span>`
+      : `<span><span class="pi-label">Last username recorded</span> No previous record found</span>`);
+  }
+  if (s.matchedRow) {
+    parts.push(`<span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span>`);
+  }
+  return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
 }
 
 function renderTickets(chatId) {
@@ -881,6 +944,9 @@ function ensureChatState(chat) {
       transactionId: "", paymentGateway: "", remarks: "", vipLevel: "", amount: "",
     },
     escalationSubmitted: false, escalationError: "",
+    // "Last username recorded" — see checkLastUsername. Runs once per chat,
+    // as soon as both Brand and the resolved chat link are ready.
+    lastUsernameChecked: false, lastUsernameFound: false, lastUsernameValue: "",
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "",
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
     // chatOpen mirrors the LiveChat conversation's open/closed state.
@@ -961,7 +1027,14 @@ chatListEl.addEventListener("click", async (e) => {
       // lark-search.js resolves every bonus's own source table directly now
       // (no more Customer Approaching Lookup-column delay) — this response
       // is already final, nothing left to poll for.
-      const { row, otherBrands, caRecordId } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow, selectedAgent);
+      //
+      // One Customer Approaching row per chat, not one per Look Up click —
+      // a repeat lookup for this same chat passes back the record created
+      // last time so the backend deletes it first. Only sent if that
+      // record hasn't been logged (submitted) yet — a completed case is
+      // never deleted by a stray re-lookup.
+      const previousRecordId = (!s.logged && s.caRecordId) ? s.caRecordId : null;
+      const { row, otherBrands, caRecordId, notVip } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow, selectedAgent, previousRecordId);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
       s.caRecordId = caRecordId;
@@ -970,7 +1043,11 @@ chatListEl.addEventListener("click", async (e) => {
       s.releasedBonusAmount = "";
       s.releasedAmountRaw = "";
       s.claimSecret = false;
-      setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
+      if (notVip) {
+        setStatus(`Not VVIP — no P&L record found for ${username} under ${brand}.`, "error");
+      } else {
+        setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
+      }
     } catch (err) {
       setStatus("Lookup failed: " + err.message, "error");
     }
@@ -1187,6 +1264,17 @@ chatListEl.addEventListener("input", (e) => {
   if (escInput) {
     const s = state[escInput.dataset.chat];
     if (s) s.escalation[escInput.dataset.field] = escInput.value;
+    return;
+  }
+  // Username isn't otherwise state-synced (only read from the DOM at Look
+  // up time) — checkLastUsername can re-render this card in the background
+  // while the agent is mid-typing, which would stomp an un-synced value.
+  // Keeping state.username live here means any re-render is always safe.
+  const usernameInput = e.target.closest(".username-input");
+  if (usernameInput) {
+    const card = usernameInput.closest(".chat-card");
+    const s = state[card?.dataset.chatId];
+    if (s) s.username = usernameInput.value;
   }
 });
 

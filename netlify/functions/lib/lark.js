@@ -102,6 +102,17 @@ async function createRecord(tableId, fields, baseToken) {
   return data.data.record;
 }
 
+async function deleteRecord(tableId, recordId, baseToken) {
+  const token = await getTenantToken();
+  const res = await fetch(
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await res.json();
+  if (data.code !== 0) throw new Error(`Lark delete failed on table ${tableId}: ${data.msg}`);
+  return true;
+}
+
 async function listRecords(tableId, pageSize = 500) {
   const token = await getTenantToken();
   const res = await fetch(
@@ -201,7 +212,7 @@ async function findOldestClaimableRow(tableId, username, brand, isClaimable) {
 }
 
 module.exports = {
-  getTenantToken, searchRecords, getRecord, updateRecord, createRecord,
+  getTenantToken, searchRecords, getRecord, updateRecord, createRecord, deleteRecord,
   listRecords, toDisplay, listFields, getFieldOptionMap, findOldestClaimableRow,
   TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
