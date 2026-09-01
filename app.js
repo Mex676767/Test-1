@@ -1,3 +1,9 @@
+// Hidden from the UI (2026-09-02) while PYM builds their own ticketing
+// system to link with — all the code (state, render, backend functions)
+// stays intact underneath; flip this back to true to bring it back rather
+// than rebuilding it.
+const ESCALATION_TICKET_ENABLED = false;
+
 /* ============================================================
    THEME
    ============================================================ */
@@ -887,7 +893,7 @@ function renderExpandedCard(chat) {
           : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
     }
 
-    <div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>
+    ${ESCALATION_TICKET_ENABLED ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
   `;
 }
 
