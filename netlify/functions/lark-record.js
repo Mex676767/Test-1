@@ -6,10 +6,24 @@ const { updateRecord, TABLE_CUSTOMER_APPROACHING } = require("./lib/lark");
 // carries digits of its own that a naive number-extraction would grab
 // instead of the real amount. So the frontend also sends releasedAmountRaw
 // (just the source's display value, e.g. "Pass RM18", no label prefix) —
-// pull the number from that. No number found (no bonus claimed, or a
-// non-numeric status like "Claimed") -> write null so the field stays blank.
+// pull the number from that.
+//
+// Confirmed bug (2026-08-30): a "first number anywhere in the string" grab
+// pulled RM15 out of a claim whose actual amount was RM18 — the real "SW
+// Check" text apparently carries other numeric content (a night index/date
+// fragment) ahead of the actual "RM<amount>" — same class of bug as Grace
+// Period's "Deposit 100 - Bonus 18" mixing two numbers. Now prefers the
+// number immediately after "RM" specifically, since every Top 10 P&L/LTV
+// example seen is formatted "Pass RM<amount>" — only falls back to the old
+// first-number grab if there's no "RM" in the string at all.
+//
+// No number found (no bonus claimed, or a non-numeric status like
+// "Claimed") -> write null so the field stays blank.
 function extractAmount(str) {
-  const match = String(str || "").match(/-?\d+(?:\.\d+)?/);
+  const s = String(str || "");
+  const rmMatch = s.match(/RM\s*(-?\d+(?:\.\d+)?)/i);
+  if (rmMatch) return Number(rmMatch[1]);
+  const match = s.match(/-?\d+(?:\.\d+)?/);
   return match ? Number(match[0]) : null;
 }
 
