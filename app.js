@@ -661,7 +661,7 @@ function renderPlayerInfo(chatId) {
   } else if (s.lastUsernameChecked) {
     parts.push(s.lastUsernameFound
       ? `<span><span class="pi-label">Last username recorded</span> ${s.lastUsernameValue}</span>`
-      : `<span><span class="pi-label">Last username recorded</span> No previous record found</span>`);
+      : `<span><span class="pi-label">Last username recorded</span> : N/A</span>`);
   }
   if (s.matchedRow) {
     parts.push(`<span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span>`);
@@ -1077,7 +1077,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.releasedAmountRaw = "";
       s.claimSecret = false;
       if (notVip) {
-        setStatus(`Not VVIP — no P&L record found for ${username} under ${brand}.`, "error");
+        setStatus("Not VVIP", "error");
       } else {
         setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
       }
