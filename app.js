@@ -181,7 +181,7 @@ function getChatSummary(chatId) {
 
 function isHiddenStatus(v) {
   const t = String(v || "").trim().toLowerCase();
-  return t === "expired" || t === "claimed";
+  return t === "expired" || t === "claimed" || t === "failed";
 }
 
 // Excludes: empty, "XD No Bonus" pattern, and Expired/Claimed

@@ -20,7 +20,7 @@ const F = {
 
 function hidden(v) {
   const t = String(v || "").trim().toLowerCase();
-  return t === "claimed" || t === "expired";
+  return t === "claimed" || t === "expired" || t === "failed";
 }
 
 exports.handler = async function (event) {
@@ -73,11 +73,18 @@ exports.handler = async function (event) {
     } catch (_) { /* non-fatal — tier just shows blank */ }
 
     // Top 10 P&L(Night): "Claimed Copy" checkbox is the claim flag
-    // (unticked = still claimable); displayed value is "SW Check".
+    // (unticked = still claimable); displayed value is "SW Check". This
+    // used to only check the checkbox + that SW Check had *some* text, not
+    // what it said — a "Failed" row (customer didn't qualify) slipped
+    // through as a claimable ticket. Now hidden() (Claimed/Expired/Failed)
+    // gates the actual text too, same as every other bonus table.
     const [topPnlRow, ltvRow] = await Promise.all([
       findOldestClaimableRow(
         TABLE_TOP_PNL_NIGHT, uname, brandVal,
-        (fields) => fields[F.claimedCopy] !== true && !!toDisplay(fields[F.swCheck])
+        (fields) => {
+          const display = toDisplay(fields[F.swCheck]);
+          return fields[F.claimedCopy] !== true && !!display && !hidden(display);
+        }
       ).catch(() => null),
       // LTV(Day) has no "Claimed Copy" field at all — confirmed from a real
       // row, not the same table structure as Top 10 P&L(Night) despite
