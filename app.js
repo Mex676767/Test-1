@@ -307,21 +307,32 @@ function extractStableChatId(link) {
   return m ? m[1] : "";
 }
 
-// Looks up P&L's "Last Livechat Link" field for a row whose link contains
-// THIS chat's stable chat_id — if this exact customer chatted before and
-// that case got recorded, this recognizes them before the agent even asks.
+// Looks up P&L's "Live Chat link" field for a row whose link contains THIS
+// chat's stable chat_id — if this exact customer chatted before and that
+// case got recorded, this recognizes them before the agent even asks.
 // Needs both Brand (to scope the search — never search another brand's
 // players) and the resolved chat link (only available once
 // livechat-chat-status.js resolves the real chat_id, ~a poll tick after the
 // chat opens) — safe to call from either place, since it no-ops until both
 // are ready and only ever runs once per chat.
+//
+// lastUsernameStarted (not lastUsernameChecked) is the "don't call twice"
+// guard, set the instant this begins — separate from lastUsernameLoading
+// (the visible state) so an agent sees "Checking…" immediately instead of
+// nothing changing until the network round trip finishes. Without that
+// visible cue, someone might start typing their own guess in the still-
+// empty box while this is in flight — since the auto-fill only ever fills
+// an empty box, that typing would silently and permanently pre-empt it for
+// this chat, with no obvious reason why the auto-fill "didn't work."
 async function checkLastUsername(chatId) {
   const s = state[chatId];
-  if (!s || s.lastUsernameChecked) return;
+  if (!s || s.lastUsernameStarted) return;
   const chatDef = activeChats.find((c) => c.chatId === chatId);
   const stableId = extractStableChatId(chatDef?.link);
   if (!stableId || !s.brand) return;
-  s.lastUsernameChecked = true;
+  s.lastUsernameStarted = true;
+  s.lastUsernameLoading = true;
+  updateLastUsernameUi(chatId);
   try {
     const res = await fetch("/.netlify/functions/lark-last-username", {
       method: "POST",
@@ -344,14 +355,26 @@ async function checkLastUsername(chatId) {
       // so surface it rather than let this look identical to "no match".
       if (data.error) logDiagnostic(`Last-username lookup failed: ${data.error}`, "warn");
     }
-    const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
-    if (card) {
-      const usernameInput = card.querySelector(".username-input");
-      if (usernameInput && !usernameInput.value && s.username) usernameInput.value = s.username;
-      const slot = card.querySelector(".player-info-slot");
-      if (slot) slot.innerHTML = renderPlayerInfo(chatId);
-    }
   } catch (_) { /* non-fatal — just no "last username" hint shown */ }
+  s.lastUsernameLoading = false;
+  s.lastUsernameChecked = true;
+  updateLastUsernameUi(chatId);
+}
+
+// Surgical DOM update (not a full renderChats) so this never disrupts
+// whatever the agent might be actively doing elsewhere on the card —
+// updates the username box's placeholder/value and the player-info line.
+function updateLastUsernameUi(chatId) {
+  const s = state[chatId];
+  const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
+  if (!s || !card) return;
+  const usernameInput = card.querySelector(".username-input");
+  if (usernameInput) {
+    usernameInput.placeholder = s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID";
+    if (!usernameInput.value && s.username) usernameInput.value = s.username;
+  }
+  const slot = card.querySelector(".player-info-slot");
+  if (slot) slot.innerHTML = renderPlayerInfo(chatId);
 }
 
 // Polls LiveChat's Agent Chat API (via livechat-chat-status.js) for the
@@ -633,7 +656,9 @@ function renderStatusDropdown(chatId) {
 function renderPlayerInfo(chatId) {
   const s = state[chatId];
   const parts = [];
-  if (s.lastUsernameChecked) {
+  if (s.lastUsernameLoading) {
+    parts.push(`<span><span class="pi-label">Last username recorded</span> Checking…</span>`);
+  } else if (s.lastUsernameChecked) {
     parts.push(s.lastUsernameFound
       ? `<span><span class="pi-label">Last username recorded</span> ${s.lastUsernameValue}</span>`
       : `<span><span class="pi-label">Last username recorded</span> No previous record found</span>`);
@@ -818,7 +843,7 @@ function renderExpandedCard(chat) {
 
     <label class="field-label">Username</label>
     <div class="username-row">
-      <input type="text" class="input mono username-input" placeholder="Player username / UID" value="${s.username}" />
+      <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.username}" />
       <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}">Look up</button>
     </div>
 
@@ -951,6 +976,9 @@ function ensureChatState(chat) {
     escalationSubmitted: false, escalationError: "",
     // "Last username recorded" — see checkLastUsername. Runs once per chat,
     // as soon as both Brand and the resolved chat link are ready.
+    // lastUsernameStarted guards against calling twice; lastUsernameLoading
+    // is the visible "Checking…" state shown until it resolves.
+    lastUsernameStarted: false, lastUsernameLoading: false,
     lastUsernameChecked: false, lastUsernameFound: false, lastUsernameValue: "",
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "",
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
