@@ -338,6 +338,11 @@ async function checkLastUsername(chatId) {
       if (!s.username) s.username = data.username;
     } else {
       s.lastUsernameFound = false;
+      // "Live Chat link" on P&L is a Lookup field, not a plain stored
+      // value — whether Lark's search API can even filter by a Lookup at
+      // all is unverified. If it can't, this is where that would show up,
+      // so surface it rather than let this look identical to "no match".
+      if (data.error) logDiagnostic(`Last-username lookup failed: ${data.error}`, "warn");
     }
     const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
     if (card) {

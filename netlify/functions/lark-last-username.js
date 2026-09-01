@@ -7,10 +7,15 @@ const { searchRecords, toDisplay, TABLE_PNL } = require("./lib/lark");
 // the livechat-chat-status.js investigation), so it's the only thing that
 // can ever actually find a "this customer chatted before" match.
 //
-// Field name assumption: "Last Livechat Link" on the P&L table -- not yet
-// confirmed against a real screenshot. If this never finds a match even
-// when it obviously should, that's the first thing to check.
-const F = { username: "Username", brand: "Brand", lastLink: "Last Livechat Link" };
+// Field name confirmed from a real screenshot: "Live Chat link" on the P&L
+// table. It's a Lookup (pulling Customer Approaching's own "link" field via
+// a Username+Brand+Telegram match), not a plain stored value -- there is no
+// plain text/URL field to fall back to. Whether Lark's search API can even
+// filter records by a Lookup field's resolved value is unverified; if this
+// never finds a match even for an obvious repeat chat, `error` in the
+// response (surfaced to Diagnostics by app.js) is the first thing to check
+// -- it'll say directly if Lark rejected filtering on this field at all.
+const F = { username: "Username", brand: "Brand", lastLink: "Live Chat link" };
 
 exports.handler = async function (event) {
   try {
