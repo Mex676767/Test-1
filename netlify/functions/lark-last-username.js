@@ -15,7 +15,14 @@ const { searchRecords, toDisplay, TABLE_PNL } = require("./lib/lark");
 // never finds a match even for an obvious repeat chat, `error` in the
 // response (surfaced to Diagnostics by app.js) is the first thing to check
 // -- it'll say directly if Lark rejected filtering on this field at all.
-const F = { username: "Username", brand: "Brand", lastLink: "Live Chat link" };
+//
+// (2026-09-10) "Live Chat link" only ever matches a non-Telegram record —
+// a separate "Telegram" Lookup field was added on P&L, same shape (Username
+// + Brand + Telegram=true match, latest Telegram record's link), for
+// telegram-sourced repeat chats. Lark's search API only supports "and"
+// across conditions (see searchRecords), so this can't be one query with an
+// OR — check both fields in parallel and treat either match as found.
+const F = { username: "Username", brand: "Brand", lastLink: "Live Chat link", lastTelegramLink: "Telegram" };
 
 exports.handler = async function (event) {
   try {
@@ -27,17 +34,24 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, found: false }) };
     }
 
-    const matches = await searchRecords(TABLE_PNL, [
-      { field_name: F.brand, operator: "is", value: [brand] },
-      { field_name: F.lastLink, operator: "contains", value: [chatId] },
+    const [liveChatMatches, telegramMatches] = await Promise.all([
+      searchRecords(TABLE_PNL, [
+        { field_name: F.brand, operator: "is", value: [brand] },
+        { field_name: F.lastLink, operator: "contains", value: [chatId] },
+      ]),
+      searchRecords(TABLE_PNL, [
+        { field_name: F.brand, operator: "is", value: [brand] },
+        { field_name: F.lastTelegramLink, operator: "contains", value: [chatId] },
+      ]).catch(() => []), // non-fatal — e.g. if the Telegram field ever gets renamed, Live Chat link still works
     ]);
-    if (!matches.length) {
+    const match = liveChatMatches[0] || telegramMatches[0];
+    if (!match) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, found: false }) };
     }
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ ok: true, found: true, username: toDisplay(matches[0].fields[F.username]) }),
+      body: JSON.stringify({ ok: true, found: true, username: toDisplay(match.fields[F.username]) }),
     };
   } catch (err) {
     return { statusCode: 200, body: JSON.stringify({ ok: true, found: false, error: err.message }) };

@@ -630,6 +630,43 @@ const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
 let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card on first load
 
+// Persists `state` into localStorage so a lookup survives LiveChat's own
+// in-app navigation and a plain page refresh — both just reload this
+// widget's iframe, which otherwise wipes every in-memory chat state and
+// forces a re-lookup. Scoped to this browser only, never sent anywhere.
+// Each chat's saved copy carries its own _savedAt so stale entries (chats
+// nobody's touched in a week) get pruned on load instead of accumulating
+// in localStorage forever.
+const STATE_STORAGE_KEY = "rc-chat-state";
+const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function saveState() {
+  try {
+    const out = {};
+    for (const [chatId, s] of Object.entries(state)) {
+      out[chatId] = { ...s, _savedAt: Date.now() };
+    }
+    localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(out));
+  } catch (_) { /* non-fatal — e.g. private browsing blocking storage */ }
+}
+
+function loadPersistedState() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}");
+    const now = Date.now();
+    const fresh = {};
+    for (const [chatId, s] of Object.entries(raw)) {
+      if (s && now - (s._savedAt || 0) < STATE_MAX_AGE_MS) {
+        delete s._savedAt;
+        fresh[chatId] = s;
+      }
+    }
+    return fresh;
+  } catch (_) {
+    return {};
+  }
+}
+
 // Shared by the initial render and every refresh so the "Select status…"
 // placeholder always gets the same dim styling as Inquiry's real
 // ::placeholder, instead of rendering at full text brightness.
@@ -1161,6 +1198,12 @@ chatListEl.addEventListener("click", async (e) => {
   const card = btn.closest(".chat-card");
   const s = state[chatId];
 
+  // try/finally (rather than a saveState() call at the end of the function
+  // body) so every branch below persists its change, including the several
+  // early `return`s inside individual action blocks (e.g. lookup's
+  // missing-username/brand guards).
+  try {
+
   if (btn.dataset.action === "lookup") {
     if (!selectedAgent) { openSettingsPanel(); return; }
     const username = card.querySelector(".username-input").value.trim();
@@ -1454,6 +1497,10 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
     card.querySelector(".dob-calendar").classList.add("hidden");
   }
+
+  } finally {
+    saveState();
+  }
 });
 
 // Inquiry search box: filter as the agent types.
@@ -1682,6 +1729,10 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
 // Boot sequence: fetch agent list, update badge, auto-open settings if no
 // agent saved yet (first time / cleared cache).
 (async () => {
+  // Restore any chat state saved before this widget last reloaded — must
+  // happen before the first renderChats/ensureChatState call, since
+  // ensureChatState only fills in defaults for a chatId it hasn't seen yet.
+  Object.assign(state, loadPersistedState());
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
   await Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchEscalationOptions()]);
   updateAgentBadge();
@@ -1689,3 +1740,11 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
   renderChats(activeChats);
   initLiveChatSdk();
 })();
+
+// Autosave safety nets beyond the explicit saveState() calls in the click/
+// input/change handlers below — covers state mutated outside those (e.g.
+// applyProfile's auto brand/telegram detection, checkLastUsername,
+// checkChatStatus) and the moment this iframe actually goes away.
+setInterval(saveState, 3000);
+window.addEventListener("pagehide", saveState);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });
