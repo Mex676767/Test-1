@@ -69,15 +69,29 @@ exports.handler = async function (event) {
     const realChatId = match.id;
     const thread = match.last_thread_summary || {};
     const customer = (match.users || []).find((u) => u.type === "customer") || {};
-    const omnichannel = customer.omnichannel || {};
     const chatUrl = `https://my.livechatinc.com/chats/${realChatId}/${threadId}`;
+
+    // CORRECTED (2026-09-10) — a real Telegram chat's customer object here
+    // has no "omnichannel" key at all (confirmed from a live chat: 03908b38-
+    // ...customer object had no such field, so the old omnichannel.telegram
+    // check always silently read false). What Telegram customers actually
+    // carry is a "Telegram ID" entry inside session_fields (an array of
+    // single-key objects, e.g. [{"First Name":"Mexha"}, {"Telegram ID":
+    // "628101177"}, {"Bot ID":"8729168475"}, ...]) — match any key
+    // containing "telegram" case-insensitively with a non-empty value, so a
+    // rename on LiveChat's side (e.g. "Telegram Id") doesn't silently break
+    // this again.
+    const sessionFields = customer.session_fields || [];
+    const isTelegram = sessionFields.some((f) =>
+      Object.entries(f).some(([k, v]) => /telegram/i.test(k) && !!v)
+    );
 
     return {
       statusCode: 200,
       body: JSON.stringify({
         ok: true,
         isActive: typeof thread.active === "boolean" ? thread.active : null,
-        isTelegram: Object.prototype.hasOwnProperty.call(omnichannel, "telegram"),
+        isTelegram,
         chatId: realChatId,
         threadId,
         chatUrl,

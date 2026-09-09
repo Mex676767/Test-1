@@ -587,7 +587,7 @@ const inquiryOptions = [
   "KYC", "OTP Failure", "Forgot Username", "Forgot Password",
   "Missing Fund", "Sms Promo", "Telegram", "Birthday", "LuckyDraw",
   "Goal321", "TO NOT UPDATED", "Rescue Bonus", "TOP Deposit",
-  "Maintenance", "Telegram Transition Message", "Unclear Inquiries", "Unsolved",
+  "Maintenance", "Telegram Transition Message", "Unclear Inquiries",
 ];
 
 // Maps each bonus program to the closest Inquiry option — auto-selected
@@ -980,7 +980,7 @@ function renderExpandedCard(chat) {
 
     <label class="field-label">Status</label>
     <div class="status-picker">
-      <button type="button" class="input status-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
+      <button type="button" class="input status-display status-only-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
         ${renderStatusDisplay(chat.chatId)}
       </button>
       <div class="status-dropdown hidden">${renderStatusDropdown(chat.chatId)}</div>
@@ -1240,7 +1240,7 @@ chatListEl.addEventListener("click", async (e) => {
       card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
       card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
       card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-      card.querySelector(".status-display").innerHTML = renderStatusDisplay(chatId);
+      card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
       card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
       return;
     }
@@ -1310,7 +1310,7 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
     card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-    card.querySelector(".status-display").innerHTML = renderStatusDisplay(chatId);
+    card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
   }
 
@@ -1386,7 +1386,7 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "selectStatus") {
     s.status = btn.dataset.value;
-    card.querySelector(".status-display").innerHTML = renderStatusDisplay(chatId);
+    card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     card.querySelector(".status-dropdown").classList.add("hidden");
   }
