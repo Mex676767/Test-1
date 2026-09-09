@@ -334,8 +334,10 @@ function extractStableChatId(link) {
 async function checkLastUsername(chatId) {
   const s = state[chatId];
   if (!s || s.lastUsernameStarted) return;
+  // Prefer s.chatUrl (survives once this chat isn't the focused one
+  // anymore) over activeChats[].link, which only exists while it is.
   const chatDef = activeChats.find((c) => c.chatId === chatId);
-  const stableId = extractStableChatId(chatDef?.link);
+  const stableId = extractStableChatId(s.chatUrl || chatDef?.link);
   if (!stableId || !s.brand) return;
   s.lastUsernameStarted = true;
   s.lastUsernameLoading = true;
@@ -406,20 +408,34 @@ function stopChatStatusPolling() {
   }
 }
 
+// Owns the tight (every CHAT_STATUS_POLL_MS) poll for whichever ONE chat is
+// currently focused/on screen — the only chat this widget instance can ever
+// actually be "live" for (see sweepPendingChats below for everything else).
+// The "should this timer keep going" decision lives here, not inside
+// checkChatStatus itself, since checkChatStatus is also called directly by
+// the sweep for other chats and must never be able to stop THIS timer as a
+// side effect of checking some other chat.
 function startChatStatusPolling(chatId) {
   stopChatStatusPolling();
-  checkChatStatus(chatId); // don't wait for the first interval tick
-  chatStatusPollTimer = setInterval(() => checkChatStatus(chatId), CHAT_STATUS_POLL_MS);
+  const tick = () => {
+    const s = state[chatId];
+    if (!s || !s.chatOpen || s.logged) { stopChatStatusPolling(); return; }
+    checkChatStatus(chatId);
+  };
+  tick(); // don't wait for the first interval tick
+  chatStatusPollTimer = setInterval(tick, CHAT_STATUS_POLL_MS);
 }
 
+// Checks ONE chat's open/Telegram status and auto-records it if it just
+// closed. Deliberately has no dependency on activeChats[0] or the
+// chatStatusPollTimer above — callable equally for the currently-focused
+// chat (via startChatStatusPolling) or any other pending chat (via
+// sweepPendingChats), since LiveChat's Details widget only runs one
+// instance per focused chat and a background chat needs exactly the same
+// check, just from a different caller and cadence.
 async function checkChatStatus(chatId) {
   const s = state[chatId];
-  // Stop polling once this chat isn't the active one anymore, or it's
-  // already closed/recorded — nothing left to detect.
-  if (!s || activeChats[0]?.chatId !== chatId || !s.chatOpen || s.logged) {
-    stopChatStatusPolling();
-    return;
-  }
+  if (!s || !s.chatOpen || s.logged) return;
   try {
     const res = await fetch("/.netlify/functions/livechat-chat-status", {
       method: "POST",
@@ -435,18 +451,19 @@ async function checkChatStatus(chatId) {
     // available so the agent can cross-check against LiveChat's own UI.
     const linkSuffix = data.chatUrl ? ` (${data.chatUrl})` : ` (thread ${chatId}, chat id not yet resolved)`;
 
-    // Feeds back into activeChats[].link — the same field the "Open ↗"
-    // button reads and that gets sent as "Live Chat Link" to Lark on claim
-    // (lark-claim.js). Previously always "" (chatFromProfile has no way to
-    // get a permalink from the SDK alone), so that Lark field and the Open
-    // button were both silently blank for every real chat until now.
-    if (data.chatUrl) {
+    // Saved on state itself (not just activeChats[].link) so it's still
+    // there for submitRecord/checkLastUsername once this chat isn't the
+    // focused one anymore — activeChats[].link (what the "Open ↗" button
+    // and claim's chatLink read) is kept in sync too, when there's a live
+    // entry for it. Previously always "" (chatFromProfile has no way to get
+    // a permalink from the SDK alone), so both were silently blank for
+    // every real chat until now.
+    if (data.chatUrl && s.chatUrl !== data.chatUrl) {
+      s.chatUrl = data.chatUrl;
       const chatEntry = activeChats.find((c) => c.chatId === chatId);
-      if (chatEntry && chatEntry.link !== data.chatUrl) {
-        chatEntry.link = data.chatUrl;
-        if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
-        checkLastUsername(chatId); // the chat link is the other thing this needs — try now that it's ready
-      }
+      if (chatEntry) chatEntry.link = data.chatUrl;
+      if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
+      checkLastUsername(chatId); // the chat link is the other thing this needs — try now that it's ready
     }
 
     if (data.error) {
@@ -506,9 +523,13 @@ async function checkChatStatus(chatId) {
 
     if (data.isActive === false && s.chatOpen) {
       logDiagnostic(`Auto-detected chat closed — auto-recording.${linkSuffix}`, "success");
-      stopChatStatusPolling();
+      // Only stop chatStatusPollTimer if it's actually this chat's own —
+      // checkChatStatus is also called for other chats by sweepPendingChats
+      // below, which must never stop the currently-focused chat's timer as
+      // a side effect of some other chat closing.
+      if (activeChats[0]?.chatId === chatId) stopChatStatusPolling();
       s.chatOpen = false;
-      renderChats(activeChats);
+      if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
       await submitRecord(chatId, { auto: true });
     }
   } catch (_) { /* non-fatal — just try again next tick */ }
@@ -1136,6 +1157,12 @@ function ensureChatState(chat) {
     lastUsernameChecked: false, lastUsernameFound: false, lastUsernameValue: "",
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "", dobView: null,
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
+    // Resolved by checkChatStatus, same value as activeChats[].link but
+    // kept here too (not just on the transient activeChats entry) so it
+    // survives once this chat isn't the focused one anymore — see
+    // sweepPendingChats, which checks/auto-records chats other than
+    // whichever one is currently on screen.
+    chatUrl: "",
     // chatOpen mirrors the LiveChat conversation's open/closed state.
     // Recording only happens once a chat closes — checkChatStatus flips
     // this and calls submitRecord automatically once LiveChat reports the
@@ -1660,7 +1687,10 @@ async function submitRecord(chatId, { auto } = {}) {
         releasedAmount: s.releasedBonusAmount,
         releasedAmountRaw: s.releasedAmountRaw,
         claimSecret: s.claimSecret,
-        chatLink: activeChats.find((c) => c.chatId === chatId)?.link || "",
+        // s.chatUrl first — survives once this chat isn't the focused one
+        // anymore (see checkChatStatus); activeChats[].link as a fallback
+        // for anything relying on the older path.
+        chatLink: s.chatUrl || activeChats.find((c) => c.chatId === chatId)?.link || "",
         dob: s.dob || "",
         telegram: !!s.telegram,
       }),
@@ -1748,3 +1778,38 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
 setInterval(saveState, 3000);
 window.addEventListener("pagehide", saveState);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });
+
+// LiveChat's Agent App "Details" widget (createDetailsWidget, see
+// initLiveChatSdk) only ever runs for whichever ONE chat is currently
+// focused on screen — switching to a different chat reloads this widget's
+// iframe just like a page refresh does (the same reload state persistence
+// above works around), so a chat the agent switches away from gets zero
+// status polling at all and its closure is only ever noticed once they
+// switch back to it. This sweeps every OTHER pending (not yet logged,
+// still open per its own last-known state) chat on a slower cadence,
+// piggybacking off whichever tab/instance happens to be alive at the
+// moment — localStorage is shared across every tab on this origin, so any
+// currently-open LiveChat tab can pick up and auto-record a chat that
+// closed while the agent was looking at a different one. checkChatStatus
+// itself is safe to call this way — see its own header note.
+const PENDING_SWEEP_MS = 8_000;
+
+async function sweepPendingChats() {
+  let persisted;
+  try {
+    persisted = loadPersistedState();
+  } catch (_) {
+    return;
+  }
+  const currentChatId = activeChats[0]?.chatId;
+  for (const [chatId, saved] of Object.entries(persisted)) {
+    if (chatId === currentChatId) continue; // already covered by its own tight poll
+    if (!saved || saved.logged || saved.chatOpen === false) continue;
+    // Adopt the persisted copy only if this tab has no live copy of its own
+    // — never clobber an in-memory one that might be ahead of what was last
+    // saved.
+    if (!state[chatId]) state[chatId] = saved;
+    await checkChatStatus(chatId);
+  }
+}
+setInterval(sweepPendingChats, PENDING_SWEEP_MS);
