@@ -1,4 +1,4 @@
-const { updateRecord, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_SPECIAL_RELOAD } = require("./lib/lark");
+const { updateRecord, TABLE_REDEEM_CODE, TABLE_SPECIAL_RELOAD, TABLE_TELEGRAM28 } = require("./lib/lark");
 
 // Called the instant CS clicks Claim on a red (special) ticket — writes
 // straight to the matched record so it happens immediately, not deferred to
@@ -11,11 +11,10 @@ exports.handler = async function (event) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "source and recordId are required" }) };
     }
 
-    if (source === "angPao") {
-      // Live Chat Link + Status="Claimed" — replicates what the "Click Here"
-      // button used to do. This fires the backoffice-approval workflow since
-      // its trigger was switched from "button clicked" to "Status -> Claimed".
-      await updateRecord(TABLE_ANG_PAO, recordId, {
+    if (source === "telegram28") {
+      // Live Chat Link + Status="Claimed" — same "Click Here" button
+      // precedent as the other special tickets.
+      await updateRecord(TABLE_TELEGRAM28, recordId, {
         "Live Chat Link": chatLink || "",
         "Status": "Claimed",
       });

@@ -1,8 +1,9 @@
 const {
   searchRecords, createRecord, deleteRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow,
-  TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_PNL,
+  TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
+  TABLE_TELEGRAM28,
 } = require("./lib/lark");
 
 const F = {
@@ -15,7 +16,7 @@ const F = {
   swCheck: "SW Check",
   swChecker: "SW Checker", // LTV(Day)'s equivalent field is spelled differently from Top 10 P&L(Night)'s — confirmed from a real row, not a guess
   claimedCopy: "Claimed Copy",
-  angPaoAmount: "Ang Pao Claim",
+  bonusAmount: "Bonus Amount", // Telegram RM28's actual per-row amount (18, 8, 28, 5...) — confirmed from a real screenshot
 };
 
 function hidden(v) {
@@ -154,16 +155,17 @@ exports.handler = async function (event) {
       (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao"
     ).catch(() => null);
 
-    // Ang Pao + Redeem Code are separate tables — search them non-fatally
-    // since their field names may differ or the tables may be empty/restructured.
-    let angPaoRow = null;
-    try {
-      const angPaoMatches = await searchRecords(TABLE_ANG_PAO, [
-        { field_name: F.usernameUid, operator: "is", value: [uname] },
-        { field_name: F.brand, operator: "is", value: [brandVal] },
-      ]);
-      angPaoRow = angPaoMatches[angPaoMatches.length - 1] || null;
-    } catch (_) { /* non-fatal */ }
+    // Telegram RM28 (2026-09-09) — repurposes the retired Ang Pao ticket's
+    // plumbing, lives on the main base like every other bonus table above.
+    // Only "Eligible" counts; display combines Status with the row's own
+    // Bonus Amount so the agent sees the real claimable amount, e.g.
+    // "Eligible — RM18" — and so the existing "grab the number after RM"
+    // extraction (already fixed for the Top 10 P&L bug) picks up the right
+    // amount for Released Amount with no new extraction logic needed.
+    const telegram28Row = await findOldestClaimableRow(
+      TABLE_TELEGRAM28, uname, brandVal,
+      (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible"
+    ).catch(() => null);
 
     let redeemRow = null;
     try {
@@ -192,8 +194,12 @@ exports.handler = async function (event) {
           specialReload: specialReloadRow
             ? { recordId: specialReloadRow.record_id, status: toDisplay(specialReloadRow.fields[F.status]) }
             : null,
-          angPao: angPaoRow
-            ? { recordId: angPaoRow.record_id, status: toDisplay(angPaoRow.fields[F.status]), amount: toDisplay(angPaoRow.fields[F.angPaoAmount]) }
+          telegram28: telegram28Row
+            ? (() => {
+                const status = toDisplay(telegram28Row.fields[F.status]);
+                const amount = toDisplay(telegram28Row.fields[F.bonusAmount]);
+                return { recordId: telegram28Row.record_id, status: amount ? `${status} — RM${amount}` : status };
+              })()
             : null,
           redeemCode: redeemRow
             ? { recordId: redeemRow.record_id, status: toDisplay(redeemRow.fields[F.status]) }

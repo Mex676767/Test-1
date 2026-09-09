@@ -3,7 +3,6 @@ const APP_SECRET = process.env.LARK_APP_SECRET;
 const BASE_APP_TOKEN = process.env.LARK_BASE_APP_TOKEN;
 
 const TABLE_CUSTOMER_APPROACHING = process.env.LARK_TABLE_CUSTOMER_APPROACHING;
-const TABLE_ANG_PAO = process.env.LARK_TABLE_ANG_PAO;
 const TABLE_REDEEM_CODE = process.env.LARK_TABLE_REDEEM_CODE;
 // Source table for Customer Approaching's "Tier" Lookup field. Lark doesn't
 // mirror the Single Select option list onto the Lookup field itself, so
@@ -35,6 +34,13 @@ const TABLE_VIP_BOOSTER = process.env.LARK_TABLE_VIP_BOOSTER;
 const ESCALATION_BASE_TOKEN = process.env.LARK_ESCALATION_BASE_TOKEN;
 const TABLE_ESCALATION = process.env.LARK_ESCALATION_TABLE;
 
+// Telegram RM28 (2026-09-09) — repurposes the retired Ang Pao ticket's
+// plumbing (same "special" instant-claim-writes-back pattern). Lives on the
+// main base like every other bonus table above (confirmed — the separate
+// base URL originally given for it turned out to just be the same base
+// under a different-looking share link), so no extra base token needed.
+const TABLE_TELEGRAM28 = process.env.LARK_TABLE_TELEGRAM28;
+
 let cachedToken = null;
 let cachedExpiry = 0;
 
@@ -54,11 +60,11 @@ async function getTenantToken() {
   return cachedToken;
 }
 
-async function searchRecords(tableId, conditions) {
+async function searchRecords(tableId, conditions, baseToken) {
   if (!tableId) throw new Error("Missing table ID — check Netlify env vars.");
   const token = await getTenantToken();
   const res = await fetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/search`,
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`,
     { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ filter: { conjunction: "and", conditions } }) }
   );
@@ -78,10 +84,10 @@ async function getRecord(tableId, recordId) {
   return data.data.record;
 }
 
-async function updateRecord(tableId, recordId, fields) {
+async function updateRecord(tableId, recordId, fields, baseToken) {
   const token = await getTenantToken();
   const res = await fetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
     { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ fields }) }
   );
@@ -199,12 +205,12 @@ function findTimeOfInspection(fields) {
   return key ? fields[key] : 0;
 }
 
-async function findOldestClaimableRow(tableId, username, brand, isClaimable) {
+async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken) {
   if (!tableId) return null;
   const matches = await searchRecords(tableId, [
     { field_name: "Username/UID", operator: "is", value: [username] },
     { field_name: "Brand", operator: "is", value: [brand] },
-  ]);
+  ], baseToken);
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
   claimable.sort((a, b) => (findTimeOfInspection(a.fields) || 0) - (findTimeOfInspection(b.fields) || 0));
@@ -214,8 +220,9 @@ async function findOldestClaimableRow(tableId, username, brand, isClaimable) {
 module.exports = {
   getTenantToken, searchRecords, getRecord, updateRecord, createRecord, deleteRecord,
   listRecords, toDisplay, listFields, getFieldOptionMap, findOldestClaimableRow,
-  TABLE_CUSTOMER_APPROACHING, TABLE_ANG_PAO, TABLE_REDEEM_CODE, TABLE_PNL,
+  TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
   ESCALATION_BASE_TOKEN, TABLE_ESCALATION,
+  TABLE_TELEGRAM28,
 };

@@ -142,9 +142,9 @@ function updateAgentBadge() {
 // Customer Approaching) — lark-search.js already applies each table's own
 // claim/hide rule and picks the single oldest still-claimable row, so by the
 // time it gets here r[key] is either "" (nothing to show) or the one display
-// value to render. Special Reload Event, Ang Pao, and Redeem Code aren't
-// listed here — they're "special" (instant claim-writes-to-Lark) tickets,
-// handled separately below.
+// value to render. Special Reload Event, Telegram RM28, and Redeem Code
+// aren't listed here — they're "special" (instant claim-writes-to-Lark)
+// tickets, handled separately below.
 const BONUS_PROGRAMS = [
   { key: "riskPlayer", label: "Risk Player" },
   { key: "topPnl", label: "Top 10 P&L" },
@@ -155,12 +155,13 @@ const BONUS_PROGRAMS = [
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
 // Released Amount only ever applies to these — Risk Player, 12h VIP Booster,
-// Ang Pao, Redeem Code, and Special Reload don't carry a claimable monetary
-// amount. Grace Period is included here for documentation, but never
-// reaches the generic claim flow that reads this set — it has its own
-// separate handling (see the claim handler) since one field packs two very
-// different states.
-const AMOUNT_ELIGIBLE_PROGRAMS = new Set(["topPnl", "ltvTest", "gracePeriod"]);
+// Redeem Code, and Special Reload don't carry a claimable monetary amount.
+// Grace Period is included here for documentation, but never reaches the
+// generic claim flow that reads this set — it has its own separate handling
+// (see the claim handler) since one field packs two very different states.
+// Telegram RM28 does carry a real per-row amount (its display string is
+// "Eligible — RM18" etc.), so it's included here too.
+const AMOUNT_ELIGIBLE_PROGRAMS = new Set(["topPnl", "ltvTest", "gracePeriod", "telegram28"]);
 
 // One-line summary shown on a collapsed card — lets an agent glance across
 // several queued chats without expanding each one. Priority order matches
@@ -170,7 +171,7 @@ function hasAnyBonus(chatId) {
   const r = state[chatId].matchedRow;
   if (!r) return false;
   if (BONUS_PROGRAMS.some((p) => isClaimableValue(r[p.key]))) return true;
-  if (r.angPao && !isHiddenStatus(r.angPao.status)) return true;
+  if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) return true;
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
   if (r.specialReload) return true; // lark-search.js already filtered to only "Eligible Angpao"
   return false;
@@ -597,7 +598,7 @@ const BONUS_INQUIRY_MAP = {
   gracePeriod: "Grace Period",
   ltvTest: "TOP LTV",
   vipBooster: "12hour VIP Deposit Boost",
-  angPao: "Ang Pao",
+  telegram28: "Telegram RM28",
   redeemCode: "Redeem Code",
   specialReload: "Reload - Ang Pao",
 };
@@ -815,15 +816,15 @@ function renderTickets(chatId) {
     defs.push(def);
   });
 
-  if (r.angPao && !isHiddenStatus(r.angPao.status)) {
-    defs.push({ key: "angPao", kind: "special", label: "Ang Pao", display: r.angPao.status });
+  if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) {
+    defs.push({ key: "telegram28", kind: "special", label: "Telegram RM28", display: r.telegram28.status });
   }
 
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) {
     defs.push({ key: "redeemCode", kind: "special", label: "Redeem Code", display: r.redeemCode.status, isCode: true });
   }
 
-  // Distinct from the standalone "Ang Pao" ticket above — this is the
+  // Distinct from the standalone "Telegram RM28" ticket above — this is the
   // Special Reload Event table's Ang Pao variant (its Free Spin variant is
   // retired). Already pre-filtered server-side to only "Eligible Angpao".
   if (r.specialReload) {
@@ -1244,11 +1245,11 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
 
-    // Ang Pao / Redeem Code / Special Reload (Ang Pao) write live to Lark
-    // the instant they're claimed — that's what fires the backoffice-
+    // Telegram RM28 / Redeem Code / Special Reload (Ang Pao) write live to
+    // Lark the instant they're claimed — that's what fires the backoffice-
     // approval workflow. Regular (gold) tickets are read-only source-table
     // rows; they're only logged at submit.
-    if (programKey === "angPao" || programKey === "redeemCode" || programKey === "specialReload") {
+    if (programKey === "telegram28" || programKey === "redeemCode" || programKey === "specialReload") {
       const source = r[programKey];
       const chatDef = activeChats.find((c) => c.chatId === chatId);
       btn.disabled = true;
@@ -1272,13 +1273,13 @@ chatListEl.addEventListener("click", async (e) => {
     s.claimedPrograms[programKey] = true;
     const allSources = [
       ...BONUS_PROGRAMS.map((p) => ({ key: p.key, label: p.label, display: r[p.key] })),
-      { key: "angPao", label: "Ang Pao", display: r.angPao?.status },
+      { key: "telegram28", label: "Telegram RM28", display: r.telegram28?.status },
       { key: "redeemCode", label: "Redeem Code", display: r.redeemCode?.status },
       { key: "specialReload", label: "Special Reload (Ang Pao)", display: r.specialReload?.status },
     ];
-    // Released Amount only ever applies to Top 10 P&L / LTV (Grace Period
-    // has its own separate handling above) — Risk Player, 12h VIP Booster,
-    // Ang Pao, Redeem Code, and Special Reload don't carry a claimable
+    // Released Amount only ever applies to Top 10 P&L / LTV / Telegram RM28
+    // (Grace Period has its own separate handling above) — Risk Player, 12h
+    // VIP Booster, Redeem Code, and Special Reload don't carry a claimable
     // monetary amount, so claiming one of those must leave it blank rather
     // than stuffing its status text in there.
     const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && AMOUNT_ELIGIBLE_PROGRAMS.has(src.key));
