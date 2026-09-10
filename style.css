@@ -334,6 +334,15 @@ body {
 .lookup-btn:hover { border-color: var(--blue); color: var(--blue); }
 .lookup-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Ticked when the customer never gave a username — see app.js's isUnknown
+   handling. Sits right under the username row so it reads as "beside" it
+   without cramming a third control into that already-tight flex row. */
+.unknown-toggle {
+  display: flex; align-items: center; gap: 7px; margin-top: 8px;
+  font-size: 12.5px; color: var(--text-muted); cursor: pointer; user-select: none;
+}
+.unknown-toggle input { accent-color: var(--danger); width: 14px; height: 14px; cursor: pointer; }
+
 /* ---------- Player info (auto-filled on match) ---------- */
 .player-info {
   display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px;
@@ -425,6 +434,9 @@ body {
   background: var(--teal-soft); color: var(--teal); font-size: 12.5px; font-weight: 600;
   padding: 9px 12px; border-radius: 9px;
 }
+/* Distinct from the normal (teal) logged state — nothing was actually
+   written to Lark, so this shouldn't read as a success confirmation. */
+.logged-badge.unknown { background: var(--surface-2); color: var(--text-muted); }
 
 /* Shown while a chat is still open — recording is deferred until it closes. */
 .record-pending-hint {

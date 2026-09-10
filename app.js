@@ -179,6 +179,7 @@ function hasAnyBonus(chatId) {
 
 function getChatSummary(chatId) {
   const s = state[chatId];
+  if (s.isUnknown) return { text: "Unknown — not recorded", cls: "neutral" };
   if (s.autoRecordError) return { text: "⚠︎ Needs attention", cls: "attention" };
   if (s.logged) return { text: "✓ Logged", cls: "done" };
   if (s.matchedRow === undefined) return { text: "Not looked up", cls: "neutral" };
@@ -281,7 +282,16 @@ function applyProfile(profile) {
 // quietly does nothing) and runs the real name through the same
 // deriveBrandFromGroup() the old demo data used.
 async function resolveBrandFromGroupId(chatId, groupID) {
-  if (!groupID) return;
+  if (!groupID) {
+    // Silent before this — if the SDK profile ever lacks a groupID at all,
+    // there'd be zero trace of why Brand never auto-filled. Logged once
+    // instead of every call so a genuinely groupID-less setup doesn't spam.
+    if (!rawGroupIdMissingLoggedFor.has(chatId)) {
+      rawGroupIdMissingLoggedFor.add(chatId);
+      logDiagnostic(`Brand auto-detect skipped for this chat — LiveChat's SDK profile had no groupID.`, "warn");
+    }
+    return;
+  }
   try {
     const res = await fetch("/.netlify/functions/livechat-group-name", {
       method: "POST",
@@ -289,7 +299,16 @@ async function resolveBrandFromGroupId(chatId, groupID) {
       body: JSON.stringify({ groupID }),
     });
     const data = await res.json();
-    if (!data.ok || !data.groupName) return;
+    if (!data.ok || !data.groupName) {
+      // Same deal — this used to fail completely silently, which is exactly
+      // how the JUS-brand-never-detected report went untraceable. data.error
+      // (from livechat-group-name.js's own catch) says why when there is one.
+      logDiagnostic(
+        `Brand auto-detect failed for group ID "${groupID}"${data.error ? `: ${data.error}` : " — group not found in LiveChat's group list."}`,
+        "warn"
+      );
+      return;
+    }
     const s = state[chatId];
     // Bail if the agent already picked a brand manually, or the chat moved
     // on before this (network-latency) response arrived.
@@ -302,8 +321,11 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}".`);
     if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
     checkLastUsername(chatId); // brand is one of the two things this needs — try now that it's ready
-  } catch (_) { /* non-fatal — Brand just stays a manual pick */ }
+  } catch (err) {
+    logDiagnostic(`Brand auto-detect request failed: ${err.message}`, "warn");
+  }
 }
+const rawGroupIdMissingLoggedFor = new Set(); // avoid re-logging the same missing-groupID chat repeatedly
 
 // LiveChat's URL is /chats/{chat_id}/{thread_id} — chat_id stays the same
 // across every reopen of a given customer's conversation, thread_id is
@@ -1018,9 +1040,13 @@ function renderExpandedCard(chat) {
 
     <label class="field-label">Username</label>
     <div class="username-row">
-      <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.username}" />
-      <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}">Look up</button>
+      <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.username}" ${s.isUnknown ? "disabled" : ""} />
+      <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}" ${s.isUnknown ? "disabled" : ""}>Look up</button>
     </div>
+    <label class="unknown-toggle">
+      <input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} />
+      <span>Unknown player <span class="hint">— customer never gave a username; won't be recorded</span></span>
+    </label>
 
     <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
     <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
@@ -1055,11 +1081,13 @@ function renderExpandedCard(chat) {
     ${s.autoRecordError ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
     ${
-      s.logged
-        ? `<div class="logged-badge">✓ Logged to Lark Base</div>`
-        : s.chatOpen
-          ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
-          : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
+      s.isUnknown
+        ? `<div class="logged-badge unknown">Unknown player — won't be recorded</div>`
+        : s.logged
+          ? `<div class="logged-badge">✓ Logged to Lark Base</div>`
+          : s.chatOpen
+            ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
+            : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
     }
 
     ${ESCALATION_TICKET_ENABLED ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
@@ -1157,6 +1185,11 @@ function ensureChatState(chat) {
     lastUsernameChecked: false, lastUsernameFound: false, lastUsernameValue: "",
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "", dobView: null,
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
+    // Ticked when the customer never gave a username — unknown players
+    // aren't counted toward chat data, so this skips recording entirely
+    // (see submitRecord) rather than treating a blank username as an
+    // incomplete record that needs chasing down.
+    isUnknown: false,
     // Resolved by checkChatStatus, same value as activeChats[].link but
     // kept here too (not just on the transient activeChats entry) so it
     // survives once this chat isn't the focused one anymore — see
@@ -1577,6 +1610,34 @@ chatListEl.addEventListener("change", (e) => {
   if (escSelect) {
     const s = state[escSelect.dataset.chat];
     if (s) s.escalation[escSelect.dataset.field] = escSelect.value;
+    return;
+  }
+  const unknownCheck = e.target.closest(".unknown-check");
+  if (unknownCheck) {
+    const chatId = unknownCheck.dataset.chat;
+    const s = state[chatId];
+    if (s) {
+      s.isUnknown = unknownCheck.checked;
+      // A placeholder Customer Approaching row can already exist from an
+      // earlier Look Up (e.g. a guessed/wrong username tried before
+      // realizing there isn't a real one) -- not yet logged, since a
+      // genuinely already-recorded chat is left alone. Delete it so this
+      // chat truly records nothing, matching how Unknown players are
+      // excluded from chat data.
+      if (s.isUnknown && s.caRecordId && !s.logged) {
+        const staleRecordId = s.caRecordId;
+        s.caRecordId = null;
+        fetch("/.netlify/functions/lark-delete-record", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recordId: staleRecordId }),
+        }).then((res) => res.json()).then((data) => {
+          if (!data.ok) logDiagnostic(`Failed to remove the placeholder record for this Unknown-marked chat: ${data.error}`, "warn");
+        }).catch(() => { /* non-fatal — worst case an orphaned placeholder row stays in Lark */ });
+      }
+      renderChats(activeChats);
+      saveState();
+    }
   }
 });
 
@@ -1630,6 +1691,20 @@ async function submitRecord(chatId, { auto } = {}) {
   const s = state[chatId];
   if (!s || s.logged) return;
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
+
+  // Unknown players are intentionally excluded from chat data — skip
+  // recording entirely rather than treating a blank username as an
+  // incomplete record that needs chasing down (which is what would
+  // otherwise happen the moment the chat closes). s.logged still gets set
+  // so this chat stops being polled/swept/retried like a real completed
+  // one, but the UI shows a distinct "not recorded" state, not "✓ Logged".
+  if (s.isUnknown) {
+    s.logged = true;
+    s.autoRecordError = "";
+    logDiagnostic(`Chat closed — marked Unknown, not recorded.`, "success");
+    renderChats(activeChats);
+    return;
+  }
 
   if (!selectedAgent) {
     if (auto) {
