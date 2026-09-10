@@ -1045,7 +1045,7 @@ function renderExpandedCard(chat) {
     </div>
     <label class="unknown-toggle">
       <input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} />
-      <span>Unknown player <span class="hint">— customer never gave a username; won't be recorded</span></span>
+      <span>Unknown player</span>
     </label>
 
     <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
