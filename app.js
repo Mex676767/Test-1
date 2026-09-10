@@ -2023,12 +2023,26 @@ async function sweepPendingChats() {
   const currentChatId = activeChats[0]?.chatId;
   for (const [chatId, saved] of Object.entries(persisted)) {
     if (chatId === currentChatId) continue; // already covered by its own tight poll
-    if (!saved || saved.logged || saved.chatOpen === false) continue;
+    if (!saved || saved.logged) continue;
     // Adopt the persisted copy only if this tab has no live copy of its own
     // — never clobber an in-memory one that might be ahead of what was last
     // saved.
     if (!state[chatId]) state[chatId] = saved;
-    await checkChatStatus(chatId);
+    if (saved.chatOpen === false) {
+      // Already known closed but never successfully recorded — the one-time
+      // auto-record attempt that fired when checkChatStatus first detected
+      // the close can still fail for reasons that have nothing to do with
+      // whether the chat is open (a transient network blip, a momentary
+      // Lark API error) and nothing used to retry it afterward — the chat
+      // would just sit there needing the agent to notice the red "needs
+      // attention" card and resubmit manually, easy to miss if they'd
+      // already moved on. Retry the submit itself here instead of
+      // checkChatStatus, which has nothing left to check once a chat's
+      // open/closed status is already known.
+      await submitRecord(chatId, { auto: true, reason: "Retrying an earlier failed auto-record" });
+    } else {
+      await checkChatStatus(chatId);
+    }
   }
 }
 setInterval(sweepPendingChats, PENDING_SWEEP_MS);

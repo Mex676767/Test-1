@@ -18,10 +18,13 @@ exports.handler = async function (event) {
     const liveChatLinkField = chatLink ? { link: chatLink, text: chatLink } : null;
 
     if (source === "telegram28") {
-      // Live Chat Link + Status="Claimed" — same "Click Here" button
-      // precedent as the other special tickets.
+      // Confirmed FieldNameNotFound on a real claim (2026-09-11) — unlike
+      // Special Reload/Telegram28's own other columns, this table's link
+      // field is just plain "Link", not "Live Chat Link" (matches the
+      // original screenshot of its real columns: ...Redeem Code, Last
+      // Modified Date, Modified By, Created By, Remark, Link).
       await updateRecord(TABLE_TELEGRAM28, recordId, {
-        "Live Chat Link": liveChatLinkField,
+        "Link": liveChatLinkField,
         "Status": "Claimed",
       });
     } else if (source === "redeemCode") {

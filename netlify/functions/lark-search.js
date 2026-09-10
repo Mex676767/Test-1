@@ -137,12 +137,24 @@ exports.handler = async function (event) {
     // applies (e.g. "7D 20% Reload") and whether there's anything to claim
     // at all ("1D No Bonus"/"3D No Bonus" mean no bonus, not just a claimed
     // one). Hide "No Bonus" tiers plus Claimed/Expired.
+    //
+    // Confirmed from the real table's own column headers (2026-09-11):
+    // unlike every other bonus table here, Risk Player(Day)'s Username
+    // column is plain "Username" (not "Username/UID") and its date column
+    // is plain "Date" (not "Time of Inspection") — searching with the
+    // usual field names silently found zero rows for every customer,
+    // Lark's search API errors on an unrecognized field_name and every
+    // call site here catches that as "nothing claimable", indistinguishable
+    // from a real no-match without checking the table's own columns
+    // directly like this did.
     const riskRow = await findOldestClaimableRow(
       TABLE_RISK_PLAYER, uname, brandVal,
       (fields) => {
         const status = String(toDisplay(fields[F.status]) || "").trim();
         return !!status && !/no bonus/i.test(status) && !hidden(status);
-      }
+      },
+      undefined,
+      { usernameField: "Username", dateField: "Date" }
     ).catch(() => null);
 
     // 12hour VIP Deposit Booster: only "Eligible" (exact) counts.

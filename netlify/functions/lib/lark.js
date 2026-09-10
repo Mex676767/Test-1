@@ -195,25 +195,37 @@ async function getFieldOptionMap(tableId, fieldName, baseToken) {
 // instead of always seeing the newest. isClaimable receives the record's
 // raw fields object and decides whether that row counts at all.
 // "Time of Inspection" isn't spelled consistently across tables (confirmed:
-// Grace Period(Day) actually has "Time of inspection", lowercase "i") — look
-// it up case-insensitively per row instead of hardcoding one casing, since a
-// silent no-match here doesn't error, it just makes the sort a no-op and can
-// let an actually-expired row (returned in unpredictable order by the search
-// API) get picked over the real claimable one.
-function findTimeOfInspection(fields) {
+// Grace Period(Day) actually has "Time of inspection", lowercase "i" —
+// and Risk Player(Day) has no such field at all, just plain "Date"; see
+// dateField below) — look it up case-insensitively per row instead of
+// hardcoding one casing, since a silent no-match here doesn't error, it
+// just makes the sort a no-op and can let an actually-expired row
+// (returned in unpredictable order by the search API) get picked over the
+// real claimable one.
+function findTimeOfInspection(fields, dateFieldName) {
+  if (dateFieldName) return fields[dateFieldName] ?? 0;
   const key = Object.keys(fields).find((k) => k.trim().toLowerCase() === "time of inspection");
   return key ? fields[key] : 0;
 }
 
-async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken) {
+// usernameField/dateField let a table that doesn't follow the usual
+// "Username/UID" + "Time of Inspection" naming override just that part —
+// confirmed necessary for Risk Player(Day), whose real columns are plain
+// "Username" and "Date" (not "Username/UID"/"Time of Inspection" like
+// every other bonus table here), which silently found zero rows for every
+// customer until this was added (Lark's search API errors on an unknown
+// field_name, non-fatal-caught by every call site as "nothing claimable"
+// — indistinguishable from a real no-match without checking the table's
+// own columns directly).
+async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, dateField } = {}) {
   if (!tableId) return null;
   const matches = await searchRecords(tableId, [
-    { field_name: "Username/UID", operator: "is", value: [username] },
+    { field_name: usernameField || "Username/UID", operator: "is", value: [username] },
     { field_name: "Brand", operator: "is", value: [brand] },
   ], baseToken);
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
-  claimable.sort((a, b) => (findTimeOfInspection(a.fields) || 0) - (findTimeOfInspection(b.fields) || 0));
+  claimable.sort((a, b) => (findTimeOfInspection(a.fields, dateField) || 0) - (findTimeOfInspection(b.fields, dateField) || 0));
   return claimable[0];
 }
 
