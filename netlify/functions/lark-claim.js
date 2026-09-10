@@ -18,15 +18,13 @@ exports.handler = async function (event) {
     const liveChatLinkField = chatLink ? { link: chatLink, text: chatLink } : null;
 
     if (source === "telegram28") {
-      // Confirmed FieldNameNotFound on a real claim (2026-09-11) — unlike
-      // Special Reload/Telegram28's own other columns, this table's link
-      // field is just plain "Link", not "Live Chat Link" (matches the
-      // original screenshot of its real columns: ...Redeem Code, Last
-      // Modified Date, Modified By, Created By, Remark, Link).
-      await updateRecord(TABLE_TELEGRAM28, recordId, {
-        "Link": liveChatLinkField,
-        "Status": "Claimed",
-      });
+      // No link field write here at all (2026-09-11) — both "Live Chat
+      // Link" and "Link" came back FieldNameNotFound on real claims, and a
+      // real screenshot of this table's columns (Time of Inspection,
+      // Username/UID, Brand, Tier, Status, Claimed, Bonus Amount, Redeem
+      // Code, ...) shows nothing link-shaped in range either. Same as
+      // Redeem Code's own claim below — Status only.
+      await updateRecord(TABLE_TELEGRAM28, recordId, { "Status": "Claimed" });
     } else if (source === "redeemCode") {
       await updateRecord(TABLE_REDEEM_CODE, recordId, { "Status": "Claimed" });
     } else if (source === "specialReload") {
