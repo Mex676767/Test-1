@@ -1471,9 +1471,13 @@ chatListEl.addEventListener("click", async (e) => {
         s.inquiry.push(val);
       }
     }
+    // Clears whatever was typed to find this option — leaving it in place
+    // left stale filter text sitting in the box (and the list still
+    // filtered down to just that text) right after picking something.
     const searchInput = card.querySelector(".inquiry-search");
+    if (searchInput) searchInput.value = "";
     card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
-    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, searchInput ? searchInput.value : "");
+    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     // Auto-close once maxed out — nothing left to add without removing a
     // chip first, and removing happens via the chips row, not the dropdown.
     if (s.inquiry.length >= 2) card.querySelector(".inquiry-dropdown").classList.add("hidden");
@@ -1704,11 +1708,27 @@ chatListEl.addEventListener("focusin", (e) => {
 
 // Clicking anywhere in the merged box (not just the thin search input
 // itself) focuses it — makes the whole box feel like one clickable control,
-// matching how the whole Status box responds to a click.
+// matching how the whole Status box responds to a click. Also makes a
+// second click actually close it again (e.g. on the caret, or empty space
+// in the box) — focus() alone never does, since the input's already
+// focused by then and focusin (which is what opens it) doesn't refire.
+// Status could always do this via its own explicit toggle action; this is
+// Inquiry's equivalent, scoped to clicks that land outside the search
+// input itself so typing in it never closes the dropdown out from under
+// whoever's still searching.
 chatListEl.addEventListener("click", (e) => {
   if (e.target.closest(".inquiry-chip-remove")) return; // don't steal focus from a chip removal click
   const box = e.target.closest(".inquiry-box");
-  if (box && e.target !== box.querySelector(".inquiry-search")) box.querySelector(".inquiry-search")?.focus();
+  if (!box) return;
+  const searchInput = box.querySelector(".inquiry-search");
+  if (e.target === searchInput) return; // let native focus behavior handle a direct click into the input
+  const dropdown = box.closest(".inquiry-select")?.querySelector(".inquiry-dropdown");
+  if (dropdown && !dropdown.classList.contains("hidden")) {
+    dropdown.classList.add("hidden");
+    searchInput?.blur();
+  } else {
+    searchInput?.focus(); // opens via the focusin handler above
+  }
 });
 
 // Click anywhere outside a given dropdown's own wrapper closes it — so a
