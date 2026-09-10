@@ -313,7 +313,26 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     // Bail if the agent already picked a brand manually, or the chat moved
     // on before this (network-latency) response arrived.
     if (!s || s.brand) return;
-    s.brand = deriveBrandFromGroup(data.groupName);
+    // Only ever auto-fill Brand with a value that's an exact match (case-
+    // insensitive) against brandOptions — Lark's Brand field is a Single
+    // Select, and writing anything that isn't an existing option silently
+    // creates a brand-new one there instead of erroring. A group naming
+    // convention this parser doesn't fully understand (e.g. "AS126
+    // GENERAL" deriving to "AS", which isn't a real Brand option) must
+    // leave Brand blank for a manual pick, never guess and risk polluting
+    // that field's option list.
+    const derived = deriveBrandFromGroup(data.groupName);
+    const matchedBrand = brandOptions.find((b) => b.toLowerCase() === derived.toLowerCase());
+    if (!matchedBrand) {
+      if (derived) {
+        logDiagnostic(
+          `Brand auto-detect found "${derived}" from group "${data.groupName}", but that's not an existing Brand option — left blank for manual pick.`,
+          "warn"
+        );
+      }
+      return;
+    }
+    s.brand = matchedBrand; // canonical casing from Lark's own option list, not whatever the group name happened to use
     // Full code (with digits) for the Escalation Ticket section's own Brand
     // field, which expects e.g. "VS96" not "VS" -- only fills in if blank,
     // same as Brand itself, so a manual pick there sticks too.
@@ -581,12 +600,18 @@ function initLiveChatSdk() {
   });
 }
 
-// Every LiveChat group is named "<BRAND><DIGITS> Priority Support".
-// Lark's Brand lookup strips digits — "VS96 Priority Support" → "VS".
+// Most LiveChat groups are named "<BRAND><DIGITS> Priority Support" —
+// Lark's Brand lookup strips digits — "VS96 Priority Support" → "VS". Some
+// (2026-09-10, confirmed from a real Groups list: "HOT GENERAL", "EZ
+// GENERAL", "VS GENERAL", "RM GENERAL", "BM GENERAL", "AS126 GENERAL")
+// instead use "<BRAND>[DIGITS] GENERAL" — same shape, different suffix, so
+// stripped the same way. A plain "General"/"96 General" group (no real
+// brand in the name at all) still correctly falls through to an empty
+// string either way, leaving Brand for a manual pick same as always.
 function deriveBrandFromGroup(groupName) {
   if (!groupName) return "";
   return groupName
-    .replace(/\s*priority support\s*/i, "")
+    .replace(/\s*(priority support|general)\s*/i, "")
     .replace(/\d+/g, "")
     // Strips emoji (e.g. the flag LiveChat group names wrap the brand code
     // in) — Extended_Pictographic covers most emoji, Regional_Indicator
@@ -603,7 +628,7 @@ function deriveBrandFromGroup(groupName) {
 function deriveFullBrandCode(groupName) {
   if (!groupName) return "";
   return groupName
-    .replace(/\s*priority support\s*/i, "")
+    .replace(/\s*(priority support|general)\s*/i, "")
     .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -744,10 +769,13 @@ function renderBrandDisplay(chatId) {
 
 function renderBrandDropdown(chatId) {
   const s = state[chatId];
-  // Auto-detection can produce a value that isn't (yet) in brandOptions —
-  // keep it selectable rather than silently dropping it from the list.
-  const options = s.brand && !brandOptions.includes(s.brand) ? [s.brand, ...brandOptions] : brandOptions;
-  return options.map((b) => {
+  // Only ever offers real brandOptions — never an ad-hoc extra value, auto-
+  // detected or otherwise. Lark's Brand field is a Single Select; writing
+  // anything that isn't an existing option there silently creates a new
+  // one instead of erroring, so this list (and resolveBrandFromGroupId,
+  // which is now the only other place Brand ever gets set) must stay
+  // restricted to what's already real.
+  return brandOptions.map((b) => {
     const active = s.brand === b;
     return `
     <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectBrand" data-chat="${chatId}" data-value="${b}">
@@ -1003,7 +1031,18 @@ function renderAutoFields(chatId) {
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Amount <span class="auto-tag">auto</span></span>
-        <div class="auto-value mono">${s.releasedBonusAmount || "—"}</div>
+        ${
+          // Risk Player has no claimable amount of its own to read off any
+          // Lark field -- CS works it out manually (based on the customer's
+          // next deposit), so once it's the claimed bonus this becomes a
+          // real input instead of the read-only value every other program
+          // gets. releasedBonusAmount/releasedAmountRaw double as the typed
+          // value directly -- same fields lark-record.js already reads at
+          // submit time, no separate state needed.
+          s.claimedPrograms.riskPlayer
+            ? `<input type="text" inputmode="decimal" class="input mono amount-input" data-chat="${chatId}" placeholder="Type amount" value="${s.releasedBonusAmount || ""}" />`
+            : `<div class="auto-value mono">${s.releasedBonusAmount || "—"}</div>`
+        }
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Claim Secret <span class="auto-tag">auto</span></span>
@@ -1577,6 +1616,18 @@ chatListEl.addEventListener("input", (e) => {
   if (escInput) {
     const s = state[escInput.dataset.chat];
     if (s) s.escalation[escInput.dataset.field] = escInput.value;
+    return;
+  }
+  // Risk Player's manually-typed Amount (see renderAutoFields) — both
+  // fields lark-record.js reads at submit time double as the typed value
+  // directly, same as every other program's auto-derived amount.
+  const amountInput = e.target.closest(".amount-input");
+  if (amountInput) {
+    const s = state[amountInput.dataset.chat];
+    if (s) {
+      s.releasedBonusAmount = amountInput.value;
+      s.releasedAmountRaw = amountInput.value;
+    }
     return;
   }
   // Username isn't otherwise state-synced (only read from the DOM at Look
