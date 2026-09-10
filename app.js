@@ -1480,6 +1480,15 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+
+    // Special Reload's Inquiry/Status/Brand/username are all already fixed
+    // the instant it's claimed — nothing about the Customer Approaching
+    // record still changes after this (D.O.B./Telegram aside, which stay
+    // editable and can be recorded later same as any other case), so this
+    // submits it immediately rather than waiting for the chat to close.
+    if (programKey === "specialReload") {
+      await submitRecord(chatId, { auto: true, reason: "Special Reload claimed" });
+    }
   }
 
   // A customer can fail to complete the Grace Period challenge whether
@@ -1816,10 +1825,16 @@ document.addEventListener("click", (e) => {
 // Always re-queries the card by chatId rather than taking a DOM reference,
 // since renderChats() can have rebuilt the card (e.g. right before an
 // auto-record call) and made any earlier reference stale.
-async function submitRecord(chatId, { auto } = {}) {
+async function submitRecord(chatId, { auto, reason } = {}) {
   const s = state[chatId];
   if (!s || s.logged) return;
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
+  // Every auto message below used to hardcode "Chat closed" -- accurate for
+  // checkChatStatus's own call, but not for e.g. an instant-submit right
+  // after a claim (see the specialReload branch above), which happens
+  // before the chat ever closes. reason lets each caller say what actually
+  // triggered this.
+  const reasonText = reason || "Chat closed";
 
   // Unknown players are intentionally excluded from chat data — skip
   // recording entirely rather than treating a blank username as an
@@ -1837,7 +1852,7 @@ async function submitRecord(chatId, { auto } = {}) {
 
   if (!selectedAgent) {
     if (auto) {
-      s.autoRecordError = "Chat closed, but no agent name is set — open Settings (⚙), then fill in and record manually.";
+      s.autoRecordError = `${reasonText}, but no agent name is set — open Settings (⚙), then fill in and record manually.`;
       logDiagnostic(s.autoRecordError, "error");
       renderChats(activeChats);
     } else {
@@ -1865,7 +1880,7 @@ async function submitRecord(chatId, { auto } = {}) {
       // Logged, not shown in the top bar — the whole card turning red (see
       // .chat-card.needs-attention) is the urgency signal now, not a banner
       // at the top that may not even be about the card the agent is looking at.
-      s.autoRecordError = `Chat closed but not fully filled in (missing: ${missing.join(", ")}) — complete it and click Record to Lark Base.`;
+      s.autoRecordError = `${reasonText} but not fully filled in (missing: ${missing.join(", ")}) — complete it and click Record to Lark Base.`;
       logDiagnostic(s.autoRecordError, "error");
       renderChats(activeChats);
     } else {
@@ -1902,7 +1917,7 @@ async function submitRecord(chatId, { auto } = {}) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Record failed");
     s.logged = true;
-    setStatus(`Logged ${s.username} to Lark Base${auto ? " (auto, on chat close)" : ""}.`, "success");
+    setStatus(`Logged ${s.username} to Lark Base${auto ? ` (auto — ${reasonText.toLowerCase()})` : ""}.`, "success");
     renderChats(activeChats);
   } catch (err) {
     if (auto) {
