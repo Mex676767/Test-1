@@ -12,12 +12,13 @@ const F = {
   brand: "Brand",
   agentName: "Agent Name",
   tier: "Tier",
-  titleName: "Title Name", // P&L's own customer-name field, shown before Tier
+  titleName: "Tittle name", // P&L's own customer-name field, shown before Tier -- yes, "Tittle" (confirmed from the real column header, not a typo on our end)
   status: "Status",
   swCheck: "SW Check",
   swChecker: "SW Checker", // LTV(Day)'s equivalent field is spelled differently from Top 10 P&L(Night)'s — confirmed from a real row, not a guess
   claimedCopy: "Claimed Copy",
   bonusAmount: "Bonus Amount", // Telegram RM28's actual per-row amount (18, 8, 28, 5...) — confirmed from a real screenshot
+  graceExpiry: "Expried", // yes, "Expried" (confirmed from the real column header) -- Grace Period's own expiry date, gates whether Reactivate shows in app.js
 };
 
 function hidden(v) {
@@ -193,6 +194,12 @@ exports.handler = async function (event) {
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
           ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",
+          // Raw epoch ms, straight off the Date field -- an absolute
+          // timestamp, unaffected by any of that field's own display/
+          // timezone formatting in Lark's UI. app.js compares it against
+          // the agent's local "today" to decide whether Reactivate still
+          // makes sense to offer at all.
+          graceExpiryMs: graceRow && typeof graceRow.fields[F.graceExpiry] === "number" ? graceRow.fields[F.graceExpiry] : null,
           riskPlayer: riskRow ? toDisplay(riskRow.fields[F.status]) : "",
           vipBooster: vipRow ? "Eligible" : "",
           specialReload: specialReloadRow

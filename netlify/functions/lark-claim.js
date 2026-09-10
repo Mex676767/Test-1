@@ -11,11 +11,17 @@ exports.handler = async function (event) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "source and recordId are required" }) };
     }
 
+    // "Live Chat Link" is a URL-type field on both tables (confirmed by a
+    // real URLFieldConvFail on Special Reload's own claim) -- Lark's API
+    // wants the {link, text} object shape for those, not a plain string,
+    // same as Customer Approaching's own "link" field in lark-record.js.
+    const liveChatLinkField = chatLink ? { link: chatLink, text: chatLink } : null;
+
     if (source === "telegram28") {
       // Live Chat Link + Status="Claimed" — same "Click Here" button
       // precedent as the other special tickets.
       await updateRecord(TABLE_TELEGRAM28, recordId, {
-        "Live Chat Link": chatLink || "",
+        "Live Chat Link": liveChatLinkField,
         "Status": "Claimed",
       });
     } else if (source === "redeemCode") {
@@ -25,7 +31,7 @@ exports.handler = async function (event) {
       // Event's own table has an identical manual claim button, replicated
       // here the same way.
       await updateRecord(TABLE_SPECIAL_RELOAD, recordId, {
-        "Live Chat Link": chatLink || "",
+        "Live Chat Link": liveChatLinkField,
         "Status": "Claimed",
       });
     } else {

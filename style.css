@@ -386,9 +386,9 @@ body {
    first (now-disabled/claimed) button to become clickable again. */
 .ticket-btns { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
 .claim-btn.reactivate-btn {
-  border-color: var(--blue); color: var(--blue); background: none;
+  border-color: var(--teal); color: var(--teal); background: none;
 }
-.claim-btn.reactivate-btn:hover { background: var(--blue); color: white; }
+.claim-btn.reactivate-btn:hover { background: var(--teal); color: var(--surface); }
 .ticket.empty {
   border-style: solid; color: var(--text-faint); font-size: 12px; justify-content: center;
   background: var(--surface-2); margin-top: 16px;

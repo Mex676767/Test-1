@@ -923,12 +923,22 @@ function renderTickets(chatId) {
       def.doneLabel = isPass ? "✓ Activated" : "✓ Claimed";
       def.done = isPass ? !!s.gracePeriodActivated : !!s.claimedPrograms.gracePeriod;
       def.excludeFromLock = isPass;
-      // Once activated, a customer who doesn't complete the challenge can
-      // still be given another attempt the same day — the Activate button
-      // itself becomes disabled the moment it's done (matching every other
-      // ticket's claimed/locked look), so this is a second, always-usable
-      // button rather than trying to re-enable the first one.
-      def.reactivatable = isPass;
+      // A customer can fail to complete the challenge at either stage —
+      // before activating, or after activating but before claiming — so
+      // Reactivate sits alongside Activate/Claim always, not just once
+      // one of those is already done (whose own button disables itself
+      // the moment it's clicked, matching every other ticket's claimed/
+      // locked look, so it can't just be re-clicked directly). Only while
+      // the challenge's own "Expried" date hasn't fully passed yet, though
+      // — once that date is before today, there's no window left to give
+      // the customer another attempt in, so only Activate/Claim shows.
+      // Compared as a whole calendar day (from local midnight), not exact
+      // time, since the expiry itself is always stored as that day's
+      // 23:59 — e.g. expiring 2026-09-10 no longer reactivates once it's
+      // the 11th, but still does for the rest of the 10th itself.
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      def.reactivatable = typeof r.graceExpiryMs === "number" && r.graceExpiryMs >= startOfToday.getTime();
     }
     defs.push(def);
   });
@@ -975,8 +985,8 @@ function renderTickets(chatId) {
           ${claimed ? doneLabel : claimLabel}
         </button>
         ${
-          d.reactivatable && claimed
-            ? `<button class="claim-btn reactivate-btn" data-action="reactivateGracePeriod" data-chat="${chatId}" title="Customer didn't complete the challenge — give them another attempt today">Reactivate</button>`
+          d.reactivatable
+            ? `<button class="claim-btn reactivate-btn" data-action="reactivateGracePeriod" data-chat="${chatId}" ${locked ? "disabled" : ""} title="Customer didn't complete the challenge — give them another attempt today">Reactivate</button>`
             : ""
         }
       </div>
@@ -1472,18 +1482,32 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
   }
 
-  // Grace Period's Activate button locks (disabled, "✓ Activated") the
-  // moment it's clicked, same look as every other claimed ticket — this is
-  // a second, always-clickable button next to it so CS can give the
-  // customer another attempt the same day if they didn't complete the
-  // challenge the first time. Same effect as Activate itself (nothing
-  // writes to Lark until the final submit either way), just re-triggerable
-  // as many times as the case needs.
+  // A customer can fail to complete the Grace Period challenge whether
+  // they're mid-activation or already at the claim stage, so this sits
+  // alongside Activate/Claim always (see renderTickets) rather than only
+  // once one of those is already done — Activate/Claim's own button
+  // disables itself the moment it's clicked, same look as every other
+  // claimed ticket, so it can't just be re-clicked directly. Resets back
+  // to a fresh "Activated, not yet claimed" state every time — including
+  // undoing an already-made claim (amount/Claim Secret/the one-claim-per-
+  // case lock) if there was one, since reactivating means giving them a
+  // new attempt at the whole thing. Same effect as Activate itself either
+  // way (nothing writes to Lark until the final submit), just
+  // re-triggerable as many times as the case needs.
   if (btn.dataset.action === "reactivateGracePeriod") {
+    const wasClaimed = !!s.claimedPrograms.gracePeriod;
+    s.gracePeriodActivated = true;
+    s.claimedPrograms.gracePeriod = false;
     s.inquiry = ["Grace Period"];
     s.status = "Activated";
+    if (wasClaimed) {
+      s.releasedBonusAmount = "";
+      s.releasedAmountRaw = "";
+      s.claimSecret = false;
+    }
     logDiagnostic("Grace Period reactivated — customer can attempt the challenge again today.", "success");
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+    card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
     card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
