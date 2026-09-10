@@ -79,6 +79,16 @@ body {
 .agent-badge.set { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 40%, transparent); }
 .agent-badge.unset { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 
+/* Global "don't log chats" toggle — deliberately styled to stand out only
+   once ticked (danger color), so an idle unticked state doesn't compete
+   for attention with the agent badge right next to it. */
+.logging-pause-toggle {
+  display: flex; align-items: center; gap: 6px; margin-top: 6px;
+  font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;
+}
+.logging-pause-toggle input { accent-color: var(--danger); width: 13px; height: 13px; cursor: pointer; }
+.logging-pause-toggle.active { color: var(--danger); font-weight: 600; }
+
 .icon-btn, .theme-toggle {
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
   border-radius: 7px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;

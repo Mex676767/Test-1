@@ -31,6 +31,14 @@ const AGENT_KEY = "rc-agent-name";
 let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
 let agentOptions = [];
 
+// Global "don't log chats" toggle — for chats deliberately not wanted in
+// Lark data at all (unlike Unknown player, which is per-chat and permanent
+// once a case closes, this is a temporary gate any chat can pass through
+// once it's unticked again — see submitRecord). Persisted so it survives
+// this widget's iframe reloading (same reason chat state itself does).
+const LOGGING_PAUSED_KEY = "rc-logging-paused";
+let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
+
 async function fetchAgentOptions() {
   try {
     const res = await fetch("/.netlify/functions/lark-pic-list");
@@ -1146,13 +1154,15 @@ function renderExpandedCard(chat) {
     ${s.autoRecordError ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
     ${
-      s.isUnknown
-        ? `<div class="logged-badge unknown">Unknown player — won't be recorded</div>`
-        : s.logged
-          ? `<div class="logged-badge">✓ Logged to Lark Base</div>`
-          : s.chatOpen
-            ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
-            : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
+      loggingPaused && !s.logged
+        ? `<div class="logged-badge unknown">Logging paused — not recorded</div>`
+        : s.isUnknown
+          ? `<div class="logged-badge unknown">Unknown player — won't be recorded</div>`
+          : s.logged
+            ? `<div class="logged-badge">✓ Logged to Lark Base</div>`
+            : s.chatOpen
+              ? `<div class="record-pending-hint">Recording happens automatically once this chat closes</div>`
+              : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
     }
 
     ${ESCALATION_TICKET_ENABLED ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
@@ -1850,6 +1860,17 @@ async function submitRecord(chatId, { auto, reason } = {}) {
     return;
   }
 
+  // Global "Don't log chats" toggle (top bar) — unlike isUnknown, this
+  // deliberately does NOT set s.logged: it's a temporary gate any chat
+  // passes back through once unticked, not a permanent per-chat skip, so
+  // the next attempt (a manual click, the next auto-close, or the next
+  // background sweep retry) records normally once logging resumes. Never
+  // flagged as an error either — nothing's actually wrong.
+  if (loggingPaused) {
+    if (!auto) setStatus('Logging is paused — not recorded. Untick "Don\'t log chats" at the top to resume.', "error");
+    return;
+  }
+
   if (!selectedAgent) {
     if (auto) {
       s.autoRecordError = `${reasonText}, but no agent name is set — open Settings (⚙), then fill in and record manually.`;
@@ -1975,6 +1996,15 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
 
+const loggingPauseCheck = document.getElementById("loggingPauseCheck");
+loggingPauseCheck.addEventListener("change", () => {
+  loggingPaused = loggingPauseCheck.checked;
+  localStorage.setItem(LOGGING_PAUSED_KEY, String(loggingPaused));
+  document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
+  logDiagnostic(loggingPaused ? "Logging paused — no chat will be recorded until this is unticked." : "Logging resumed.", loggingPaused ? "warn" : "success");
+  renderChats(activeChats); // every card's bottom banner depends on this
+});
+
 // Boot sequence: fetch agent list, update badge, auto-open settings if no
 // agent saved yet (first time / cleared cache).
 (async () => {
@@ -1982,6 +2012,8 @@ document.getElementById("settingsBtn").addEventListener("click", () => openSetti
   // happen before the first renderChats/ensureChatState call, since
   // ensureChatState only fills in defaults for a chatId it hasn't seen yet.
   Object.assign(state, loadPersistedState());
+  loggingPauseCheck.checked = loggingPaused;
+  document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
   await Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchEscalationOptions()]);
   updateAgentBadge();
