@@ -12,6 +12,7 @@ const F = {
   brand: "Brand",
   agentName: "Agent Name",
   tier: "Tier",
+  titleName: "Title Name", // P&L's own customer-name field, shown before Tier
   status: "Status",
   swCheck: "SW Check",
   swChecker: "SW Checker", // LTV(Day)'s equivalent field is spelled differently from Top 10 P&L(Night)'s — confirmed from a real row, not a guess
@@ -74,6 +75,7 @@ exports.handler = async function (event) {
     // isn't a VIP under this brand — surfaced to the frontend as notVip
     // rather than just silently leaving Tier blank.
     let tier = "";
+    let customerName = "";
     let notVip = false;
     try {
       if (TABLE_PNL) {
@@ -84,11 +86,12 @@ exports.handler = async function (event) {
         if (pnlMatches.length) {
           const tierMap = await getFieldOptionMap(TABLE_PNL, F.tier);
           tier = toDisplay(pnlMatches[0].fields[F.tier], tierMap);
+          customerName = toDisplay(pnlMatches[0].fields[F.titleName]);
         } else {
           notVip = true;
         }
       }
-    } catch (_) { /* non-fatal — tier just shows blank, notVip stays false */ }
+    } catch (_) { /* non-fatal — tier/customerName just show blank, notVip stays false */ }
 
     // Top 10 P&L(Night): "Claimed Copy" checkbox is the claim flag
     // (unticked = still claimable); displayed value is "SW Check". This
@@ -186,6 +189,7 @@ exports.handler = async function (event) {
         caRecordId,
         row: {
           tier,
+          customerName,
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
           ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",

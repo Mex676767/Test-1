@@ -381,6 +381,14 @@ body {
 .claim-btn.claimed {
   background: var(--teal); border-color: var(--teal); color: var(--surface); cursor: default;
 }
+/* Grace Period's second, always-clickable button next to Activate — lets
+   CS give the customer another attempt the same day without needing the
+   first (now-disabled/claimed) button to become clickable again. */
+.ticket-btns { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.claim-btn.reactivate-btn {
+  border-color: var(--blue); color: var(--blue); background: none;
+}
+.claim-btn.reactivate-btn:hover { background: var(--blue); color: white; }
 .ticket.empty {
   border-style: solid; color: var(--text-faint); font-size: 12px; justify-content: center;
   background: var(--surface-2); margin-top: 16px;

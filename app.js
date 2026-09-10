@@ -884,6 +884,9 @@ function renderPlayerInfo(chatId) {
       : `<span><span class="pi-label">Last username recorded</span> : N/A</span>`);
   }
   if (s.matchedRow) {
+    if (s.matchedRow.customerName) {
+      parts.push(`<span><span class="pi-label">Name</span> ${s.matchedRow.customerName}</span>`);
+    }
     parts.push(`<span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span>`);
   }
   return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
@@ -920,6 +923,12 @@ function renderTickets(chatId) {
       def.doneLabel = isPass ? "✓ Activated" : "✓ Claimed";
       def.done = isPass ? !!s.gracePeriodActivated : !!s.claimedPrograms.gracePeriod;
       def.excludeFromLock = isPass;
+      // Once activated, a customer who doesn't complete the challenge can
+      // still be given another attempt the same day — the Activate button
+      // itself becomes disabled the moment it's done (matching every other
+      // ticket's claimed/locked look), so this is a second, always-usable
+      // button rather than trying to re-enable the first one.
+      def.reactivatable = isPass;
     }
     defs.push(def);
   });
@@ -961,9 +970,16 @@ function renderTickets(chatId) {
         <div class="ticket-name">${d.label}</div>
         <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.display}</div>
       </div>
-      <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="claim" data-program="${d.key}" data-chat="${chatId}" ${claimed || locked ? "disabled" : ""}>
-        ${claimed ? doneLabel : claimLabel}
-      </button>
+      <div class="ticket-btns">
+        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="claim" data-program="${d.key}" data-chat="${chatId}" ${claimed || locked ? "disabled" : ""}>
+          ${claimed ? doneLabel : claimLabel}
+        </button>
+        ${
+          d.reactivatable && claimed
+            ? `<button class="claim-btn reactivate-btn" data-action="reactivateGracePeriod" data-chat="${chatId}" title="Customer didn't complete the challenge — give them another attempt today">Reactivate</button>`
+            : ""
+        }
+      </div>
     </div>`;
   }).join("") + `</div>` + (alreadyClaimedOne ? `<div class="ticket-note">Only 1 bonus can be claimed per case</div>` : "");
 }
@@ -1450,6 +1466,24 @@ chatListEl.addEventListener("click", async (e) => {
 
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
+    card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
+    card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
+    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+  }
+
+  // Grace Period's Activate button locks (disabled, "✓ Activated") the
+  // moment it's clicked, same look as every other claimed ticket — this is
+  // a second, always-clickable button next to it so CS can give the
+  // customer another attempt the same day if they didn't complete the
+  // challenge the first time. Same effect as Activate itself (nothing
+  // writes to Lark until the final submit either way), just re-triggerable
+  // as many times as the case needs.
+  if (btn.dataset.action === "reactivateGracePeriod") {
+    s.inquiry = ["Grace Period"];
+    s.status = "Activated";
+    logDiagnostic("Grace Period reactivated — customer can attempt the challenge again today.", "success");
+    card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
