@@ -114,6 +114,34 @@ body {
 .status-bar.error { color: var(--danger); }
 .status-bar.success { color: var(--teal); }
 
+/* ---------- Needs Attention ---------- */
+/* Every closed-but-incomplete chat this browser knows about, not just
+   whichever one happens to be the currently-focused card -- LiveChat's SDK
+   only ever shows this widget one real chat at a time, so a case the agent
+   already navigated away from would otherwise be invisible until they
+   happened to reopen that exact conversation. */
+.needs-attention-panel {
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.needs-attention-panel.hidden { display: none; }
+.needs-attention-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 16px; background: none; border: none; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; color: var(--danger); font-family: inherit;
+}
+.na-caret { font-size: 10px; color: var(--text-faint); transition: transform 0.15s ease; }
+.needs-attention-toggle.open .na-caret { transform: rotate(180deg); }
+.needs-attention-list { padding: 0 16px 12px; display: flex; flex-direction: column; gap: 8px; }
+.needs-attention-list.hidden { display: none; }
+.na-item {
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px;
+}
+.na-item-username { font-weight: 600; color: var(--text); }
+.na-item-reason { color: var(--text-muted); margin-top: 2px; }
+.na-item-link { display: inline-block; margin-top: 4px; color: var(--blue); font-size: 11.5px; }
+
 /* ---------- Chat list ---------- */
 /* No max-width — the widget only ever shows one chat at a time now (the
    real active LiveChat conversation), so it should fill whatever width the

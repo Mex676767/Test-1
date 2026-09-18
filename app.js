@@ -449,6 +449,7 @@ const CHAT_STATUS_POLL_MS = 2_000; // worst-case detection latency = this value;
 const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payload every tick
 const firstCheckLoggedFor = new Set(); // one confirmation per chat that get_chat succeeded at all
 const errorLoggedFor = new Set(); // avoid spamming the same persistent error every 20s
+const autoMissingLoggedFor = new Map(); // chatId -> last "missing" list logged by submitRecord's auto path, so sweepPendingChats retrying a permanently-incomplete chat doesn't spam the identical message every 8s forever
 
 function stopChatStatusPolling() {
   if (chatStatusPollTimer) {
@@ -580,6 +581,7 @@ async function checkChatStatus(chatId) {
       s.chatOpen = false;
       if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
       await submitRecord(chatId, { auto: true });
+      renderNeedsAttentionPanel(); // reflect immediately if that submit left this chat incomplete
     }
   } catch (_) { /* non-fatal — just try again next tick */ }
 }
@@ -1114,7 +1116,7 @@ function renderExpandedCard(chat) {
     <label class="field-label">Username</label>
     <div class="username-row">
       <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.username}" ${s.isUnknown ? "disabled" : ""} />
-      <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}" ${s.isUnknown ? "disabled" : ""}>Look up</button>
+      <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}" ${s.isUnknown || s.lookupInFlight ? "disabled" : ""}>${s.lookupInFlight ? "…" : "Look up"}</button>
     </div>
     <label class="unknown-toggle">
       <input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} />
@@ -1276,6 +1278,19 @@ function ensureChatState(chat) {
     // this and calls submitRecord automatically once LiveChat reports the
     // chat inactive; there's no manual close button anymore.
     chatOpen: true, autoRecordError: "",
+    // Guards the Look Up click handler against firing twice concurrently
+    // for the same chat — btn.disabled alone isn't enough, since any
+    // background re-render (checkChatStatus's Telegram-detection poll runs
+    // every 2s and calls renderChats for the focused chat) replaces the
+    // disabled button with a fresh enabled one mid-request. Without a
+    // state-level guard, a second click landing in that window starts a
+    // second lookup before the first has set s.caRecordId, so its "delete
+    // my previous record" dedup sees nothing to delete -- both create a
+    // fresh, empty Customer Approaching row, and only one ever gets
+    // tracked. The other sits there forever as an orphaned duplicate
+    // (confirmed from real data: the same username creating 3-4 rows
+    // seconds apart, all blank past Username/Brand/Agent Name).
+    lookupInFlight: false,
     // Collapsed by default — a card only expands to full detail when the
     // agent clicks it (see toggleExpand). Keeps up to 6 concurrent chats
     // glanceable instead of only ~2 fitting on screen at once.
@@ -1341,6 +1356,14 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "lookup") {
     if (!selectedAgent) { openSettingsPanel(); return; }
+    // State-level guard, not just btn.disabled -- a background re-render
+    // (checkChatStatus's 2s Telegram-detection poll calls renderChats for
+    // the focused chat) replaces this button with a fresh enabled one
+    // mid-request, and a second click landing in that window would start a
+    // second lookup before the first has set s.caRecordId, creating a
+    // duplicate empty Customer Approaching row that never gets tracked or
+    // cleaned up. See ensureChatState's lookupInFlight for the full story.
+    if (s.lookupInFlight) return;
     const username = card.querySelector(".username-input").value.trim();
     if (!username) { setStatus("Enter a username before looking up.", "error"); return; }
     const brand = s.brand;
@@ -1349,6 +1372,7 @@ chatListEl.addEventListener("click", async (e) => {
     if (!s.escalation.memberUserId) s.escalation.memberUserId = username;
     const chatDef = activeChats.find((c) => c.chatId === chatId);
     const telegramNow = card.querySelector(".tg-check").checked;
+    s.lookupInFlight = true;
     btn.disabled = true;
     btn.textContent = "…";
     try {
@@ -1379,6 +1403,7 @@ chatListEl.addEventListener("click", async (e) => {
     } catch (err) {
       setStatus("Lookup failed: " + err.message, "error");
     }
+    s.lookupInFlight = false;
     btn.disabled = false;
     btn.textContent = "Look up";
     card.querySelector(".player-info-slot").innerHTML = renderPlayerInfo(chatId);
@@ -1902,7 +1927,16 @@ async function submitRecord(chatId, { auto, reason } = {}) {
       // .chat-card.needs-attention) is the urgency signal now, not a banner
       // at the top that may not even be about the card the agent is looking at.
       s.autoRecordError = `${reasonText} but not fully filled in (missing: ${missing.join(", ")}) — complete it and click Record to Lark Base.`;
-      logDiagnostic(s.autoRecordError, "error");
+      // Only the diagnostics-log write is deduped, not autoRecordError
+      // itself — a permanently-incomplete chat (e.g. one that never had a
+      // real lookup done at all) gets retried by sweepPendingChats every
+      // 8s forever, and it was logging this identical line every single
+      // time. The card still stays accurately red regardless.
+      const missingKey = missing.join(",");
+      if (autoMissingLoggedFor.get(chatId) !== missingKey) {
+        autoMissingLoggedFor.set(chatId, missingKey);
+        logDiagnostic(s.autoRecordError, "error");
+      }
       renderChats(activeChats);
     } else {
       setStatus(`Missing before recording: ${missing.join(", ")}.`, "error");
@@ -2019,6 +2053,7 @@ loggingPauseCheck.addEventListener("change", () => {
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);
+  renderNeedsAttentionPanel();
   initLiveChatSdk();
 })();
 
@@ -2061,6 +2096,13 @@ async function sweepPendingChats() {
     // saved.
     if (!state[chatId]) state[chatId] = saved;
     if (saved.chatOpen === false) {
+      // While logging is paused, submitRecord would just no-op anyway (see
+      // its own loggingPaused check) -- skip calling it at all so a chat
+      // that's permanently missing fields (or anything else that'll never
+      // resolve on its own) doesn't keep re-attempting and re-logging every
+      // sweep tick while the agent has deliberately paused recording.
+      // Resumes retrying normally the moment logging is unticked again.
+      if (loggingPaused) continue;
       // Already known closed but never successfully recorded — the one-time
       // auto-record attempt that fired when checkChatStatus first detected
       // the close can still fail for reasons that have nothing to do with
@@ -2076,5 +2118,63 @@ async function sweepPendingChats() {
       await checkChatStatus(chatId);
     }
   }
+  renderNeedsAttentionPanel();
 }
 setInterval(sweepPendingChats, PENDING_SWEEP_MS);
+
+// Every chat this browser knows about that closed without ever being
+// completed (missing Inquiry/Status/etc.) -- read straight from persisted
+// state, not just whichever chat happens to be the currently-focused card
+// (see sweepPendingChats' own header note on why that distinction matters:
+// LiveChat's SDK only ever shows this widget one real chat at a time, so a
+// case the agent already navigated away from would otherwise be invisible
+// until they happened to reopen that exact conversation).
+function getIncompleteChats() {
+  let persisted;
+  try {
+    persisted = loadPersistedState();
+  } catch (_) {
+    return [];
+  }
+  return Object.entries(persisted)
+    .filter(([, s]) => s && s.chatOpen === false && !s.logged && !s.isUnknown && s.autoRecordError)
+    .map(([chatId, s]) => ({
+      chatId,
+      username: s.username || "(no username)",
+      reason: s.autoRecordError,
+      chatUrl: s.chatUrl || "",
+    }));
+}
+
+function renderNeedsAttentionPanel() {
+  const panel = document.getElementById("needsAttentionPanel");
+  const countEl = document.getElementById("needsAttentionCount");
+  const listEl = document.getElementById("needsAttentionList");
+  if (!panel || !countEl || !listEl) return;
+
+  const incomplete = getIncompleteChats();
+  if (!incomplete.length) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  countEl.textContent = incomplete.length === 1
+    ? "⚠ 1 chat needs attention"
+    : `⚠ ${incomplete.length} chats need attention`;
+  listEl.innerHTML = incomplete.map((c) => `
+    <div class="na-item">
+      <div class="na-item-username">${c.username}</div>
+      <div class="na-item-reason">${c.reason}</div>
+      ${c.chatUrl ? `<a class="na-item-link" href="${c.chatUrl}" target="_blank">Open ↗</a>` : ""}
+    </div>
+  `).join("");
+}
+
+document.getElementById("needsAttentionToggle").addEventListener("click", () => {
+  const listEl = document.getElementById("needsAttentionList");
+  const toggleBtn = document.getElementById("needsAttentionToggle");
+  const willOpen = listEl.classList.contains("hidden");
+  if (willOpen) renderNeedsAttentionPanel(); // refresh contents right before showing, not just the count badge
+  listEl.classList.toggle("hidden", !willOpen);
+  toggleBtn.classList.toggle("open", willOpen);
+});

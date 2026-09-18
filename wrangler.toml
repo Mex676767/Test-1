@@ -1,0 +1,8 @@
+name = "customer-approaching"
+pages_build_output_dir = "."
+compatibility_date = "2026-01-01"
+# Required so functions/_lib/lark.js and functions/_lib/livechat.js can keep
+# reading process.env.X unchanged from their Netlify versions -- without
+# this flag Workers has no process.env at all. See functions/_lib/adapt.js
+# for the belt-and-suspenders per-request copy on top of this.
+compatibility_flags = ["nodejs_compat"]

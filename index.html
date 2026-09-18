@@ -34,6 +34,18 @@
 
   <div id="statusBar" class="status-bar hidden"></div>
 
+  <!-- Every chat this browser knows about that closed without ever being
+       completed (missing Inquiry/Status/etc.) -- not just whichever one
+       happens to be the currently-focused card, since LiveChat's SDK only
+       ever shows this widget one chat at a time. See renderNeedsAttentionPanel. -->
+  <div id="needsAttentionPanel" class="needs-attention-panel hidden">
+    <button type="button" id="needsAttentionToggle" class="needs-attention-toggle">
+      <span id="needsAttentionCount"></span>
+      <span class="na-caret">▾</span>
+    </button>
+    <div id="needsAttentionList" class="needs-attention-list hidden"></div>
+  </div>
+
   <main id="chatList" class="chat-list"></main>
 
   <!-- LiveChat Agent App SDK — provides the currently active chat (customer
