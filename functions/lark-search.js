@@ -27,7 +27,7 @@ function hidden(v) {
   return t === "claimed" || t === "expired" || t === "failed";
 }
 
-async function handler(event) {
+export async function handler(event) {
   try {
     const { username, brand, picName, previousRecordId } = JSON.parse(event.body || "{}");
     if (!username || !brand) {

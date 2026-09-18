@@ -1,8 +1,16 @@
-name = "customer-approaching"
-pages_build_output_dir = "."
+name = "ctmaprapp"
+main = "functions/_worker.js"
 compatibility_date = "2026-01-01"
-# Required so functions/_lib/lark.js and functions/_lib/livechat.js can keep
-# reading process.env.X unchanged from their Netlify versions -- without
-# this flag Workers has no process.env at all. See functions/_lib/adapt.js
-# for the belt-and-suspenders per-request copy on top of this.
+# Required so _lib/lark.js and _lib/livechat.js can keep reading
+# process.env.X unchanged from their Netlify versions -- without this flag
+# Workers has no process.env at all. See functions/_worker.js for the
+# belt-and-suspenders per-request copy on top of this.
 compatibility_flags = ["nodejs_compat"]
+
+# This project was created as a Worker, not classic Pages -- static assets
+# (index.html, app.js, style.css) are served through this binding, with
+# functions/_worker.js (the `main` entry above) routing API calls to the
+# right handler first and falling through to this for everything else.
+[assets]
+directory = "."
+binding = "ASSETS"

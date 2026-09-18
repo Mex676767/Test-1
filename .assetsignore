@@ -1,0 +1,13 @@
+# Excludes these from the [assets] upload in wrangler.toml -- otherwise
+# `directory = "."` would serve the Worker's own source code, git internals,
+# and other non-site files as plain browsable static files alongside
+# index.html/app.js/style.css.
+functions/
+netlify/
+.git/
+.claude/
+node_modules/
+netlify.toml
+wrangler.toml
+_redirects
+.assetsignore

@@ -14,7 +14,7 @@ import { createRecord, ESCALATION_BASE_TOKEN, TABLE_ESCALATION } from "./_lib/la
 // API caller's identity (the app's own bot, not the individual agent) --
 // "PIC Name" is the separate Single Option field the agent actually
 // controls, always set to the same name chosen in Settings.
-async function handler(event) {
+export async function handler(event) {
   try {
     if (!ESCALATION_BASE_TOKEN || !TABLE_ESCALATION) {
       return { statusCode: 200, body: JSON.stringify({ ok: false, error: "Escalation ticket table isn't configured on this site yet." }) };

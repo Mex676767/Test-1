@@ -39,7 +39,7 @@ async function fetchGroups(pat) {
   return data;
 }
 
-async function handler(event) {
+export async function handler(event) {
   try {
     if (!LIVECHAT_PATS.length) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: null }) };

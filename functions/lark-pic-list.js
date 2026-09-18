@@ -7,7 +7,7 @@ import { getFieldOptionMap, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 // 10 min) means the dropdown here always matches whatever options exist on
 // that field in Lark — add/rename an option there and it shows up on next
 // load, no separate table or LARK_TABLE_AGENT_LIST env var to maintain.
-async function handler() {
+export async function handler() {
   try {
     const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Agent Name");
     const names = Array.from(optionMap.values()).filter(Boolean).sort();

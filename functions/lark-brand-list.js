@@ -9,7 +9,7 @@ import { getFieldOptionMap, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 // detection fails or is wrong — a dropdown instead of free text means they
 // can only pick a value that actually exists as a real Brand option, not a
 // typo that wouldn't match any per-table Brand column value.
-async function handler() {
+export async function handler() {
   try {
     const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Brand");
     const names = Array.from(optionMap.values()).filter(Boolean).sort();

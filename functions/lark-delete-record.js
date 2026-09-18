@@ -9,7 +9,7 @@ import { deleteRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 // unknown players aren't counted toward chat data (see app.js's
 // isUnknown handling). Only ever called for a record that hasn't been
 // logged yet -- app.js guards that on its side.
-async function handler(event) {
+export async function handler(event) {
   try {
     const { recordId } = JSON.parse(event.body || "{}");
     if (!recordId) {

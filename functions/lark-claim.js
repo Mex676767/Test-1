@@ -5,7 +5,7 @@ import { updateRecord, TABLE_REDEEM_CODE, TABLE_SPECIAL_RELOAD, TABLE_TELEGRAM28
 // straight to the matched record so it happens immediately, not deferred to
 // the final "Record to Lark Base" submit. Regular (gold) tickets don't call
 // this — they're read-only source-table rows, only logged at submit time.
-async function handler(event) {
+export async function handler(event) {
   try {
     const { source, recordId, chatLink } = JSON.parse(event.body || "{}");
     if (!source || !recordId) {

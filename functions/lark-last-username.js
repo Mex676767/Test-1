@@ -25,7 +25,7 @@ import { searchRecords, toDisplay, TABLE_PNL } from "./_lib/lark.js";
 // OR — check both fields in parallel and treat either match as found.
 const F = { username: "Username", brand: "Brand", lastLink: "Live Chat link", lastTelegramLink: "Telegram" };
 
-async function handler(event) {
+export async function handler(event) {
   try {
     const { chatId, brand } = JSON.parse(event.body || "{}");
     if (!chatId || !brand) {

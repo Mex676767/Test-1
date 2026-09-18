@@ -1,6 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 
-async function handler() {
+export async function handler() {
   return {
     statusCode: 200,
     body: JSON.stringify({

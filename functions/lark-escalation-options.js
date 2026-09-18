@@ -7,7 +7,7 @@ import { getFieldOptionMap, ESCALATION_BASE_TOKEN, TABLE_ESCALATION } from "./_l
 // Name/Brand elsewhere in this app — so the list always matches whatever
 // options actually exist there, no redeploy needed when the other team
 // adds a new Query type or Brand code.
-async function handler() {
+export async function handler() {
   try {
     if (!ESCALATION_BASE_TOKEN || !TABLE_ESCALATION) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, brand: [], queries: [], paymentGateway: [], vipLevel: [] }) };
