@@ -1,33 +1,45 @@
-// Cloudflare Pages Functions port of netlify/functions/lib/lark.js -- logic
-// is unchanged (still field-by-field the same code that's been fixed
-// against real Lark data over many rounds); only module.exports -> export
-// differs. Reads process.env.X exactly like the Netlify version, relying on
-// this project's `nodejs_compat` compatibility flag (see wrangler.toml) to
-// populate it from the Pages project's bound environment variables -- and
-// on _lib/adapt.js also copying context.env onto process.env per request as
-// a belt-and-suspenders safety net. If any endpoint ever comes back with an
-// "X not set" error after deploying here, check the env vars are bound in
-// the Cloudflare Pages dashboard first -- same class of check already done
-// repeatedly for the Netlify env vars this project has had.
-const APP_ID = process.env.LARK_APP_ID;
-const APP_SECRET = process.env.LARK_APP_SECRET;
-const BASE_APP_TOKEN = process.env.LARK_BASE_APP_TOKEN;
+// Cloudflare Worker port of netlify/functions/lib/lark.js -- logic is
+// unchanged (still field-by-field the same code that's been fixed against
+// real Lark data over many rounds); only module.exports -> export differs.
+//
+// These used to be `const X = process.env.Y` read once at module-load time
+// -- confirmed broken (2026-09-18, real "LARK_APP_ID / LARK_APP_SECRET not
+// set" error on a live deploy with the env vars genuinely bound in
+// Cloudflare's dashboard): a Worker's module evaluates once, BEFORE
+// _worker.js's fetch handler ever runs, so process.env is still empty at
+// that point no matter what env vars are bound -- there's no way to read
+// them from a top-level const in time. Fixed with `let` + initEnv(), called
+// from _worker.js's fetch handler before any route runs. ES module named
+// exports are live bindings, not copied snapshots, so every file that
+// imports e.g. TABLE_PNL still sees the update after initEnv() runs, with
+// zero changes needed to any of those files.
+let APP_ID, APP_SECRET, BASE_APP_TOKEN;
+let TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL;
+let TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER, TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER;
+let ESCALATION_BASE_TOKEN, TABLE_ESCALATION;
+let TABLE_TELEGRAM28;
 
-const TABLE_CUSTOMER_APPROACHING = process.env.LARK_TABLE_CUSTOMER_APPROACHING;
-const TABLE_REDEEM_CODE = process.env.LARK_TABLE_REDEEM_CODE;
-const TABLE_PNL = process.env.LARK_TABLE_PNL;
+export function initEnv(env) {
+  APP_ID = env.LARK_APP_ID;
+  APP_SECRET = env.LARK_APP_SECRET;
+  BASE_APP_TOKEN = env.LARK_BASE_APP_TOKEN;
 
-const TABLE_GRACE_PERIOD = process.env.LARK_TABLE_GRACE_PERIOD;
-const TABLE_TOP_PNL_NIGHT = process.env.LARK_TABLE_TOP_PNL_NIGHT;
-const TABLE_LTV_DAY = process.env.LARK_TABLE_LTV_DAY;
-const TABLE_RISK_PLAYER = process.env.LARK_TABLE_RISK_PLAYER;
-const TABLE_SPECIAL_RELOAD = process.env.LARK_TABLE_SPECIAL_RELOAD;
-const TABLE_VIP_BOOSTER = process.env.LARK_TABLE_VIP_BOOSTER;
+  TABLE_CUSTOMER_APPROACHING = env.LARK_TABLE_CUSTOMER_APPROACHING;
+  TABLE_REDEEM_CODE = env.LARK_TABLE_REDEEM_CODE;
+  TABLE_PNL = env.LARK_TABLE_PNL;
 
-const ESCALATION_BASE_TOKEN = process.env.LARK_ESCALATION_BASE_TOKEN;
-const TABLE_ESCALATION = process.env.LARK_ESCALATION_TABLE;
+  TABLE_GRACE_PERIOD = env.LARK_TABLE_GRACE_PERIOD;
+  TABLE_TOP_PNL_NIGHT = env.LARK_TABLE_TOP_PNL_NIGHT;
+  TABLE_LTV_DAY = env.LARK_TABLE_LTV_DAY;
+  TABLE_RISK_PLAYER = env.LARK_TABLE_RISK_PLAYER;
+  TABLE_SPECIAL_RELOAD = env.LARK_TABLE_SPECIAL_RELOAD;
+  TABLE_VIP_BOOSTER = env.LARK_TABLE_VIP_BOOSTER;
 
-const TABLE_TELEGRAM28 = process.env.LARK_TABLE_TELEGRAM28;
+  ESCALATION_BASE_TOKEN = env.LARK_ESCALATION_BASE_TOKEN;
+  TABLE_ESCALATION = env.LARK_ESCALATION_TABLE;
+
+  TABLE_TELEGRAM28 = env.LARK_TABLE_TELEGRAM28;
+}
 
 let cachedToken = null;
 let cachedExpiry = 0;

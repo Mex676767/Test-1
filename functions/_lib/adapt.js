@@ -6,19 +6,24 @@
 // rewrite of logic that already works and has been fixed field-by-field
 // against real data over many rounds.
 //
-// Also copies context.env onto process.env before calling the handler --
-// this project's `nodejs_compat` compatibility flag (see wrangler.toml)
-// should already populate process.env from the Pages project's bound
-// environment variables, but doing it explicitly here too removes any doubt
-// and costs nothing. lib/lark.js and lib/livechat.js read process.env.X as
-// module-level consts, unchanged from their Netlify versions -- if that
-// population is ever incomplete, every endpoint fails immediately and
-// loudly (e.g. "LARK_APP_ID / LARK_APP_SECRET not set"), not silently.
+// NOT currently the live entry point -- this project (a Cloudflare Worker,
+// not classic Pages) routes through _worker.js instead, which calls
+// _lib/lark.js's/_lib/livechat.js's initEnv() directly. Kept working here
+// too in case this ever runs under classic Pages' own file-based routing
+// instead, where each functions/*.js file's own onRequest export (built
+// from this adapt()) would be the real entry point per request.
+import { initEnv as initLarkEnv } from "./lark.js";
+import { initEnv as initLivechatEnv } from "./livechat.js";
+
 export function adapt(netlifyHandler) {
   return async (context) => {
-    try {
-      Object.assign(process.env, context.env);
-    } catch (_) { /* non-fatal -- falls through to whatever process.env already has */ }
+    // A Worker's (or Pages Function's) module evaluates once, before any
+    // request handler runs -- _lib/lark.js and _lib/livechat.js no longer
+    // read process.env at module top-level for exactly this reason (see
+    // their own header notes); initEnv() sets their values fresh here,
+    // every request.
+    initLarkEnv(context.env);
+    initLivechatEnv(context.env);
 
     let body = "";
     try {

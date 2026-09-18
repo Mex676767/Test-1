@@ -18,6 +18,8 @@ import { handler as larkDeleteRecord } from "./lark-delete-record.js";
 import { handler as livechatChatStatus } from "./livechat-chat-status.js";
 import { handler as livechatGroupName } from "./livechat-group-name.js";
 import { handler as helloHandler } from "./hello.js";
+import { initEnv as initLarkEnv } from "./_lib/lark.js";
+import { initEnv as initLivechatEnv } from "./_lib/livechat.js";
 
 const ROUTES = {
   "lark-search": larkSearch,
@@ -36,12 +38,17 @@ const ROUTES = {
 
 export default {
   async fetch(request, env, ctx) {
-    // Makes _lib/lark.js and _lib/livechat.js's process.env.X reads work --
-    // they're unchanged from the Netlify versions, which read real
-    // process.env directly. `nodejs_compat` (see wrangler.toml) should
-    // already populate this, but doing it explicitly here too removes any
-    // doubt and costs nothing.
-    try { Object.assign(process.env, env); } catch (_) { /* non-fatal */ }
+    // A Worker's module evaluates once, before this fetch handler ever
+    // runs -- so a top-level `const X = process.env.Y` in _lib/lark.js
+    // would always capture undefined, no matter what env vars are bound in
+    // Cloudflare's dashboard (confirmed live, 2026-09-18: a real "LARK_APP_ID
+    // / LARK_APP_SECRET not set" error with the vars genuinely bound).
+    // initEnv() sets those values fresh on every request instead; ES
+    // module named exports are live bindings, so every file that imports
+    // e.g. TABLE_PNL from _lib/lark.js sees the update with no changes
+    // needed on their end.
+    initLarkEnv(env);
+    initLivechatEnv(env);
 
     const url = new URL(request.url);
     let path = url.pathname;
