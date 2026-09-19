@@ -292,38 +292,69 @@ body {
 .inquiry-option-check { width: 13px; color: var(--blue); flex-shrink: 0; }
 .inquiry-option-empty { padding: 10px; font-size: 12px; color: var(--text-faint); text-align: center; }
 
-/* ---------- Status / Brand (custom dropdowns, same look as Inquiry's —
-   reuses .inquiry-option/.inquiry-option-check for the list itself). Brand
-   used to be a native <select> — its own dropdown chrome, scrollbar
-   included, can't be restyled via CSS in any browser, which is the whole
-   reason it's a custom dropdown now instead. .brand-picker/-display/
-   -dropdown are separate classes from .status-*, not just reused directly
-   — several call sites do `card.querySelector(".status-dropdown")`
-   expecting exactly one match per card, which a shared class would break
-   now that both exist on the same card. ---------- */
-.status-picker, .brand-picker { position: relative; }
-.status-display, .brand-display { display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; }
+/* ---------- Status (rebuilt to match Inquiry's own box exactly — merged
+   chip + search input, not a separate display-button-plus-panel. Reuses
+   .inquiry-box/-chip/-caret directly via .status-box/.status-chip-slot,
+   just single-select so there's at most one chip.) ---------- */
+.status-picker { position: relative; }
+.status-box { /* same rules as .inquiry-box, kept a separate class since
+     several call sites need exactly one .status-dropdown match per card
+     and a shared trigger class risks ambiguous querySelector results */
+  position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  width: 100%; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 30px 7px 11px; cursor: text;
+}
+.status-box:focus-within { border-color: var(--blue); }
+.status-chip-slot { display: contents; }
+.status-search {
+  flex: 1 1 20px; min-width: 20px; background: none; border: none; outline: none;
+  color: var(--text); font-size: 13px; font-family: inherit; padding: 3px 0;
+}
+.status-search::placeholder { color: var(--text-faint); opacity: 1; }
+.status-dropdown {
+  position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 20;
+  max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+  padding: 5px; box-shadow: var(--shadow);
+  scrollbar-width: none;
+}
+.status-dropdown::-webkit-scrollbar { display: none; }
+.status-dropdown.hidden { display: none; }
+
+/* ---------- Brand (custom dropdown, same look as Inquiry's list — reuses
+   .inquiry-option/.inquiry-option-check for the list itself). Still a
+   display-button-plus-panel (see renderBrandDropdown's header note) since
+   it lives in the cramped auto-fields grid, not full-width like Inquiry/
+   Status above. Used to be a native <select> — its own dropdown chrome,
+   scrollbar included, can't be restyled via CSS in any browser, which is
+   the whole reason it's a custom dropdown at all. ---------- */
+.brand-picker { position: relative; }
+/* .status-display is a shared utility class, not specific to Status
+   despite the name (kept as-is since Brand/D.O.B's own trigger buttons
+   still carry it in their markup) — the flex/cursor rule every simple
+   display-button trigger needs. */
+.status-display { display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; }
 .status-caret { color: var(--text-faint); font-size: 11px; margin-left: 6px; }
-/* Search box stays fixed at the top of the panel; only .status-options/
-   .brand-options (not this outer container) scrolls, so the search input
-   is never scrolled out of view while scrolling through matches. */
-.status-dropdown, .brand-dropdown {
+/* Search box stays fixed at the top of the panel; only .brand-options
+   (not this outer container) scrolls, so the search input is never
+   scrolled out of view while scrolling through matches. */
+.brand-dropdown {
   position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 20;
   display: flex; flex-direction: column; gap: 5px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
   padding: 6px; box-shadow: var(--shadow);
 }
-.status-dropdown.hidden, .brand-dropdown.hidden { display: none; }
-.status-search, .brand-search {
+.brand-dropdown.hidden { display: none; }
+.brand-search {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
   padding: 7px 9px; font-size: 12.5px; color: var(--text); font-family: inherit;
 }
-.status-search::placeholder, .brand-search::placeholder { color: var(--text-faint); }
-.status-options, .brand-options {
+.brand-search::placeholder { color: var(--text-faint); }
+.brand-options {
   max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
   scrollbar-width: none;
 }
-.status-options::-webkit-scrollbar, .brand-options::-webkit-scrollbar { display: none; }
+.brand-options::-webkit-scrollbar { display: none; }
 
 /* ---------- Auto-derived fields (Brand / D.O.B / Released Amount / Claim Secret) ---------- */
 /* 4 fields now (was 3) — forcing them into one row squeezed "Claim Secret"

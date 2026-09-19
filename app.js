@@ -778,19 +778,18 @@ function loadPersistedState() {
   }
 }
 
-// Shared by the initial render and every refresh so the "Select status…"
-// placeholder always gets the same dim styling as Inquiry's real
-// ::placeholder, instead of rendering at full text brightness.
-function renderStatusDisplay(chatId) {
+// Status now mirrors Inquiry's own box exactly (merged chip + search
+// input, not a separate display-button-plus-panel) — same
+// renderXChips/renderXDropdown split, same .inquiry-chip/-option styling,
+// just single-select (one chip max, picking a new one replaces it instead
+// of adding a second).
+function renderStatusChip(chatId) {
   const s = state[chatId];
-  const empty = !s.status;
-  return `<span class="status-value ${empty ? "placeholder" : ""}">${s.status || "Select status…"}</span><span class="status-caret">▾</span>`;
+  if (!s.status) return "";
+  return `<span class="inquiry-chip">${s.status}<button type="button" class="inquiry-chip-remove" data-action="clearStatus" data-chat="${chatId}" aria-label="Clear status">✕</button></span>`;
 }
 
-// Status is a custom dropdown (not a native <select>) so it matches
-// Inquiry's look exactly — reuses the same .inquiry-option/-check styling,
-// just single-select and with no search box (only 5 fixed options).
-function renderStatusOptions(chatId, query) {
+function renderStatusDropdown(chatId, query) {
   const s = state[chatId];
   const q = (query || "").trim().toLowerCase();
   const filtered = statusOptions.filter((opt) => !q || opt.toLowerCase().includes(q));
@@ -804,18 +803,12 @@ function renderStatusOptions(chatId, query) {
   }).join("");
 }
 
-// Search box lives inside the dropdown panel itself (unlike Inquiry's,
-// which sits in its always-visible merged box) since Status/Brand's
-// trigger is a plain display button, not a chips+search box. Split into
-// this (the full panel, rebuilt fresh each time the dropdown opens) and
-// renderStatusOptions above (just the filtered list, re-rendered on every
-// keystroke into the panel's own .status-options child so the search
-// input itself is never touched/re-focused mid-typing).
-function renderStatusDropdown(chatId) {
-  return `
-    <input type="text" class="status-search" placeholder="Search status…" autocomplete="off" />
-    <div class="status-options">${renderStatusOptions(chatId, "")}</div>
-  `;
+// Updates the chip slot AND the search box's own placeholder together —
+// same reasoning as Inquiry's refreshInquiryChips.
+function refreshStatusChip(card, chatId) {
+  card.querySelector(".status-chip-slot").innerHTML = renderStatusChip(chatId);
+  const searchInput = card.querySelector(".status-search");
+  if (searchInput) searchInput.placeholder = state[chatId].status ? "" : "Select status…";
 }
 
 // Brand, same custom-dropdown treatment as Status — a native <select>'s
@@ -1279,10 +1272,12 @@ function renderExpandedCard(chat) {
 
     <label class="field-label">Status</label>
     <div class="status-picker">
-      <button type="button" class="input status-display status-only-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
-        ${renderStatusDisplay(chat.chatId)}
-      </button>
-      <div class="status-dropdown ${s.statusDropdownOpen ? "" : "hidden"}">${renderStatusDropdown(chat.chatId)}</div>
+      <div class="status-box">
+        <div class="status-chip-slot">${renderStatusChip(chat.chatId)}</div>
+        <input type="text" class="status-search" placeholder="${s.status ? "" : "Select status…"}" autocomplete="off" />
+        <span class="inquiry-caret">▾</span>
+      </div>
+      <div class="status-dropdown ${s.statusDropdownOpen ? "" : "hidden"}">${renderStatusDropdown(chat.chatId, "")}</div>
     </div>
 
     <div class="toggle-row">
@@ -1473,7 +1468,7 @@ function focusableFieldSelector(el) {
 // Inquiry's — see restoreFocus below).
 const SEARCH_BOX_OPTIONS = {
   ".inquiry-search": [".inquiry-dropdown", renderInquiryDropdown],
-  ".status-search": [".status-options", renderStatusOptions],
+  ".status-search": [".status-dropdown", renderStatusDropdown],
   ".brand-search": [".brand-options", renderBrandOptions],
   ".dob-cal-month-search": [".dob-cal-month-options", renderDobMonthOptions],
   ".dob-cal-year-search": [".dob-cal-year-options", renderDobYearOptions],
@@ -1711,7 +1706,7 @@ chatListEl.addEventListener("click", async (e) => {
       card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
       refreshInquiryChips(card, chatId);
       card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-      card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
+      refreshStatusChip(card, chatId);
       card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
       // "Pass" is only an activation, not a completed claim (see this
       // branch's own header note) — nothing to submit yet. The real claim
@@ -1788,7 +1783,7 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
     refreshInquiryChips(card, chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-    card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
+    refreshStatusChip(card, chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
 
     // Every field submitRecord requires is already fixed the instant any
@@ -1832,7 +1827,7 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
     refreshInquiryChips(card, chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-    card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
+    refreshStatusChip(card, chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
   }
 
@@ -1905,25 +1900,21 @@ chatListEl.addEventListener("click", async (e) => {
     renderChats(activeChats);
   }
 
-  if (btn.dataset.action === "toggleStatusDropdown") {
-    const dropdown = card.querySelector(".status-dropdown");
-    const willOpen = dropdown.classList.contains("hidden");
-    closeAllDropdowns(); // only one dropdown open at a time across the whole widget
-    if (willOpen) {
-      dropdown.classList.remove("hidden");
-      s.statusDropdownOpen = true;
-      // Auto-focus the search box the instant it opens, same one-click-
-      // then-type feel as Inquiry's merged box -- otherwise this is an
-      // extra click (open, then click into search) before typing works.
-      dropdown.querySelector(".status-search")?.focus();
-    }
-  }
-
   if (btn.dataset.action === "selectStatus") {
     s.status = btn.dataset.value;
     s.statusDropdownOpen = false;
-    card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
-    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+    const searchInput = card.querySelector(".status-search");
+    if (searchInput) { searchInput.value = ""; searchInput.blur(); }
+    refreshStatusChip(card, chatId);
+    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId, "");
+    card.querySelector(".status-dropdown").classList.add("hidden");
+  }
+
+  if (btn.dataset.action === "clearStatus") {
+    s.status = "";
+    s.statusDropdownOpen = false;
+    refreshStatusChip(card, chatId);
+    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId, "");
     card.querySelector(".status-dropdown").classList.add("hidden");
   }
 
@@ -2035,15 +2026,20 @@ chatListEl.addEventListener("input", (e) => {
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
     return;
   }
-  // Status/Brand/D.O.B month/year search boxes -- each only replaces its
-  // own sibling .*-options list, never the panel that contains the search
-  // input itself (see renderStatusDropdown's header note on why).
+  // Status's search box lives in its always-visible box now (matching
+  // Inquiry exactly), so its dropdown panel holds nothing but the options
+  // list already -- same renderStatusDropdown(chatId, query) call Inquiry's
+  // own handler makes just above.
   const statusSearch = e.target.closest(".status-search");
   if (statusSearch) {
     const card = statusSearch.closest(".chat-card");
-    card.querySelector(".status-options").innerHTML = renderStatusOptions(card.dataset.chatId, statusSearch.value);
+    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(card.dataset.chatId, statusSearch.value);
     return;
   }
+  // Brand/D.O.B month/year search boxes still live inside their own
+  // dropdown panel (see renderBrandDropdown's header note) -- each only
+  // replaces its sibling .*-options list, never the panel that contains
+  // the search input itself.
   const brandSearch = e.target.closest(".brand-search");
   if (brandSearch) {
     const card = brandSearch.closest(".chat-card");
@@ -2154,42 +2150,56 @@ function setUnknown(chatId, value) {
   }
 }
 
-// Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
-// Status); closes whatever else is open first so only one shows at a time
-// across the whole widget.
+// Inquiry and Status both use this same merged box + search pattern now
+// (Status rebuilt to match Inquiry exactly, single-select instead of up to
+// 2 — see renderStatusChip's header note). One shared config drives both
+// the focusin and click handlers below instead of duplicating each one
+// per field.
+const MERGED_SEARCH_BOXES = [
+  { search: ".inquiry-search", box: ".inquiry-box", wrapper: ".inquiry-select", dropdown: ".inquiry-dropdown", stateKey: "inquiryDropdownOpen" },
+  { search: ".status-search", box: ".status-box", wrapper: ".status-picker", dropdown: ".status-dropdown", stateKey: "statusDropdownOpen" },
+];
+
+// Dropdown opens on focus (no explicit toggle button, unlike Brand/D.O.B);
+// closes whatever else is open first so only one shows at a time across
+// the whole widget.
 chatListEl.addEventListener("focusin", (e) => {
-  const input = e.target.closest(".inquiry-search");
-  if (!input) return;
-  closeAllDropdowns();
-  input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
-  const chatId = input.closest(".chat-card")?.dataset.chatId;
-  if (chatId && state[chatId]) state[chatId].inquiryDropdownOpen = true;
+  for (const cfg of MERGED_SEARCH_BOXES) {
+    const input = e.target.closest(cfg.search);
+    if (!input) continue;
+    closeAllDropdowns();
+    input.closest(cfg.wrapper)?.querySelector(cfg.dropdown)?.classList.remove("hidden");
+    const chatId = input.closest(".chat-card")?.dataset.chatId;
+    if (chatId && state[chatId]) state[chatId][cfg.stateKey] = true;
+    return;
+  }
 });
 
 // Clicking anywhere in the merged box (not just the thin search input
-// itself) focuses it — makes the whole box feel like one clickable control,
-// matching how the whole Status box responds to a click. Also makes a
-// second click actually close it again (e.g. on the caret, or empty space
-// in the box) — focus() alone never does, since the input's already
-// focused by then and focusin (which is what opens it) doesn't refire.
-// Status could always do this via its own explicit toggle action; this is
-// Inquiry's equivalent, scoped to clicks that land outside the search
-// input itself so typing in it never closes the dropdown out from under
-// whoever's still searching.
+// itself) focuses it — makes the whole box feel like one clickable control.
+// Also makes a second click actually close it again (e.g. on the caret, or
+// empty space in the box) — focus() alone never does, since the input's
+// already focused by then and focusin (which is what opens it) doesn't
+// refire. Scoped to clicks that land outside the search input itself so
+// typing in it never closes the dropdown out from under whoever's still
+// searching.
 chatListEl.addEventListener("click", (e) => {
-  if (e.target.closest(".inquiry-chip-remove")) return; // don't steal focus from a chip removal click
-  const box = e.target.closest(".inquiry-box");
-  if (!box) return;
-  const searchInput = box.querySelector(".inquiry-search");
-  if (e.target === searchInput) return; // let native focus behavior handle a direct click into the input
-  const dropdown = box.closest(".inquiry-select")?.querySelector(".inquiry-dropdown");
-  if (dropdown && !dropdown.classList.contains("hidden")) {
-    dropdown.classList.add("hidden");
-    const chatId = box.closest(".chat-card")?.dataset.chatId;
-    if (chatId && state[chatId]) state[chatId].inquiryDropdownOpen = false;
-    searchInput?.blur();
-  } else {
-    searchInput?.focus(); // opens via the focusin handler above
+  if (e.target.closest(".inquiry-chip-remove, .status-chip-slot .inquiry-chip-remove")) return; // don't steal focus from a chip removal click
+  for (const cfg of MERGED_SEARCH_BOXES) {
+    const box = e.target.closest(cfg.box);
+    if (!box) continue;
+    const searchInput = box.querySelector(cfg.search);
+    if (e.target === searchInput) return; // let native focus behavior handle a direct click into the input
+    const dropdown = box.closest(cfg.wrapper)?.querySelector(cfg.dropdown);
+    if (dropdown && !dropdown.classList.contains("hidden")) {
+      dropdown.classList.add("hidden");
+      const chatId = box.closest(".chat-card")?.dataset.chatId;
+      if (chatId && state[chatId]) state[chatId][cfg.stateKey] = false;
+      searchInput?.blur();
+    } else {
+      searchInput?.focus(); // opens via the focusin handler above
+    }
+    return;
   }
 });
 
