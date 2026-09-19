@@ -3,8 +3,6 @@
 // Function export. This is the live entry point: the deployed project
 // ("test-1") is classic Pages, so each functions/*.js file's own onRequest
 // export (built from this adapt()) is what actually runs per request.
-// _worker.js is a dormant alternative for a Worker-style deployment, not
-// currently used.
 import { initEnv as initLarkEnv } from "./lark.js";
 import { initEnv as initLivechatEnv } from "./livechat.js";
 
