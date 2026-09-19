@@ -3,11 +3,8 @@
 # and other non-site files as plain browsable static files alongside
 # index.html/app.js/style.css.
 functions/
-netlify/
 .git/
 .claude/
 node_modules/
-netlify.toml
 wrangler.toml
-_redirects
 .assetsignore

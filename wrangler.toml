@@ -1,10 +1,8 @@
 name = "ctmaprapp"
 main = "functions/_worker.js"
 compatibility_date = "2026-01-01"
-# Required so _lib/lark.js and _lib/livechat.js can keep reading
-# process.env.X unchanged from their Netlify versions -- without this flag
-# Workers has no process.env at all. See functions/_worker.js for the
-# belt-and-suspenders per-request copy on top of this.
+# Required so _lib/lark.js and _lib/livechat.js can read process.env at all
+# -- without this flag Workers has no process.env whatsoever.
 compatibility_flags = ["nodejs_compat"]
 
 # This project was created as a Worker, not classic Pages -- static assets

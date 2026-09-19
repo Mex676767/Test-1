@@ -1,15 +1,14 @@
-// Cloudflare Worker port of netlify/functions/lib/lark.js -- logic is
-// unchanged (still field-by-field the same code that's been fixed against
-// real Lark data over many rounds); only module.exports -> export differs.
+// Lark API helpers -- field-by-field the same logic that's been fixed
+// against real Lark data over many rounds.
 //
 // These used to be `const X = process.env.Y` read once at module-load time
 // -- confirmed broken (2026-09-18, real "LARK_APP_ID / LARK_APP_SECRET not
 // set" error on a live deploy with the env vars genuinely bound in
-// Cloudflare's dashboard): a Worker's module evaluates once, BEFORE
-// _worker.js's fetch handler ever runs, so process.env is still empty at
-// that point no matter what env vars are bound -- there's no way to read
-// them from a top-level const in time. Fixed with `let` + initEnv(), called
-// from _worker.js's fetch handler before any route runs. ES module named
+// Cloudflare's dashboard): a Worker/Pages Function's module evaluates once,
+// BEFORE any request's actual handler runs, so process.env is still empty
+// at that point no matter what env vars are bound -- there's no way to
+// read them from a top-level const in time. Fixed with `let` + initEnv(),
+// called at the start of every request (see adapt.js). ES module named
 // exports are live bindings, not copied snapshots, so every file that
 // imports e.g. TABLE_PNL still sees the update after initEnv() runs, with
 // zero changes needed to any of those files.

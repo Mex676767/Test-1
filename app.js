@@ -2,7 +2,7 @@
 // system to link with — all the code (state, render, backend functions)
 // stays intact underneath; flip this back to true to bring it back rather
 // than rebuilding it.
-const ESCALATION_TICKET_ENABLED = true;
+const ESCALATION_TICKET_ENABLED = false;
 
 /* ============================================================
    THEME
@@ -41,7 +41,7 @@ let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
 
 async function fetchAgentOptions() {
   try {
-    const res = await fetch("/.netlify/functions/lark-pic-list");
+    const res = await fetch("/lark-pic-list");
     const data = await res.json();
     if (data.ok) agentOptions = data.pics || [];
   } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
@@ -53,7 +53,7 @@ async function fetchAgentOptions() {
 let brandOptions = [];
 async function fetchBrandOptions() {
   try {
-    const res = await fetch("/.netlify/functions/lark-brand-list");
+    const res = await fetch("/lark-brand-list");
     const data = await res.json();
     if (data.ok) brandOptions = data.brands || [];
   } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
@@ -65,7 +65,7 @@ async function fetchBrandOptions() {
 let escalationOptions = { brand: [], queries: [], paymentGateway: [], vipLevel: [] };
 async function fetchEscalationOptions() {
   try {
-    const res = await fetch("/.netlify/functions/lark-escalation-options");
+    const res = await fetch("/lark-escalation-options");
     const data = await res.json();
     if (data.ok) {
       escalationOptions = {
@@ -212,7 +212,7 @@ function isClaimableValue(v) {
 // case (creates the Customer Approaching row) if one doesn't exist yet —
 // that's what makes Lark's bonus lookup columns actually populate.
 async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId) {
-  const res = await fetch("/.netlify/functions/lark-search", {
+  const res = await fetch("/lark-search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, brand, link, telegram, picName, previousRecordId }),
@@ -301,7 +301,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     return;
   }
   try {
-    const res = await fetch("/.netlify/functions/livechat-group-name", {
+    const res = await fetch("/livechat-group-name", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ groupID }),
@@ -392,7 +392,7 @@ async function checkLastUsername(chatId) {
   s.lastUsernameLoading = true;
   updateLastUsernameUi(chatId);
   try {
-    const res = await fetch("/.netlify/functions/lark-last-username", {
+    const res = await fetch("/lark-last-username", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId: stableId, brand: s.brand }),
@@ -487,7 +487,7 @@ async function checkChatStatus(chatId) {
   const s = state[chatId];
   if (!s || !s.chatOpen || s.logged) return;
   try {
-    const res = await fetch("/.netlify/functions/livechat-chat-status", {
+    const res = await fetch("/livechat-chat-status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId }),
@@ -531,7 +531,7 @@ async function checkChatStatus(chatId) {
       // "raw" branch below with no raw payload to show, which crashed
       // JSON.stringify(undefined).slice(...) and got silently swallowed by
       // the catch, giving zero diagnostic feedback for the single most
-      // likely misconfiguration (LIVECHAT_PAT missing on this Netlify site).
+      // likely misconfiguration (LIVECHAT_PAT missing on this site).
       if (!rawStatusDebugLoggedFor.has(chatId)) {
         rawStatusDebugLoggedFor.add(chatId);
         logDiagnostic("Telegram/auto-close detection is off — LIVECHAT_PAT isn't set on this site.", "warn");
@@ -1458,7 +1458,7 @@ chatListEl.addEventListener("click", async (e) => {
       btn.disabled = true;
       btn.textContent = "…";
       try {
-        const res = await fetch("/.netlify/functions/lark-claim", {
+        const res = await fetch("/lark-claim", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ source: programKey, recordId: source.recordId, chatLink: chatDef?.link || "" }),
@@ -1599,7 +1599,7 @@ chatListEl.addEventListener("click", async (e) => {
     btn.disabled = true;
     btn.textContent = "…";
     try {
-      const res = await fetch("/.netlify/functions/lark-escalation-submit", {
+      const res = await fetch("/lark-escalation-submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...e, picName: selectedAgent }),
@@ -1784,7 +1784,7 @@ chatListEl.addEventListener("change", (e) => {
       if (s.isUnknown && s.caRecordId && !s.logged) {
         const staleRecordId = s.caRecordId;
         s.caRecordId = null;
-        fetch("/.netlify/functions/lark-delete-record", {
+        fetch("/lark-delete-record", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ recordId: staleRecordId }),
@@ -1956,7 +1956,7 @@ async function submitRecord(chatId, { auto, reason } = {}) {
   if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Recording…"; }
 
   try {
-    const res = await fetch("/.netlify/functions/lark-record", {
+    const res = await fetch("/lark-record", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

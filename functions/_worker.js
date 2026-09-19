@@ -1,11 +1,14 @@
 // Single Worker entry point -- this project was created as a Cloudflare
 // Worker (not classic Pages), which doesn't understand the functions/
-// directory's file-based routing or the _redirects file at all (both are
-// Pages-only conventions). Everything else in this directory (the actual
-// endpoint logic in lark-search.js, lark-claim.js, etc., and _lib/lark.js/
-// _lib/livechat.js) is unchanged and reused directly here -- this file is
-// just the routing table plus the static-asset fallback a Worker needs to
-// serve index.html/app.js/style.css itself.
+// directory's file-based routing at all (that's a Pages-only convention).
+// Not currently the live entry point -- the actual deployed project
+// ("test-1") is classic Pages and routes through each functions/*.js file's
+// own onRequest export instead; this file is kept in case a Worker-style
+// deployment is ever used again. Everything else in this directory (the
+// actual endpoint logic in lark-search.js, lark-claim.js, etc., and
+// _lib/lark.js/_lib/livechat.js) is unchanged and reused directly here --
+// this file is just the routing table plus the static-asset fallback a
+// Worker needs to serve index.html/app.js/style.css itself.
 import { handler as larkSearch } from "./lark-search.js";
 import { handler as larkClaim } from "./lark-claim.js";
 import { handler as larkRecord } from "./lark-record.js";
@@ -51,13 +54,7 @@ export default {
     initLivechatEnv(env);
 
     const url = new URL(request.url);
-    let path = url.pathname;
-    // app.js calls /.netlify/functions/<name> everywhere, unchanged, so the
-    // exact same static files work on either host without editing -- Pages
-    // handled this via _redirects; a Worker has to do it itself here.
-    const prefix = "/.netlify/functions/";
-    if (path.startsWith(prefix)) path = "/" + path.slice(prefix.length);
-    const name = path.replace(/^\/+/, "");
+    const name = url.pathname.replace(/^\/+/, "");
 
     const routeHandler = ROUTES[name];
     if (routeHandler) {

@@ -1,21 +1,14 @@
-// Wraps an existing Netlify-style handler -- `async (event) => ({ statusCode,
-// body })` -- as a Cloudflare Pages Function export. Every endpoint's actual
-// business logic (Lark field mapping, LiveChat calls, etc.) stays
-// byte-for-byte identical to its Netlify version; only this thin adapter
-// differs per platform, specifically so the migration doesn't also become a
-// rewrite of logic that already works and has been fixed field-by-field
-// against real data over many rounds.
-//
-// NOT currently the live entry point -- this project (a Cloudflare Worker,
-// not classic Pages) routes through _worker.js instead, which calls
-// _lib/lark.js's/_lib/livechat.js's initEnv() directly. Kept working here
-// too in case this ever runs under classic Pages' own file-based routing
-// instead, where each functions/*.js file's own onRequest export (built
-// from this adapt()) would be the real entry point per request.
+// Wraps each endpoint's plain handler -- `async (event) => ({ statusCode,
+// body })`, kept simple and platform-agnostic -- as a Cloudflare Pages
+// Function export. This is the live entry point: the deployed project
+// ("test-1") is classic Pages, so each functions/*.js file's own onRequest
+// export (built from this adapt()) is what actually runs per request.
+// _worker.js is a dormant alternative for a Worker-style deployment, not
+// currently used.
 import { initEnv as initLarkEnv } from "./lark.js";
 import { initEnv as initLivechatEnv } from "./livechat.js";
 
-export function adapt(netlifyHandler) {
+export function adapt(handler) {
   return async (context) => {
     // A Worker's (or Pages Function's) module evaluates once, before any
     // request handler runs -- _lib/lark.js and _lib/livechat.js no longer
@@ -38,7 +31,7 @@ export function adapt(netlifyHandler) {
       headers: Object.fromEntries(context.request.headers),
     };
 
-    const result = await netlifyHandler(event);
+    const result = await handler(event);
     return new Response(result.body, {
       status: result.statusCode,
       headers: { "Content-Type": "application/json" },

@@ -1,7 +1,0 @@
-# app.js is served unmodified by both Netlify and Cloudflare Pages -- it
-# still calls /.netlify/functions/<name> everywhere (kept that way
-# deliberately so this one file works on either host without editing).
-# This rewrites those paths to this project's actual Cloudflare Pages
-# Functions, which live at /<name> (see functions/<name>.js). Status 200
-# means an internal rewrite, not a browser-visible redirect.
-/.netlify/functions/*  /:splat  200
