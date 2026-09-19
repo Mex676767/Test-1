@@ -24,7 +24,11 @@ const F = {
 
 function hidden(v) {
   const t = String(v || "").trim().toLowerCase();
-  return t === "claimed" || t === "expired" || t === "failed";
+  // startsWith, not === -- LTV(Day)'s real Status values are things like
+  // "Claimed RM18"/"Pass RM28", not the bare word alone (confirmed from a
+  // real row: "Claimed RM18" wasn't recognized as claimed at all under an
+  // exact match, so an already-claimed row kept showing as claimable).
+  return t.startsWith("claimed") || t.startsWith("expired") || t.startsWith("failed");
 }
 
 export async function handler(event) {
