@@ -22,13 +22,16 @@ const F = {
   graceExpiry: "Expried", // yes, "Expried" (confirmed from the real column header) -- Grace Period's own expiry date, gates whether Reactivate shows in app.js
 };
 
+// Word-boundary substring, not startsWith/=== -- real Status/SW Check
+// values embed "claimed"/"expired"/"failed" in different positions per
+// table: LTV(Day) is "Claimed RM18" (prefix), but Top 10 P&L(Night) is
+// "Batch 09-09-2026 Claimed RM58" (buried in the middle, confirmed live
+// 2026-09-19 -- a claimed row still showed as an active claimable ticket
+// under startsWith, same bug class as the earlier LTV one). \b so this
+// never partial-matches inside an unrelated word.
 function hidden(v) {
   const t = String(v || "").trim().toLowerCase();
-  // startsWith, not === -- LTV(Day)'s real Status values are things like
-  // "Claimed RM18"/"Pass RM28", not the bare word alone (confirmed from a
-  // real row: "Claimed RM18" wasn't recognized as claimed at all under an
-  // exact match, so an already-claimed row kept showing as claimable).
-  return t.startsWith("claimed") || t.startsWith("expired") || t.startsWith("failed");
+  return /\b(claimed|expired|failed)\b/.test(t);
 }
 
 export async function handler(event) {

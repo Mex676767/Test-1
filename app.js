@@ -195,9 +195,15 @@ function getChatSummary(chatId) {
   return hasAnyBonus(chatId) ? { text: "Bonuses ready", cls: "ready" } : { text: "No active bonuses", cls: "neutral" };
 }
 
+// Word-boundary substring, not === -- mirrors hidden() in lark-search.js
+// (see its own header note). Real Status/SW Check text embeds "claimed"/
+// "expired"/"failed" in different positions per bonus table -- e.g. Top 10
+// P&L(Night) is "Batch 09-09-2026 Claimed RM58", not the bare word alone --
+// so an exact match let an already-claimed row still render its Claim
+// button client-side even after the server itself stopped selecting it.
 function isHiddenStatus(v) {
   const t = String(v || "").trim().toLowerCase();
-  return t === "expired" || t === "claimed" || t === "failed";
+  return /\b(claimed|expired|failed)\b/.test(t);
 }
 
 // Excludes: empty, "XD No Bonus" pattern, and Expired/Claimed
