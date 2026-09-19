@@ -1909,7 +1909,14 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".status-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     closeAllDropdowns(); // only one dropdown open at a time across the whole widget
-    if (willOpen) { dropdown.classList.remove("hidden"); s.statusDropdownOpen = true; }
+    if (willOpen) {
+      dropdown.classList.remove("hidden");
+      s.statusDropdownOpen = true;
+      // Auto-focus the search box the instant it opens, same one-click-
+      // then-type feel as Inquiry's merged box -- otherwise this is an
+      // extra click (open, then click into search) before typing works.
+      dropdown.querySelector(".status-search")?.focus();
+    }
   }
 
   if (btn.dataset.action === "selectStatus") {
@@ -1924,7 +1931,11 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".brand-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     closeAllDropdowns(); // only one dropdown open at a time across the whole widget
-    if (willOpen) { dropdown.classList.remove("hidden"); s.brandDropdownOpen = true; }
+    if (willOpen) {
+      dropdown.classList.remove("hidden");
+      s.brandDropdownOpen = true;
+      dropdown.querySelector(".brand-search")?.focus();
+    }
   }
 
   if (btn.dataset.action === "selectBrand") {
@@ -1960,14 +1971,20 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".dob-cal-month-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     document.querySelectorAll(".dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
-    if (willOpen) dropdown.classList.remove("hidden");
+    if (willOpen) {
+      dropdown.classList.remove("hidden");
+      dropdown.querySelector(".dob-cal-month-search")?.focus();
+    }
   }
 
   if (btn.dataset.action === "toggleDobYearDropdown") {
     const dropdown = card.querySelector(".dob-cal-year-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     document.querySelectorAll(".dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
-    if (willOpen) dropdown.classList.remove("hidden");
+    if (willOpen) {
+      dropdown.classList.remove("hidden");
+      dropdown.querySelector(".dob-cal-year-search")?.focus();
+    }
   }
 
   if (btn.dataset.action === "selectDobMonthValue") {
