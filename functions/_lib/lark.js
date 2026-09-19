@@ -42,21 +42,42 @@ export function initEnv(env) {
 
 let cachedToken = null;
 let cachedExpiry = 0;
+// De-dupes concurrent callers on a cold cache -- lark-search.js fires ~9
+// parallel Lark calls (P&L, Top 10 P&L, LTV, Grace Period, Risk Player, VIP
+// Booster, Special Reload, Telegram28, Redeem Code), each needing a tenant
+// token. Without this, every one of them would race to fetch its own token
+// the moment cachedToken is empty (e.g. a cold function instance), firing
+// up to 9 simultaneous auth requests at Lark -- confirmed live as a likely
+// cause of an intermittent "record created but response wasn't valid JSON"
+// failure (2026-09-19): the resulting rate-limit/slowdown stalled the whole
+// request past Cloudflare's own function time limit, which serves its own
+// HTML error page in place of our JSON, well after the record had already
+// been created earlier in the same handler. Every caller now awaits the
+// same in-flight request instead of starting a new one.
+let inFlightTokenRequest = null;
 
 export async function getTenantToken() {
   const now = Date.now();
   if (cachedToken && now < cachedExpiry - 60_000) return cachedToken;
+  if (inFlightTokenRequest) return inFlightTokenRequest;
   if (!APP_ID || !APP_SECRET) throw new Error("LARK_APP_ID / LARK_APP_SECRET not set.");
-  const res = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET }),
-  });
-  const data = await res.json();
-  if (data.code !== 0) throw new Error("Lark auth failed: " + data.msg);
-  cachedToken = data.tenant_access_token;
-  cachedExpiry = now + data.expire * 1000;
-  return cachedToken;
+  inFlightTokenRequest = (async () => {
+    try {
+      const res = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET }),
+      });
+      const data = await res.json();
+      if (data.code !== 0) throw new Error("Lark auth failed: " + data.msg);
+      cachedToken = data.tenant_access_token;
+      cachedExpiry = Date.now() + data.expire * 1000;
+      return cachedToken;
+    } finally {
+      inFlightTokenRequest = null;
+    }
+  })();
+  return inFlightTokenRequest;
 }
 
 export async function searchRecords(tableId, conditions, baseToken) {

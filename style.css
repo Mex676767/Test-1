@@ -332,7 +332,13 @@ body {
 }
 .dob-calendar.hidden { display: none; }
 .dob-cal-header { display: flex; align-items: center; gap: 2px; margin-bottom: 8px; }
-.dob-cal-title { flex: 1; text-align: center; font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 12.5px; }
+.dob-cal-select {
+  flex: 1; min-width: 0; text-align: center; text-align-last: center;
+  font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 12.5px;
+  background: none; border: 1px solid transparent; color: var(--text);
+  border-radius: 6px; padding: 3px 2px; cursor: pointer;
+}
+.dob-cal-select:hover { border-color: var(--border); }
 .dob-cal-nav {
   flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--text-muted);
   border-radius: 6px; width: 22px; height: 22px; font-size: 12px; cursor: pointer;

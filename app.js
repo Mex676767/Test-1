@@ -803,6 +803,19 @@ const DOB_MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 const DOB_WEEKDAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const pad2 = (n) => String(n).padStart(2, "0");
 const dobKey = (y, m, day) => `${y}-${pad2(m + 1)}-${pad2(day)}`;
+// Descending, current year first -- a customer's DOB is virtually always
+// somewhere in the last century, and jumping straight to a year (this
+// dropdown) beats clicking a Previous Year arrow dozens of times to get
+// there. currentYear is always included even if the picker's already
+// looking further out, so the dropdown never has to omit the selected year.
+function dobYearOptions(includeYear) {
+  const nowY = new Date().getFullYear();
+  const top = Math.max(nowY, includeYear);
+  const bottom = Math.min(nowY - 100, includeYear);
+  const years = [];
+  for (let y = top; y >= bottom; y--) years.push(y);
+  return years;
+}
 
 function formatDobDisplay(dob) {
   if (!dob) return "";
@@ -856,11 +869,14 @@ function renderDobCalendar(chatId) {
   for (let r = 0; r < 6; r++) rows.push(cells.slice(r * 7, r * 7 + 7));
   return `
     <div class="dob-cal-header">
-      <button type="button" class="dob-cal-nav" data-action="dobNavYear" data-chat="${chatId}" data-dir="-1" title="Previous year">«</button>
       <button type="button" class="dob-cal-nav" data-action="dobNavMonth" data-chat="${chatId}" data-dir="-1" title="Previous month">‹</button>
-      <span class="dob-cal-title">${DOB_MONTH_NAMES[month]} ${year}</span>
+      <select class="dob-cal-select" data-action="selectDobMonth" data-chat="${chatId}" title="Jump to month">
+        ${DOB_MONTH_NAMES.map((name, i) => `<option value="${i}" ${i === month ? "selected" : ""}>${name}</option>`).join("")}
+      </select>
+      <select class="dob-cal-select" data-action="selectDobYear" data-chat="${chatId}" title="Jump to year">
+        ${dobYearOptions(year).map((y) => `<option value="${y}" ${y === year ? "selected" : ""}>${y}</option>`).join("")}
+      </select>
       <button type="button" class="dob-cal-nav" data-action="dobNavMonth" data-chat="${chatId}" data-dir="1" title="Next month">›</button>
-      <button type="button" class="dob-cal-nav" data-action="dobNavYear" data-chat="${chatId}" data-dir="1" title="Next year">»</button>
     </div>
     <div class="dob-cal-weekdays">${DOB_WEEKDAY_LABELS.map((w) => `<span>${w}</span>`).join("")}</div>
     <div class="dob-cal-grid">${rows.map((row) => row.map((cell) => {
@@ -1675,12 +1691,6 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
   }
 
-  if (btn.dataset.action === "dobNavYear") {
-    if (!s.dobView) renderDobCalendar(chatId);
-    s.dobView = { year: s.dobView.year + Number(btn.dataset.dir), month: s.dobView.month };
-    card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
-  }
-
   if (btn.dataset.action === "selectDobDay") {
     s.dob = btn.dataset.value;
     const [y, m] = s.dob.split("-").map(Number);
@@ -1798,6 +1808,28 @@ chatListEl.addEventListener("change", (e) => {
   }
 });
 
+// D.O.B. calendar's month/year jump dropdowns -- native <select>s fire
+// "change", not "click", so they need their own delegated listener rather
+// than piggybacking on the data-action click handler above.
+chatListEl.addEventListener("change", (e) => {
+  const sel = e.target.closest("select[data-action]");
+  if (!sel) return;
+  const chatId = sel.dataset.chat;
+  const s = state[chatId];
+  const card = sel.closest(".chat-card");
+  if (!s || !s.dobView) return;
+
+  if (sel.dataset.action === "selectDobMonth") {
+    s.dobView = { year: s.dobView.year, month: Number(sel.value) };
+  } else if (sel.dataset.action === "selectDobYear") {
+    s.dobView = { year: Number(sel.value), month: s.dobView.month };
+  } else {
+    return;
+  }
+  card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
+  saveState();
+});
+
 // Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
 // Status); closes whatever else is open first so only one shows at a time
 // across the whole widget.
@@ -1839,7 +1871,7 @@ chatListEl.addEventListener("click", (e) => {
 //
 // Uses composedPath(), not wrap.contains(e.target): chatListEl's own click
 // handler runs first (closer ancestor, fires earlier in bubbling) and some
-// actions (dobNavMonth/dobNavYear) replace their container's innerHTML to
+// actions (dobNavMonth, selectDobMonth/selectDobYear) replace their container's innerHTML to
 // reflect the new month/year — which detaches the very button that was
 // clicked from the document. By the time this handler runs, e.target is a
 // detached node, and wrap.contains(detachedNode) is always false — every
