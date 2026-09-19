@@ -45,6 +45,48 @@ async function listChatsFor(pat) {
   return data;
 }
 
+// Targeted alternative to list_chats once we already know a thread's real
+// chat_id (see the module header note on chat_id vs thread_id) -- list_chats
+// only ever returns the 100 most recently active chats per account, so a
+// chat the agent has switched away from silently falls out of that window
+// as newer chats arrive, forever after reporting notFound (confirmed live,
+// 2026-09-19: a busy multi-agent queue with 45,000+ total chats caused a
+// closed-but-backgrounded chat to never be found again by the sweep, so it
+// never auto-recorded until the agent manually reopened it in LiveChat).
+// get_chat looks up one specific chat_id directly and isn't windowed by
+// recency at all, so it keeps working no matter how long ago this chat was
+// last touched.
+async function getChatFor(pat, realChatId) {
+  const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/get_chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
+    body: JSON.stringify({ chat_id: realChatId }),
+  });
+  const data = await res.json();
+  if (data && data.error) {
+    throw new Error(data.error.message || JSON.stringify(data.error));
+  }
+  return data;
+}
+
+// CORRECTED (2026-09-10) — a real Telegram chat's customer object here has
+// no "omnichannel" key at all (confirmed from a live chat: 03908b38-...
+// customer object had no such field, so the old omnichannel.telegram check
+// always silently read false). What Telegram customers actually carry is a
+// "Telegram ID" entry inside session_fields (an array of single-key
+// objects, e.g. [{"First Name":"Mexha"}, {"Telegram ID":"628101177"},
+// {"Bot ID":"8729168475"}, ...]) — match any key containing "telegram"
+// case-insensitively with a non-empty value, so a rename on LiveChat's side
+// (e.g. "Telegram Id") doesn't silently break this again. Shared by both
+// the list_chats and get_chat paths below — same users[] shape either way.
+function detectTelegram(users) {
+  const customer = (users || []).find((u) => u.type === "customer") || {};
+  const sessionFields = customer.session_fields || [];
+  return sessionFields.some((f) =>
+    Object.entries(f).some(([k, v]) => /telegram/i.test(k) && !!v)
+  );
+}
+
 export async function handler(event) {
   let threadId;
   try {
@@ -57,6 +99,34 @@ export async function handler(event) {
     threadId = body.chatId; // wire name kept as chatId for app.js compat; it's actually the thread id — see header note
     if (!threadId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "chatId is required" }) };
+    }
+
+    // Fast path — app.js sends this once a previous check has already
+    // resolved the real chat_id for this thread (parsed back out of its own
+    // saved chatUrl). Bypasses list_chats' 100-most-recent window entirely,
+    // so a chat that's been backgrounded for a while still resolves
+    // correctly instead of silently going notFound forever (see getChatFor's
+    // header note).
+    if (body.realChatId) {
+      for (const pat of LIVECHAT_PATS) {
+        try {
+          const data = await getChatFor(pat, body.realChatId);
+          if (!data || !data.thread) continue; // this account doesn't recognize this chat_id — try the next
+          const chatUrl = `https://my.livechatinc.com/chats/${body.realChatId}/${threadId}`;
+          return {
+            statusCode: 200,
+            body: JSON.stringify({
+              ok: true,
+              isActive: typeof data.thread.active === "boolean" ? data.thread.active : null,
+              isTelegram: detectTelegram(data.users),
+              chatId: body.realChatId,
+              threadId,
+              chatUrl,
+              raw: { id: data.id, thread: data.thread, users: data.users },
+            }),
+          };
+        } catch (_) { /* this account's get_chat call failed outright — try the next, then fall through to list_chats below */ }
+      }
     }
 
     let match = null;
@@ -97,30 +167,14 @@ export async function handler(event) {
 
     const realChatId = match.id;
     const thread = match.last_thread_summary || {};
-    const customer = (match.users || []).find((u) => u.type === "customer") || {};
     const chatUrl = `https://my.livechatinc.com/chats/${realChatId}/${threadId}`;
-
-    // CORRECTED (2026-09-10) — a real Telegram chat's customer object here
-    // has no "omnichannel" key at all (confirmed from a live chat: 03908b38-
-    // ...customer object had no such field, so the old omnichannel.telegram
-    // check always silently read false). What Telegram customers actually
-    // carry is a "Telegram ID" entry inside session_fields (an array of
-    // single-key objects, e.g. [{"First Name":"Mexha"}, {"Telegram ID":
-    // "628101177"}, {"Bot ID":"8729168475"}, ...]) — match any key
-    // containing "telegram" case-insensitively with a non-empty value, so a
-    // rename on LiveChat's side (e.g. "Telegram Id") doesn't silently break
-    // this again.
-    const sessionFields = customer.session_fields || [];
-    const isTelegram = sessionFields.some((f) =>
-      Object.entries(f).some(([k, v]) => /telegram/i.test(k) && !!v)
-    );
 
     return {
       statusCode: 200,
       body: JSON.stringify({
         ok: true,
         isActive: typeof thread.active === "boolean" ? thread.active : null,
-        isTelegram,
+        isTelegram: detectTelegram(match.users),
         chatId: realChatId,
         threadId,
         chatUrl,

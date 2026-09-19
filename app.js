@@ -278,6 +278,26 @@ function applyProfile(profile) {
     renderChats(activeChats);
     return;
   }
+  // The SDK fires this same customer_profile event/getCustomerProfile()
+  // shape for three different contexts (profile.source): "chats" (a real
+  // live conversation), "archives" (an agent just browsing chat history),
+  // and "customers" (the Customers section). Confirmed live: opening an
+  // archived chat was triggering a full lookup/status-polling cycle for it
+  // exactly like a real live chat -- this widget has nothing useful to do
+  // for either of the other two, so only "chats" is treated as an actual
+  // active chat; everything else clears the widget the same as no profile
+  // at all, rather than silently tracking something that's already over.
+  if (profile.source && profile.source !== "chats") {
+    stopChatStatusPolling();
+    activeChats = [];
+    renderChats(activeChats);
+    setStatus(
+      profile.source === "archives"
+        ? "Viewing an archived chat — this widget only tracks live chats."
+        : "Viewing a customer profile — this widget only tracks live chats.",
+    );
+    return;
+  }
   const chat = chatFromProfile(profile);
   activeChats = [chat];
   // In live mode there's only ever one chat shown at a time, so a newly-
@@ -493,10 +513,17 @@ async function checkChatStatus(chatId) {
   const s = state[chatId];
   if (!s || !s.chatOpen || s.logged) return;
   try {
+    // Once a previous check has resolved s.chatUrl, pull the real chat_id
+    // back out of it (https://my.livechatinc.com/chats/{chatId}/{threadId})
+    // and send it along -- lets the backend look this exact chat up
+    // directly instead of searching list_chats' 100-most-recent window,
+    // which a backgrounded chat silently falls out of over time (see
+    // livechat-chat-status.js's getChatFor header note).
+    const realChatId = s.chatUrl?.match(/\/chats\/([^/]+)\//)?.[1] || null;
     const res = await fetch("/livechat-chat-status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatId }),
+      body: JSON.stringify({ chatId, realChatId }),
     });
     const data = await res.json();
     if (!data.ok) return;
