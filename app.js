@@ -1099,7 +1099,7 @@ function renderAutoFields(chatId) {
           <button type="button" class="input status-display brand-display" data-action="toggleBrandDropdown" data-chat="${chatId}">
             ${renderBrandDisplay(chatId)}
           </button>
-          <div class="brand-dropdown hidden">${renderBrandDropdown(chatId)}</div>
+          <div class="brand-dropdown ${s.brandDropdownOpen ? "" : "hidden"}">${renderBrandDropdown(chatId)}</div>
         </div>
       </div>
       <div class="auto-field">
@@ -1108,7 +1108,7 @@ function renderAutoFields(chatId) {
           <button type="button" class="input status-display dob-display" data-action="toggleDobCalendar" data-chat="${chatId}">
             ${renderDobDisplay(chatId)}
           </button>
-          <div class="dob-calendar hidden"></div>
+          <div class="dob-calendar ${s.dobCalendarOpen ? "" : "hidden"}">${s.dobCalendarOpen ? renderDobCalendar(chatId) : ""}</div>
         </div>
       </div>
       <div class="auto-field">
@@ -1180,7 +1180,7 @@ function renderExpandedCard(chat) {
         <input type="text" class="inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
         <span class="inquiry-caret">▾</span>
       </div>
-      <div class="inquiry-dropdown hidden">${renderInquiryDropdown(chat.chatId, "")}</div>
+      <div class="inquiry-dropdown ${s.inquiryDropdownOpen ? "" : "hidden"}">${renderInquiryDropdown(chat.chatId, "")}</div>
     </div>
 
     <label class="field-label">Status</label>
@@ -1188,7 +1188,7 @@ function renderExpandedCard(chat) {
       <button type="button" class="input status-display status-only-display" data-action="toggleStatusDropdown" data-chat="${chat.chatId}">
         ${renderStatusDisplay(chat.chatId)}
       </button>
-      <div class="status-dropdown hidden">${renderStatusDropdown(chat.chatId)}</div>
+      <div class="status-dropdown ${s.statusDropdownOpen ? "" : "hidden"}">${renderStatusDropdown(chat.chatId)}</div>
     </div>
 
     <div class="toggle-row">
@@ -1341,6 +1341,16 @@ function ensureChatState(chat) {
     // agent clicks it (see toggleExpand). Keeps up to 6 concurrent chats
     // glanceable instead of only ~2 fitting on screen at once.
     expanded: false,
+    // Whether the D.O.B. calendar is currently open -- tracked in state
+    // (not just a DOM class toggle) because renderChats does a full
+    // re-render of every card, including on a background poll the agent
+    // never triggered (checkChatStatus's telegram-detection check runs
+    // every 2s). The initial card template used to hardcode the calendar
+    // as hidden, so any such re-render silently closed it out from under
+    // an agent still scrolling through it -- confirmed live as "the date
+    // picker sometimes just closes on its own." See toggleDobCalendar and
+    // the card template below.
+    dobCalendarOpen: false,
   };
 }
 
@@ -1382,6 +1392,38 @@ function renderChats(chats) {
 
     chatListEl.appendChild(card);
   }
+}
+
+// Which state flag backs each dropdown's open/closed persistence -- see
+// closeAllDropdowns' header note for why this exists at all.
+const DROPDOWN_STATE_KEY = {
+  "inquiry-dropdown": "inquiryDropdownOpen",
+  "status-dropdown": "statusDropdownOpen",
+  "brand-dropdown": "brandDropdownOpen",
+  "dob-calendar": "dobCalendarOpen",
+};
+
+// Hides every open dropdown/calendar across the whole widget (the "only
+// one open at a time" rule) AND clears each one's state flag, not just its
+// DOM class -- renderChats does a full re-render of every card, including
+// from a background poll the agent never triggered (checkChatStatus's
+// telegram-detection check runs every 2s). A card's initial template reads
+// these state flags to decide whether to render a dropdown already open;
+// if only the DOM class were cleared here, that flag would still say
+// "open" and the very next re-render would silently reopen a dropdown the
+// agent had already closed. Every toggle/select handler calls this instead
+// of touching classList directly.
+function closeAllDropdowns() {
+  document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => {
+    d.classList.add("hidden");
+    const chatId = d.closest(".chat-card")?.dataset.chatId;
+    const s = chatId && state[chatId];
+    if (!s) return;
+    for (const cls of d.classList) {
+      const key = DROPDOWN_STATE_KEY[cls];
+      if (key) s[key] = false;
+    }
+  });
 }
 
 /* ============================================================
@@ -1628,7 +1670,10 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     // Auto-close once maxed out — nothing left to add without removing a
     // chip first, and removing happens via the chips row, not the dropdown.
-    if (s.inquiry.length >= 2) card.querySelector(".inquiry-dropdown").classList.add("hidden");
+    if (s.inquiry.length >= 2) {
+      card.querySelector(".inquiry-dropdown").classList.add("hidden");
+      s.inquiryDropdownOpen = false;
+    }
   }
 
   if (btn.dataset.action === "submit") {
@@ -1673,13 +1718,13 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "toggleStatusDropdown") {
     const dropdown = card.querySelector(".status-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
-    // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
-    if (willOpen) dropdown.classList.remove("hidden");
+    closeAllDropdowns(); // only one dropdown open at a time across the whole widget
+    if (willOpen) { dropdown.classList.remove("hidden"); s.statusDropdownOpen = true; }
   }
 
   if (btn.dataset.action === "selectStatus") {
     s.status = btn.dataset.value;
+    s.statusDropdownOpen = false;
     card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     card.querySelector(".status-dropdown").classList.add("hidden");
@@ -1688,13 +1733,13 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "toggleBrandDropdown") {
     const dropdown = card.querySelector(".brand-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
-    // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
-    if (willOpen) dropdown.classList.remove("hidden");
+    closeAllDropdowns(); // only one dropdown open at a time across the whole widget
+    if (willOpen) { dropdown.classList.remove("hidden"); s.brandDropdownOpen = true; }
   }
 
   if (btn.dataset.action === "selectBrand") {
     s.brand = btn.dataset.value;
+    s.brandDropdownOpen = false;
     card.querySelector(".brand-display").innerHTML = renderBrandDisplay(chatId);
     card.querySelector(".brand-dropdown").innerHTML = renderBrandDropdown(chatId);
     card.querySelector(".brand-dropdown").classList.add("hidden");
@@ -1703,9 +1748,9 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "toggleDobCalendar") {
     const cal = card.querySelector(".dob-calendar");
     const willOpen = cal.classList.contains("hidden");
-    // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
+    closeAllDropdowns(); // only one dropdown open at a time across the whole widget
     if (willOpen) {
+      s.dobCalendarOpen = true;
       cal.innerHTML = renderDobCalendar(chatId); // fresh each open — reflects any dob change since last shown
       cal.classList.remove("hidden");
     }
@@ -1749,12 +1794,14 @@ chatListEl.addEventListener("click", async (e) => {
     s.dob = btn.dataset.value;
     const [y, m] = s.dob.split("-").map(Number);
     s.dobView = { year: y, month: m - 1 };
+    s.dobCalendarOpen = false;
     card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
     card.querySelector(".dob-calendar").classList.add("hidden");
   }
 
   if (btn.dataset.action === "dobClear") {
     s.dob = "";
+    s.dobCalendarOpen = false;
     card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
     card.querySelector(".dob-calendar").classList.add("hidden");
   }
@@ -1763,6 +1810,7 @@ chatListEl.addEventListener("click", async (e) => {
     const t = new Date();
     s.dob = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
     s.dobView = { year: t.getFullYear(), month: t.getMonth() };
+    s.dobCalendarOpen = false;
     card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
     card.querySelector(".dob-calendar").classList.add("hidden");
   }
@@ -1868,8 +1916,10 @@ chatListEl.addEventListener("change", (e) => {
 chatListEl.addEventListener("focusin", (e) => {
   const input = e.target.closest(".inquiry-search");
   if (!input) return;
-  document.querySelectorAll(".status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
+  closeAllDropdowns();
   input.closest(".inquiry-select")?.querySelector(".inquiry-dropdown")?.classList.remove("hidden");
+  const chatId = input.closest(".chat-card")?.dataset.chatId;
+  if (chatId && state[chatId]) state[chatId].inquiryDropdownOpen = true;
 });
 
 // Clicking anywhere in the merged box (not just the thin search input
@@ -1891,6 +1941,8 @@ chatListEl.addEventListener("click", (e) => {
   const dropdown = box.closest(".inquiry-select")?.querySelector(".inquiry-dropdown");
   if (dropdown && !dropdown.classList.contains("hidden")) {
     dropdown.classList.add("hidden");
+    const chatId = box.closest(".chat-card")?.dataset.chatId;
+    if (chatId && state[chatId]) state[chatId].inquiryDropdownOpen = false;
     searchInput?.blur();
   } else {
     searchInput?.focus(); // opens via the focusin handler above
@@ -1914,7 +1966,17 @@ chatListEl.addEventListener("click", (e) => {
 document.addEventListener("click", (e) => {
   const path = e.composedPath();
   document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker, .dob-picker, .dob-cal-jump-picker").forEach((wrap) => {
-    if (!path.includes(wrap)) wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown")?.classList.add("hidden");
+    if (path.includes(wrap)) return;
+    const dropdown = wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown");
+    if (!dropdown) return;
+    dropdown.classList.add("hidden");
+    const chatId = wrap.closest(".chat-card")?.dataset.chatId;
+    const s = chatId && state[chatId];
+    if (!s) return;
+    for (const cls of dropdown.classList) {
+      const key = DROPDOWN_STATE_KEY[cls];
+      if (key) s[key] = false;
+    }
   });
 });
 
