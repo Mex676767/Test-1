@@ -244,7 +244,13 @@ body {
 .inquiry-box:focus-within { border-color: var(--blue); }
 .inquiry-chips { display: contents; }
 .inquiry-search {
-  flex: 1 1 70px; min-width: 70px; background: none; border: none; outline: none;
+  /* min-width used to force 70px even once a chip already fills most of
+     the row's width, which usually pushed the search input onto its own
+     line — and with no placeholder text once a chip exists (see
+     renderInquiryChips), that wrapped line renders as a plain empty gap.
+     20px still fits a cursor comfortably, and lets it actually share the
+     line with an existing chip in the common one-chip-picked case. */
+  flex: 1 1 20px; min-width: 20px; background: none; border: none; outline: none;
   color: var(--text); font-size: 13px; font-family: inherit; padding: 3px 0;
 }
 .inquiry-search::placeholder { color: var(--text-faint); opacity: 1; }
