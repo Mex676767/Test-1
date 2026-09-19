@@ -790,15 +790,32 @@ function renderStatusDisplay(chatId) {
 // Status is a custom dropdown (not a native <select>) so it matches
 // Inquiry's look exactly — reuses the same .inquiry-option/-check styling,
 // just single-select and with no search box (only 5 fixed options).
-function renderStatusDropdown(chatId) {
+function renderStatusOptions(chatId, query) {
   const s = state[chatId];
-  return statusOptions.map((opt) => {
+  const q = (query || "").trim().toLowerCase();
+  const filtered = statusOptions.filter((opt) => !q || opt.toLowerCase().includes(q));
+  if (!filtered.length) return `<div class="inquiry-option-empty">No matching status</div>`;
+  return filtered.map((opt) => {
     const active = s.status === opt;
     return `
     <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectStatus" data-chat="${chatId}" data-value="${opt}">
       <span class="inquiry-option-check">${active ? "✓" : ""}</span>${opt}
     </button>`;
   }).join("");
+}
+
+// Search box lives inside the dropdown panel itself (unlike Inquiry's,
+// which sits in its always-visible merged box) since Status/Brand's
+// trigger is a plain display button, not a chips+search box. Split into
+// this (the full panel, rebuilt fresh each time the dropdown opens) and
+// renderStatusOptions above (just the filtered list, re-rendered on every
+// keystroke into the panel's own .status-options child so the search
+// input itself is never touched/re-focused mid-typing).
+function renderStatusDropdown(chatId) {
+  return `
+    <input type="text" class="status-search" placeholder="Search status…" autocomplete="off" />
+    <div class="status-options">${renderStatusOptions(chatId, "")}</div>
+  `;
 }
 
 // Brand, same custom-dropdown treatment as Status — a native <select>'s
@@ -810,7 +827,7 @@ function renderBrandDisplay(chatId) {
   return `<span class="status-value ${empty ? "placeholder" : ""}">${s.brand || "Select brand…"}</span><span class="status-caret">▾</span>`;
 }
 
-function renderBrandDropdown(chatId) {
+function renderBrandOptions(chatId, query) {
   const s = state[chatId];
   // Only ever offers real brandOptions — never an ad-hoc extra value, auto-
   // detected or otherwise. Lark's Brand field is a Single Select; writing
@@ -818,13 +835,26 @@ function renderBrandDropdown(chatId) {
   // one instead of erroring, so this list (and resolveBrandFromGroupId,
   // which is now the only other place Brand ever gets set) must stay
   // restricted to what's already real.
-  return brandOptions.map((b) => {
+  const q = (query || "").trim().toLowerCase();
+  const filtered = brandOptions.filter((b) => !q || b.toLowerCase().includes(q));
+  if (!filtered.length) return `<div class="inquiry-option-empty">No matching brand</div>`;
+  return filtered.map((b) => {
     const active = s.brand === b;
     return `
     <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectBrand" data-chat="${chatId}" data-value="${b}">
       <span class="inquiry-option-check">${active ? "✓" : ""}</span>${b}
     </button>`;
   }).join("");
+}
+
+// See renderStatusDropdown's header note — same panel/options split, same
+// reason (search box inside the dropdown panel, filtered list re-rendered
+// separately so typing never re-focuses the search input itself).
+function renderBrandDropdown(chatId) {
+  return `
+    <input type="text" class="brand-search" placeholder="Search brand…" autocomplete="off" />
+    <div class="brand-options">${renderBrandOptions(chatId, "")}</div>
+  `;
 }
 
 // D.O.B. — a fully custom calendar, not <input type="date">. The native
@@ -885,22 +915,46 @@ function buildDobCalendarDays(year, month) {
 // — see renderBrandDropdown's header note; a native <select>'s open list is
 // OS/browser chrome with no CSS styling hook in any browser, so it can't be
 // dark-themed and stands out badly against the rest of this app.
-function renderDobMonthDropdown(chatId) {
+function renderDobMonthOptions(chatId, query) {
   const { month } = state[chatId].dobView;
-  return DOB_MONTH_NAMES.map((name, i) => {
+  const q = (query || "").trim().toLowerCase();
+  const filtered = DOB_MONTH_NAMES.map((name, i) => ({ name, i })).filter(({ name }) => !q || name.toLowerCase().includes(q));
+  if (!filtered.length) return `<div class="inquiry-option-empty">No matching month</div>`;
+  return filtered.map(({ name, i }) => {
     const active = i === month;
     return `
     <button type="button" class="dob-cal-jump-option ${active ? "active" : ""}" data-action="selectDobMonthValue" data-chat="${chatId}" data-value="${i}">${name}</button>`;
   }).join("");
 }
 
-function renderDobYearDropdown(chatId) {
+function renderDobYearOptions(chatId, query) {
   const { year } = state[chatId].dobView;
-  return dobYearOptions(year).map((y) => {
+  const q = (query || "").trim();
+  const filtered = dobYearOptions(year).filter((y) => !q || String(y).includes(q));
+  if (!filtered.length) return `<div class="inquiry-option-empty">No matching year</div>`;
+  return filtered.map((y) => {
     const active = y === year;
     return `
     <button type="button" class="dob-cal-jump-option ${active ? "active" : ""}" data-action="selectDobYearValue" data-chat="${chatId}" data-value="${y}">${y}</button>`;
   }).join("");
+}
+
+// See renderStatusDropdown's header note — same panel/options split, same
+// reason. Both month and year get a search box for consistency with every
+// other dropdown in this widget, even though month's own list (12 items)
+// barely needs one — year's (up to 101) genuinely does.
+function renderDobMonthDropdown(chatId) {
+  return `
+    <input type="text" class="dob-cal-month-search" placeholder="Search month…" autocomplete="off" />
+    <div class="dob-cal-month-options">${renderDobMonthOptions(chatId, "")}</div>
+  `;
+}
+
+function renderDobYearDropdown(chatId) {
+  return `
+    <input type="text" class="dob-cal-year-search" placeholder="Search year…" autocomplete="off" />
+    <div class="dob-cal-year-options">${renderDobYearOptions(chatId, "")}</div>
+  `;
 }
 
 // s.dobView (the month/year currently displayed — separate from s.dob, the
@@ -1082,10 +1136,24 @@ function renderTickets(chatId) {
 // collapsed behind a search box so the card stays short until it's used.
 function renderInquiryChips(chatId) {
   const s = state[chatId];
-  if (!s.inquiry.length) return `<span class="inquiry-chips-empty">No inquiry selected</span>`;
+  // No placeholder when empty — the "Search inquiry…" placeholder already
+  // sitting in the search box says the same thing without needing its own
+  // separate label crowding the box.
+  if (!s.inquiry.length) return "";
   return s.inquiry.map((v) => `
     <span class="inquiry-chip">${v}<button type="button" class="inquiry-chip-remove" data-action="removeInquiry" data-chat="${chatId}" data-value="${v}" aria-label="Remove ${v}">✕</button></span>
   `).join("");
+}
+
+// Updates the chip row AND the search box's own placeholder together — the
+// input's "Search inquiry…" text is dropped once there's already a chip
+// (the chip itself makes the box's purpose obvious; the placeholder just
+// crowds a one-line box next to it), same reasoning as dropping the old
+// "No inquiry selected" label entirely.
+function refreshInquiryChips(card, chatId) {
+  card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+  const searchInput = card.querySelector(".inquiry-search");
+  if (searchInput) searchInput.placeholder = state[chatId].inquiry.length ? "" : "Search inquiry…";
 }
 
 function renderInquiryDropdown(chatId, query) {
@@ -1140,18 +1208,17 @@ function renderAutoFields(chatId) {
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Amount <span class="auto-tag">auto</span></span>
-        ${
-          // Risk Player has no claimable amount of its own to read off any
-          // Lark field -- CS works it out manually (based on the customer's
-          // next deposit), so once it's the claimed bonus this becomes a
-          // real input instead of the read-only value every other program
-          // gets. releasedBonusAmount/releasedAmountRaw double as the typed
-          // value directly -- same fields lark-record.js already reads at
-          // submit time, no separate state needed.
-          s.claimedPrograms.riskPlayer
-            ? `<input type="text" inputmode="decimal" class="input mono amount-input" data-chat="${chatId}" placeholder="Type amount" value="${s.releasedBonusAmount || ""}" />`
-            : `<div class="auto-value mono">${s.releasedBonusAmount || "—"}</div>`
-        }
+        <!-- Always editable, not just when Risk Player is the claimed bonus
+             (the only program with no claimable amount to read off any Lark
+             field at all -- CS works that one out manually). Auto-derived
+             programs pre-fill this the same as before; CS can still correct
+             it if the derived value's ever wrong. releasedBonusAmount/
+             releasedAmountRaw double as the typed value directly -- same
+             fields lark-record.js already reads at submit time (its own
+             extractAmount() pulls the number back out regardless of
+             whatever label text still surrounds it), no separate state
+             needed. -->
+        <input type="text" inputmode="decimal" class="input mono amount-input" data-chat="${chatId}" placeholder="Type amount" value="${s.releasedBonusAmount || ""}" />
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Claim Secret <span class="auto-tag">auto</span></span>
@@ -1204,7 +1271,7 @@ function renderExpandedCard(chat) {
     <div class="inquiry-select">
       <div class="inquiry-box">
         <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
-        <input type="text" class="inquiry-search" placeholder="Search inquiry…" autocomplete="off" />
+        <input type="text" class="inquiry-search" placeholder="${s.inquiry.length ? "" : "Search inquiry…"}" autocomplete="off" />
         <span class="inquiry-caret">▾</span>
       </div>
       <div class="inquiry-dropdown ${s.inquiryDropdownOpen ? "" : "hidden"}">${renderInquiryDropdown(chat.chatId, "")}</div>
@@ -1391,11 +1458,26 @@ function focusableFieldSelector(el) {
   if (el.classList.contains("username-input")) return ".username-input";
   if (el.classList.contains("inquiry-search")) return ".inquiry-search";
   if (el.classList.contains("amount-input")) return ".amount-input";
+  if (el.classList.contains("status-search")) return ".status-search";
+  if (el.classList.contains("brand-search")) return ".brand-search";
+  if (el.classList.contains("dob-cal-month-search")) return ".dob-cal-month-search";
+  if (el.classList.contains("dob-cal-year-search")) return ".dob-cal-year-search";
   if (el.classList.contains("esc-input") && el.dataset.field) {
     return `.esc-input[data-field="${el.dataset.field}"]`;
   }
   return null;
 }
+
+// Selector -> [options-list selector, options re-renderer] for every search
+// box whose typed filter text isn't mirrored into state (same situation as
+// Inquiry's — see restoreFocus below).
+const SEARCH_BOX_OPTIONS = {
+  ".inquiry-search": [".inquiry-dropdown", renderInquiryDropdown],
+  ".status-search": [".status-options", renderStatusOptions],
+  ".brand-search": [".brand-options", renderBrandOptions],
+  ".dob-cal-month-search": [".dob-cal-month-options", renderDobMonthOptions],
+  ".dob-cal-year-search": [".dob-cal-year-options", renderDobYearOptions],
+};
 
 function captureFocus() {
   const el = document.activeElement;
@@ -1412,16 +1494,20 @@ function restoreFocus(captured) {
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${captured.chatId}"]`);
   const el = card?.querySelector(captured.selector);
   if (!el) return;
-  // Inquiry's search box is the one field here that isn't mirrored into
-  // state (see its own "input" handler note) -- a fresh render always
-  // starts it blank, so the typed filter text itself would otherwise be
-  // lost outright, not just defocused. Every other captured field already
-  // renders with the right value straight from state, so this is a no-op
-  // for them.
+  // Every search box here (Inquiry, Status, Brand, D.O.B month/year) has
+  // its typed filter text live only in the DOM, never mirrored into state
+  // (see each one's own "input" handler note) -- a fresh render always
+  // starts it blank, so the typed text itself would otherwise be lost
+  // outright, not just defocused. Every other captured field (username,
+  // Escalation fields, the amount box) already renders with the right
+  // value straight from state, so this is a no-op for them.
   if (el.value !== captured.value) {
     el.value = captured.value;
-    if (captured.selector === ".inquiry-search") {
-      card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(captured.chatId, captured.value);
+    const optionsTarget = SEARCH_BOX_OPTIONS[captured.selector];
+    if (optionsTarget) {
+      const [optionsSelector, renderOptions] = optionsTarget;
+      const optionsEl = card.querySelector(optionsSelector);
+      if (optionsEl) optionsEl.innerHTML = renderOptions(captured.chatId, captured.value);
     }
   }
   el.focus();
@@ -1623,7 +1709,7 @@ chatListEl.addEventListener("click", async (e) => {
       }
       card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
       card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
-      card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+      refreshInquiryChips(card, chatId);
       card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
       card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
       card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
@@ -1693,7 +1779,7 @@ chatListEl.addEventListener("click", async (e) => {
 
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
-    card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+    refreshInquiryChips(card, chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
@@ -1734,7 +1820,7 @@ chatListEl.addEventListener("click", async (e) => {
     logDiagnostic("Grace Period reactivated — customer can attempt the challenge again today.", "success");
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
-    card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+    refreshInquiryChips(card, chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
@@ -1760,7 +1846,7 @@ chatListEl.addEventListener("click", async (e) => {
     // filtered down to just that text) right after picking something.
     const searchInput = card.querySelector(".inquiry-search");
     if (searchInput) searchInput.value = "";
-    card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
+    refreshInquiryChips(card, chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
     // Auto-close once maxed out — nothing left to add without removing a
     // chip first, and removing happens via the chips row, not the dropdown.
@@ -1920,6 +2006,33 @@ chatListEl.addEventListener("input", (e) => {
   if (inquiryInput) {
     const card = inquiryInput.closest(".chat-card");
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
+    return;
+  }
+  // Status/Brand/D.O.B month/year search boxes -- each only replaces its
+  // own sibling .*-options list, never the panel that contains the search
+  // input itself (see renderStatusDropdown's header note on why).
+  const statusSearch = e.target.closest(".status-search");
+  if (statusSearch) {
+    const card = statusSearch.closest(".chat-card");
+    card.querySelector(".status-options").innerHTML = renderStatusOptions(card.dataset.chatId, statusSearch.value);
+    return;
+  }
+  const brandSearch = e.target.closest(".brand-search");
+  if (brandSearch) {
+    const card = brandSearch.closest(".chat-card");
+    card.querySelector(".brand-options").innerHTML = renderBrandOptions(card.dataset.chatId, brandSearch.value);
+    return;
+  }
+  const dobMonthSearch = e.target.closest(".dob-cal-month-search");
+  if (dobMonthSearch) {
+    const card = dobMonthSearch.closest(".chat-card");
+    card.querySelector(".dob-cal-month-options").innerHTML = renderDobMonthOptions(card.dataset.chatId, dobMonthSearch.value);
+    return;
+  }
+  const dobYearSearch = e.target.closest(".dob-cal-year-search");
+  if (dobYearSearch) {
+    const card = dobYearSearch.closest(".chat-card");
+    card.querySelector(".dob-cal-year-options").innerHTML = renderDobYearOptions(card.dataset.chatId, dobYearSearch.value);
     return;
   }
   // Escalation Ticket text/number/textarea fields — same no-re-render,
