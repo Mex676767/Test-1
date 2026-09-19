@@ -1908,6 +1908,13 @@ async function submitRecord(chatId, { auto, reason } = {}) {
     return;
   }
 
+  // Stamps this chat as belonging to whichever agent's browser last tried
+  // to record it — the Needs Attention panel uses this to only surface a
+  // given agent's own incomplete chats (see getIncompleteChats), not every
+  // agent's, since localStorage is shared across tabs but a shared/kiosk
+  // browser can otherwise mix different agents' work together in the list.
+  s.agentName = selectedAgent;
+
   // Brand and Status are both discrete picks from a dropdown now (no free
   // text), written to state the instant they're clicked — state is always
   // the source of truth here, no need to reach into the DOM for either.
@@ -2122,13 +2129,16 @@ async function sweepPendingChats() {
 }
 setInterval(sweepPendingChats, PENDING_SWEEP_MS);
 
-// Every chat this browser knows about that closed without ever being
-// completed (missing Inquiry/Status/etc.) -- read straight from persisted
-// state, not just whichever chat happens to be the currently-focused card
-// (see sweepPendingChats' own header note on why that distinction matters:
-// LiveChat's SDK only ever shows this widget one real chat at a time, so a
-// case the agent already navigated away from would otherwise be invisible
-// until they happened to reopen that exact conversation).
+// Every chat the CURRENT agent's own browser knows about that closed
+// without ever being completed (missing Inquiry/Status/etc.) -- read
+// straight from persisted state, not just whichever chat happens to be the
+// currently-focused card (see sweepPendingChats' own header note on why
+// that distinction matters: LiveChat's SDK only ever shows this widget one
+// real chat at a time, so a case the agent already navigated away from
+// would otherwise be invisible until they happened to reopen that exact
+// conversation). Filtered to s.agentName === selectedAgent so a shared/
+// kiosk browser used by multiple agents across shifts doesn't mix other
+// agents' incomplete chats into this one's list.
 function getIncompleteChats() {
   let persisted;
   try {
@@ -2137,7 +2147,8 @@ function getIncompleteChats() {
     return [];
   }
   return Object.entries(persisted)
-    .filter(([, s]) => s && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError)
+    .filter(([, s]) => s && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError
+      && s.agentName === selectedAgent)
     .map(([chatId, s]) => ({
       chatId,
       username: s.username || "(no username)",
