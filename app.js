@@ -1381,7 +1381,67 @@ function ensureChatState(chat) {
   };
 }
 
+// Which text field is focused, by a selector stable across a re-render
+// (class + which chat's card + which escalation field, where relevant) --
+// used to restore focus/cursor position around renderChats() below, since
+// it always tears down and rebuilds the whole card. Only a fixed, known
+// set of fields are worth this: the ones an agent is realistically still
+// typing into when a background poll's re-render lands mid-keystroke.
+function focusableFieldSelector(el) {
+  if (el.classList.contains("username-input")) return ".username-input";
+  if (el.classList.contains("inquiry-search")) return ".inquiry-search";
+  if (el.classList.contains("amount-input")) return ".amount-input";
+  if (el.classList.contains("esc-input") && el.dataset.field) {
+    return `.esc-input[data-field="${el.dataset.field}"]`;
+  }
+  return null;
+}
+
+function captureFocus() {
+  const el = document.activeElement;
+  if (!el || !chatListEl.contains(el)) return null;
+  const selector = focusableFieldSelector(el);
+  if (!selector) return null;
+  const chatId = el.closest(".chat-card")?.dataset.chatId;
+  if (!chatId) return null;
+  return { chatId, selector, value: el.value, selectionStart: el.selectionStart, selectionEnd: el.selectionEnd };
+}
+
+function restoreFocus(captured) {
+  if (!captured) return;
+  const card = chatListEl.querySelector(`.chat-card[data-chat-id="${captured.chatId}"]`);
+  const el = card?.querySelector(captured.selector);
+  if (!el) return;
+  // Inquiry's search box is the one field here that isn't mirrored into
+  // state (see its own "input" handler note) -- a fresh render always
+  // starts it blank, so the typed filter text itself would otherwise be
+  // lost outright, not just defocused. Every other captured field already
+  // renders with the right value straight from state, so this is a no-op
+  // for them.
+  if (el.value !== captured.value) {
+    el.value = captured.value;
+    if (captured.selector === ".inquiry-search") {
+      card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(captured.chatId, captured.value);
+    }
+  }
+  el.focus();
+  try { el.setSelectionRange(captured.selectionStart, captured.selectionEnd); } catch (_) { /* not a text-selectable input type */ }
+}
+
+// Wraps the actual render so a background re-render (checkChatStatus
+// detecting a link/Telegram/close, sweepPendingChats, etc.) never steals
+// focus or loses in-progress typing -- confirmed live as "it just reloads
+// while I'm typing." chatListEl.innerHTML = "" below always destroys every
+// input node outright, so plain focus() alone isn't enough; this captures
+// which field (and, for Inquiry's untracked search text, what was typed)
+// before that happens and restores it after.
 function renderChats(chats) {
+  const focusCapture = captureFocus();
+  renderChatsInner(chats);
+  restoreFocus(focusCapture);
+}
+
+function renderChatsInner(chats) {
   chatListEl.innerHTML = "";
 
   if (!chats.length) {
