@@ -2,7 +2,7 @@
 // system to link with — all the code (state, render, backend functions)
 // stays intact underneath; flip this back to true to bring it back rather
 // than rebuilding it.
-const ESCALATION_TICKET_ENABLED = false;
+const ESCALATION_TICKET_ENABLED = true;
 
 /* ============================================================
    THEME
