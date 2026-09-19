@@ -854,6 +854,32 @@ function buildDobCalendarDays(year, month) {
   return cells;
 }
 
+// Custom dropdowns (not native <select>s) for the same reason Brand is one
+// — see renderBrandDropdown's header note; a native <select>'s open list is
+// OS/browser chrome with no CSS styling hook in any browser, so it can't be
+// dark-themed and stands out badly against the rest of this app.
+function renderDobMonthDropdown(chatId) {
+  const { month } = state[chatId].dobView;
+  return DOB_MONTH_NAMES.map((name, i) => {
+    const active = i === month;
+    return `
+    <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectDobMonthValue" data-chat="${chatId}" data-value="${i}">
+      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${name}
+    </button>`;
+  }).join("");
+}
+
+function renderDobYearDropdown(chatId) {
+  const { year } = state[chatId].dobView;
+  return dobYearOptions(year).map((y) => {
+    const active = y === year;
+    return `
+    <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectDobYearValue" data-chat="${chatId}" data-value="${y}">
+      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${y}
+    </button>`;
+  }).join("");
+}
+
 // s.dobView (the month/year currently displayed — separate from s.dob, the
 // actually-selected date) is lazily initialized here: starts on the
 // selected date's month if one's set, otherwise today's.
@@ -876,12 +902,14 @@ function renderDobCalendar(chatId) {
   return `
     <div class="dob-cal-header">
       <button type="button" class="dob-cal-nav" data-action="dobNavMonth" data-chat="${chatId}" data-dir="-1" title="Previous month">‹</button>
-      <select class="dob-cal-select" data-action="selectDobMonth" data-chat="${chatId}" title="Jump to month">
-        ${DOB_MONTH_NAMES.map((name, i) => `<option value="${i}" ${i === month ? "selected" : ""}>${name}</option>`).join("")}
-      </select>
-      <select class="dob-cal-select" data-action="selectDobYear" data-chat="${chatId}" title="Jump to year">
-        ${dobYearOptions(year).map((y) => `<option value="${y}" ${y === year ? "selected" : ""}>${y}</option>`).join("")}
-      </select>
+      <div class="dob-cal-jump-picker">
+        <button type="button" class="dob-cal-jump-display" data-action="toggleDobMonthDropdown" data-chat="${chatId}">${DOB_MONTH_NAMES[month]}</button>
+        <div class="dob-cal-month-dropdown dob-cal-jump-dropdown hidden">${renderDobMonthDropdown(chatId)}</div>
+      </div>
+      <div class="dob-cal-jump-picker">
+        <button type="button" class="dob-cal-jump-display" data-action="toggleDobYearDropdown" data-chat="${chatId}">${year}</button>
+        <div class="dob-cal-year-dropdown dob-cal-jump-dropdown hidden">${renderDobYearDropdown(chatId)}</div>
+      </div>
       <button type="button" class="dob-cal-nav" data-action="dobNavMonth" data-chat="${chatId}" data-dir="1" title="Next month">›</button>
     </div>
     <div class="dob-cal-weekdays">${DOB_WEEKDAY_LABELS.map((w) => `<span>${w}</span>`).join("")}</div>
@@ -1650,7 +1678,7 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".status-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
     if (willOpen) dropdown.classList.remove("hidden");
   }
 
@@ -1665,7 +1693,7 @@ chatListEl.addEventListener("click", async (e) => {
     const dropdown = card.querySelector(".brand-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
     // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
     if (willOpen) dropdown.classList.remove("hidden");
   }
 
@@ -1680,7 +1708,7 @@ chatListEl.addEventListener("click", async (e) => {
     const cal = card.querySelector(".dob-calendar");
     const willOpen = cal.classList.contains("hidden");
     // Only one dropdown open at a time across the whole widget.
-    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar").forEach((d) => d.classList.add("hidden"));
+    document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
     if (willOpen) {
       cal.innerHTML = renderDobCalendar(chatId); // fresh each open — reflects any dob change since last shown
       cal.classList.remove("hidden");
@@ -1694,6 +1722,30 @@ chatListEl.addEventListener("click", async (e) => {
     if (month < 0) { month = 11; year--; }
     if (month > 11) { month = 0; year++; }
     s.dobView = { year, month };
+    card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
+  }
+
+  if (btn.dataset.action === "toggleDobMonthDropdown") {
+    const dropdown = card.querySelector(".dob-cal-month-dropdown");
+    const willOpen = dropdown.classList.contains("hidden");
+    document.querySelectorAll(".dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
+    if (willOpen) dropdown.classList.remove("hidden");
+  }
+
+  if (btn.dataset.action === "toggleDobYearDropdown") {
+    const dropdown = card.querySelector(".dob-cal-year-dropdown");
+    const willOpen = dropdown.classList.contains("hidden");
+    document.querySelectorAll(".dob-cal-jump-dropdown").forEach((d) => d.classList.add("hidden"));
+    if (willOpen) dropdown.classList.remove("hidden");
+  }
+
+  if (btn.dataset.action === "selectDobMonthValue") {
+    s.dobView = { year: s.dobView.year, month: Number(btn.dataset.value) };
+    card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
+  }
+
+  if (btn.dataset.action === "selectDobYearValue") {
+    s.dobView = { year: Number(btn.dataset.value), month: s.dobView.month };
     card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
   }
 
@@ -1814,28 +1866,6 @@ chatListEl.addEventListener("change", (e) => {
   }
 });
 
-// D.O.B. calendar's month/year jump dropdowns -- native <select>s fire
-// "change", not "click", so they need their own delegated listener rather
-// than piggybacking on the data-action click handler above.
-chatListEl.addEventListener("change", (e) => {
-  const sel = e.target.closest("select[data-action]");
-  if (!sel) return;
-  const chatId = sel.dataset.chat;
-  const s = state[chatId];
-  const card = sel.closest(".chat-card");
-  if (!s || !s.dobView) return;
-
-  if (sel.dataset.action === "selectDobMonth") {
-    s.dobView = { year: s.dobView.year, month: Number(sel.value) };
-  } else if (sel.dataset.action === "selectDobYear") {
-    s.dobView = { year: Number(sel.value), month: s.dobView.month };
-  } else {
-    return;
-  }
-  card.querySelector(".dob-calendar").innerHTML = renderDobCalendar(chatId);
-  saveState();
-});
-
 // Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
 // Status); closes whatever else is open first so only one shows at a time
 // across the whole widget.
@@ -1877,7 +1907,7 @@ chatListEl.addEventListener("click", (e) => {
 //
 // Uses composedPath(), not wrap.contains(e.target): chatListEl's own click
 // handler runs first (closer ancestor, fires earlier in bubbling) and some
-// actions (dobNavMonth, selectDobMonth/selectDobYear) replace their container's innerHTML to
+// actions (dobNavMonth, selectDobMonthValue/selectDobYearValue) replace their container's innerHTML to
 // reflect the new month/year — which detaches the very button that was
 // clicked from the document. By the time this handler runs, e.target is a
 // detached node, and wrap.contains(detachedNode) is always false — every
@@ -1887,8 +1917,8 @@ chatListEl.addEventListener("click", (e) => {
 // the original ancestors regardless of what ran before this.
 document.addEventListener("click", (e) => {
   const path = e.composedPath();
-  document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker, .dob-picker").forEach((wrap) => {
-    if (!path.includes(wrap)) wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar")?.classList.add("hidden");
+  document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker, .dob-picker, .dob-cal-jump-picker").forEach((wrap) => {
+    if (!path.includes(wrap)) wrap.querySelector(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown")?.classList.add("hidden");
   });
 });
 

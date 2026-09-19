@@ -332,13 +332,27 @@ body {
 }
 .dob-calendar.hidden { display: none; }
 .dob-cal-header { display: flex; align-items: center; gap: 2px; margin-bottom: 8px; }
-.dob-cal-select {
-  flex: 1; min-width: 0; text-align: center; text-align-last: center;
+/* Custom dropdown, not a native <select> -- see renderDobMonthDropdown's
+   header note (same reasoning as Brand: the open list is unstyleable OS
+   chrome in a native <select>). Reuses .inquiry-option/-check for the
+   list itself, same as Status/Brand do. */
+.dob-cal-jump-picker { position: relative; flex: 1; min-width: 0; }
+.dob-cal-jump-display {
+  width: 100%; text-align: center;
   font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 12.5px;
   background: none; border: 1px solid transparent; color: var(--text);
   border-radius: 6px; padding: 3px 2px; cursor: pointer;
 }
-.dob-cal-select:hover { border-color: var(--border); }
+.dob-cal-jump-display:hover { border-color: var(--border); }
+.dob-cal-jump-dropdown {
+  position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 20;
+  max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+  padding: 5px; box-shadow: var(--shadow);
+  scrollbar-width: none;
+}
+.dob-cal-jump-dropdown::-webkit-scrollbar { display: none; }
+.dob-cal-jump-dropdown.hidden { display: none; }
 .dob-cal-nav {
   flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--text-muted);
   border-radius: 6px; width: 22px; height: 22px; font-size: 12px; cursor: pointer;
