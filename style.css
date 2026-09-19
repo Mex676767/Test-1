@@ -140,7 +140,13 @@ body {
 }
 .na-item-username { font-weight: 600; color: var(--text); }
 .na-item-reason { color: var(--text-muted); margin-top: 2px; }
-.na-item-link { display: inline-block; margin-top: 4px; color: var(--blue); font-size: 11.5px; }
+.na-item-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+.na-item-link { color: var(--blue); font-size: 11.5px; }
+.na-item-ignore {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--text-faint); font-size: 11.5px; font-family: inherit;
+}
+.na-item-ignore:hover { color: var(--text-muted); text-decoration: underline; }
 
 /* ---------- Chat list ---------- */
 /* No max-width — the widget only ever shows one chat at a time now (the
