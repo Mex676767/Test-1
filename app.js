@@ -863,9 +863,7 @@ function renderDobMonthDropdown(chatId) {
   return DOB_MONTH_NAMES.map((name, i) => {
     const active = i === month;
     return `
-    <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectDobMonthValue" data-chat="${chatId}" data-value="${i}">
-      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${name}
-    </button>`;
+    <button type="button" class="dob-cal-jump-option ${active ? "active" : ""}" data-action="selectDobMonthValue" data-chat="${chatId}" data-value="${i}">${name}</button>`;
   }).join("");
 }
 
@@ -874,9 +872,7 @@ function renderDobYearDropdown(chatId) {
   return dobYearOptions(year).map((y) => {
     const active = y === year;
     return `
-    <button type="button" class="inquiry-option ${active ? "active" : ""}" data-action="selectDobYearValue" data-chat="${chatId}" data-value="${y}">
-      <span class="inquiry-option-check">${active ? "✓" : ""}</span>${y}
-    </button>`;
+    <button type="button" class="dob-cal-jump-option ${active ? "active" : ""}" data-action="selectDobYearValue" data-chat="${chatId}" data-value="${y}">${y}</button>`;
   }).join("");
 }
 
