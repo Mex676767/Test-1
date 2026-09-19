@@ -1511,7 +1511,14 @@ chatListEl.addEventListener("click", async (e) => {
       s.releasedAmountRaw = "";
       s.claimSecret = false;
       if (notVip) {
-        setStatus("Not VVIP", "error");
+        // CS only tracks VIP retention here — a confirmed non-VIP result
+        // is treated the same as Unknown player: nothing about this chat
+        // should end up in Customer Approaching (see setUnknown). Needs its
+        // own full renderChats() (not just the three targeted slots below)
+        // since the checkbox/username row itself lives outside all three.
+        setUnknown(chatId, true);
+        renderChats(activeChats);
+        setStatus("Not VVIP — marked Unknown player.", "error");
       } else {
         setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
       }
@@ -1910,32 +1917,42 @@ chatListEl.addEventListener("change", (e) => {
   }
   const unknownCheck = e.target.closest(".unknown-check");
   if (unknownCheck) {
-    const chatId = unknownCheck.dataset.chat;
-    const s = state[chatId];
-    if (s) {
-      s.isUnknown = unknownCheck.checked;
-      // A placeholder Customer Approaching row can already exist from an
-      // earlier Look Up (e.g. a guessed/wrong username tried before
-      // realizing there isn't a real one) -- not yet logged, since a
-      // genuinely already-recorded chat is left alone. Delete it so this
-      // chat truly records nothing, matching how Unknown players are
-      // excluded from chat data.
-      if (s.isUnknown && s.caRecordId && !s.logged) {
-        const staleRecordId = s.caRecordId;
-        s.caRecordId = null;
-        fetch("/lark-delete-record", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recordId: staleRecordId }),
-        }).then((res) => res.json()).then((data) => {
-          if (!data.ok) logDiagnostic(`Failed to remove the placeholder record for this Unknown-marked chat: ${data.error}`, "warn");
-        }).catch(() => { /* non-fatal — worst case an orphaned placeholder row stays in Lark */ });
-      }
-      renderChats(activeChats);
-      saveState();
-    }
+    setUnknown(unknownCheck.dataset.chat, unknownCheck.checked);
+    renderChats(activeChats);
+    saveState();
   }
 });
+
+// Shared by the manual "Unknown player" checkbox and the auto-tick once a
+// Look Up comes back Not VVIP (see the lookup action handler) -- both mean
+// the same thing to this widget: nothing about this chat should end up in
+// Customer Approaching. Deletes the placeholder row a Look Up already
+// created (username/brand/agent name only, nothing else filled in yet) so
+// an Unknown-marked chat truly records nothing, not just an empty row.
+// Doesn't render or save itself -- callers already do their own render
+// right after (the checkbox handler above, the lookup handler's own
+// unconditional slot refresh), so this stays a plain state mutation
+// instead of triggering a second, redundant re-render on top of theirs.
+function setUnknown(chatId, value) {
+  const s = state[chatId];
+  if (!s) return;
+  s.isUnknown = value;
+  // A placeholder Customer Approaching row can already exist from an
+  // earlier Look Up (e.g. a guessed/wrong username tried before realizing
+  // there isn't a real one, or a confirmed non-VIP) -- not yet logged,
+  // since a genuinely already-recorded chat is left alone.
+  if (s.isUnknown && s.caRecordId && !s.logged) {
+    const staleRecordId = s.caRecordId;
+    s.caRecordId = null;
+    fetch("/lark-delete-record", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recordId: staleRecordId }),
+    }).then((res) => res.json()).then((data) => {
+      if (!data.ok) logDiagnostic(`Failed to remove the placeholder record for this Unknown-marked chat: ${data.error}`, "warn");
+    }).catch(() => { /* non-fatal — worst case an orphaned placeholder row stays in Lark */ });
+  }
+}
 
 // Inquiry dropdown opens on focus (it has no explicit toggle button, unlike
 // Status); closes whatever else is open first so only one shows at a time
