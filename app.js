@@ -1713,6 +1713,13 @@ chatListEl.addEventListener("click", async (e) => {
       card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
       card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
       card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+      // "Pass" is only an activation, not a completed claim (see this
+      // branch's own header note) — nothing to submit yet. The real claim
+      // ("Activated: ...") sets everything submitRecord needs same as any
+      // other program's claim, so it gets the same instant-submit treatment.
+      if (s.claimedPrograms.gracePeriod) {
+        await submitRecord(chatId, { auto: true, reason: "Grace Period claimed" });
+      }
       return;
     }
 
@@ -1784,14 +1791,17 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".status-only-display").innerHTML = renderStatusDisplay(chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
 
-    // Special Reload's Inquiry/Status/Brand/username are all already fixed
-    // the instant it's claimed — nothing about the Customer Approaching
-    // record still changes after this (D.O.B./Telegram aside, which stay
-    // editable and can be recorded later same as any other case), so this
-    // submits it immediately rather than waiting for the chat to close.
-    if (programKey === "specialReload") {
-      await submitRecord(chatId, { auto: true, reason: "Special Reload claimed" });
-    }
+    // Every field submitRecord requires is already fixed the instant any
+    // bonus is claimed here — username/caRecordId from the Look Up that
+    // had to happen first to see a claimable ticket at all, Brand
+    // auto-detected, Inquiry/Status just set above — so nothing about the
+    // Customer Approaching record still changes after this claim
+    // (D.O.B./Telegram aside, which stay editable and can be recorded
+    // later same as any other case). Submits immediately rather than
+    // waiting for the chat to close, same as Special Reload originally did
+    // — generalized to every program that reaches this shared completion
+    // path, not just that one.
+    await submitRecord(chatId, { auto: true, reason: `${allSources.find((src) => src.key === programKey)?.label || "Bonus"} claimed` });
   }
 
   // A customer can fail to complete the Grace Period challenge whether
