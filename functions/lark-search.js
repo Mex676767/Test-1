@@ -68,47 +68,67 @@ export async function handler(event) {
     });
     const caRecordId = created.record_id;
 
-    // Warn CS if username exists under other brands
-    const caUsernameOnly = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
-      { field_name: F.username, operator: "is", value: [uname] },
-    ]);
-    const otherBrands = [...new Set(
-      caUsernameOnly
-        .map((r) => toDisplay(r.fields[F.brand]))
-        .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
-    )];
+    // Every lookup below is fully independent of the others (and of
+    // caRecordId) -- previously each was its own separate `await`, one
+    // after another, meaning ~9 sequential Lark API round trips stacked
+    // into a single request (roughly 200-800ms of network latency each,
+    // so several seconds in a slow moment). Confirmed live as a
+    // contributor to "record created but the response never arrived as
+    // valid JSON" recurring intermittently even after de-duping the
+    // concurrent-token race (see _lib/lark.js's getTenantToken note) --
+    // Cloudflare (or the browser's own fetch) can still give up on a slow
+    // enough chain of sequential awaits. Running them all together caps
+    // the total wait at whichever single lookup is slowest, not their sum.
+    const [
+      otherBrands,
+      { tier, customerName, notVip },
+      topPnlRow,
+      ltvRow,
+      graceRow,
+      riskRow,
+      vipRow,
+      specialReloadRow,
+      telegram28Row,
+      redeemRow,
+    ] = await Promise.all([
+      // Warn CS if username exists under other brands
+      (async () => {
+        const caUsernameOnly = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
+          { field_name: F.username, operator: "is", value: [uname] },
+        ]);
+        return [...new Set(
+          caUsernameOnly
+            .map((r) => toDisplay(r.fields[F.brand]))
+            .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
+        )];
+      })().catch(() => []),
 
-    // Tier comes straight from the P&L "master file" table (Username +
-    // Brand match) — not from Customer Approaching's Tier Lookup. P&L is
-    // the full VIP player list, so no match at all means this username
-    // isn't a VIP under this brand — surfaced to the frontend as notVip
-    // rather than just silently leaving Tier blank.
-    let tier = "";
-    let customerName = "";
-    let notVip = false;
-    try {
-      if (TABLE_PNL) {
+      // Tier comes straight from the P&L "master file" table (Username +
+      // Brand match) — not from Customer Approaching's Tier Lookup. P&L is
+      // the full VIP player list, so no match at all means this username
+      // isn't a VIP under this brand — surfaced to the frontend as notVip
+      // rather than just silently leaving Tier blank.
+      (async () => {
+        if (!TABLE_PNL) return { tier: "", customerName: "", notVip: false };
         const pnlMatches = await searchRecords(TABLE_PNL, [
           { field_name: F.username, operator: "is", value: [uname] },
           { field_name: F.brand, operator: "is", value: [brandVal] },
         ]);
-        if (pnlMatches.length) {
-          const tierMap = await getFieldOptionMap(TABLE_PNL, F.tier);
-          tier = toDisplay(pnlMatches[0].fields[F.tier], tierMap);
-          customerName = toDisplay(pnlMatches[0].fields[F.titleName]);
-        } else {
-          notVip = true;
-        }
-      }
-    } catch (_) { /* non-fatal — tier/customerName just show blank, notVip stays false */ }
+        if (!pnlMatches.length) return { tier: "", customerName: "", notVip: true };
+        const tierMap = await getFieldOptionMap(TABLE_PNL, F.tier);
+        return {
+          tier: toDisplay(pnlMatches[0].fields[F.tier], tierMap),
+          customerName: toDisplay(pnlMatches[0].fields[F.titleName]),
+          notVip: false,
+        };
+      })().catch(() => ({ tier: "", customerName: "", notVip: false })), // non-fatal — tier/customerName just show blank, notVip stays false
 
-    // Top 10 P&L(Night): "Claimed Copy" checkbox is the claim flag
-    // (unticked = still claimable); displayed value is "SW Check". This
-    // used to only check the checkbox + that SW Check had *some* text, not
-    // what it said — a "Failed" row (customer didn't qualify) slipped
-    // through as a claimable ticket. Now hidden() (Claimed/Expired/Failed)
-    // gates the actual text too, same as every other bonus table.
-    const [topPnlRow, ltvRow] = await Promise.all([
+      // Top 10 P&L(Night): "Claimed Copy" checkbox is the claim flag
+      // (unticked = still claimable); displayed value is "SW Check". This
+      // used to only check the checkbox + that SW Check had *some* text, not
+      // what it said — a "Failed" row (customer didn't qualify) slipped
+      // through as a claimable ticket. Now hidden() (Claimed/Expired/Failed)
+      // gates the actual text too, same as every other bonus table.
       findOldestClaimableRow(
         TABLE_TOP_PNL_NIGHT, uname, brandVal,
         (fields) => {
@@ -116,6 +136,7 @@ export async function handler(event) {
           return fields[F.claimedCopy] !== true && !!display && !hidden(display);
         }
       ).catch(() => null),
+
       // LTV(Day) has no "Claimed Copy" field at all — confirmed from a real
       // row, not the same table structure as Top 10 P&L(Night) despite
       // looking similar at a glance. It follows Grace Period's pattern
@@ -126,79 +147,78 @@ export async function handler(event) {
         TABLE_LTV_DAY, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.status])) && !!toDisplay(fields[F.swChecker])
       ).catch(() => null),
+
+      // Grace Period(Day): "SW Check" is both the claim flag (hide only
+      // Claimed/Expired) and the displayed value. "SW Check" is a Formula
+      // field, so its raw API value can come back as a segments array rather
+      // than a plain string — hidden() needs toDisplay() first, or it never
+      // matches "claimed"/"expired" and an actually-expired row can slip
+      // through as "claimable" (this was the actual bug: an expired row got
+      // picked over the real one, so the ticket ended up hidden entirely once
+      // isClaimableValue saw "Expired" client-side).
+      findOldestClaimableRow(
+        TABLE_GRACE_PERIOD, uname, brandVal,
+        (fields) => !hidden(toDisplay(fields[F.swCheck]))
+      ).catch(() => null),
+
+      // Risk Player(Day): one field ("Status") encodes both which day-tier
+      // applies (e.g. "7D 20% Reload") and whether there's anything to claim
+      // at all ("1D No Bonus"/"3D No Bonus" mean no bonus, not just a claimed
+      // one). Hide "No Bonus" tiers plus Claimed/Expired.
+      //
+      // Confirmed from the real table's own column headers (2026-09-11):
+      // unlike every other bonus table here, Risk Player(Day)'s Username
+      // column is plain "Username" (not "Username/UID") and its date column
+      // is plain "Date" (not "Time of Inspection") — searching with the
+      // usual field names silently found zero rows for every customer,
+      // Lark's search API errors on an unrecognized field_name and every
+      // call site here catches that as "nothing claimable", indistinguishable
+      // from a real no-match without checking the table's own columns
+      // directly like this did.
+      findOldestClaimableRow(
+        TABLE_RISK_PLAYER, uname, brandVal,
+        (fields) => {
+          const status = String(toDisplay(fields[F.status]) || "").trim();
+          return !!status && !/no bonus/i.test(status) && !hidden(status);
+        },
+        undefined,
+        { usernameField: "Username", dateField: "Date" }
+      ).catch(() => null),
+
+      // 12hour VIP Deposit Booster: only "Eligible" (exact) counts.
+      findOldestClaimableRow(
+        TABLE_VIP_BOOSTER, uname, brandVal,
+        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible"
+      ).catch(() => null),
+
+      // Special Reload Event: only "Eligible Angpao" counts — the Free Spin
+      // variant that used to live in this table is retired (kept for old
+      // record history only), so it's intentionally not checked for here.
+      findOldestClaimableRow(
+        TABLE_SPECIAL_RELOAD, uname, brandVal,
+        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao"
+      ).catch(() => null),
+
+      // Telegram RM28 (2026-09-09) — repurposes the retired Ang Pao ticket's
+      // plumbing, lives on the main base like every other bonus table above.
+      // Only "Eligible" counts; display combines Status with the row's own
+      // Bonus Amount so the agent sees the real claimable amount, e.g.
+      // "Eligible — RM18" — and so the existing "grab the number after RM"
+      // extraction (already fixed for the Top 10 P&L bug) picks up the right
+      // amount for Released Amount with no new extraction logic needed.
+      findOldestClaimableRow(
+        TABLE_TELEGRAM28, uname, brandVal,
+        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible"
+      ).catch(() => null),
+
+      (async () => {
+        const redeemMatches = (await searchRecords(TABLE_REDEEM_CODE, [
+          { field_name: F.usernameUid, operator: "is", value: [uname] },
+          { field_name: F.brand, operator: "is", value: [brandVal] },
+        ])).filter((r) => !hidden(toDisplay(r.fields[F.status])));
+        return redeemMatches[redeemMatches.length - 1] || null;
+      })().catch(() => null),
     ]);
-
-    // Grace Period(Day): "SW Check" is both the claim flag (hide only
-    // Claimed/Expired) and the displayed value. "SW Check" is a Formula
-    // field, so its raw API value can come back as a segments array rather
-    // than a plain string — hidden() needs toDisplay() first, or it never
-    // matches "claimed"/"expired" and an actually-expired row can slip
-    // through as "claimable" (this was the actual bug: an expired row got
-    // picked over the real one, so the ticket ended up hidden entirely once
-    // isClaimableValue saw "Expired" client-side).
-    const graceRow = await findOldestClaimableRow(
-      TABLE_GRACE_PERIOD, uname, brandVal,
-      (fields) => !hidden(toDisplay(fields[F.swCheck]))
-    ).catch(() => null);
-
-    // Risk Player(Day): one field ("Status") encodes both which day-tier
-    // applies (e.g. "7D 20% Reload") and whether there's anything to claim
-    // at all ("1D No Bonus"/"3D No Bonus" mean no bonus, not just a claimed
-    // one). Hide "No Bonus" tiers plus Claimed/Expired.
-    //
-    // Confirmed from the real table's own column headers (2026-09-11):
-    // unlike every other bonus table here, Risk Player(Day)'s Username
-    // column is plain "Username" (not "Username/UID") and its date column
-    // is plain "Date" (not "Time of Inspection") — searching with the
-    // usual field names silently found zero rows for every customer,
-    // Lark's search API errors on an unrecognized field_name and every
-    // call site here catches that as "nothing claimable", indistinguishable
-    // from a real no-match without checking the table's own columns
-    // directly like this did.
-    const riskRow = await findOldestClaimableRow(
-      TABLE_RISK_PLAYER, uname, brandVal,
-      (fields) => {
-        const status = String(toDisplay(fields[F.status]) || "").trim();
-        return !!status && !/no bonus/i.test(status) && !hidden(status);
-      },
-      undefined,
-      { usernameField: "Username", dateField: "Date" }
-    ).catch(() => null);
-
-    // 12hour VIP Deposit Booster: only "Eligible" (exact) counts.
-    const vipRow = await findOldestClaimableRow(
-      TABLE_VIP_BOOSTER, uname, brandVal,
-      (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible"
-    ).catch(() => null);
-
-    // Special Reload Event: only "Eligible Angpao" counts — the Free Spin
-    // variant that used to live in this table is retired (kept for old
-    // record history only), so it's intentionally not checked for here.
-    const specialReloadRow = await findOldestClaimableRow(
-      TABLE_SPECIAL_RELOAD, uname, brandVal,
-      (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao"
-    ).catch(() => null);
-
-    // Telegram RM28 (2026-09-09) — repurposes the retired Ang Pao ticket's
-    // plumbing, lives on the main base like every other bonus table above.
-    // Only "Eligible" counts; display combines Status with the row's own
-    // Bonus Amount so the agent sees the real claimable amount, e.g.
-    // "Eligible — RM18" — and so the existing "grab the number after RM"
-    // extraction (already fixed for the Top 10 P&L bug) picks up the right
-    // amount for Released Amount with no new extraction logic needed.
-    const telegram28Row = await findOldestClaimableRow(
-      TABLE_TELEGRAM28, uname, brandVal,
-      (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible"
-    ).catch(() => null);
-
-    let redeemRow = null;
-    try {
-      const redeemMatches = (await searchRecords(TABLE_REDEEM_CODE, [
-        { field_name: F.usernameUid, operator: "is", value: [uname] },
-        { field_name: F.brand, operator: "is", value: [brandVal] },
-      ])).filter((r) => !hidden(toDisplay(r.fields[F.status])));
-      redeemRow = redeemMatches[redeemMatches.length - 1] || null;
-    } catch (_) { /* non-fatal */ }
 
     return {
       statusCode: 200,
