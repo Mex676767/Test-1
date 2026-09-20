@@ -53,6 +53,23 @@ export async function handler(event) {
     var dob = body.dob;
     var telegram = body.telegram;
 
+    // Unclaim: blank the four claim-related fields on the existing row.
+    // The row itself is kept (never deleted) and every other field (agent,
+    // brand, link, D.O.B, telegram...) is left untouched -- Lark's update
+    // only changes the fields sent.
+    if (body.unclaim) {
+      if (!recordId) {
+        return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId is required" }) };
+      }
+      var cleared = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, {
+        "Inquiry": [],
+        "Status": null,
+        "Released amount": null,
+        "Claim Secret": false
+      });
+      return { statusCode: 200, body: JSON.stringify({ ok: true, record: cleared }) };
+    }
+
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
     }
