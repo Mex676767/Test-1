@@ -171,6 +171,19 @@ const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 // "Eligible — RM18" etc.), so it's included here too.
 const AMOUNT_ELIGIBLE_PROGRAMS = new Set(["topPnl", "ltvTest", "gracePeriod", "telegram28"]);
 
+// Mirrors lark-record.js's own extractAmount() -- a number directly after
+// "RM" takes priority over the first plain number found, since a bonus's
+// raw display text often has other digits earlier (e.g. Top 10 P&L(Night)'s
+// real format "Batch 09-09-2026 Pass RM58" -- a naive first-number-found
+// match would grab "09" instead of the real "58").
+function extractAmountNumber(str) {
+  const s = String(str || "");
+  const rmMatch = s.match(/RM\s*(-?\d+(?:\.\d+)?)/i);
+  if (rmMatch) return rmMatch[1];
+  const match = s.match(/-?\d+(?:\.\d+)?/);
+  return match ? match[0] : "";
+}
+
 // One-line summary shown on a collapsed card — lets an agent glance across
 // several queued chats without expanding each one. Priority order matches
 // what's most actionable: a card needing attention should never be masked
@@ -1699,7 +1712,10 @@ chatListEl.addEventListener("click", async (e) => {
         s.inquiry = ["Grace Period"];
         s.status = "Given";
         s.claimSecret = true;
-        s.releasedBonusAmount = `Grace Period: ${amount || display}`;
+        // Bare number only, same convention as the generic claim path below
+        // — no "Grace Period: " label prefix (the Inquiry tag already says
+        // which bonus this is).
+        s.releasedBonusAmount = amount || display;
         s.releasedAmountRaw = amount || display;
         if (!s.escalation.amount && amount) s.escalation.amount = amount;
       }
@@ -1756,18 +1772,23 @@ chatListEl.addEventListener("click", async (e) => {
     // VIP Booster, Redeem Code, and Special Reload don't carry a claimable
     // monetary amount, so claiming one of those must leave it blank rather
     // than stuffing its status text in there.
+    //
+    // The Amount box shows just the bare number now (e.g. "18"), not the
+    // label/status text it used to ("Top 10 P&L: Pass RM18") -- confirmed
+    // live as confusing to read, and the label added nothing the Inquiry
+    // tag doesn't already say. extractAmountNumber mirrors lark-record.js's
+    // own extractAmount(): a number directly after "RM" takes priority,
+    // since a bonus's raw display text often has other digits earlier
+    // (e.g. Top 10 P&L(Night)'s real format "Batch 09-09-2026 Pass RM58" --
+    // the naive "first number found" pattern used here previously for
+    // escalation.amount would have grabbed "09" instead of "58").
     const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && AMOUNT_ELIGIBLE_PROGRAMS.has(src.key));
-    s.releasedBonusAmount = claimedSources.map((src) => `${src.label}: ${src.display}`).join(" | ");
-    // Raw display text only (no label prefix) for the backend to pull a
-    // number out of — labels like "Top 10 P&L - Test" contain digits of
-    // their own, so parsing the combined string above would grab the wrong
-    // number. Only one bonus can be claimed per case, so this is just that
-    // one entry's display value.
-    s.releasedAmountRaw = claimedSources.map((src) => src.display).join(" | ");
+    const claimedAmount = claimedSources.map((src) => extractAmountNumber(src.display)).filter(Boolean).join(" | ");
+    s.releasedBonusAmount = claimedAmount;
+    s.releasedAmountRaw = claimedAmount;
     s.claimSecret = true;
-    if (!s.escalation.amount && s.releasedAmountRaw) {
-      const numMatch = s.releasedAmountRaw.match(/-?\d+(?:\.\d+)?/);
-      if (numMatch) s.escalation.amount = numMatch[0];
+    if (!s.escalation.amount && claimedAmount) {
+      s.escalation.amount = claimedAmount.split(" | ")[0];
     }
 
     // Auto-set inquiry from the bonus type — only the matching inquiry tag,
