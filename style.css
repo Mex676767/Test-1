@@ -495,6 +495,10 @@ body {
 }
 .ticket::before { left: -7px; }
 .ticket::after { right: -7px; }
+/* .ticket-main wraps icon+body so the two-button Reactivate case (below)
+   can drop it to its own row above a full-width button row, without
+   changing the single-button layout every other ticket already has. */
+.ticket-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .ticket-icon { font-size: 18px; color: var(--gold); }
 .ticket-body { flex: 1; min-width: 0; }
 .ticket-name { font-weight: 600; font-size: 13.5px; color: var(--text); }
@@ -509,10 +513,18 @@ body {
 .claim-btn.claimed {
   background: var(--teal); border-color: var(--teal); color: var(--surface); cursor: default;
 }
+.ticket-btns { display: flex; flex-direction: row; gap: 6px; align-items: center; }
 /* Grace Period's second, always-clickable button next to Activate — lets
    CS give the customer another attempt the same day without needing the
-   first (now-disabled/claimed) button to become clickable again. */
-.ticket-btns { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+   first (now-disabled/claimed) button to become clickable again. Icon+body
+   don't leave enough room for two buttons to sit inline at real sidebar
+   widths, so this drops .ticket-main to its own row above a full-width
+   button row instead — .claim-btn's flex:1 then splits that row evenly
+   between Claim/Activate and Reactivate. Single-button tickets are
+   unaffected (no .ticket-has-reactivate class, so .ticket stays row).*/
+.ticket.ticket-has-reactivate { flex-direction: column; align-items: stretch; }
+.ticket-has-reactivate .ticket-btns { width: 100%; }
+.ticket-has-reactivate .claim-btn { flex: 1; text-align: center; }
 .claim-btn.reactivate-btn {
   border-color: var(--teal); color: var(--teal); background: none;
 }
