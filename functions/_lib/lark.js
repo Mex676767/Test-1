@@ -82,15 +82,33 @@ export async function getTenantToken() {
 
 export async function searchRecords(tableId, conditions, baseToken) {
   if (!tableId) throw new Error("Missing table ID — check env vars.");
-  const token = await getTenantToken();
-  const res = await fetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`,
-    { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ filter: { conjunction: "and", conditions } }) }
-  );
-  const data = await res.json();
-  if (data.code !== 0) throw new Error(`Lark search failed on table ${tableId}: ${data.msg}`);
-  return data.data.items || [];
+  // Retries once (2 attempts total, brief pause between) before giving up.
+  // lark-search.js runs ~9 of these in parallel per Look Up, each behind
+  // its own .catch(() => null) so one bonus's failure doesn't break the
+  // whole lookup -- but that also meant a transient blip (network hiccup,
+  // momentary 5xx, Lark rate-limiting under 9x the concurrent load since
+  // parallelizing those calls) silently dropped that one bonus from the
+  // response with zero indication anything went wrong. Confirmed live: the
+  // same player's Telegram RM28 ticket intermittently not showing up on a
+  // re-lookup with no underlying data change in between.
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const token = await getTenantToken();
+      const res = await fetch(
+        `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`,
+        { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ filter: { conjunction: "and", conditions } }) }
+      );
+      const data = await res.json();
+      if (data.code !== 0) throw new Error(`Lark search failed on table ${tableId}: ${data.msg}`);
+      return data.data.items || [];
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+  throw lastErr;
 }
 
 export async function getRecord(tableId, recordId) {
