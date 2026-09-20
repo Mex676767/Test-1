@@ -188,6 +188,7 @@ function hasAnyBonus(chatId) {
 function getChatSummary(chatId) {
   const s = state[chatId];
   if (s.isUnknown) return { text: "Unknown — not recorded", cls: "neutral" };
+  if (s.attentionIgnored) return { text: "Ignored — not recorded", cls: "neutral" };
   if (s.autoRecordError) return { text: "⚠︎ Needs attention", cls: "attention" };
   if (s.logged) return { text: "✓ Logged", cls: "done" };
   if (s.matchedRow === undefined) return { text: "Not looked up", cls: "neutral" };
@@ -2537,27 +2538,35 @@ function getIncompleteChats() {
     }));
 }
 
-// Permanently drops one chat out of the Needs Attention list -- for a case
-// an agent has decided to write off rather than ever complete (unlike
-// Unknown player, which skips logging from the start, this is for a chat
-// that already tried and failed to auto-record). Written straight into the
-// persisted blob rather than through state+saveState(), since this tab may
-// not have that chatId in memory at all if another tab is the one that
-// logged it -- going through saveState() would rebuild the whole storage
-// key from just this tab's own state and silently drop everyone else's
-// entries.
+// Permanently drops one chat out of the Needs Attention list AND stops it
+// from ever being recorded -- for a case an agent has decided to write off
+// rather than ever complete (unlike Unknown player, which skips logging
+// from the start, this is for a chat that already tried and failed to
+// auto-record). Also sets logged so sweepPendingChats' own retry loop
+// (gated on !saved.logged) stops targeting it -- attentionIgnored alone
+// only hid it from this list; the chat was still being silently retried
+// every 8s forever underneath, and could still end up recorded later if
+// the retry ever happened to succeed. Written straight into the persisted
+// blob rather than through state+saveState(), since this tab may not have
+// that chatId in memory at all if another tab is the one that logged it --
+// going through saveState() would rebuild the whole storage key from just
+// this tab's own state and silently drop everyone else's entries.
 function ignoreAttention(chatId) {
   try {
     const raw = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}");
     if (raw[chatId]) {
       raw[chatId].attentionIgnored = true;
+      raw[chatId].logged = true;
       raw[chatId]._savedAt = Date.now();
       localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
     }
   } catch (_) { /* non-fatal — e.g. private browsing blocking storage */ }
   // Mirror onto this tab's own in-memory copy too, if it has one, so this
   // tab's own periodic saveState() doesn't overwrite the flag back off.
-  if (state[chatId]) state[chatId].attentionIgnored = true;
+  if (state[chatId]) {
+    state[chatId].attentionIgnored = true;
+    state[chatId].logged = true;
+  }
   renderNeedsAttentionPanel();
 }
 
