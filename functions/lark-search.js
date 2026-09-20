@@ -34,6 +34,36 @@ function hidden(v) {
   return /\b(claimed|expired|failed)\b/.test(t);
 }
 
+// "Expried" (Grace Period's own expiry date) previously only worked when
+// Lark handed it back as a bare number -- true for a plain Date field, but
+// not guaranteed if it's actually a Formula field underneath (same
+// situation "SW Check" already needed toDisplay() for: Lark can wrap a
+// Formula's output in a segments array or a {value: ...}/{text: ...}
+// object instead of returning the raw type directly). A shape mismatch
+// here silently failed the `typeof === "number"` check and left
+// graceExpiryMs null no matter which row got picked -- confirmed live as
+// Reactivate never showing even for a genuinely not-yet-expired cycle.
+// Unwraps the same handful of shapes toDisplay() does, but returns the
+// numeric epoch itself instead of a display string.
+function toEpochMs(v) {
+  if (typeof v === "number") return v;
+  if (Array.isArray(v)) {
+    for (const item of v) {
+      const n = toEpochMs(item);
+      if (n !== null) return n;
+    }
+    return null;
+  }
+  if (v && typeof v === "object") {
+    if ("value" in v) return toEpochMs(v.value);
+    if ("text" in v) {
+      const n = Number(v.text);
+      return Number.isFinite(n) ? n : null;
+    }
+  }
+  return null;
+}
+
 export async function handler(event) {
   try {
     const { username, brand, picName, previousRecordId } = JSON.parse(event.body || "{}");
@@ -251,7 +281,7 @@ export async function handler(event) {
           // timezone formatting in Lark's UI. app.js compares it against
           // the agent's local "today" to decide whether Reactivate still
           // makes sense to offer at all.
-          graceExpiryMs: graceRow && typeof graceRow.fields[F.graceExpiry] === "number" ? graceRow.fields[F.graceExpiry] : null,
+          graceExpiryMs: graceRow ? toEpochMs(graceRow.fields[F.graceExpiry]) : null,
           riskPlayer: riskRow ? toDisplay(riskRow.fields[F.status]) : "",
           vipBooster: vipRow ? "Eligible" : "",
           specialReload: specialReloadRow
