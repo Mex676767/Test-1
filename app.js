@@ -2758,3 +2758,93 @@ document.getElementById("needsAttentionToggle").addEventListener("click", () => 
   listEl.classList.toggle("hidden", !willOpen);
   toggleBtn.classList.toggle("open", willOpen);
 });
+
+/* ============================================================
+   AUTO-UPDATE
+   Agents keep this widget open all day inside LiveChat, so a new deploy
+   never reaches them until they reload. This checks the deployed files
+   (app.js / style.css / index.html) for a change and reloads ONLY this
+   widget's iframe -- LiveChat itself is untouched.
+   - Compares each file's ETag (falls back to Last-Modified / length) from a
+     no-store HEAD request; nothing needs bumping by hand.
+   - Needs the same new signature on two checks in a row before acting, so a
+     one-off odd response can't trigger a reload.
+   - Waits until it's safe: not while the agent is typing in a box, or while
+     a Look up / unclaim request is in flight.
+   - saveState() runs first, so open chats and their claims survive.
+   - Never reloads more than once every 2 minutes (loop guard).
+   ============================================================ */
+const UPDATE_CHECK_MS = 60 * 1000;
+const UPDATE_RETRY_MS = 5 * 1000;
+const UPDATE_FILES = ["app.js", "style.css", "index.html"];
+const UPDATE_GUARD_KEY = "rc-last-auto-reload";
+let updateBaseline = null;
+let updateCandidate = null;
+let updateReloadScheduled = false;
+
+// version.json is written by Cloudflare at build time (see the build command
+// in the setup notes) and changes on EVERY deploy, including ones that only
+// touch functions/. If it isn't there, this quietly falls back to comparing
+// the static files alone. Pages serves index.html for unknown paths, so the
+// response must actually parse as JSON with a "version" to count.
+async function fetchDeployVersion() {
+  try {
+    const res = await fetch("version.json", { cache: "no-store" });
+    if (!res.ok) return "";
+    const data = await res.json();
+    return typeof data.version === "string" && data.version ? "version=" + data.version : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+async function fetchDeploySignature() {
+  const [deployVersion, ...fileParts] = await Promise.all([
+    fetchDeployVersion(),
+    ...UPDATE_FILES.map(async (f) => {
+      const res = await fetch(f, { method: "HEAD", cache: "no-store" });
+      if (!res.ok) throw new Error(f + " " + res.status);
+      return f + "=" + (res.headers.get("etag") || res.headers.get("last-modified") || res.headers.get("content-length") || "");
+    }),
+  ]);
+  return [deployVersion, ...fileParts].filter(Boolean).join("|");
+}
+
+function isSafeToAutoReload() {
+  const a = document.activeElement;
+  const typing = !!a && (a.tagName === "TEXTAREA" || a.tagName === "SELECT" ||
+    (a.tagName === "INPUT" && !["checkbox", "radio", "button"].includes(a.type)));
+  const busy = Object.values(state).some((s) => s && (s.lookupInFlight || s.unclaimInFlight));
+  return !typing && !busy;
+}
+
+function reloadWhenSafe() {
+  if (updateReloadScheduled) return;
+  updateReloadScheduled = true;
+  const attempt = () => {
+    if (!isSafeToAutoReload()) { setTimeout(attempt, UPDATE_RETRY_MS); return; }
+    const last = Number(sessionStorage.getItem(UPDATE_GUARD_KEY) || 0);
+    if (Date.now() - last < 2 * 60 * 1000) { updateReloadScheduled = false; return; }
+    sessionStorage.setItem(UPDATE_GUARD_KEY, String(Date.now()));
+    try { saveState(); } catch (e) { /* state is also saved every 3s */ }
+    location.reload();
+  };
+  attempt();
+}
+
+async function checkForUpdate() {
+  try {
+    const sig = await fetchDeploySignature();
+    if (updateBaseline === null) { updateBaseline = sig; return; }
+    if (sig === updateBaseline) { updateCandidate = null; return; }
+    if (sig === updateCandidate) { reloadWhenSafe(); return; }
+    updateCandidate = sig; // changed once -- confirm on the next check
+    setTimeout(checkForUpdate, UPDATE_RETRY_MS);
+  } catch (e) {
+    /* offline / blip -- try again next tick */
+  }
+}
+
+checkForUpdate();
+setInterval(checkForUpdate, UPDATE_CHECK_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
