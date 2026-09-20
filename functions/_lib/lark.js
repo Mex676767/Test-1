@@ -200,7 +200,7 @@ function findTimeOfInspection(fields, dateFieldName) {
   return key ? fields[key] : 0;
 }
 
-export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, dateField } = {}) {
+export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, dateField, newest } = {}) {
   if (!tableId) return null;
   const matches = await searchRecords(tableId, [
     { field_name: usernameField || "Username/UID", operator: "is", value: [username] },
@@ -209,7 +209,18 @@ export async function findOldestClaimableRow(tableId, username, brand, isClaimab
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
   claimable.sort((a, b) => (findTimeOfInspection(a.fields, dateField) || 0) - (findTimeOfInspection(b.fields, dateField) || 0));
-  return claimable[0];
+  // newest: true picks the most recent claimable row instead of the oldest.
+  // Grace Period specifically needs this -- it's a recurring weekly
+  // challenge, and an old cycle's own row can still read as "claimable"
+  // (its SW Check / Activated text doesn't change once written) well after
+  // a newer cycle has already started. Picking the oldest one there meant
+  // the Reactivate button's expiry check (graceExpiryMs) compared against
+  // a stale, already-past cycle's expiry even when a current, still-valid
+  // cycle existed -- confirmed live: a genuinely not-yet-expired Grace
+  // Period bonus wasn't showing Reactivate at all. Every other bonus table
+  // still wants the oldest (FIFO -- give the earliest-earned one first), so
+  // this defaults to the old behavior everywhere else.
+  return newest ? claimable[claimable.length - 1] : claimable[0];
 }
 
 export {

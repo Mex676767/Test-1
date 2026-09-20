@@ -156,9 +156,21 @@ export async function handler(event) {
       // through as "claimable" (this was the actual bug: an expired row got
       // picked over the real one, so the ticket ended up hidden entirely once
       // isClaimableValue saw "Expired" client-side).
+      //
+      // newest: true -- Grace Period is a recurring weekly challenge, and an
+      // old cycle's own row can still read as "claimable" long after a newer
+      // cycle has started (its SW Check/Activated text doesn't change once
+      // written). Picking the oldest claimable row (every other bonus
+      // table's correct default) meant Reactivate's own expiry check
+      // (graceExpiryMs) compared against a stale, already-past cycle even
+      // when a current, still-valid one existed -- confirmed live: a
+      // genuinely not-yet-expired Grace Period bonus wasn't showing
+      // Reactivate at all.
       findOldestClaimableRow(
         TABLE_GRACE_PERIOD, uname, brandVal,
-        (fields) => !hidden(toDisplay(fields[F.swCheck]))
+        (fields) => !hidden(toDisplay(fields[F.swCheck])),
+        undefined,
+        { newest: true }
       ).catch(() => null),
 
       // Risk Player(Day): one field ("Status") encodes both which day-tier
