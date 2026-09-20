@@ -1118,14 +1118,16 @@ function renderTickets(chatId) {
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
     return `
-    <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""}">
-      <div class="ticket-icon">◆</div>
-      <div class="ticket-body">
-        <div class="ticket-name">${d.label}</div>
-        <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.display}</div>
+    <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""}">
+      <div class="ticket-main">
+        <div class="ticket-icon">◆</div>
+        <div class="ticket-body">
+          <div class="ticket-name">${d.label}</div>
+          <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.display}</div>
+        </div>
       </div>
       <div class="ticket-btns">
-        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="claim" data-program="${d.key}" data-chat="${chatId}" ${claimed || locked ? "disabled" : ""}>
+        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : ""} ${!claimed && locked ? "disabled" : ""}>
           ${claimed ? doneLabel : claimLabel}
         </button>
         ${
@@ -1229,7 +1231,15 @@ function renderAutoFields(chatId) {
       </div>
       <div class="auto-field">
         <span class="field-label" style="margin:0">Claim Secret <span class="auto-tag">auto</span></span>
-        <div class="auto-value">${s.claimSecret ? "✓ Ticked" : "— Not ticked"}</div>
+        <!-- Auto-ticked when a bonus is claimed, but CS can flip it by hand.
+             claimSecretManual stops later auto-updates from overriding that. -->
+        <div class="auto-value" style="display:flex;align-items:center;gap:10px">
+          <label class="switch">
+            <input type="checkbox" class="secret-check" data-chat="${chatId}" ${s.claimSecret ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+          <span class="secret-label">${s.claimSecret ? "✓ Ticked" : "— Not ticked"}</span>
+        </div>
       </div>
     </div>`;
 }
@@ -1665,6 +1675,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.releasedBonusAmount = "";
       s.releasedAmountRaw = "";
       s.claimSecret = false;
+      s.claimSecretManual = false;
       if (notVip) {
         // CS only tracks VIP retention here — a confirmed non-VIP result
         // is treated the same as Unknown player: nothing about this chat
@@ -1711,7 +1722,7 @@ chatListEl.addEventListener("click", async (e) => {
         s.claimedPrograms.gracePeriod = true;
         s.inquiry = ["Grace Period"];
         s.status = "Given";
-        s.claimSecret = true;
+        if (!s.claimSecretManual) s.claimSecret = true;
         // Bare number only, same convention as the generic claim path below
         // — no "Grace Period: " label prefix (the Inquiry tag already says
         // which bonus this is).
@@ -1786,7 +1797,7 @@ chatListEl.addEventListener("click", async (e) => {
     const claimedAmount = claimedSources.map((src) => extractAmountNumber(src.display)).filter(Boolean).join(" | ");
     s.releasedBonusAmount = claimedAmount;
     s.releasedAmountRaw = claimedAmount;
-    s.claimSecret = true;
+    if (!s.claimSecretManual) s.claimSecret = true;
     if (!s.escalation.amount && claimedAmount) {
       s.escalation.amount = claimedAmount.split(" | ")[0];
     }
@@ -1821,6 +1832,72 @@ chatListEl.addEventListener("click", async (e) => {
     await submitRecord(chatId, { auto: true, reason: `${allSources.find((src) => src.key === programKey)?.label || "Bonus"} claimed` });
   }
 
+  // Click a claimed bonus again to undo it. Clears Inquiry, Status, Amount and
+  // Claim Secret in the card AND blanks them on the existing Customer
+  // Approaching record (the row itself is kept, never deleted). Claiming
+  // auto-submits instantly (s.logged = true), so if it was already written
+  // to Lark we send an unclaim update first, and only reset the card once
+  // that succeeds -- otherwise the card would say "cleared" while Lark still
+  // holds the old values. s.logged goes back to false so a re-claim (or the
+  // normal record-on-close) can write the record again.
+  //
+  // Telegram RM28 / Redeem Code / Special Reload: their claim also set the
+  // source table's own Status to "Claimed" (which fires the backoffice
+  // workflow). That is deliberately NOT touched here -- only the Customer
+  // Approaching record is cleared.
+  if (btn.dataset.action === "unclaim") {
+    if (s.unclaimInFlight) return;
+    const programKey = btn.dataset.program;
+    const wasGraceActivationOnly = programKey === "gracePeriod" && s.gracePeriodActivated && !s.claimedPrograms.gracePeriod;
+    s.unclaimInFlight = true;
+    btn.disabled = true;
+    try {
+      if (s.logged && s.caRecordId && !s.isUnknown) {
+        const res = await fetch("/lark-record", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recordId: s.caRecordId, unclaim: true }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "Unclaim failed");
+      }
+    } catch (err) {
+      s.unclaimInFlight = false;
+      btn.disabled = false;
+      setStatus("Unclaim failed: " + err.message, "error");
+      return;
+    }
+    s.unclaimInFlight = false;
+
+    const prevFirstAmount = String(s.releasedBonusAmount || "").split(" | ")[0];
+    if (wasGraceActivationOnly) s.gracePeriodActivated = false;
+    s.claimedPrograms = {};
+    s.inquiry = [];
+    s.status = "";
+    s.releasedBonusAmount = "";
+    s.releasedAmountRaw = "";
+    s.claimSecret = false;
+    s.claimSecretManual = false;
+    if (prevFirstAmount && s.escalation.amount === prevFirstAmount) s.escalation.amount = "";
+    s.logged = false;
+    s.autoRecordError = "";
+    // Polling stops once a chat is logged -- restart it so the chat closing
+    // still triggers the normal auto-record.
+    if (s.chatOpen && activeChats[0]?.chatId === chatId) startChatStatusPolling(chatId);
+
+    const special = programKey === "telegram28" || programKey === "redeemCode" || programKey === "specialReload";
+    setStatus(special
+      ? "Unclaimed — record cleared. The source table's Claimed status was left as is."
+      : "Unclaimed — Inquiry, Status, Amount and Claim Secret cleared.", "success");
+    card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+    card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
+    refreshInquiryChips(card, chatId);
+    card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
+    refreshStatusChip(card, chatId);
+    card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+    renderChats(activeChats);
+  }
+
   // A customer can fail to complete the Grace Period challenge whether
   // they're mid-activation or already at the claim stage, so this sits
   // alongside Activate/Claim always (see renderTickets) rather than only
@@ -1843,6 +1920,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.releasedBonusAmount = "";
       s.releasedAmountRaw = "";
       s.claimSecret = false;
+      s.claimSecretManual = false;
     }
     logDiagnostic("Grace Period reactivated — customer can attempt the challenge again today.", "success");
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
@@ -2118,6 +2196,22 @@ chatListEl.addEventListener("input", (e) => {
 // selectBrand action handler above, since it's a custom dropdown, not a
 // native <select>, anymore.)
 chatListEl.addEventListener("change", (e) => {
+  // Claim Secret: auto-ticked on claim, but editable. If the record was
+  // already written to Lark (claims auto-submit), push the edit through too,
+  // otherwise it would only change on screen.
+  const secretCheck = e.target.closest(".secret-check");
+  if (secretCheck) {
+    const s = state[secretCheck.dataset.chat];
+    if (s) {
+      s.claimSecret = secretCheck.checked;
+      s.claimSecretManual = true;
+      const label = secretCheck.closest(".auto-value")?.querySelector(".secret-label");
+      if (label) label.textContent = s.claimSecret ? "✓ Ticked" : "— Not ticked";
+      if (s.logged) resyncLoggedRecord(secretCheck.dataset.chat);
+      saveState();
+    }
+    return;
+  }
   const tgCheck = e.target.closest(".tg-check");
   if (tgCheck) {
     const s = state[tgCheck.dataset.chat];
@@ -2255,6 +2349,38 @@ document.addEventListener("click", (e) => {
     }
   });
 });
+
+// Re-sends an already-logged chat's record with its current values -- used
+// when something is edited AFTER the instant claim auto-submit (submitRecord
+// returns early once s.logged is set, so it can't do this itself).
+async function resyncLoggedRecord(chatId) {
+  const s = state[chatId];
+  if (!s || !s.logged || !s.caRecordId || s.isUnknown || !s.inquiry.length || !s.status) return;
+  try {
+    const res = await fetch("/lark-record", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recordId: s.caRecordId,
+        agentName: selectedAgent,
+        brand: s.brand,
+        inquiry: s.inquiry,
+        status: s.status,
+        releasedAmount: s.releasedBonusAmount,
+        releasedAmountRaw: s.releasedAmountRaw,
+        claimSecret: s.claimSecret,
+        chatLink: s.chatUrl || activeChats.find((c) => c.chatId === chatId)?.link || "",
+        dob: s.dob || "",
+        telegram: !!s.telegram,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Update failed");
+    setStatus("Claim Secret updated in Lark Base.", "success");
+  } catch (err) {
+    setStatus("Couldn't update Lark: " + err.message, "error");
+  }
+}
 
 // Shared by the manual "Record to Lark Base" button and the auto-record
 // triggered when a chat closes. Pulls Brand/Status straight from the DOM
