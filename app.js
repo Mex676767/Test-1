@@ -278,6 +278,44 @@ function chatFromProfile(profile) {
   };
 }
 
+// Finds the card (state key) for an archived-chat profile. Cards are keyed
+// by thread id, which is the id in /archives/{thread_id} -- and also the
+// second segment of the /chats/{chat_id}/{thread_id} link saved in
+// s.chatUrl, so both are checked. Deliberately NOT matched on chat_id (the
+// first segment): that one is shared by every past session of the same
+// customer and could open the wrong session's card.
+function findTrackedChatByThread(profile) {
+  const chat = (profile && profile.chat) || {};
+  const candidates = new Set(
+    [chat.id, chat.threadId, chat.thread_id, chat.thread && chat.thread.id]
+      .filter(Boolean)
+      .map(String)
+  );
+  if (!candidates.size) return "";
+  for (const [key, s] of Object.entries(state)) {
+    if (!s) continue;
+    if (candidates.has(key)) return key;
+    const m = String(s.chatUrl || "").match(/\/chats\/[^/]+\/([^/?#]+)/);
+    if (m && candidates.has(m[1])) return key;
+  }
+  return "";
+}
+
+function showTrackedArchivedChat(trackedId, profile) {
+  const s = state[trackedId];
+  stopChatStatusPolling();
+  activeChats = [{
+    chatId: trackedId,
+    customerName: (profile && profile.name) || (s.matchedRow && s.matchedRow.customerName) || s.username || "Unknown customer",
+    link: s.chatUrl || "",
+    isTelegram: !!s.telegram,
+    groupName: "",
+  }];
+  s.expanded = true;
+  renderChats(activeChats);
+  setStatus("Archived chat — showing its saved card.");
+}
+
 // Set once the SDK actually connects — lets the Refresh button re-sync
 // against the real widget on demand instead of always claiming "preview
 // mode", which stopped being accurate the moment live mode existed.
@@ -301,6 +339,20 @@ function applyProfile(profile) {
   // for either of the other two, so only "chats" is treated as an actual
   // active chat; everything else clears the widget the same as no profile
   // at all, rather than silently tracking something that's already over.
+  // Exception: an archived chat this widget already has a card for. Once a
+  // chat ends, LiveChat rewrites its link from /chats/{chat_id}/{thread_id}
+  // to /archives/{thread_id}, so clicking Open on a Needs Attention card
+  // lands here as an "archives" profile, not "chats". Matched by thread id
+  // (the second id, and the key every card is stored under), so the agent
+  // gets their own saved card back to finish and record it -- nothing is
+  // tracked or polled, since the chat is already over.
+  if (profile.source === "archives") {
+    const trackedId = findTrackedChatByThread(profile);
+    if (trackedId) {
+      showTrackedArchivedChat(trackedId, profile);
+      return;
+    }
+  }
   if (profile.source && profile.source !== "chats") {
     stopChatStatusPolling();
     activeChats = [];
@@ -344,7 +396,10 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     const res = await fetch("/livechat-group-name", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ groupID }),
+      // chatId here is the thread id (see chatFromProfile) -- lets the server
+      // find which LiveChat account owns the chat, since a group ID alone is
+      // only unique within one account.
+      body: JSON.stringify({ groupID, threadId: chatId }),
     });
     const data = await res.json();
     if (!data.ok || !data.groupName) {
@@ -385,7 +440,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     // field, which expects e.g. "VS96" not "VS" -- only fills in if blank,
     // same as Brand itself, so a manual pick there sticks too.
     if (!s.escalation.brand) s.escalation.brand = deriveFullBrandCode(data.groupName);
-    logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}".`);
+    logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}"${data.groups && data.groups.length > 1 ? ` (chat's groups: ${data.groups.join(", ")})` : ""}.`);
     if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
     checkLastUsername(chatId); // brand is one of the two things this needs — try now that it's ready
   } catch (err) {
@@ -668,7 +723,7 @@ function initLiveChatSdk() {
 function deriveBrandFromGroup(groupName) {
   if (!groupName) return "";
   return groupName
-    .replace(/\s*(priority support|general)\s*/i, "")
+    .replace(/\s*(prior\w*\s+support|general)\s*/i, "")
     .replace(/\d+/g, "")
     // Strips emoji (e.g. the flag LiveChat group names wrap the brand code
     // in) — Extended_Pictographic covers most emoji, Regional_Indicator
@@ -685,7 +740,7 @@ function deriveBrandFromGroup(groupName) {
 function deriveFullBrandCode(groupName) {
   if (!groupName) return "";
   return groupName
-    .replace(/\s*(priority support|general)\s*/i, "")
+    .replace(/\s*(prior\w*\s+support|general)\s*/i, "")
     .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
