@@ -217,7 +217,8 @@ function getChatSummary(chatId) {
 // button client-side even after the server itself stopped selecting it.
 function isHiddenStatus(v) {
   const t = String(v || "").trim().toLowerCase();
-  return /\b(claimed|expired|failed)\b/.test(t);
+  // "Not Eligible" / "Ineligible" = nothing to claim, same as Expired/Failed.
+  return /\b(claimed|expired|failed|not\s+eligible|ineligible)\b/.test(t);
 }
 
 // Excludes: empty, "XD No Bonus" pattern, and Expired/Claimed
@@ -1141,6 +1142,194 @@ function renderPlayerInfo(chatId) {
   return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
 }
 
+// ---------------------------------------------------------------------
+// Multiple cases per chat
+// One chat can hold several separate Customer Approaching rows -- e.g. the
+// customer asks about a free spin, then later about a deposit -- each with
+// its own Inquiry / Status / Amount / Claim Secret. Username, brand, D.O.B,
+// Telegram and the chat link carry over. The fields on state[chatId] always
+// describe the ONE open case; every other case is parked in s.logs[] as a
+// snapshot, and every parked case is already recorded in Lark. "Edit" swaps
+// a parked case back in (parking the current one), so all the existing
+// claim / unclaim / record code keeps working on "the open case" untouched.
+// ---------------------------------------------------------------------
+const CASE_CONTENT_KEYS = [
+  "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
+  "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
+];
+const CASE_KEYS = [
+  ...CASE_CONTENT_KEYS,
+  "caseNo", "caRecordId", "matchedRow", "otherBrandMatches", "claimSecretManual",
+  "logged", "autoRecordError", "loggedSnapshot",
+];
+const addingCaseFor = new Set(); // chatIds with an add/edit in flight (not persisted, so it can never get stuck)
+
+// What actually gets written to Lark for a case -- used to tell whether a
+// logged case has been changed since it was last saved.
+function caseContentJson(s) {
+  const o = {};
+  for (const k of CASE_CONTENT_KEYS) o[k] = s[k] === undefined ? null : s[k];
+  return JSON.stringify(o);
+}
+function markCaseRecorded(s) { s.loggedSnapshot = caseContentJson(s); }
+function isCaseDirty(s) {
+  return !!s.logged && !!s.loggedSnapshot && caseContentJson(s) !== s.loggedSnapshot;
+}
+function isCaseEmpty(s) {
+  return !s.logged && !(s.inquiry || []).length && !s.status
+    && !Object.values(s.claimedPrograms || {}).some(Boolean) && !s.gracePeriodActivated;
+}
+function snapshotCase(s) {
+  const o = {};
+  for (const k of CASE_KEYS) if (s[k] !== undefined) o[k] = JSON.parse(JSON.stringify(s[k]));
+  return o;
+}
+function loadCaseInto(s, snap) {
+  for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
+}
+function usedProgramsInOtherCases(s) {
+  const used = new Set();
+  for (const c of (s.logs || [])) {
+    for (const [k, v] of Object.entries(c.claimedPrograms || {})) if (v) used.add(k);
+  }
+  return used;
+}
+function caseAmountText(c) {
+  const raw = String(c.releasedAmountRaw || c.releasedBonusAmount || "").trim();
+  const rm = raw.match(/RM\s*-?\d+(?:\.\d+)?/i);
+  if (rm) return rm[0].replace(/\s+/g, "");
+  return /^-?\d+(?:\.\d+)?$/.test(raw) ? "RM" + raw : "";
+}
+function caseSummaryText(c) {
+  const parts = [(c.inquiry || []).join(" + ") || "no inquiry", c.status || "no status"];
+  const amt = caseAmountText(c);
+  if (amt) parts.push(amt);
+  return parts.join(" · ");
+}
+
+function renderCasesBar(chatId) {
+  const s = state[chatId];
+  if (!s || s.isUnknown) return "";
+  const logs = (s.logs || []).slice().sort((a, b) => (a.caseNo || 0) - (b.caseNo || 0));
+  if (!s.caRecordId && !logs.length) return "";
+  const busy = addingCaseFor.has(chatId) || s.lookupInFlight;
+  const dirty = isCaseDirty(s);
+  const rows = logs.map((c) => `
+    <div class="case-row">
+      <span class="case-tag">Case ${c.caseNo}</span>
+      <span class="case-summary">${caseSummaryText(c)}</span>
+      <button type="button" class="case-edit-btn" data-action="editCase" data-case="${c.caseNo}" data-chat="${chatId}" ${busy ? "disabled" : ""}>Edit</button>
+    </div>`).join("");
+  const current = logs.length ? `
+    <div class="case-row current">
+      <span class="case-tag">Case ${s.caseNo || 1} · open</span>
+      <span class="case-summary">${caseSummaryText(s)}</span>
+    </div>` : "";
+  return `
+    <div class="cases-bar">
+      ${logs.length ? `<label class="field-label">Cases in this chat</label>${rows}${current}` : ""}
+      <div class="cases-actions">
+        ${dirty ? `<button type="button" class="save-case-btn" data-action="saveCase" data-chat="${chatId}" ${busy ? "disabled" : ""}>Save changes</button>` : ""}
+        <button type="button" class="add-case-btn" data-action="addCase" data-chat="${chatId}" ${busy || !s.caRecordId ? "disabled" : ""} title="Record this case, then start another one for the same customer">+ Log another case</button>
+      </div>
+    </div>`;
+}
+
+// Makes sure the open case is saved in Lark before anything moves on from
+// it. Resolves true only if it is.
+async function ensureActiveCaseSaved(chatId) {
+  const s = state[chatId];
+  if (s.logged && !isCaseDirty(s)) return true;
+  if (s.logged) return resyncLoggedRecord(chatId);
+  await submitRecord(chatId, { auto: false }); // shows its own "missing …" / error message
+  return !!s.logged;
+}
+
+// Start another case: record the open one, THEN run a fresh lookup (so any
+// bonus the first case just claimed is already accounted for), park the
+// finished case and open a clean one.
+async function addCaseFlow(chatId) {
+  const s = state[chatId];
+  if (!s || addingCaseFor.has(chatId) || s.lookupInFlight) return;
+  if (!s.username || !s.caRecordId || !s.brand || s.isUnknown) {
+    setStatus("Look up the username first.", "error");
+    return;
+  }
+  if (!selectedAgent) { openSettingsPanel(); return; }
+  addingCaseFor.add(chatId);
+  renderChats(activeChats);
+  try {
+    if (!(await ensureActiveCaseSaved(chatId))) return;
+    const chatDef = activeChats.find((c) => c.chatId === chatId);
+    const { row, otherBrands, caRecordId } = await fetchBonusRow(
+      s.username, s.brand, s.chatUrl || (chatDef && chatDef.link) || "", !!s.telegram, selectedAgent, null
+    );
+    s.logs = s.logs || [];
+    s.logs.push(snapshotCase(s));
+    const nextNo = Math.max(s.caseNo || 1, ...s.logs.map((c) => c.caseNo || 0)) + 1;
+    s.caseNo = nextNo;
+    s.caRecordId = caRecordId;
+    s.matchedRow = row;
+    s.otherBrandMatches = otherBrands;
+    s.claimedPrograms = {};
+    s.gracePeriodActivated = false;
+    s.inquiry = [];
+    s.status = "";
+    s.releasedBonusAmount = "";
+    s.releasedAmountRaw = "";
+    s.claimSecret = false;
+    s.claimSecretManual = false;
+    s.logged = false;
+    s.autoRecordError = "";
+    s.loggedSnapshot = "";
+    setStatus(`Case ${nextNo} started — fill in its inquiry and status.`, "success");
+    if (s.chatOpen && activeChats[0] && activeChats[0].chatId === chatId) startChatStatusPolling(chatId);
+  } catch (err) {
+    setStatus("Couldn't start another case: " + err.message, "error");
+  } finally {
+    addingCaseFor.delete(chatId);
+    renderChats(activeChats);
+    saveState();
+  }
+}
+
+// Swap a parked case back in for editing. The open case is parked first
+// (saved to Lark), or -- if it was never touched -- its blank Lark row is
+// removed instead of leaving an empty case behind.
+async function editCaseFlow(chatId, caseNo) {
+  const s = state[chatId];
+  if (!s || addingCaseFor.has(chatId)) return;
+  if (!(s.logs || []).some((c) => c.caseNo === caseNo)) return;
+  addingCaseFor.add(chatId);
+  renderChats(activeChats);
+  try {
+    if (isCaseEmpty(s)) {
+      if (s.caRecordId) {
+        fetch("/lark-delete-record", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recordId: s.caRecordId }),
+        }).catch(() => { /* non-fatal — worst case a blank row stays in Lark */ });
+      }
+    } else {
+      if (!(await ensureActiveCaseSaved(chatId))) return;
+      s.logs.push(snapshotCase(s));
+    }
+    const i = s.logs.findIndex((c) => c.caseNo === caseNo);
+    const [target] = s.logs.splice(i, 1);
+    loadCaseInto(s, target);
+    s.logged = true;
+    markCaseRecorded(s);
+    setStatus(`Editing case ${s.caseNo}. Click "Save changes" when you're done.`);
+  } catch (err) {
+    setStatus("Couldn't open that case: " + err.message, "error");
+  } finally {
+    addingCaseFor.delete(chatId);
+    renderChats(activeChats);
+    saveState();
+  }
+}
+
 function renderTickets(chatId) {
   const s = state[chatId];
   if (s.matchedRow === undefined) {
@@ -1157,8 +1346,12 @@ function renderTickets(chatId) {
   // Build one unified list of ticket definitions across all 3 sources —
   // the "only 1 claimable per case" lock applies across all of them together.
   const defs = [];
+  // A bonus claimed in an earlier case of this chat stays gone even if Lark
+  // hasn't caught up yet (its source row can lag behind).
+  const usedElsewhere = usedProgramsInOtherCases(s);
 
   BONUS_PROGRAMS.forEach((p) => {
+    if (usedElsewhere.has(p.key)) return;
     if (!isClaimableValue(r[p.key])) return;
     const def = { key: p.key, kind: "regular", label: p.label, display: r[p.key] };
     // Grace Period's one field packs two different states: "Pass ..." means
@@ -1192,18 +1385,18 @@ function renderTickets(chatId) {
     defs.push(def);
   });
 
-  if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) {
+  if (r.telegram28 && !usedElsewhere.has("telegram28") && !isHiddenStatus(r.telegram28.status)) {
     defs.push({ key: "telegram28", kind: "special", label: "Telegram RM28", display: r.telegram28.status });
   }
 
-  if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) {
+  if (r.redeemCode && !usedElsewhere.has("redeemCode") && !isHiddenStatus(r.redeemCode.status)) {
     defs.push({ key: "redeemCode", kind: "special", label: "Redeem Code", display: r.redeemCode.status, isCode: true });
   }
 
   // Distinct from the standalone "Telegram RM28" ticket above — this is the
   // Special Reload Event table's Ang Pao variant (its Free Spin variant is
   // retired). Already pre-filtered server-side to only "Eligible Angpao".
-  if (r.specialReload) {
+  if (r.specialReload && !usedElsewhere.has("specialReload")) {
     defs.push({ key: "specialReload", kind: "special", label: "Special Reload (Ang Pao)", display: r.specialReload.status });
   }
 
@@ -1431,6 +1624,8 @@ function renderExpandedCard(chat) {
               : `<button class="submit-btn" data-action="submit" data-chat="${chat.chatId}">Record to Lark Base</button>`
     }
 
+    <div class="cases-slot">${renderCasesBar(chat.chatId)}</div>
+
     ${ESCALATION_TICKET_ENABLED ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
   `;
 }
@@ -1505,6 +1700,10 @@ function ensureChatState(chat) {
   if (state[chat.chatId]) return;
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
+    // Extra cases logged in this same chat (see the "Multiple cases" block
+    // above renderTickets). The fields above always describe the ONE case
+    // currently open for editing; earlier cases are parked in logs[].
+    logs: [], caseNo: 1, loggedSnapshot: "",
     gracePeriodActivated: false,
     brand: deriveBrandFromGroup(chat.groupName),
     // C9MYR CS-PYM Escalation Ticket -- a separate Lark base/table entirely,
@@ -1726,6 +1925,20 @@ function closeAllDropdowns() {
 /* ============================================================
    EVENTS (delegated — cards re-render often)
    ============================================================ */
+// The cases bar ("Save changes" appears once a logged case is edited) is
+// refreshed after any click / input / change inside a card, since many
+// handlers only update their own slot instead of re-rendering the card.
+function refreshCasesSlotLater(e) {
+  const id = e.target.closest && e.target.closest(".chat-card")?.dataset.chatId;
+  if (!id) return;
+  setTimeout(() => {
+    const card = chatListEl.querySelector(`.chat-card[data-chat-id="${id}"]`);
+    const slot = card && card.querySelector(".cases-slot");
+    if (slot && state[id]) slot.innerHTML = renderCasesBar(id);
+  }, 0);
+}
+["click", "input", "change"].forEach((t) => chatListEl.addEventListener(t, refreshCasesSlotLater));
+
 chatListEl.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-action]");
   if (!btn) return;
@@ -1985,6 +2198,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.claimSecretManual = false;
     if (prevFirstAmount && s.escalation.amount === prevFirstAmount) s.escalation.amount = "";
     s.logged = false;
+    s.loggedSnapshot = "";
     s.autoRecordError = "";
     // Polling stops once a chat is logged -- restart it so the chat closing
     // still triggers the normal auto-record.
@@ -2063,6 +2277,21 @@ chatListEl.addEventListener("click", async (e) => {
     // flag is cleared too, or the next background re-render would reopen it.
     card.querySelector(".inquiry-dropdown").classList.add("hidden");
     s.inquiryDropdownOpen = false;
+  }
+
+  if (btn.dataset.action === "addCase") {
+    await addCaseFlow(chatId);
+  }
+
+  if (btn.dataset.action === "editCase") {
+    await editCaseFlow(chatId, Number(btn.dataset.case));
+  }
+
+  if (btn.dataset.action === "saveCase") {
+    if (addingCaseFor.has(chatId)) return;
+    addingCaseFor.add(chatId);
+    try { await resyncLoggedRecord(chatId); } finally { addingCaseFor.delete(chatId); }
+    renderChats(activeChats);
   }
 
   if (btn.dataset.action === "submit") {
@@ -2459,7 +2688,11 @@ document.addEventListener("click", (e) => {
 // returns early once s.logged is set, so it can't do this itself).
 async function resyncLoggedRecord(chatId) {
   const s = state[chatId];
-  if (!s || !s.logged || !s.caRecordId || s.isUnknown || !s.inquiry.length || !s.status) return;
+  if (!s || !s.logged || !s.caRecordId || s.isUnknown) return false;
+  if (!s.inquiry.length || !s.status) {
+    setStatus("Add an inquiry and a status before saving.", "error");
+    return false;
+  }
   try {
     const res = await fetch("/lark-record", {
       method: "POST",
@@ -2480,9 +2713,12 @@ async function resyncLoggedRecord(chatId) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Update failed");
-    setStatus("Claim Secret updated in Lark Base.", "success");
+    markCaseRecorded(s);
+    setStatus("Changes saved to Lark Base.", "success");
+    return true;
   } catch (err) {
     setStatus("Couldn't update Lark: " + err.message, "error");
+    return false;
   }
 }
 
@@ -2611,6 +2847,7 @@ async function submitRecord(chatId, { auto, reason } = {}) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Record failed");
     s.logged = true;
+    markCaseRecorded(s);
     setStatus(`Logged ${s.username} to Lark Base${auto ? ` (auto — ${reasonText.toLowerCase()})` : ""}.`, "success");
     renderChats(activeChats);
   } catch (err) {

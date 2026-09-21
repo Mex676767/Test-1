@@ -670,3 +670,24 @@ body {
 .escalation-field-wide { flex-basis: 100%; }
 .escalation-field-wide textarea.input { resize: vertical; min-height: 44px; }
 .escalation-submit-btn { margin-top: 14px; }
+
+
+/* ---------- Multiple cases per chat ---------- */
+.cases-bar { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.case-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; font-size: 12px;
+}
+.case-row.current { border-color: var(--blue); }
+.case-tag { font-weight: 600; color: var(--text); white-space: nowrap; }
+.case-row.current .case-tag { color: var(--blue); }
+.case-summary { flex: 1; min-width: 0; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.case-edit-btn, .add-case-btn, .save-case-btn {
+  background: none; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.case-edit-btn:hover:not(:disabled), .add-case-btn:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.save-case-btn { border-color: var(--gold); color: var(--gold); }
+.save-case-btn:hover:not(:disabled) { background: var(--gold); color: var(--surface); }
+.case-edit-btn:disabled, .add-case-btn:disabled, .save-case-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.cases-actions { display: flex; gap: 8px; justify-content: flex-end; }
