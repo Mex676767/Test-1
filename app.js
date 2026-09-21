@@ -324,6 +324,42 @@ let liveWidget = null;
 
 // Top-level (not nested in initLiveChatSdk's closure) so the Refresh button
 // can also call this directly for a manual re-sync.
+// Small, self-dismissing on-screen confirmation, separate from the
+// diagnostics-only statusBar (see setStatus -- routine confirmations are
+// deliberately silent there). This one is specifically for "which chat did
+// that action just affect" -- the thing CS has no other way to check in the
+// moment, handling several chats at once.
+let chatToastTimer = null;
+function showChatToast(text, kind) {
+  let el = document.getElementById("chatToast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "chatToast";
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.className = "chat-toast " + (kind || "info") + " visible";
+  clearTimeout(chatToastTimer);
+  chatToastTimer = setTimeout(() => el.classList.remove("visible"), kind === "warn" ? 6000 : 3000);
+}
+
+// Called right before applyProfile swaps to a different chat -- this is the
+// exact moment a stray click could otherwise land on the wrong customer.
+// Flags it loudly, and extra loudly if the chat being swapped AWAY from had
+// something unsaved (a typed-but-not-looked-up username, or a lookup still
+// in flight) -- that's the specific situation that can turn into recording
+// one customer's case under a different one's card.
+function announceChatSwitch(prevChatId, nextChat) {
+  const prev = prevChatId ? state[prevChatId] : null;
+  const hadUnsaved = !!(prev && (prev.usernameDraft || prev.lookupInFlight));
+  const nextLabel = nextChat.customerName || nextChat.chatId;
+  if (hadUnsaved) {
+    showChatToast(`⚠ Switched chats before "${prev.usernameDraft || "a lookup"}" was submitted — now viewing ${nextLabel}. Come back to the other chat to finish it.`, "warn");
+  } else if (prevChatId && prevChatId !== nextChat.chatId) {
+    showChatToast(`Now viewing ${nextLabel}`, "info");
+  }
+}
+
 function applyProfile(profile) {
   if (!profile || !profile.chat || !profile.chat.id) {
     stopChatStatusPolling();
@@ -366,6 +402,7 @@ function applyProfile(profile) {
     return;
   }
   const chat = chatFromProfile(profile);
+  announceChatSwitch(activeChats[0]?.chatId, chat);
   activeChats = [chat];
   // In live mode there's only ever one chat shown at a time, so a newly-
   // active chat should always render expanded — collapsing exists to save
@@ -1138,6 +1175,9 @@ function renderPlayerInfo(chatId) {
       parts.push(`<span><span class="pi-label">Name</span> ${s.matchedRow.customerName}</span>`);
     }
     parts.push(`<span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span>`);
+    if (s.forcedVipFor && !s.matchedRow.tier) {
+      parts.push(`<span><span class="pi-label">Note</span> Not on the VIP list yet — force looked up</span>`);
+    }
   }
   return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
 }
@@ -1570,8 +1610,8 @@ function renderExpandedCard(chat) {
 
     <label class="field-label">Username</label>
     <div class="username-row">
-      <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.username}" ${s.isUnknown ? "disabled" : ""} />
-      <button class="lookup-btn" data-action="lookup" data-chat="${chat.chatId}" ${s.isUnknown || s.lookupInFlight ? "disabled" : ""}>${s.lookupInFlight ? "…" : "Look up"}</button>
+      <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
+      <button class="lookup-btn ${s.notVipResult ? "force" : ""}" data-action="lookup" data-chat="${chat.chatId}" ${(s.isUnknown && !s.notVipResult) || s.lookupInFlight ? "disabled" : ""} ${s.notVipResult ? 'title="Not on the VIP list — look up again anyway and keep them as a VIP"' : ""}>${s.lookupInFlight ? "…" : (s.notVipResult ? "Force lookup" : "Look up")}</button>
     </div>
     <label class="unknown-toggle">
       <input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} />
@@ -1704,6 +1744,11 @@ function ensureChatState(chat) {
     // above renderTickets). The fields above always describe the ONE case
     // currently open for editing; earlier cases are parked in logs[].
     logs: [], caseNo: 1, loggedSnapshot: "",
+    // Set when a Look up came back "Not VVIP" and auto-marked the chat
+    // Unknown -- turns the Look up button into "Force lookup". forcedVipFor
+    // remembers a username CS force-looked-up so a repeat lookup of the same
+    // player isn't auto-marked Unknown all over again.
+    notVipResult: false, forcedVipFor: "",
     gracePeriodActivated: false,
     brand: deriveBrandFromGroup(chat.groupName),
     // C9MYR CS-PYM Escalation Ticket -- a separate Lark base/table entirely,
@@ -1725,6 +1770,13 @@ function ensureChatState(chat) {
     lastUsernameChecked: false, lastUsernameFound: false, lastUsernameValue: "",
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "", dobView: null,
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
+    // Typed-but-not-yet-looked-up text in the username box, saved on every
+    // keystroke (see the "input" listener below). Restores what CS was
+    // typing if LiveChat swaps this widget to a different chat mid-typing
+    // (a new incoming chat can steal focus at any moment) and they come
+    // back to this one later — the box never silently reverts to blank,
+    // and a stray click on a since-swapped-in card can't submit it either.
+    usernameDraft: "",
     // Ticked when the customer never gave a username — unknown players
     // aren't counted toward chat data, so this skips recording entirely
     // (see submitRecord) rather than treating a blank username as an
@@ -1939,6 +1991,13 @@ function refreshCasesSlotLater(e) {
 }
 ["click", "input", "change"].forEach((t) => chatListEl.addEventListener(t, refreshCasesSlotLater));
 
+chatListEl.addEventListener("input", (e) => {
+  const input = e.target.closest(".username-input");
+  if (!input) return;
+  const id = input.closest(".chat-card")?.dataset.chatId;
+  if (id && state[id]) state[id].usernameDraft = input.value;
+});
+
 chatListEl.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-action]");
   if (!btn) return;
@@ -1967,9 +2026,16 @@ chatListEl.addEventListener("click", async (e) => {
     const brand = s.brand;
     if (!brand) { setStatus("Brand hasn't been auto-detected yet for this chat — try again in a moment.", "error"); return; }
     s.username = username;
+    s.usernameDraft = "";
     if (!s.escalation.memberUserId) s.escalation.memberUserId = username;
     const chatDef = activeChats.find((c) => c.chatId === chatId);
     const telegramNow = card.querySelector(".tg-check").checked;
+    // "Force lookup": the last lookup said Not VVIP and auto-ticked Unknown.
+    // CS is saying the player is VIP anyway (the list just isn't updated
+    // yet), so un-mark Unknown up front and don't auto-mark it again below.
+    const forcing = !!s.notVipResult;
+    if (forcing) s.isUnknown = false;
+    let needFullRender = forcing;
     s.lookupInFlight = true;
     btn.disabled = true;
     btn.textContent = "…";
@@ -1994,24 +2060,37 @@ chatListEl.addEventListener("click", async (e) => {
       s.releasedAmountRaw = "";
       s.claimSecret = false;
       s.claimSecretManual = false;
-      if (notVip) {
+      const sameForced = !!s.forcedVipFor && s.forcedVipFor.toLowerCase() === username.toLowerCase();
+      showChatToast(`✓ Looked up "${username}" — ${brand}`, "info");
+      if (notVip && !forcing && !sameForced) {
         // CS only tracks VIP retention here — a confirmed non-VIP result
         // is treated the same as Unknown player: nothing about this chat
-        // should end up in Customer Approaching (see setUnknown). Needs its
-        // own full renderChats() (not just the three targeted slots below)
-        // since the checkbox/username row itself lives outside all three.
-        setUnknown(chatId, true);
-        renderChats(activeChats);
-        setStatus("Not VVIP — marked Unknown player.", "error");
+        // should end up in Customer Approaching (see setUnknown). The
+        // checkbox/username row lives outside the three targeted slots
+        // below, so this needs a full render -- done after the in-flight
+        // flag clears, so the button comes back as "Force lookup".
+        s.notVipResult = true;
+        s.forcedVipFor = "";
+        setUnknown(chatId, true, { silent: true });
+        needFullRender = true;
+        setStatus('Not VVIP — marked Unknown player. Use "Force lookup" if they are VIP but not on the list yet.', "error");
+      } else if (notVip) {
+        s.notVipResult = false;
+        s.forcedVipFor = username;
+        setStatus(`Force lookup: ${username} isn't on the VIP list yet — kept as a VIP.`);
       } else {
+        s.notVipResult = false;
+        s.forcedVipFor = "";
         setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
       }
     } catch (err) {
+      if (forcing) s.isUnknown = true; // failed force lookup -- back to how it was
       setStatus("Lookup failed: " + err.message, "error");
     }
     s.lookupInFlight = false;
     btn.disabled = false;
-    btn.textContent = "Look up";
+    btn.textContent = s.notVipResult ? "Force lookup" : "Look up";
+    if (needFullRender) renderChats(activeChats);
     card.querySelector(".player-info-slot").innerHTML = renderPlayerInfo(chatId);
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
@@ -2562,6 +2641,8 @@ chatListEl.addEventListener("change", (e) => {
   }
   const unknownCheck = e.target.closest(".unknown-check");
   if (unknownCheck) {
+    const uState = state[unknownCheck.dataset.chat];
+    if (uState) uState.notVipResult = false; // a manual tick/untick ends the "Force lookup" offer
     setUnknown(unknownCheck.dataset.chat, unknownCheck.checked);
     renderChats(activeChats);
     saveState();
@@ -2578,25 +2659,46 @@ chatListEl.addEventListener("change", (e) => {
 // right after (the checkbox handler above, the lookup handler's own
 // unconditional slot refresh), so this stays a plain state mutation
 // instead of triggering a second, redundant re-render on top of theirs.
-function setUnknown(chatId, value) {
+function setUnknown(chatId, value, { silent = false } = {}) {
   const s = state[chatId];
   if (!s) return;
   s.isUnknown = value;
-  // A placeholder Customer Approaching row can already exist from an
-  // earlier Look Up (e.g. a guessed/wrong username tried before realizing
-  // there isn't a real one, or a confirmed non-VIP) -- not yet logged,
-  // since a genuinely already-recorded chat is left alone.
-  if (s.isUnknown && s.caRecordId && !s.logged) {
-    const staleRecordId = s.caRecordId;
-    s.caRecordId = null;
-    fetch("/lark-delete-record", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recordId: staleRecordId }),
-    }).then((res) => res.json()).then((data) => {
-      if (!data.ok) logDiagnostic(`Failed to remove the placeholder record for this Unknown-marked chat: ${data.error}`, "warn");
-    }).catch(() => { /* non-fatal — worst case an orphaned placeholder row stays in Lark */ });
+  if (!s.isUnknown || !s.caRecordId) return;
+
+  // A record can already exist from a Look up (a guessed/wrong username, a
+  // confirmed non-VIP) or even have been recorded already -- an Unknown
+  // player should have no Customer Approaching row at all, so it's removed
+  // either way. The one exception: a bonus claimed on it is real (the
+  // source table was already marked Claimed), so that record is kept --
+  // unclaim first (click the claimed bonus again) if it should go too.
+  const hasClaim = Object.values(s.claimedPrograms || {}).some(Boolean);
+  if (hasClaim) {
+    if (!silent) setStatus("Marked Unknown, but its Lark record was kept because a bonus is claimed on it. Unclaim the bonus first if the record should be removed.", "error");
+    return;
   }
+
+  const staleRecordId = s.caRecordId;
+  s.caRecordId = null;
+  s.logged = false;
+  s.loggedSnapshot = "";
+  s.autoRecordError = "";
+  const restore = () => { if (!s.caRecordId) s.caRecordId = staleRecordId; }; // lets a re-tick retry
+  fetch("/lark-delete-record", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recordId: staleRecordId }),
+  }).then((res) => res.json()).then((data) => {
+    if (!data.ok) {
+      restore();
+      logDiagnostic(`Failed to remove the record for this Unknown-marked chat: ${data.error}`, "warn");
+      if (!silent) setStatus("Couldn't remove the record from Lark Base: " + data.error, "error");
+    } else if (!silent) {
+      setStatus("Unknown player — the record was removed from Lark Base.", "success");
+    }
+  }).catch(() => {
+    restore();
+    if (!silent) setStatus("Couldn't reach Lark to remove the record.", "error");
+  });
 }
 
 // Inquiry and Status both use this same merged box + search pattern now
