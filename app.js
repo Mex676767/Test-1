@@ -820,13 +820,63 @@ let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card 
 const STATE_STORAGE_KEY = "rc-chat-state";
 const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// Several copies of this widget can be alive at once against the same
+// localStorage (the LiveChat window's own widget, plus the extra tab a
+// Needs Attention "Open" link launches, the other LiveChat account, ...).
+// This used to rebuild the WHOLE blob from this tab's memory every 3s, so a
+// tab that hadn't touched a chat still overwrote the newer copy another tab
+// had just saved -- e.g. a chat recorded in the "Open" tab flipped back to
+// "not logged, needs attention" a few seconds later, and the copies also
+// dropped each other's chats. Now each tab only writes chats IT changed
+// since it last synced, keeps everything else already in storage, and adopts
+// the newer stored copy of any chat it hasn't touched.
+const lastSyncedJson = new Map(); // chatId -> JSON of that chat as of this tab's last load/save/adopt
+function stateSnapshot(s) {
+  const { _savedAt, ...rest } = s || {};
+  return JSON.stringify(rest);
+}
+function markStateSynced(chatId) {
+  lastSyncedJson.set(chatId, stateSnapshot(state[chatId]));
+}
+
 function saveState() {
   try {
-    const out = {};
+    let raw = {};
+    try { raw = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}") || {}; } catch (_) { raw = {}; }
+    const now = Date.now();
+    let dirty = false;
+    let adopted = false;
     for (const [chatId, s] of Object.entries(state)) {
-      out[chatId] = { ...s, _savedAt: Date.now() };
+      const cur = stateSnapshot(s);
+      const synced = lastSyncedJson.get(chatId);
+      if (synced !== undefined && cur === synced) {
+        // Nothing changed in THIS tab -- another tab may have updated it.
+        const theirs = raw[chatId];
+        if (theirs) {
+          const { _savedAt, ...rest } = theirs;
+          const theirsJson = JSON.stringify(rest);
+          if (theirsJson !== cur) {
+            // Mutate in place so existing references to state[chatId] stay valid.
+            for (const k of Object.keys(s)) delete s[k];
+            Object.assign(s, rest);
+            lastSyncedJson.set(chatId, stateSnapshot(s));
+            adopted = true;
+          }
+        }
+        continue;
+      }
+      raw[chatId] = { ...s, _savedAt: now };
+      lastSyncedJson.set(chatId, cur);
+      dirty = true;
     }
-    localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(out));
+    if (dirty) {
+      // Keep other tabs' chats, but still prune anything nobody has touched in a week.
+      for (const [chatId, entry] of Object.entries(raw)) {
+        if (!entry || now - (entry._savedAt || 0) >= STATE_MAX_AGE_MS) delete raw[chatId];
+      }
+      localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
+    }
+    if (adopted && typeof renderNeedsAttentionPanel === "function") renderNeedsAttentionPanel();
   } catch (_) { /* non-fatal — e.g. private browsing blocking storage */ }
 }
 
@@ -2005,15 +2055,14 @@ chatListEl.addEventListener("click", async (e) => {
     // left stale filter text sitting in the box (and the list still
     // filtered down to just that text) right after picking something.
     const searchInput = card.querySelector(".inquiry-search");
-    if (searchInput) searchInput.value = "";
+    if (searchInput) { searchInput.value = ""; searchInput.blur(); }
     refreshInquiryChips(card, chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-    // Auto-close once maxed out — nothing left to add without removing a
-    // chip first, and removing happens via the chips row, not the dropdown.
-    if (s.inquiry.length >= 2) {
-      card.querySelector(".inquiry-dropdown").classList.add("hidden");
-      s.inquiryDropdownOpen = false;
-    }
+    // Close after every pick (same as Status) -- needing a second inquiry
+    // (e.g. Feedback) is just a click on the box to reopen it. The state
+    // flag is cleared too, or the next background re-render would reopen it.
+    card.querySelector(".inquiry-dropdown").classList.add("hidden");
+    s.inquiryDropdownOpen = false;
   }
 
   if (btn.dataset.action === "submit") {
@@ -2636,6 +2685,7 @@ loggingPauseCheck.addEventListener("change", () => {
   // happen before the first renderChats/ensureChatState call, since
   // ensureChatState only fills in defaults for a chatId it hasn't seen yet.
   Object.assign(state, loadPersistedState());
+  for (const chatId of Object.keys(state)) markStateSynced(chatId);
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
@@ -2652,6 +2702,15 @@ loggingPauseCheck.addEventListener("change", () => {
 // applyProfile's auto brand/telegram detection, checkLastUsername,
 // checkChatStatus) and the moment this iframe actually goes away.
 setInterval(saveState, 3000);
+// Another tab just wrote state (e.g. finished recording a chat from a Needs
+// Attention "Open" tab) -- pick it up and refresh the panel right away
+// instead of waiting for the next sweep. saveState() only adopts/writes
+// what actually differs, so this can't ping-pong between tabs.
+window.addEventListener("storage", (e) => {
+  if (e.key !== STATE_STORAGE_KEY) return;
+  saveState();
+  renderNeedsAttentionPanel();
+});
 window.addEventListener("pagehide", saveState);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });
 
@@ -2684,7 +2743,7 @@ async function sweepPendingChats() {
     // Adopt the persisted copy only if this tab has no live copy of its own
     // — never clobber an in-memory one that might be ahead of what was last
     // saved.
-    if (!state[chatId]) state[chatId] = saved;
+    if (!state[chatId]) { state[chatId] = saved; markStateSynced(chatId); }
     if (saved.chatOpen === false) {
       // While logging is paused, submitRecord would just no-op anyway (see
       // its own loggingPaused check) -- skip calling it at all so a chat
