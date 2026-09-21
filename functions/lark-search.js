@@ -31,7 +31,11 @@ const F = {
 // never partial-matches inside an unrelated word.
 function hidden(v) {
   const t = String(v || "").trim().toLowerCase();
-  return /\b(claimed|expired|failed)\b/.test(t);
+  // "Not Eligible" / "Ineligible" (e.g. Risk Player) = nothing to claim. Must
+  // be filtered here too, not just in the app: findOldestClaimableRow picks
+  // the OLDEST claimable row, so a stale "Not Eligible" row would otherwise
+  // be returned instead of a newer, genuinely eligible one.
+  return /\b(claimed|expired|failed|not\s+eligible|ineligible)\b/.test(t);
 }
 
 // "Expried" (Grace Period's own expiry date) previously only worked when
