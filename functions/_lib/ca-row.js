@@ -1,7 +1,7 @@
 // Shared helpers for reading Customer Approaching rows back out of Lark --
 // used by lark-stale-records.js (Needs Attention) and lark-chat-records.js
 // (rebuilding a chat's card from Lark when the browser has no saved copy).
-import { toDisplay } from "./lark.js";
+import { toDisplay, getRecord, TABLE_CUSTOMER_APPROACHING } from "./lark.js";
 
 export const CA = {
   username: "Username", brand: "Brand", agentName: "Agent Name", inquiry: "Inquiry", status: "Status",
@@ -66,4 +66,21 @@ export function summarizeRow(r) {
     threadId: parseChatLink(link).threadId,
     createdAt: Number(r.created_time) || 0,
   };
+}
+
+// Who a Customer Approaching row belongs to. When a chat gets transferred
+// (agent's PC crashed / lost connection), each agent keeps their OWN row --
+// so nothing may ever delete or overwrite a row stamped with a different
+// Agent Name. A row with no Agent Name (older data) belongs to nobody yet.
+export async function readOwnership(recordId) {
+  const rec = await getRecord(TABLE_CUSTOMER_APPROACHING, recordId);
+  const f = (rec && rec.fields) || {};
+  return {
+    owner: toDisplay(f[CA.agentName]).trim(),
+    blank: isBlank(f[CA.inquiry]) && isBlank(f[CA.status]),
+  };
+}
+
+export function ownedBy(owner, agent) {
+  return !owner || owner === String(agent || "").trim();
 }

@@ -6,6 +6,7 @@ import {
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
   TABLE_TELEGRAM28,
 } from "./_lib/lark.js";
+import { readOwnership, ownedBy } from "./_lib/ca-row.js";
 
 const F = {
   username: "Username",
@@ -85,8 +86,15 @@ export async function handler(event) {
     // gone, etc.) the old row just lingers rather than blocking the new
     // lookup. Only ever sent for a chat that hasn't been logged yet (see
     // app.js) -- a completed case is never deleted by a stray re-lookup.
+    //
+    // Only this agent's own still-blank row is ever removed: after a chat
+    // transfer (PC crash / lost connection) the previous agent's row stays
+    // theirs, and the new agent gets a separate row of their own.
     if (previousRecordId) {
-      try { await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId); } catch (_) { /* non-fatal */ }
+      try {
+        const { owner, blank } = await readOwnership(previousRecordId);
+        if (blank && ownedBy(owner, agentVal)) await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId);
+      } catch (_) { /* non-fatal */ }
     }
 
     // Always create a fresh record — each Look Up is a new case. This row

@@ -1213,8 +1213,16 @@ const CASE_CONTENT_KEYS = [
 const CASE_KEYS = [
   ...CASE_CONTENT_KEYS,
   "caseNo", "caRecordId", "matchedRow", "otherBrandMatches", "claimSecretManual",
-  "logged", "autoRecordError", "loggedSnapshot", "caLinkSaved",
+  "logged", "autoRecordError", "loggedSnapshot", "caLinkSaved", "caOwner",
 ];
+
+// Which agent's Lark row the open case is. After a chat transfer (PC crash
+// / lost connection) each agent keeps their OWN row -- this browser never
+// deletes, re-uses or records into a row that belongs to someone else (the
+// server refuses too, see functions/_lib/ca-row.js ownedBy).
+function ownsCaseRecord(s) {
+  return !s.caOwner || s.caOwner === selectedAgent;
+}
 const addingCaseFor = new Set(); // chatIds with an add/edit in flight (not persisted, so it can never get stuck)
 
 // What actually gets written to Lark for a case -- used to tell whether a
@@ -1322,6 +1330,7 @@ async function addCaseFlow(chatId) {
     const nextNo = Math.max(s.caseNo || 1, ...s.logs.map((c) => c.caseNo || 0)) + 1;
     s.caseNo = nextNo;
     s.caRecordId = caRecordId;
+    s.caOwner = selectedAgent;
     s.caLinkSaved = !!(s.chatUrl || (chatDef && chatDef.link));
     s.matchedRow = row;
     s.otherBrandMatches = otherBrands;
@@ -1362,7 +1371,7 @@ async function editCaseFlow(chatId, caseNo) {
         fetch("/lark-delete-record", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recordId: s.caRecordId }),
+          body: JSON.stringify({ recordId: s.caRecordId, agentName: selectedAgent }),
         }).catch(() => { /* non-fatal — worst case a blank row stays in Lark */ });
       }
     } else {
@@ -2078,12 +2087,13 @@ chatListEl.addEventListener("click", async (e) => {
       // last time so the backend deletes it first. Only sent if that
       // record hasn't been logged (submitted) yet — a completed case is
       // never deleted by a stray re-lookup.
-      const previousRecordId = (!s.logged && s.caRecordId) ? s.caRecordId : null;
+      const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
       const { row, otherBrands, caRecordId, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId);
       s.caLinkSaved = !!(s.chatUrl || chatDef?.link);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
       s.caRecordId = caRecordId;
+      s.caOwner = selectedAgent;
       s.claimedPrograms = {};
       s.gracePeriodActivated = false;
       s.releasedBonusAmount = "";
@@ -2283,7 +2293,7 @@ chatListEl.addEventListener("click", async (e) => {
         const res = await fetch("/lark-record", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recordId: s.caRecordId, unclaim: true }),
+          body: JSON.stringify({ recordId: s.caRecordId, unclaim: true, agentName: selectedAgent }),
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "Unclaim failed");
@@ -2708,6 +2718,13 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   }
 
   const staleRecordId = s.caRecordId;
+  if (!ownsCaseRecord(s)) {
+    // Another agent's row -- just stop using it here, never delete it.
+    s.caRecordId = null;
+    s.logged = false;
+    s.loggedSnapshot = "";
+    return;
+  }
   s.caRecordId = null;
   s.logged = false;
   s.loggedSnapshot = "";
@@ -2716,7 +2733,7 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   fetch("/lark-delete-record", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ recordId: staleRecordId }),
+    body: JSON.stringify({ recordId: staleRecordId, agentName: selectedAgent }),
   }).then((res) => res.json()).then((data) => {
     if (!data.ok) {
       restore();
@@ -2904,6 +2921,21 @@ async function submitRecord(chatId, { auto, reason } = {}) {
     } else {
       setStatus("Set your agent name in Settings (⚙) before recording.", "error");
       openSettingsPanel();
+    }
+    return;
+  }
+
+  // Transferred chat: this card's Lark row is another agent's -- never
+  // record into it (and never stamp it as ours). The agent presses Look up
+  // to get a row of their own; both agents' records are kept.
+  if (s.caRecordId && !ownsCaseRecord(s)) {
+    const msg = `This case's Lark record belongs to ${s.caOwner}. Press Look up to log your own record — theirs is kept.`;
+    if (auto) {
+      s.autoRecordError = msg;
+      logDiagnostic(msg, "warn");
+      renderChats(activeChats);
+    } else {
+      setStatus(msg, "error");
     }
     return;
   }
@@ -3110,6 +3142,8 @@ async function sweepPendingChats() {
   for (const [chatId, saved] of Object.entries(persisted)) {
     if (chatId === currentChatId) continue; // already covered by its own tight poll
     if (!saved || saved.logged) continue;
+    // Another agent's case (shared browser) -- theirs to record, not ours.
+    if (saved.caOwner && saved.caOwner !== selectedAgent) continue;
     // Adopt the persisted copy only if this tab has no live copy of its own
     // — never clobber an in-memory one that might be ahead of what was last
     // saved.
@@ -3179,13 +3213,14 @@ const linkSaveInFlight = new Set(); // not persisted, so it can never get stuck
 async function saveLinkToRecord(chatId) {
   const s = state[chatId];
   if (!s || !s.caRecordId || !s.chatUrl || s.caLinkSaved || s.logged || linkSaveInFlight.has(chatId)) return;
+  if (!ownsCaseRecord(s)) return;
   const recordId = s.caRecordId;
   linkSaveInFlight.add(chatId);
   try {
     const res = await fetch("/lark-record", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recordId, linkOnly: true, chatLink: s.chatUrl }),
+      body: JSON.stringify({ recordId, linkOnly: true, chatLink: s.chatUrl, agentName: selectedAgent }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "link save failed");
@@ -3263,6 +3298,7 @@ function caseFromLarkRow(r) {
     autoRecordError: "",
     loggedSnapshot: "",
     caLinkSaved: !!r.link,
+    caOwner: selectedAgent, // lark-chat-records only returns this agent's own rows
   };
   if (c.logged) c.loggedSnapshot = caseContentJson(c);
   return c;

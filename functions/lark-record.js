@@ -1,5 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { updateRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
+import { readOwnership, ownedBy } from "./_lib/ca-row.js";
 
 // "Released amount" is a Number field in Lark. The frontend's display
 // string (e.g. "LTV - Test: Pass RM18") isn't usable directly — sending it
@@ -52,6 +53,23 @@ export async function handler(event) {
     var chatLink = body.chatLink;
     var dob = body.dob;
     var telegram = body.telegram;
+
+    // Every write here is to an existing row -- never one stamped with a
+    // different Agent Name. After a chat transfer (PC crash / lost
+    // connection) each agent keeps their own record; without this, a
+    // shared browser's background auto-record could overwrite the first
+    // agent's row with the second agent's name.
+    if (!recordId) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId is required" }) };
+    }
+    if (!String(agentName).trim()) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "agentName is required" }) };
+    }
+    var ownership = await readOwnership(recordId);
+    if (!ownedBy(ownership.owner, agentName)) {
+      return { statusCode: 409, body: JSON.stringify({ ok: false, notOwner: true, owner: ownership.owner,
+        error: "This case is logged under " + ownership.owner + " — not changed. Press Look up to log your own record." }) };
+    }
 
     // Unclaim: blank the four claim-related fields on the existing row.
     // The row itself is kept (never deleted) and every other field (agent,

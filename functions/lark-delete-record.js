@@ -1,5 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { deleteRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
+import { readOwnership, ownedBy } from "./_lib/ca-row.js";
 
 // Used when CS ticks "Unknown" on a chat that already has a placeholder
 // Customer Approaching row (lark-search.js creates one on every Look Up,
@@ -11,9 +12,15 @@ import { deleteRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 // logged yet -- app.js guards that on its side.
 export async function handler(event) {
   try {
-    const { recordId } = JSON.parse(event.body || "{}");
-    if (!recordId) {
-      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId is required" }) };
+    const { recordId, agentName } = JSON.parse(event.body || "{}");
+    if (!recordId || !String(agentName || "").trim()) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId and agentName are required" }) };
+    }
+    // Never another agent's row -- after a chat transfer each agent keeps
+    // their own record.
+    const { owner } = await readOwnership(recordId);
+    if (!ownedBy(owner, agentName)) {
+      return { statusCode: 409, body: JSON.stringify({ ok: false, error: `This record belongs to ${owner} — not removed.` }) };
     }
     await deleteRecord(TABLE_CUSTOMER_APPROACHING, recordId);
     return { statusCode: 200, body: JSON.stringify({ ok: true }) };
