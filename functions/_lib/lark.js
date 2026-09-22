@@ -232,16 +232,26 @@ export async function listFields(tableId, baseToken) {
 
 const fieldOptionMapCache = new Map(); // key -> { map, expiry }
 
-export async function getFieldOptionMap(tableId, fieldName, baseToken) {
+// fresh: true skips (and doesn't populate) the 10-min cache -- for the
+// dropdown-list endpoints (Agent Name/Brand/Inquiry/Status), which are only
+// ever called at boot and on a slow periodic refresh (a handful of times an
+// hour, not once per Look Up like Tier resolution below), so there's no
+// real cost to always reading Lark's current option list. Confirmed live:
+// an agent added a new Agent Name and removed an Inquiry tag in Lark and
+// neither change was reflected in the app for up to 10 minutes (or longer,
+// since these were previously only ever fetched once at page load).
+export async function getFieldOptionMap(tableId, fieldName, baseToken, { fresh = false } = {}) {
   const key = (baseToken || BASE_APP_TOKEN) + "::" + tableId + "::" + fieldName;
-  const cached = fieldOptionMapCache.get(key);
-  if (cached && Date.now() < cached.expiry) return cached.map;
+  if (!fresh) {
+    const cached = fieldOptionMapCache.get(key);
+    if (cached && Date.now() < cached.expiry) return cached.map;
+  }
 
   const fields = await listFields(tableId, baseToken);
   const field = fields.find((f) => f.field_name === fieldName);
   const options = field && field.property && field.property.options;
   const map = new Map((options || []).map((o) => [o.id, o.name]));
-  fieldOptionMapCache.set(key, { map, expiry: Date.now() + 10 * 60_000 });
+  if (!fresh) fieldOptionMapCache.set(key, { map, expiry: Date.now() + 10 * 60_000 });
   return map;
 }
 

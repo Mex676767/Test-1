@@ -805,11 +805,13 @@ function deriveFullBrandCode(groupName) {
     .trim();
 }
 
-// NOTE: this list is large and clearly still growing on the Lark side (the
-// real table shows dozens of Inquiry tags). This is a snapshot for the demo —
-// the real build should fetch these live from Lark's field metadata so new
-// tags show up automatically without a redeploy.
-const inquiryOptions = [
+// Fetched live from Lark's own Inquiry field (see fetchInquiryOptions) so a
+// tag added/renamed/removed there shows up here without a redeploy. This
+// array is only the fallback shown until that first fetch resolves (and if
+// it ever fails outright, e.g. preview mode with no Lark configured) --
+// kept as a snapshot of the real list so the app never opens on an empty
+// Inquiry dropdown.
+let inquiryOptions = [
   "Free Spin", "Ang Pao", "Deposit Challenge", "Feedback", "TOP P&L",
   "TOP LTV", "Grace Period", "1D", "3D", "7D", "14D", "19D", "21D",
   "24D", "30D", "Complain", "Ask free credit", "WD/DP problem",
@@ -828,6 +830,13 @@ const inquiryOptions = [
   "Goal321", "TO NOT UPDATED", "Rescue Bonus", "TOP Deposit",
   "Maintenance", "Telegram Transition Message", "Unclear Inquiries",
 ];
+async function fetchInquiryOptions() {
+  try {
+    const res = await fetch("/lark-inquiry-list");
+    const data = await res.json();
+    if (data.ok && data.options && data.options.length) inquiryOptions = data.options;
+  } catch (_) { /* non-fatal — keeps whatever list it already had */ }
+}
 
 // Maps each bonus program to the closest Inquiry option — auto-selected
 // the moment CS clicks Claim so they don't have to pick it manually.
@@ -859,7 +868,16 @@ function resolveInquiryForProgram(key, display) {
   return BONUS_INQUIRY_MAP[key];
 }
 
-const statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
+// Fetched live from Lark's own Status field, same as inquiryOptions above —
+// this fallback is only shown until that first fetch resolves.
+let statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
+async function fetchStatusOptions() {
+  try {
+    const res = await fetch("/lark-status-list");
+    const data = await res.json();
+    if (data.ok && data.options && data.options.length) statusOptions = data.options;
+  } catch (_) { /* non-fatal — keeps whatever list it already had */ }
+}
 
 /* ============================================================
    RENDER
@@ -3097,7 +3115,21 @@ function setStatus(text, kind) {
   }
 }
 
+// Agent Name / Brand / Inquiry / Status dropdowns all come from Lark's own
+// field option lists (see fetchAgentOptions etc. above) instead of being
+// hardcoded, so a name/tag added, renamed or removed there shows up here
+// without a redeploy. Re-fetched at boot, on every manual Refresh click,
+// and on this slow background timer — a widget an agent leaves open all
+// day would otherwise only ever see whatever was live when it first
+// loaded. Doesn't touch anything already picked on an open card.
+const OPTIONS_REFRESH_MS = 3 * 60_000;
+function refreshDropdownOptions() {
+  return Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions()]);
+}
+setInterval(refreshDropdownOptions, OPTIONS_REFRESH_MS);
+
 document.getElementById("refreshBtn").addEventListener("click", () => {
+  refreshDropdownOptions();
   if (liveWidget) {
     // Live mode — re-sync against the SDK on demand rather than just
     // re-rendering whatever we already had (which could be stale if a
@@ -3131,7 +3163,7 @@ loggingPauseCheck.addEventListener("change", () => {
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
-  await Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchEscalationOptions()]);
+  await Promise.all([refreshDropdownOptions(), fetchEscalationOptions()]);
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);

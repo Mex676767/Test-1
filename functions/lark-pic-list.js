@@ -9,7 +9,10 @@ import { getFieldOptionMap, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 // load, no separate table or LARK_TABLE_AGENT_LIST env var to maintain.
 export async function handler() {
   try {
-    const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Agent Name");
+    // fresh: true -- see getFieldOptionMap's own note. Only called at boot
+    // and on the widget's periodic options refresh, so always reading
+    // Lark's current list (rather than up to 10 min stale) costs nothing.
+    const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Agent Name", undefined, { fresh: true });
     const names = Array.from(optionMap.values()).filter(Boolean).sort();
     return { statusCode: 200, body: JSON.stringify({ ok: true, pics: names }) };
   } catch (err) {

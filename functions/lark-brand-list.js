@@ -11,7 +11,10 @@ import { getFieldOptionMap, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 // typo that wouldn't match any per-table Brand column value.
 export async function handler() {
   try {
-    const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Brand");
+    // fresh: true -- see getFieldOptionMap's own note; only called at boot
+    // and on the widget's periodic options refresh, so no reason to ever
+    // serve a stale (up to 10 min old) list here.
+    const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Brand", undefined, { fresh: true });
     const names = Array.from(optionMap.values()).filter(Boolean).sort();
     return { statusCode: 200, body: JSON.stringify({ ok: true, brands: names }) };
   } catch (err) {
