@@ -121,6 +121,9 @@ function openSettingsPanel() {
     updateAgentBadge();
     staleRecords = [];
     fetchStaleRecords();
+    // A chat that loaded before any agent was picked (fresh incognito
+    // window) skipped the Lark card restore -- re-run it now.
+    if (liveWidget) applyProfile(liveWidget.getCustomerProfile());
     setStatus(`Agent set to ${selectedAgent}.`, "success");
   });
 
@@ -391,6 +394,12 @@ function applyProfile(profile) {
       showTrackedArchivedChat(trackedId, profile);
       return;
     }
+    // No saved card in this browser (e.g. a new incognito window) -- look
+    // for this agent's own Lark rows for this thread and rebuild it.
+    const threadId = String(profile.chat.id);
+    restoreCardFromLark(threadId, { archived: true, customerName: profile.name || "" }).then((restored) => {
+      if (restored && state[threadId]) showTrackedArchivedChat(threadId, profile);
+    });
   }
   if (profile.source && profile.source !== "chats") {
     stopChatStatusPolling();
@@ -414,6 +423,7 @@ function applyProfile(profile) {
   renderChats(activeChats);
   resolveBrandFromGroupId(chat.chatId, profile.chat.groupID);
   startChatStatusPolling(chat.chatId);
+  if (!state[chat.chatId].caRecordId) restoreCardFromLark(chat.chatId, { customerName: chat.customerName });
 }
 
 // The SDK only gives us an opaque groupID (chatFromProfile leaves groupName
@@ -3155,7 +3165,8 @@ function getIncompleteChats() {
       chatId,
       username: s.username || "(no username)",
       reason: s.autoRecordError,
-      chatUrl: s.chatUrl || "",
+      // Closed chats only open under /archives/{thread_id} -- the card key.
+      chatUrl: s.chatUrl ? archiveUrlFor(chatId) : "",
       recordId: s.caRecordId || null,
     }));
 }
@@ -3186,6 +3197,128 @@ async function saveLinkToRecord(chatId) {
   }
 }
 
+function archiveUrlFor(threadId) {
+  return `https://my.livechatinc.com/archives/${encodeURIComponent(threadId)}`;
+}
+
+// Local Needs Attention entries whose Lark row turned out to be filled in
+// (recorded from another browser/tab) or removed -- stop flagging them, and
+// stop this browser's sweep from retrying (and overwriting) them.
+function markResolvedElsewhere(recordIds) {
+  if (!recordIds || !recordIds.length) return;
+  const ids = new Set(recordIds);
+  try {
+    const raw = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}");
+    let changed = false;
+    for (const entry of Object.values(raw)) {
+      if (entry && ids.has(entry.caRecordId) && !entry.logged) {
+        entry.logged = true;
+        entry.autoRecordError = "";
+        entry._savedAt = Date.now();
+        changed = true;
+      }
+    }
+    if (changed) localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
+  } catch (_) { /* non-fatal */ }
+  for (const [chatId, st] of Object.entries(state)) {
+    if (st && ids.has(st.caRecordId) && !st.logged) {
+      st.logged = true;
+      st.autoRecordError = "";
+      markStateSynced(chatId);
+    }
+  }
+}
+
+/* Rebuilding a card from Lark. Agents run LiveChat in incognito, so closing
+   the window wipes every saved card. Look Up saves the chat link on the
+   Lark row, so when a chat (live, or archived via Needs Attention's Open)
+   shows up with no saved card here, this agent's rows for that chat are
+   found by its thread id -- the SECOND id, the only part shared by the
+   /chats/{chat_id}/{thread_id} link and the /archives/{thread_id} one --
+   and put back on the card: newest row as the open case, earlier completed
+   rows as its other cases. Only ever the selected agent's own rows. */
+const larkRestoreTried = new Set(); // not persisted -- a reload may try again
+
+function epochToDateInput(ms) {
+  if (typeof ms !== "number") return "";
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+}
+
+function caseFromLarkRow(r) {
+  const amount = typeof r.amount === "number" ? String(r.amount) : "";
+  const c = {
+    caRecordId: r.recordId,
+    inquiry: r.inquiry || [],
+    status: r.status || "",
+    releasedBonusAmount: amount,
+    releasedAmountRaw: amount ? "RM" + amount : "",
+    claimSecret: !!r.claimSecret,
+    claimSecretManual: true, // keep what Lark has; don't auto-fill over it
+    dob: epochToDateInput(r.dob),
+    telegram: !!r.telegram,
+    claimedPrograms: {},
+    gracePeriodActivated: false,
+    logged: !!((r.inquiry || []).length && r.status),
+    autoRecordError: "",
+    loggedSnapshot: "",
+    caLinkSaved: !!r.link,
+  };
+  if (c.logged) c.loggedSnapshot = caseContentJson(c);
+  return c;
+}
+
+async function restoreCardFromLark(threadId, { archived = false, customerName = "" } = {}) {
+  if (!selectedAgent || !threadId || larkRestoreTried.has(threadId)) return false;
+  larkRestoreTried.add(threadId);
+  const agentAtRequest = selectedAgent;
+  let records;
+  try {
+    const res = await fetch("/lark-chat-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentName: agentAtRequest, threadId }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "lookup failed");
+    records = data.records || [];
+  } catch (err) {
+    larkRestoreTried.delete(threadId); // let a later visit try again
+    logDiagnostic("Couldn't check Lark for this chat's saved case: " + err.message, "warn");
+    return false;
+  }
+  if (!records.length || agentAtRequest !== selectedAgent) return false;
+
+  if (!state[threadId]) {
+    ensureChatState({ chatId: threadId, customerName, link: "", isTelegram: false, groupName: "" });
+  }
+  const s = state[threadId];
+  // Something already happened on this card meanwhile -- never overwrite it.
+  if (s.caRecordId || (s.logs && s.logs.length) || s.lookupInFlight) return false;
+
+  const latest = records[records.length - 1];
+  const earlier = records.slice(0, -1).filter((r) => (r.inquiry || []).length && r.status);
+  s.logs = earlier.map((r, i) => ({ ...caseFromLarkRow(r), caseNo: i + 1, matchedRow: undefined, otherBrandMatches: [] }));
+  Object.assign(s, caseFromLarkRow(latest));
+  s.caseNo = earlier.length + 1;
+  s.username = latest.username;
+  s.usernameDraft = "";
+  if (latest.brand) s.brand = latest.brand;
+  if (!s.chatUrl && /\/chats\//.test(latest.link)) s.chatUrl = latest.link;
+  s.agentName = selectedAgent;
+  s.restoredFromLark = true;
+  if (archived) {
+    s.chatOpen = false;
+    if (!s.logged) s.autoRecordError = "Chat ended without Inquiry/Status — restored from Lark. Fill in and record.";
+  }
+  saveState();
+  renderChats(activeChats);
+  renderNeedsAttentionPanel();
+  showChatToast(`Restored ${latest.username}'s case from Lark`, "info");
+  logDiagnostic(`Restored ${records.length} Lark record(s) for thread ${threadId} (${latest.username}).`, "success");
+  return true;
+}
+
 // Lark-side half of Needs Attention (see functions/lark-stale-records.js):
 // Customer Approaching rows stamped with THIS agent's name that still have
 // no Inquiry/Status -- found straight from Lark, so an unfinished case can't
@@ -3214,7 +3347,10 @@ async function fetchStaleRecords() {
     const res = await fetch("/lark-stale-records", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agentName: agentAtRequest }),
+      body: JSON.stringify({
+        agentName: agentAtRequest,
+        localRecordIds: getIncompleteChats().map((c) => c.recordId).filter(Boolean),
+      }),
     });
     const data = await res.json();
     if (agentAtRequest !== selectedAgent) return; // agent switched mid-request
@@ -3223,6 +3359,7 @@ async function fetchStaleRecords() {
       return; // keep the last good list rather than blanking it
     }
     staleRecords = data.records || [];
+    markResolvedElsewhere(data.resolvedIds || []);
   } catch (err) {
     logDiagnostic("Unfinished-records check failed: " + err.message, "error");
     return;
@@ -3251,7 +3388,7 @@ function getStaleLarkRecords() {
     })
     .map((r) => {
       const local = localByRecord.get(r.recordId);
-      return { ...r, chatUrl: (local && local.chatUrl) || r.link || "" };
+      return { ...r, chatUrl: r.openUrl || (local && local.chatUrl) || "" };
     });
 }
 
@@ -3342,7 +3479,7 @@ function renderNeedsAttentionPanel() {
   `).join("") + stale.map((r) => `
     <div class="na-item">
       <div class="na-item-username">${escapeHtml(r.username)} · ${escapeHtml(r.brand)}</div>
-      <div class="na-item-reason">Empty in Lark: no Inquiry/Status yet (looked up ${formatAge(now - r.createdAt)})</div>
+      <div class="na-item-reason">${r.chatEnded ? "Chat ended" : "Not finished"} — no Inquiry/Status in Lark (looked up ${formatAge(now - r.createdAt)})</div>
       <div class="na-item-actions">
         ${r.chatUrl ? `<a class="na-item-link" href="${escapeHtml(r.chatUrl)}" target="_blank">Open ↗</a>` : ""}
         <button type="button" class="na-item-ignore" data-action="removeStale" data-record="${escapeHtml(r.recordId)}" title="Delete this empty row from Lark">Remove</button>

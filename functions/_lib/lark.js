@@ -118,6 +118,32 @@ export async function searchRecords(tableId, conditions, baseToken, opts = {}) {
   throw lastErr;
 }
 
+// Same as searchRecords, but follows Lark's page_token across up to
+// maxPages pages of 500 -- for scans that can outgrow a single page.
+export async function searchAllRecords(tableId, conditions, { maxPages = 5, automaticFields = false } = {}) {
+  if (!tableId) throw new Error("Missing table ID — check env vars.");
+  const token = await getTenantToken();
+  const all = [];
+  let pageToken = "";
+  for (let page = 0; page < maxPages; page++) {
+    const res = await fetch(
+      `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/search?page_size=500`
+        + (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""),
+      { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          filter: { conjunction: "and", conditions },
+          ...(automaticFields ? { automatic_fields: true } : {}),
+        }) }
+    );
+    const data = await res.json();
+    if (data.code !== 0) throw new Error(`Lark search failed on table ${tableId}: ${data.msg}`);
+    all.push(...(data.data.items || []));
+    if (!data.data.has_more || !data.data.page_token) break;
+    pageToken = data.data.page_token;
+  }
+  return all;
+}
+
 export async function getRecord(tableId, recordId) {
   const token = await getTenantToken();
   const res = await fetch(
