@@ -70,7 +70,7 @@ function toEpochMs(v) {
 
 export async function handler(event) {
   try {
-    const { username, brand, picName, previousRecordId } = JSON.parse(event.body || "{}");
+    const { username, brand, picName, previousRecordId, link } = JSON.parse(event.body || "{}");
     if (!username || !brand) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "username and brand are required" }) };
     }
@@ -95,11 +95,17 @@ export async function handler(event) {
     // below comes from its Lookup columns anymore (see the 2026-08-29
     // rearchitecture note in lib/lark.js), so there's no Lookup-resolution
     // delay to wait out.
-    const created = await createRecord(TABLE_CUSTOMER_APPROACHING, {
-      [F.username]: uname,
-      [F.brand]: brandVal,
-      [F.agentName]: agentVal,
-    });
+    // The chat link goes on the row right away (not just on final submit)
+    // so an unfinished row can still be traced back to its chat -- see
+    // lark-stale-records.js. "link" is a Lark Link field, hence {link, text}.
+    // If the link write is ever rejected, retry without it rather than
+    // failing the whole Look Up.
+    const baseFields = { [F.username]: uname, [F.brand]: brandVal, [F.agentName]: agentVal };
+    const chatLink = String(link || "").trim();
+    const created = chatLink
+      ? await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } })
+          .catch(() => createRecord(TABLE_CUSTOMER_APPROACHING, baseFields))
+      : await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
     const caRecordId = created.record_id;
 
     // Every lookup below is fully independent of the others (and of

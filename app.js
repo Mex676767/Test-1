@@ -657,6 +657,7 @@ async function checkChatStatus(chatId) {
       if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
       checkLastUsername(chatId); // the chat link is the other thing this needs — try now that it's ready
     }
+    saveLinkToRecord(chatId);
 
     if (data.error) {
       // Once per chat — this call runs every 20s, and a persistent error
@@ -1202,7 +1203,7 @@ const CASE_CONTENT_KEYS = [
 const CASE_KEYS = [
   ...CASE_CONTENT_KEYS,
   "caseNo", "caRecordId", "matchedRow", "otherBrandMatches", "claimSecretManual",
-  "logged", "autoRecordError", "loggedSnapshot",
+  "logged", "autoRecordError", "loggedSnapshot", "caLinkSaved",
 ];
 const addingCaseFor = new Set(); // chatIds with an add/edit in flight (not persisted, so it can never get stuck)
 
@@ -1311,6 +1312,7 @@ async function addCaseFlow(chatId) {
     const nextNo = Math.max(s.caseNo || 1, ...s.logs.map((c) => c.caseNo || 0)) + 1;
     s.caseNo = nextNo;
     s.caRecordId = caRecordId;
+    s.caLinkSaved = !!(s.chatUrl || (chatDef && chatDef.link));
     s.matchedRow = row;
     s.otherBrandMatches = otherBrands;
     s.claimedPrograms = {};
@@ -2067,7 +2069,8 @@ chatListEl.addEventListener("click", async (e) => {
       // record hasn't been logged (submitted) yet — a completed case is
       // never deleted by a stray re-lookup.
       const previousRecordId = (!s.logged && s.caRecordId) ? s.caRecordId : null;
-      const { row, otherBrands, caRecordId, notVip } = await fetchBonusRow(username, brand, chatDef?.link || "", telegramNow, selectedAgent, previousRecordId);
+      const { row, otherBrands, caRecordId, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId);
+      s.caLinkSaved = !!(s.chatUrl || chatDef?.link);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
       s.caRecordId = caRecordId;
@@ -3157,6 +3160,32 @@ function getIncompleteChats() {
     }));
 }
 
+// Look Up writes the chat link onto its new Lark row straight away, but the
+// real link only resolves ~2s after a chat opens -- a Look Up done before
+// that created the row without one. Fills it in once it's known, so every
+// row (even one never completed) can be traced back to its chat.
+const linkSaveInFlight = new Set(); // not persisted, so it can never get stuck
+async function saveLinkToRecord(chatId) {
+  const s = state[chatId];
+  if (!s || !s.caRecordId || !s.chatUrl || s.caLinkSaved || s.logged || linkSaveInFlight.has(chatId)) return;
+  const recordId = s.caRecordId;
+  linkSaveInFlight.add(chatId);
+  try {
+    const res = await fetch("/lark-record", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recordId, linkOnly: true, chatLink: s.chatUrl }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "link save failed");
+    if (s.caRecordId === recordId) s.caLinkSaved = true;
+  } catch (err) {
+    logDiagnostic("Couldn't save chat link to Lark yet: " + err.message, "warn");
+  } finally {
+    linkSaveInFlight.delete(chatId);
+  }
+}
+
 // Lark-side half of Needs Attention (see functions/lark-stale-records.js):
 // Customer Approaching rows stamped with THIS agent's name that still have
 // no Inquiry/Status -- found straight from Lark, so an unfinished case can't
@@ -3222,7 +3251,7 @@ function getStaleLarkRecords() {
     })
     .map((r) => {
       const local = localByRecord.get(r.recordId);
-      return { ...r, chatUrl: (local && local.chatUrl) || "" };
+      return { ...r, chatUrl: (local && local.chatUrl) || r.link || "" };
     });
 }
 

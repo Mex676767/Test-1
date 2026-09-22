@@ -70,6 +70,19 @@ export async function handler(event) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, record: cleared }) };
     }
 
+    // Link-only: the chat link resolved after Look Up already created the
+    // row (LiveChat's real chat_id takes ~2s to resolve) -- fill it in now
+    // instead of waiting for the final submit.
+    if (body.linkOnly) {
+      if (!recordId || !chatLink) {
+        return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId and chatLink are required" }) };
+      }
+      var linked = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, {
+        "link": { link: chatLink, text: chatLink }
+      });
+      return { statusCode: 200, body: JSON.stringify({ ok: true, record: linked }) };
+    }
+
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
     }

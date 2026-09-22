@@ -19,7 +19,15 @@ import { searchRecords, getRecord, deleteRecord, toDisplay, TABLE_CUSTOMER_APPRO
 //   after re-checking it on Lark's side: same Agent Name, still no Inquiry
 //   and no Status. A row that got filled in meanwhile is never deleted.
 
-const F = { username: "Username", brand: "Brand", agentName: "Agent Name", inquiry: "Inquiry", status: "Status" };
+const F = { username: "Username", brand: "Brand", agentName: "Agent Name", inquiry: "Inquiry", status: "Status", link: "link" };
+
+// "link" is a Lark Link field -- {link, text}, sometimes wrapped in an array.
+function linkUrl(v) {
+  if (!v) return "";
+  if (Array.isArray(v)) return linkUrl(v[0]);
+  if (typeof v === "object") return String(v.link || v.text || "");
+  return String(v);
+}
 
 // A row younger than this is most likely a case still being worked on
 // (Look Up done, Inquiry/Status not picked yet) -- not stale.
@@ -62,6 +70,7 @@ export async function handler(event) {
         recordId: r.record_id,
         username: toDisplay(r.fields[F.username]).trim(),
         brand: toDisplay(r.fields[F.brand]).trim(),
+        link: linkUrl(r.fields[F.link]).trim(),
         createdAt: Number(r.created_time) || 0,
         // Re-check on our side too, in case Lark's filter ever loosely matches.
         agent: toDisplay(r.fields[F.agentName]).trim(),
