@@ -119,6 +119,8 @@ function openSettingsPanel() {
     saveAgent(val);
     overlay.remove();
     updateAgentBadge();
+    staleRecords = [];
+    fetchStaleRecords();
     setStatus(`Agent set to ${selectedAgent}.`, "success");
   });
 
@@ -1461,7 +1463,7 @@ function renderTickets(chatId) {
         <div class="ticket-icon">◆</div>
         <div class="ticket-body">
           <div class="ticket-name">${d.label}</div>
-          <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.display}</div>
+          <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.key === "gracePeriod" ? highlightDates(d.display) : d.display}</div>
         </div>
       </div>
       <div class="ticket-btns">
@@ -1476,6 +1478,21 @@ function renderTickets(chatId) {
       </div>
     </div>`;
   }).join("") + `</div>` + (alreadyClaimedOne ? `<div class="ticket-note">Only 1 bonus can be claimed per case</div>` : "");
+}
+
+// Grace Period's SW Check text carries the challenge date(s) inline -- wraps
+// each date-looking piece so it stands out on the ticket. Covers numeric
+// (09/09/2026, 2026-09-09, 9-9-26, 09.09) and written-month (9 Sep 2026,
+// Sep 9) forms; anything else is left as plain text.
+const DATE_PATTERN = new RegExp([
+  String.raw`\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b`,
+  String.raw`\b\d{1,2}[-/.]\d{1,2}(?:[-/.]\d{2,4})?\b`,
+  String.raw`\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?(?:,?\s+\d{2,4})?\b`,
+  String.raw`\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{2,4})?\b`,
+].join("|"), "gi");
+
+function highlightDates(text) {
+  return escapeHtml(text).replace(DATE_PATTERN, (m) => `<span class="ticket-date">${m}</span>`);
 }
 
 // Inquiry is a searchable dropdown + chip list instead of a big always-open
@@ -3033,6 +3050,7 @@ loggingPauseCheck.addEventListener("change", () => {
   if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);
   renderNeedsAttentionPanel();
+  fetchStaleRecords();
   initLiveChatSdk();
 })();
 
@@ -3135,7 +3153,102 @@ function getIncompleteChats() {
       username: s.username || "(no username)",
       reason: s.autoRecordError,
       chatUrl: s.chatUrl || "",
+      recordId: s.caRecordId || null,
     }));
+}
+
+// Lark-side half of Needs Attention (see functions/lark-stale-records.js):
+// Customer Approaching rows stamped with THIS agent's name that still have
+// no Inquiry/Status -- found straight from Lark, so an unfinished case can't
+// vanish just because the browser that started it forgot about it
+// (incognito closed, cleared storage, another PC). Only ever the selected
+// agent's own rows, never anyone else's.
+const STALE_POLL_MS = 60_000;
+let staleRecords = [];
+
+function escapeHtml(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function formatAge(ms) {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+async function fetchStaleRecords() {
+  if (!selectedAgent) { staleRecords = []; renderNeedsAttentionPanel(); return; }
+  const agentAtRequest = selectedAgent;
+  try {
+    const res = await fetch("/lark-stale-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentName: agentAtRequest }),
+    });
+    const data = await res.json();
+    if (agentAtRequest !== selectedAgent) return; // agent switched mid-request
+    if (!data.ok) {
+      logDiagnostic("Unfinished-records check failed: " + (data.error || "unknown error"), "error");
+      return; // keep the last good list rather than blanking it
+    }
+    staleRecords = data.records || [];
+  } catch (err) {
+    logDiagnostic("Unfinished-records check failed: " + err.message, "error");
+    return;
+  }
+  renderNeedsAttentionPanel();
+}
+
+// Rows the local list already covers (or that are still being worked on in
+// a chat this browser has open) are left out, so nothing shows twice and an
+// in-progress case isn't flagged.
+function getStaleLarkRecords() {
+  let persisted = {};
+  try { persisted = loadPersistedState(); } catch (_) { /* non-fatal */ }
+  const localByRecord = new Map();
+  for (const s of [...Object.values(persisted), ...Object.values(state)]) {
+    if (s && s.caRecordId) localByRecord.set(s.caRecordId, s);
+  }
+  const shownLocally = new Set(getIncompleteChats().map((c) => c.recordId).filter(Boolean));
+  return staleRecords
+    .filter((r) => {
+      if (shownLocally.has(r.recordId)) return false;
+      const local = localByRecord.get(r.recordId);
+      if (!local) return true;
+      // Recorded since the last poll (a logged row is never blank in Lark), or still being worked on.
+      return !local.logged && local.chatOpen === false;
+    })
+    .map((r) => {
+      const local = localByRecord.get(r.recordId);
+      return { ...r, chatUrl: (local && local.chatUrl) || "" };
+    });
+}
+
+async function removeStaleRecord(recordId, btn) {
+  const rec = staleRecords.find((r) => r.recordId === recordId);
+  const label = rec ? `${rec.username} (${rec.brand})` : "this record";
+  if (!confirm(`Remove the empty Lark record for ${label}?
+
+Only do this if the case doesn't need logging. It's only removed if Inquiry and Status are still empty.`)) return;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch("/lark-stale-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentName: selectedAgent, deleteRecordId: recordId }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Remove failed");
+    staleRecords = staleRecords.filter((r) => r.recordId !== recordId);
+    setStatus(`Removed empty record for ${label}.`, "success");
+  } catch (err) {
+    setStatus(`Couldn't remove record: ${err.message}`, "error");
+    fetchStaleRecords(); // e.g. it got filled in meanwhile -- refresh the list
+  }
+  if (btn) btn.disabled = false;
+  renderNeedsAttentionPanel();
 }
 
 // Permanently drops one chat out of the Needs Attention list AND stops it
@@ -3177,14 +3290,17 @@ function renderNeedsAttentionPanel() {
   if (!panel || !countEl || !listEl) return;
 
   const incomplete = getIncompleteChats();
-  if (!incomplete.length) {
+  const stale = getStaleLarkRecords();
+  const total = incomplete.length + stale.length;
+  if (!total) {
     panel.classList.add("hidden");
     return;
   }
   panel.classList.remove("hidden");
-  countEl.textContent = incomplete.length === 1
+  countEl.textContent = total === 1
     ? "⚠ 1 chat needs attention"
-    : `⚠ ${incomplete.length} chats need attention`;
+    : `⚠ ${total} chats need attention`;
+  const now = Date.now();
   listEl.innerHTML = incomplete.map((c) => `
     <div class="na-item">
       <div class="na-item-username">${c.username}</div>
@@ -3194,14 +3310,26 @@ function renderNeedsAttentionPanel() {
         <button type="button" class="na-item-ignore" data-action="ignoreAttention" data-chat="${c.chatId}" title="Stop showing this chat here">Ignore</button>
       </div>
     </div>
+  `).join("") + stale.map((r) => `
+    <div class="na-item">
+      <div class="na-item-username">${escapeHtml(r.username)} · ${escapeHtml(r.brand)}</div>
+      <div class="na-item-reason">Empty in Lark: no Inquiry/Status yet (looked up ${formatAge(now - r.createdAt)})</div>
+      <div class="na-item-actions">
+        ${r.chatUrl ? `<a class="na-item-link" href="${escapeHtml(r.chatUrl)}" target="_blank">Open ↗</a>` : ""}
+        <button type="button" class="na-item-ignore" data-action="removeStale" data-record="${escapeHtml(r.recordId)}" title="Delete this empty row from Lark">Remove</button>
+      </div>
+    </div>
   `).join("");
 }
 
 document.getElementById("needsAttentionList").addEventListener("click", (e) => {
+  const staleBtn = e.target.closest("button[data-action='removeStale']");
+  if (staleBtn) { removeStaleRecord(staleBtn.dataset.record, staleBtn); return; }
   const btn = e.target.closest("button[data-action='ignoreAttention']");
   if (!btn) return;
   ignoreAttention(btn.dataset.chat);
 });
+setInterval(fetchStaleRecords, STALE_POLL_MS);
 
 document.getElementById("needsAttentionToggle").addEventListener("click", () => {
   const listEl = document.getElementById("needsAttentionList");

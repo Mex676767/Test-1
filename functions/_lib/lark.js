@@ -80,7 +80,10 @@ export async function getTenantToken() {
   return inFlightTokenRequest;
 }
 
-export async function searchRecords(tableId, conditions, baseToken) {
+// opts.pageSize: Lark's search defaults to only 20 rows per page -- fine for
+// the per-username lookups everywhere else, too few for a table-wide sweep
+// (see lark-stale-records.js). opts.automaticFields adds created_time etc.
+export async function searchRecords(tableId, conditions, baseToken, opts = {}) {
   if (!tableId) throw new Error("Missing table ID — check env vars.");
   // Retries once (2 attempts total, brief pause between) before giving up.
   // lark-search.js runs ~9 of these in parallel per Look Up, each behind
@@ -96,9 +99,13 @@ export async function searchRecords(tableId, conditions, baseToken) {
     try {
       const token = await getTenantToken();
       const res = await fetch(
-        `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`,
+        `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`
+          + (opts.pageSize ? `?page_size=${opts.pageSize}` : ""),
         { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ filter: { conjunction: "and", conditions } }) }
+          body: JSON.stringify({
+            filter: { conjunction: "and", conditions },
+            ...(opts.automaticFields ? { automatic_fields: true } : {}),
+          }) }
       );
       const data = await res.json();
       if (data.code !== 0) throw new Error(`Lark search failed on table ${tableId}: ${data.msg}`);
