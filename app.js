@@ -431,7 +431,14 @@ function applyProfile(profile) {
 // (see livechat-group-name.js — no LiveChat PAT configured just means this
 // quietly does nothing) and runs the real name through the same
 // deriveBrandFromGroup() the old demo data used.
+// In-memory only (per widget copy): the brand this copy detected for each
+// chat, and the group id it came from -- lets Look up recover Brand if the
+// saved copy of the card ever loses it, and re-detect if it never had it.
+const detectedBrandFor = new Map();
+const groupIdFor = new Map();
+
 async function resolveBrandFromGroupId(chatId, groupID) {
+  if (groupID) groupIdFor.set(chatId, groupID);
   if (!groupID) {
     // Silent before this — if the SDK profile ever lacks a groupID at all,
     // there'd be zero trace of why Brand never auto-filled. Logged once
@@ -485,6 +492,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
       }
       return;
     }
+    detectedBrandFor.set(chatId, matchedBrand);
     s.brand = matchedBrand; // canonical casing from Lark's own option list, not whatever the group name happened to use
     // Full code (with digits) for the Escalation Ticket section's own Brand
     // field, which expects e.g. "VS96" not "VS" -- only fills in if blank,
@@ -900,13 +908,39 @@ function saveState() {
     for (const [chatId, s] of Object.entries(state)) {
       const cur = stateSnapshot(s);
       const synced = lastSyncedJson.get(chatId);
+      const stored = raw[chatId];
+      const storedJson = stored ? stateSnapshot(stored) : undefined;
+      if (synced !== undefined && cur !== synced && storedJson !== undefined && storedJson !== synced) {
+        // BOTH this tab and another one changed this chat since this tab
+        // last synced. Writing either whole copy loses the other's edits --
+        // confirmed live: another tab's background sweep (checkChatStatus
+        // setting chatUrl/telegram on its older copy) wrote back a copy
+        // from before Brand was auto-detected, wiping Brand here ("Brand
+        // hasn't been auto-detected yet" on Look up right after "Auto-
+        // detected brand HOT"). Merge per field instead: whatever THIS tab
+        // changed wins, everything else comes from the stored copy.
+        const base = JSON.parse(synced);
+        const theirs = JSON.parse(storedJson);
+        const merged = { ...theirs };
+        for (const k of Object.keys(s)) {
+          if (JSON.stringify(s[k]) !== JSON.stringify(base[k])) merged[k] = s[k];
+        }
+        for (const k of Object.keys(base)) {
+          if (!(k in s) && JSON.stringify(theirs[k]) === JSON.stringify(base[k])) delete merged[k];
+        }
+        for (const k of Object.keys(s)) delete s[k];
+        Object.assign(s, JSON.parse(JSON.stringify(merged)));
+        raw[chatId] = { ...s, _savedAt: now };
+        lastSyncedJson.set(chatId, stateSnapshot(s));
+        dirty = true;
+        adopted = true;
+        continue;
+      }
       if (synced !== undefined && cur === synced) {
         // Nothing changed in THIS tab -- another tab may have updated it.
-        const theirs = raw[chatId];
-        if (theirs) {
-          const { _savedAt, ...rest } = theirs;
-          const theirsJson = JSON.stringify(rest);
-          if (theirsJson !== cur) {
+        if (stored) {
+          const { _savedAt, ...rest } = stored;
+          if (storedJson !== cur) {
             // Mutate in place so existing references to state[chatId] stay valid.
             for (const k of Object.keys(s)) delete s[k];
             Object.assign(s, rest);
@@ -2061,8 +2095,15 @@ chatListEl.addEventListener("click", async (e) => {
     if (s.lookupInFlight) return;
     const username = card.querySelector(".username-input").value.trim();
     if (!username) { setStatus("Enter a username before looking up.", "error"); return; }
+    if (!s.brand && detectedBrandFor.has(chatId)) s.brand = detectedBrandFor.get(chatId);
     const brand = s.brand;
-    if (!brand) { setStatus("Brand hasn't been auto-detected yet for this chat — try again in a moment.", "error"); return; }
+    if (!brand) {
+      // Kick detection off again rather than just waiting -- the first
+      // attempt may have failed or never run for this chat.
+      if (groupIdFor.has(chatId)) resolveBrandFromGroupId(chatId, groupIdFor.get(chatId));
+      setStatus("Brand hasn't been auto-detected yet for this chat — pick it from the Brand box, or try again in a moment.", "error");
+      return;
+    }
     s.username = username;
     s.usernameDraft = "";
     if (!s.escalation.memberUserId) s.escalation.memberUserId = username;
