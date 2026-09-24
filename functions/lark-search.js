@@ -4,7 +4,7 @@ import {
   TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
-  TABLE_TELEGRAM28,
+  TABLE_TELEGRAM28, TABLE_MOONCAKE,
 } from "./_lib/lark.js";
 import { readOwnership, ownedBy } from "./_lib/ca-row.js";
 
@@ -21,6 +21,7 @@ const F = {
   claimedCopy: "Claimed Copy",
   bonusAmount: "Bonus Amount", // Telegram RM28's actual per-row amount (18, 8, 28, 5...) — confirmed from a real screenshot
   graceExpiry: "Expried", // yes, "Expried" (confirmed from the real column header) -- Grace Period's own expiry date, gates whether Reactivate shows in app.js
+  uid: "UID", // Mooncake bonus's own username column -- confirmed from a real screenshot; plain "UID", not "Username/UID" like most other bonus tables (same situation as Risk Player's plain "Username").
 };
 
 // Word-boundary substring, not startsWith/=== -- real Status/SW Check
@@ -138,6 +139,7 @@ export async function handler(event) {
       specialReloadRow,
       telegram28Row,
       redeemRow,
+      mooncakeRow,
     ] = await Promise.all([
       // Warn CS if username exists under other brands
       (async () => {
@@ -278,6 +280,20 @@ export async function handler(event) {
         ])).filter((r) => !hidden(toDisplay(r.fields[F.status])));
         return redeemMatches[redeemMatches.length - 1] || null;
       })().catch(() => null),
+
+      // Mooncake bonus: "Status" hides Claimed/Expired same as every other
+      // table (only "Pass" is a real value here today, but this follows the
+      // same generic hidden()-based rule as LTV/Grace Period rather than an
+      // exact "pass" string match, so it doesn't need a code change if Lark
+      // ever adds another non-Claimed status). No monetary amount column,
+      // so it's not in AMOUNT_ELIGIBLE_PROGRAMS on the frontend. Username
+      // column is plain "UID" here, not "Username/UID".
+      findOldestClaimableRow(
+        TABLE_MOONCAKE, uname, brandVal,
+        (fields) => !hidden(toDisplay(fields[F.status])) && !!toDisplay(fields[F.status]),
+        undefined,
+        { usernameField: F.uid }
+      ).catch(() => null),
     ]);
 
     return {
@@ -315,6 +331,7 @@ export async function handler(event) {
           redeemCode: redeemRow
             ? { recordId: redeemRow.record_id, status: toDisplay(redeemRow.fields[F.status]) }
             : null,
+          mooncake: mooncakeRow ? toDisplay(mooncakeRow.fields[F.status]) : "",
         },
       }),
     };

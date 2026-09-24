@@ -164,6 +164,7 @@ const BONUS_PROGRAMS = [
   { key: "gracePeriod", label: "Grace Period" },
   { key: "ltvTest", label: "LTV" },
   { key: "vipBooster", label: "12h VIP Deposit Booster" },
+  { key: "mooncake", label: "Mooncake Bonus" },
 ];
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
@@ -849,6 +850,7 @@ const BONUS_INQUIRY_MAP = {
   telegram28: "Telegram RM28",
   redeemCode: "Redeem Code",
   specialReload: "Reload - Ang Pao",
+  mooncake: "Moon Bonus",
 };
 
 // Risk Player is a single Lark field, but its value encodes which day-tier
