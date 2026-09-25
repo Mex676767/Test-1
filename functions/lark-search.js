@@ -187,15 +187,19 @@ export async function handler(event) {
         }
       ).catch(() => null),
 
-      // LTV(Day) has no "Claimed Copy" field at all — confirmed from a real
-      // row, not the same table structure as Top 10 P&L(Night) despite
-      // looking similar at a glance. It follows Grace Period's pattern
-      // instead: "Status" hides Claimed/Expired, display comes from
-      // "SW Checker" (note the different spelling from Top 10 P&L's
-      // "SW Check").
+      // LTV(Day): "Status" is a Formula field whose only value that means
+      // "claimable" is the literal "Valid" — anything else (blank, or any
+      // other formula output) means don't show it. This is an exact match
+      // on Status, not the generic hidden()-word-scan every other table
+      // above uses (that scan only flags text containing "claimed"/
+      // "expired"/etc., so a Status value that was neither "Valid" nor one
+      // of those words was slipping through as claimable). LTV(Day) has no
+      // "Claimed Copy" field at all — confirmed from a real row — so the
+      // display text still comes from "SW Checker" (note the different
+      // spelling from Top 10 P&L's "SW Check").
       findOldestClaimableRow(
         TABLE_LTV_DAY, uname, brandVal,
-        (fields) => !hidden(toDisplay(fields[F.status])) && !!toDisplay(fields[F.swChecker])
+        (fields) => toDisplay(fields[F.status]).trim().toLowerCase() === "valid" && !!toDisplay(fields[F.swChecker])
       ).catch(() => null),
 
       // Grace Period(Day): "SW Check" is both the claim flag (hide only
