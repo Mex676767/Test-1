@@ -509,6 +509,15 @@ body {
   color: var(--text); font-weight: 700; font-family: "IBM Plex Mono", monospace;
 }
 .ticket-meta .amount { font-family: "IBM Plex Mono", monospace; color: var(--gold); font-weight: 600; }
+/* Risk Player's "Date Expired" line under the ticket -- color escalates
+   the closer/past the deadline is, reusing the theme's existing accent
+   colors rather than introducing a new one: --text-faint with plenty of
+   time left, --gold inside the last 24h, --danger once it's already past
+   (see renderExpiryLine in app.js). */
+.ticket-expiry { font-size: 11px; margin-top: 4px; }
+.ticket-expiry-ok { color: var(--text-faint); }
+.ticket-expiry-soon { color: var(--gold); font-weight: 700; }
+.ticket-expiry-expired { color: var(--danger); font-weight: 700; }
 .claim-btn {
   background: none; border: 1px solid var(--gold); color: var(--gold);
   border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;

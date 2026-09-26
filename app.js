@@ -1499,6 +1499,12 @@ function renderTickets(chatId) {
       startOfToday.setHours(0, 0, 0, 0);
       def.reactivatable = typeof r.graceExpiryMs === "number" && r.graceExpiryMs >= startOfToday.getTime();
     }
+    // Risk Player: surfaces its own "Date Expired" column as a line under
+    // the ticket (see renderExpiryLine) -- previously fetched from Lark
+    // (lark-search.js) but never actually shown anywhere in the app.
+    if (p.key === "riskPlayer" && typeof r.riskExpiryMs === "number") {
+      def.expiryMs = r.riskExpiryMs;
+    }
     defs.push(def);
   });
 
@@ -1538,7 +1544,8 @@ function renderTickets(chatId) {
         <div class="ticket-icon">◆</div>
         <div class="ticket-body">
           <div class="ticket-name">${d.label}</div>
-          <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.key === "gracePeriod" ? highlightDates(d.display) : d.display}</div>
+          <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.isCode ? escapeHtml(d.display) : formatTicketMeta(d.display)}</div>
+          ${renderExpiryLine(d.expiryMs)}
         </div>
       </div>
       <div class="ticket-btns">
@@ -1566,8 +1573,47 @@ const DATE_PATTERN = new RegExp([
   String.raw`\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{2,4})?\b`,
 ].join("|"), "gi");
 
+// "RM28", "RM 28", "Bonus 28" -- the actual claimable amount buried in a raw
+// Lark display string ("Pass RM28", "7D 20% Reload - Bonus 18", ...).
+// Highlighted the same way across every ticket now, not just one table, so
+// the number an agent actually cares about jumps out regardless of which
+// source table's own wording it came from.
+const AMOUNT_PATTERN = /\bRM\s?-?\d+(?:\.\d+)?\b|\bBonus\s+-?\d+(?:\.\d+)?\b/gi;
+
 function highlightDates(text) {
   return escapeHtml(text).replace(DATE_PATTERN, (m) => `<span class="ticket-date">${m}</span>`);
+}
+
+// Every ticket's meta line goes through this now (previously only Grace
+// Period's did) -- wraps dates AND RM/Bonus amounts so every bonus reads
+// the same way at a glance: 📅 for a date, 🎁 for the actual amount. Escapes
+// first (same order highlightDates already used), so this is safe to run
+// on any raw table text without either pattern ever matching inside an
+// HTML-escaped entity.
+function formatTicketMeta(text) {
+  let html = escapeHtml(text);
+  html = html.replace(DATE_PATTERN, (m) => `📅 <span class="ticket-date">${m}</span>`);
+  html = html.replace(AMOUNT_PATTERN, (m) => `🎁 <span class="amount">${m}</span>`);
+  return html;
+}
+
+// Risk Player's own "Date Expired" column, shown as its own line under the
+// ticket so CS can see at a glance how much time is left -- previously not
+// shown in the app at all. Color escalates the closer/past the deadline is:
+// grey with plenty of time left, amber inside the last 24h, red once it's
+// actually already past (the row can still be showing here briefly if the
+// underlying Status text hasn't flipped to "Expired" yet on Lark's side).
+function renderExpiryLine(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return "";
+  const diff = ms - Date.now();
+  const expired = diff <= 0;
+  const soon = !expired && diff <= 24 * 60 * 60 * 1000;
+  const cls = expired ? "ticket-expiry-expired" : soon ? "ticket-expiry-soon" : "ticket-expiry-ok";
+  const d = new Date(ms);
+  const dateStr = d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const timeStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const label = expired ? "Expired" : "Expires";
+  return `<div class="ticket-expiry ${cls}">📅 ${label}: ${escapeHtml(dateStr)} (${escapeHtml(timeStr)})</div>`;
 }
 
 // Inquiry is a searchable dropdown + chip list instead of a big always-open

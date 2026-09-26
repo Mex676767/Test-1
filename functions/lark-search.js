@@ -22,6 +22,7 @@ const F = {
   claimedCopy: "Claimed Copy",
   bonusAmount: "Bonus Amount", // Telegram RM28's actual per-row amount (18, 8, 28, 5...) — confirmed from a real screenshot
   graceExpiry: "Expried", // yes, "Expried" (confirmed from the real column header) -- Grace Period's own expiry date, gates whether Reactivate shows in app.js
+  riskExpiry: "Date Expired", // Risk Player(Day)'s own expiry date column -- confirmed from the real column header
   uid: "UID", // Mooncake bonus's own username column -- confirmed from a real screenshot; plain "UID", not "Username/UID" like most other bonus tables (same situation as Risk Player's plain "Username").
 };
 
@@ -335,6 +336,13 @@ export async function handler(event) {
           // makes sense to offer at all.
           graceExpiryMs: graceRow ? toEpochMs(graceRow.fields[F.graceExpiry]) : null,
           riskPlayer: riskRow ? toDisplay(riskRow.fields[F.status]) : "",
+          // Same epoch-ms pattern as graceExpiryMs above -- Date Expired is
+          // a Date field, so it may come back as a bare number or (if the
+          // column's ever swapped to a Formula) one of the wrapped shapes
+          // toEpochMs() already unwraps. Sent as a raw timestamp, not a
+          // pre-formatted string, so app.js can format it in the agent's
+          // own local time and decide for itself whether it's already past.
+          riskExpiryMs: riskRow ? toEpochMs(riskRow.fields[F.riskExpiry]) : null,
           vipBooster: vipRow ? "Eligible" : "",
           specialReload: specialReloadRow
             ? { recordId: specialReloadRow.record_id, status: toDisplay(specialReloadRow.fields[F.status]) }
