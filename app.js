@@ -852,7 +852,7 @@ const BONUS_INQUIRY_MAP = {
   redeemCode: "Redeem Code",
   specialReload: "Reload - Ang Pao",
   mooncake: "Moon Bonus",
-  vs96Feedback: "Feedback",
+  vs96Feedback: "VS96 Feedback bonus",
 };
 
 // Risk Player is a single Lark field, but its value encodes which day-tier
