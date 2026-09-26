@@ -77,7 +77,18 @@ export async function handler(event) {
     if (!username || !brand) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "username and brand are required" }) };
     }
-    const uname = username.trim();
+    // P&L (and every other bonus table's Username column) is always stored
+    // lowercase -- confirmed from real data, no capitals anywhere. Lark's
+    // "is" filter is an exact-match string comparison, not case-insensitive,
+    // so a CS agent typing a username with any capital letters (autocapitalize
+    // on a phone keyboard, habit, copy-pasted from a chat where the player
+    // capitalized their own name, etc.) silently matched nothing on every
+    // table -- P&L Tier, LTV, Top 10 P&L, Grace Period, Risk Player, VIP
+    // Booster, all of it -- with no error, just an empty/"not VIP" result.
+    // Lowercasing once here (before it's used for any search below, or
+    // written into the new Customer Approaching row) fixes every one of
+    // those lookups at the source, regardless of what case the agent typed.
+    const uname = username.trim().toLowerCase();
     const brandVal = brand.trim();
     const agentVal = (picName || "").trim();
 
