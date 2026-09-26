@@ -18,6 +18,7 @@ const F = {
   status: "Status",
   swCheck: "SW Check",
   swChecker: "SW Checker", // LTV(Day)'s equivalent field is spelled differently from Top 10 P&L(Night)'s — confirmed from a real row, not a guess
+  swCheckerCopy: "SW Checker Copy", // LTV(Day)'s own copy field -- this, not "Status", is what actually decides claimable (see the LTV(Day) block below)
   claimedCopy: "Claimed Copy",
   bonusAmount: "Bonus Amount", // Telegram RM28's actual per-row amount (18, 8, 28, 5...) — confirmed from a real screenshot
   graceExpiry: "Expried", // yes, "Expried" (confirmed from the real column header) -- Grace Period's own expiry date, gates whether Reactivate shows in app.js
@@ -187,19 +188,21 @@ export async function handler(event) {
         }
       ).catch(() => null),
 
-      // LTV(Day): "Status" is a Formula field whose only value that means
-      // "claimable" is the literal "Valid" — anything else (blank, or any
-      // other formula output) means don't show it. This is an exact match
-      // on Status, not the generic hidden()-word-scan every other table
-      // above uses (that scan only flags text containing "claimed"/
-      // "expired"/etc., so a Status value that was neither "Valid" nor one
-      // of those words was slipping through as claimable). LTV(Day) has no
-      // "Claimed Copy" field at all — confirmed from a real row — so the
-      // display text still comes from "SW Checker" (note the different
-      // spelling from Top 10 P&L's "SW Check").
+      // LTV(Day): the "Status" formula field was still leaving rows hidden
+      // that should've shown -- checking "SW Checker Copy" directly instead
+      // (confirmed live to be the reliable one): contains "Failed" or
+      // "Claimed" -> not claimable, contains "Pass" -> claimable. When more
+      // than one row for this Username/Brand contains "Pass", only the most
+      // recent one (by Time of Inspection) should show -- newest: true does
+      // exactly that: filters down to the Pass-only rows first, then picks
+      // the latest of those, same as scanning newest-to-oldest and stopping
+      // at the first Pass. Display text comes from the same field that was
+      // checked, so it always reflects the row actually picked.
       findOldestClaimableRow(
         TABLE_LTV_DAY, uname, brandVal,
-        (fields) => toDisplay(fields[F.status]).trim().toLowerCase() === "valid" && !!toDisplay(fields[F.swChecker])
+        (fields) => /pass/i.test(toDisplay(fields[F.swCheckerCopy])),
+        undefined,
+        { newest: true }
       ).catch(() => null),
 
       // Grace Period(Day): "SW Check" is both the claim flag (hide only
@@ -312,7 +315,7 @@ export async function handler(event) {
           tier,
           customerName,
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
-          ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
+          ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swCheckerCopy]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",
           // Raw epoch ms, straight off the Date field -- an absolute
           // timestamp, unaffected by any of that field's own display/
