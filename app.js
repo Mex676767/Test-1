@@ -165,6 +165,7 @@ const BONUS_PROGRAMS = [
   { key: "ltvTest", label: "LTV" },
   { key: "vipBooster", label: "12h VIP Deposit Booster" },
   { key: "mooncake", label: "Mooncake Bonus" },
+  { key: "vs96Feedback", label: "VS96 Feedback" },
 ];
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
@@ -851,6 +852,7 @@ const BONUS_INQUIRY_MAP = {
   redeemCode: "Redeem Code",
   specialReload: "Reload - Ang Pao",
   mooncake: "Moon Bonus",
+  vs96Feedback: "Feedback",
 };
 
 // Risk Player is a single Lark field, but its value encodes which day-tier
@@ -2672,6 +2674,16 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".dob-calendar").classList.add("hidden");
   }
 
+  } catch (err) {
+    // This whole handler previously had no catch -- an exception thrown by
+    // ANY action here (not just saveCase) was swallowed by the browser
+    // with zero feedback: no status message, no visible change, nothing in
+    // the UI to suggest anything even happened. Surfacing it here doesn't
+    // fix whatever throws, but at least tells the agent (and, via the
+    // console.error below, tells us) what actually went wrong instead of
+    // looking like the button silently does nothing.
+    console.error("Action failed:", btn.dataset.action, err);
+    setStatus(`Something went wrong (${btn.dataset.action}): ` + err.message, "error");
   } finally {
     saveState();
   }

@@ -4,7 +4,7 @@ import {
   TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
-  TABLE_TELEGRAM28, TABLE_MOONCAKE,
+  TABLE_TELEGRAM28, TABLE_MOONCAKE, TABLE_VS96_FEEDBACK,
 } from "./_lib/lark.js";
 import { readOwnership, ownedBy } from "./_lib/ca-row.js";
 
@@ -153,6 +153,7 @@ export async function handler(event) {
       telegram28Row,
       redeemRow,
       mooncakeRow,
+      vs96Row,
     ] = await Promise.all([
       // Warn CS if username exists under other brands
       (async () => {
@@ -313,6 +314,17 @@ export async function handler(event) {
         undefined,
         { usernameField: F.uid }
       ).catch(() => null),
+
+      // VS96 Feedback Bonus: same rule as Redeem Code above -- "Status"
+      // hides Claimed/Expired, anything else (still shows as its actual
+      // text, e.g. "Eligible" / "Pass") is claimable.
+      (async () => {
+        const vs96Matches = (await searchRecords(TABLE_VS96_FEEDBACK, [
+          { field_name: F.usernameUid, operator: "is", value: [uname] },
+          { field_name: F.brand, operator: "is", value: [brandVal] },
+        ])).filter((r) => !hidden(toDisplay(r.fields[F.status])));
+        return vs96Matches[vs96Matches.length - 1] || null;
+      })().catch(() => null),
     ]);
 
     return {
@@ -358,6 +370,7 @@ export async function handler(event) {
             ? { recordId: redeemRow.record_id, status: toDisplay(redeemRow.fields[F.status]) }
             : null,
           mooncake: mooncakeRow ? toDisplay(mooncakeRow.fields[F.status]) : "",
+          vs96Feedback: vs96Row ? toDisplay(vs96Row.fields[F.status]) : "",
         },
       }),
     };
