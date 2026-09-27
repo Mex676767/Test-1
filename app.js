@@ -243,7 +243,7 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
   const res = await fetch("/lark-search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, brand, link, telegram, picName, previousRecordId }),
+    body: JSON.stringify({ username, brand, link, telegram, picName, previousRecordId, preview: previewMode }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Lookup failed");
@@ -260,8 +260,7 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
 // Fallback only — used until (or unless) the real LiveChat Agent App SDK
 // connects. See initLiveChatSdk() below.
 const SAMPLE_CHATS = [
-  { chatId: "c1", customerName: "VS96 VIP", link: "https://my.livechatinc.com/chats/c1", isTelegram: false, groupName: "VS96 Priority Support" },
-  { chatId: "c2", customerName: "MAX39 Priority", link: "https://my.livechatinc.com/chats/c2", isTelegram: true, groupName: "MAX39 Priority Support" },
+  { chatId: "preview-test", customerName: "Bonus Test Preview", link: "", isTelegram: false, groupName: "VS96 Priority Support" },
 ];
 
 // The list renderChats() actually draws from. Starts as the demo data;
@@ -269,6 +268,10 @@ const SAMPLE_CHATS = [
 // SDK connects. Kept as a list (not a single object) so renderChats/state
 // keying by chatId didn't need to change shape for this swap.
 let activeChats = SAMPLE_CHATS;
+// Standalone Pages preview is a read-only test bench. It reads the same live
+// bonus tables, but every write path is disabled until the LiveChat SDK
+// successfully connects and replaces the sample cards with a real chat.
+let previewMode = true;
 
 // Builds our chat shape from the SDK's ICustomerProfile. One remaining gap,
 // confirmed from the SDK's own type definitions (not just undocumented) —
@@ -757,6 +760,7 @@ function initLiveChatSdk() {
   LiveChat.createDetailsWidget().then((widget) => {
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
     liveWidget = widget;
+    previewMode = false;
     // We're definitely embedded in real LiveChat now (this promise only
     // resolves inside an actual Agent App) — stop showing demo data
     // immediately, even before we know whether a chat happens to be
@@ -1335,6 +1339,7 @@ function caseSummaryText(c) {
 }
 
 function renderCasesBar(chatId) {
+  if (previewMode) return "";
   const s = state[chatId];
   if (!s || s.isUnknown) return "";
   const logs = (s.logs || []).slice().sort((a, b) => (a.caseNo || 0) - (b.caseNo || 0));
@@ -1766,6 +1771,7 @@ function renderExpandedCard(chat) {
     <div class="chat-card-head">
       <span class="chat-name">${chat.customerName}</span>
       <div class="chat-card-head-actions">
+        ${previewMode ? `<span class="preview-mode-badge">TEST MODE · READ ONLY</span><button type="button" class="preview-reset-btn" data-action="resetPreview" data-chat="${chat.chatId}">Reset test</button>` : ""}
         ${chat.link ? `<a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>` : ""}
         <button class="expand-btn expanded" data-action="toggleExpand" data-chat="${chat.chatId}" title="Collapse">▴</button>
       </div>
@@ -1813,10 +1819,12 @@ function renderExpandedCard(chat) {
       </label>
     </div>
 
-    ${s.autoRecordError ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
+    ${s.autoRecordError && !previewMode ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
     ${
-      loggingPaused && !s.logged
+      previewMode
+        ? `<div class="preview-readonly-note">Test mode reads live bonus data. Claims and form changes stay on this preview card and never create or update a Lark record.</div>`
+        : loggingPaused && !s.logged
         ? `<div class="logged-badge unknown">Logging paused — not recorded</div>`
         : s.isUnknown
           ? `<div class="logged-badge unknown">Unknown player — won't be recorded</div>`
@@ -2052,6 +2060,18 @@ function ensureChatState(chat) {
   };
 }
 
+function resetPreviewCard(chatId) {
+  if (!previewMode) return;
+  const chat = SAMPLE_CHATS.find((item) => item.chatId === chatId);
+  if (!chat) return;
+  delete state[chatId];
+  lastSyncedJson.delete(chatId);
+  ensureChatState(chat);
+  state[chatId].expanded = true;
+  renderChats(activeChats);
+  setStatus("Preview test reset. No Lark record was changed.", "success");
+}
+
 // Which text field is focused, by a selector stable across a re-render
 // (class + which chat's card + which escalation field, where relevant) --
 // used to restore focus/cursor position around renderChats() below, since
@@ -2240,8 +2260,13 @@ chatListEl.addEventListener("click", async (e) => {
   // missing-username/brand guards).
   try {
 
+  if (btn.dataset.action === "resetPreview") {
+    resetPreviewCard(chatId);
+    return;
+  }
+
   if (btn.dataset.action === "lookup") {
-    if (!selectedAgent) { openSettingsPanel(); return; }
+    if (!selectedAgent && !previewMode) { openSettingsPanel(); return; }
     // State-level guard, not just btn.disabled -- a background re-render
     // (checkChatStatus's 2s Telegram-detection poll calls renderChats for
     // the focused chat) replaces this button with a fresh enabled one
@@ -2388,7 +2413,7 @@ chatListEl.addEventListener("click", async (e) => {
       // branch's own header note) — nothing to submit yet. The real claim
       // ("Activated: ...") sets everything submitRecord needs same as any
       // other program's claim, so it gets the same instant-submit treatment.
-      if (s.claimedPrograms.gracePeriod) {
+      if (s.claimedPrograms.gracePeriod && !previewMode) {
         await submitRecord(chatId, { auto: true, reason: "Grace Period claimed" });
       }
       return;
@@ -2398,7 +2423,7 @@ chatListEl.addEventListener("click", async (e) => {
     // Lark the instant they're claimed — that's what fires the backoffice-
     // approval workflow. Regular (gold) tickets are read-only source-table
     // rows; they're only logged at submit.
-    if (programKey === "telegram28" || programKey === "redeemCode" || programKey === "specialReload") {
+    if (!previewMode && (programKey === "telegram28" || programKey === "redeemCode" || programKey === "specialReload")) {
       const source = r[programKey];
       const chatDef = activeChats.find((c) => c.chatId === chatId);
       btn.disabled = true;
@@ -2477,7 +2502,11 @@ chatListEl.addEventListener("click", async (e) => {
     // waiting for the chat to close, same as Special Reload originally did
     // — generalized to every program that reaches this shared completion
     // path, not just that one.
-    await submitRecord(chatId, { auto: true, reason: `${allSources.find((src) => src.key === programKey)?.label || "Bonus"} claimed` });
+    if (!previewMode) {
+      await submitRecord(chatId, { auto: true, reason: `${allSources.find((src) => src.key === programKey)?.label || "Bonus"} claimed` });
+    } else {
+      setStatus("Preview claim simulated. No Lark record was created or updated.", "success");
+    }
   }
 
   // Click a claimed bonus again to undo it. Clears Inquiry, Status, Amount and
@@ -2500,7 +2529,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.unclaimInFlight = true;
     btn.disabled = true;
     try {
-      if (s.logged && s.caRecordId && !s.isUnknown) {
+      if (!previewMode && s.logged && s.caRecordId && !s.isUnknown) {
         const res = await fetch("/lark-record", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3002,6 +3031,14 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   s.isUnknown = value;
   if (!s.isUnknown || !s.caRecordId) return;
 
+  if (previewMode) {
+    s.caRecordId = null;
+    s.logged = false;
+    s.loggedSnapshot = "";
+    s.autoRecordError = "";
+    return;
+  }
+
   // A record can already exist from a Look up (a guessed/wrong username, a
   // confirmed non-VIP) or even have been recorded already -- an Unknown
   // player should have no Customer Approaching row at all, so it's removed
@@ -3134,6 +3171,7 @@ document.addEventListener("click", (e) => {
 // returns early once s.logged is set, so it can't do this itself).
 async function resyncLoggedRecord(chatId) {
   const s = state[chatId];
+  if (previewMode) return true;
   if (!s || !s.logged || !s.caRecordId || s.isUnknown) return false;
   if (!s.inquiry.length || !s.status) {
     setStatus("Add an inquiry and a status before saving.", "error");
@@ -3178,6 +3216,7 @@ async function resyncLoggedRecord(chatId) {
 // auto-record call) and made any earlier reference stale.
 async function submitRecord(chatId, { auto, reason } = {}) {
   const s = state[chatId];
+  if (previewMode) return;
   if (!s || s.logged) return;
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
   // Every auto message below used to hardcode "Chat closed" -- accurate for

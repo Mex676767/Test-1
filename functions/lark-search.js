@@ -73,7 +73,7 @@ function toEpochMs(v) {
 
 export async function handler(event) {
   try {
-    const { username, brand, picName, previousRecordId, link } = JSON.parse(event.body || "{}");
+    const { username, brand, picName, previousRecordId, link, preview } = JSON.parse(event.body || "{}");
     if (!username || !brand) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "username and brand are required" }) };
     }
@@ -103,7 +103,7 @@ export async function handler(event) {
     // Only this agent's own still-blank row is ever removed: after a chat
     // transfer (PC crash / lost connection) the previous agent's row stays
     // theirs, and the new agent gets a separate row of their own.
-    if (previousRecordId) {
+    if (!preview && previousRecordId) {
       try {
         const { owner, blank } = await readOwnership(previousRecordId);
         if (blank && ownedBy(owner, agentVal)) await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId);
@@ -121,13 +121,16 @@ export async function handler(event) {
     // lark-stale-records.js. "link" is a Lark Link field, hence {link, text}.
     // If the link write is ever rejected, retry without it rather than
     // failing the whole Look Up.
-    const baseFields = { [F.username]: uname, [F.brand]: brandVal, [F.agentName]: agentVal };
-    const chatLink = String(link || "").trim();
-    const created = chatLink
-      ? await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } })
-          .catch(() => createRecord(TABLE_CUSTOMER_APPROACHING, baseFields))
-      : await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
-    const caRecordId = created.record_id;
+    let caRecordId = null;
+    if (!preview) {
+      const baseFields = { [F.username]: uname, [F.brand]: brandVal, [F.agentName]: agentVal };
+      const chatLink = String(link || "").trim();
+      const created = chatLink
+        ? await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } })
+            .catch(() => createRecord(TABLE_CUSTOMER_APPROACHING, baseFields))
+        : await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
+      caRecordId = created.record_id;
+    }
 
     // Every lookup below is fully independent of the others (and of
     // caRecordId) -- previously each was its own separate `await`, one
@@ -325,7 +328,7 @@ export async function handler(event) {
       body: JSON.stringify({
         ok: true,
         otherBrands,
-        justCreated: true,
+        justCreated: !preview,
         notVip,
         caRecordId,
         row: {
