@@ -188,6 +188,11 @@ body {
   margin-top: 16px; padding: 9px 11px; border: 1px dashed color-mix(in srgb, var(--teal) 55%, transparent);
   border-radius: 8px; color: var(--teal); background: var(--teal-soft); font-size: 11px; text-align: center;
 }
+.bonus-admin-embed { margin-top: 18px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface-2); }
+.bonus-admin-embed > summary { padding: 11px 13px; color: var(--text-muted); font-size: 11.5px; font-weight: 700; cursor: pointer; user-select: none; }
+.bonus-admin-embed[open] > summary { border-bottom: 1px solid var(--border); color: var(--teal); }
+.bonus-admin-embed iframe { display: block; width: 100%; height: 1180px; border: 0; background: transparent; }
+@media (max-width: 680px) { .bonus-admin-embed iframe { height: 1540px; } }
 .chat-link {
   font-size: 11.5px; color: var(--text-faint); text-decoration: none; display: flex; align-items: center; gap: 3px;
 }

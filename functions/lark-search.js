@@ -7,6 +7,7 @@ import {
   TABLE_TELEGRAM28, TABLE_MOONCAKE, TABLE_VS96_FEEDBACK,
 } from "./_lib/lark.js";
 import { readOwnership, ownedBy } from "./_lib/ca-row.js";
+import { isConfiguredBonusEligible, listBonusConfigs } from "./_lib/bonus-config.js";
 
 const F = {
   username: "Username",
@@ -91,6 +92,28 @@ export async function handler(event) {
     const uname = username.trim().toLowerCase();
     const brandVal = brand.trim();
     const agentVal = (picName || "").trim();
+
+    // User-defined regular bonuses are stored as metadata in Lark. Start
+    // their reads immediately so they run alongside the built-in lookups.
+    const configuredBonusRowsP = listBonusConfigs({ fresh: !!preview }).then(async (configs) => {
+      const pairs = await Promise.all(configs.map(async (config) => {
+        const row = await findOldestClaimableRow(
+          config.sourceTableId,
+          uname,
+          brandVal,
+          (fields) => isConfiguredBonusEligible(config, toDisplay(fields[config.displayField])),
+          config.sourceBaseToken || undefined,
+          {
+            usernameField: config.usernameField,
+            brandField: config.brandField,
+            dateField: config.dateField,
+            newest: config.selection === "newest",
+          }
+        );
+        return [config.key, row ? toDisplay(row.fields[config.displayField]) : ""];
+      }));
+      return Object.fromEntries(pairs);
+    }).catch(() => ({}));
 
     // One Customer Approaching row per chat, not one per Look Up click —
     // if the agent looks up again for the same chat (typo fix, re-check,
@@ -322,6 +345,7 @@ export async function handler(event) {
         }
       ),
     ]);
+    const configuredBonuses = await configuredBonusRowsP;
 
     return {
       statusCode: 200,
@@ -367,6 +391,7 @@ export async function handler(event) {
             : null,
           mooncake: mooncakeRow ? toDisplay(mooncakeRow.fields[F.status]) : "",
           vs96Feedback: vs96Row ? toDisplay(vs96Row.fields[F.status]) : "",
+          ...configuredBonuses,
         },
       }),
     };

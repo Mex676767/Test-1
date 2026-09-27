@@ -19,6 +19,7 @@ let ESCALATION_BASE_TOKEN, TABLE_ESCALATION;
 let TABLE_TELEGRAM28;
 let TABLE_MOONCAKE;
 let TABLE_VS96_FEEDBACK;
+let TABLE_BONUS_CONFIG;
 
 export function initEnv(env) {
   APP_ID = env.LARK_APP_ID;
@@ -44,6 +45,7 @@ export function initEnv(env) {
   TABLE_MOONCAKE = env.LARK_TABLE_MOONCAKE;
 
   TABLE_VS96_FEEDBACK = env.LARK_TABLE_VS96_FEEDBACK;
+  TABLE_BONUS_CONFIG = env.LARK_TABLE_BONUS_CONFIG;
 }
 
 let cachedToken = null;
@@ -271,11 +273,11 @@ function findTimeOfInspection(fields, dateFieldName) {
   return key ? fields[key] : 0;
 }
 
-export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, dateField, newest } = {}) {
+export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest } = {}) {
   if (!tableId) return null;
   const matches = await searchRecords(tableId, [
     { field_name: usernameField || "Username/UID", operator: "is", value: [username] },
-    { field_name: "Brand", operator: "is", value: [brand] },
+    { field_name: brandField || "Brand", operator: "is", value: [brand] },
   ], baseToken, { pageSize: 500, automaticFields: true });
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
@@ -308,4 +310,5 @@ export {
   TABLE_TELEGRAM28,
   TABLE_MOONCAKE,
   TABLE_VS96_FEEDBACK,
+  TABLE_BONUS_CONFIG,
 };

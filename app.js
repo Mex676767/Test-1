@@ -167,6 +167,17 @@ const BONUS_PROGRAMS = [
   { key: "mooncake", label: "Mooncake Bonus" },
   { key: "vs96Feedback", label: "VS96 Feedback" },
 ];
+let configuredBonusPrograms = [];
+function allBonusPrograms() { return [...BONUS_PROGRAMS, ...configuredBonusPrograms]; }
+async function fetchConfiguredBonusPrograms() {
+  try {
+    const res = await fetch("/bonus-config");
+    const data = await res.json();
+    configuredBonusPrograms = data.ok && Array.isArray(data.configs) ? data.configs : [];
+  } catch (_) {
+    configuredBonusPrograms = [];
+  }
+}
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
 // Released Amount only ever applies to these — Risk Player, 12h VIP Booster,
@@ -198,7 +209,7 @@ function extractAmountNumber(str) {
 function hasAnyBonus(chatId) {
   const r = state[chatId].matchedRow;
   if (!r) return false;
-  if (BONUS_PROGRAMS.some((p) => isClaimableValue(r[p.key]))) return true;
+  if (allBonusPrograms().some((p) => isClaimableValue(r[p.key]))) return true;
   if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) return true;
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
   if (r.specialReload) return true; // lark-search.js already filtered to only "Eligible Angpao"
@@ -873,7 +884,12 @@ function resolveInquiryForProgram(key, display) {
     const tag = match ? match[1].toUpperCase() : null;
     if (tag && inquiryOptions.includes(tag)) return tag;
   }
-  return BONUS_INQUIRY_MAP[key];
+  return BONUS_INQUIRY_MAP[key] || configuredBonusPrograms.find((item) => item.key === key)?.inquiry;
+}
+
+function programHasAmount(key) {
+  return AMOUNT_ELIGIBLE_PROGRAMS.has(key)
+    || configuredBonusPrograms.some((item) => item.key === key && item.amountEligible);
 }
 
 // Fetched live from Lark's own Status field, same as inquiryOptions above —
@@ -1486,7 +1502,7 @@ function renderTickets(chatId) {
   // hasn't caught up yet (its source row can lag behind).
   const usedElsewhere = usedProgramsInOtherCases(s);
 
-  BONUS_PROGRAMS.forEach((p) => {
+  allBonusPrograms().forEach((p) => {
     if (usedElsewhere.has(p.key)) return;
     if (!isClaimableValue(r[p.key])) return;
     const def = { key: p.key, kind: "regular", label: p.label, display: r[p.key] };
@@ -1837,6 +1853,12 @@ function renderExpandedCard(chat) {
 
     <div class="cases-slot">${renderCasesBar(chat.chatId)}</div>
 
+    ${previewMode ? `
+      <details class="bonus-admin-embed">
+        <summary>⚙ Bonus Setup Admin</summary>
+        <iframe src="/bonus-admin.html?embedded=1" title="Bonus Setup Admin"></iframe>
+      </details>` : ""}
+
     ${ESCALATION_TICKET_ENABLED ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
   `;
 }
@@ -1864,6 +1886,9 @@ function claimedProgramsFromSavedCase(row) {
   if (!row.claimSecret && String(row.status || "").trim().toLowerCase() !== "given") return claimed;
   for (const [key, inquiry] of Object.entries(BONUS_INQUIRY_MAP)) {
     if (inquiries.includes(inquiry)) claimed[key] = true;
+  }
+  for (const config of configuredBonusPrograms) {
+    if (inquiries.includes(config.inquiry)) claimed[config.key] = true;
   }
   return claimed;
 }
@@ -2446,7 +2471,7 @@ chatListEl.addEventListener("click", async (e) => {
 
     s.claimedPrograms[programKey] = true;
     const allSources = [
-      ...BONUS_PROGRAMS.map((p) => ({ key: p.key, label: p.label, display: r[p.key] })),
+      ...allBonusPrograms().map((p) => ({ key: p.key, label: p.label, display: r[p.key] })),
       { key: "telegram28", label: "Telegram RM28", display: r.telegram28?.status },
       { key: "redeemCode", label: "Redeem Code", display: r.redeemCode?.status },
       { key: "specialReload", label: "Special Reload (Ang Pao)", display: r.specialReload?.status },
@@ -2466,7 +2491,7 @@ chatListEl.addEventListener("click", async (e) => {
     // (e.g. Top 10 P&L(Night)'s real format "Batch 09-09-2026 Pass RM58" --
     // the naive "first number found" pattern used here previously for
     // escalation.amount would have grabbed "09" instead of "58").
-    const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && AMOUNT_ELIGIBLE_PROGRAMS.has(src.key));
+    const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && programHasAmount(src.key));
     const claimedAmount = claimedSources.map((src) => extractAmountNumber(src.display)).filter(Boolean).join(" | ");
     s.releasedBonusAmount = claimedAmount;
     s.releasedAmountRaw = claimedAmount;
@@ -3405,7 +3430,7 @@ function setStatus(text, kind) {
 // loaded. Doesn't touch anything already picked on an open card.
 const OPTIONS_REFRESH_MS = 3 * 60_000;
 function refreshDropdownOptions() {
-  return Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchTicketConfig()]);
+  return Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchTicketConfig(), fetchConfiguredBonusPrograms()]);
 }
 setInterval(refreshDropdownOptions, OPTIONS_REFRESH_MS);
 
@@ -3423,6 +3448,12 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
   }
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
+
+window.addEventListener("message", async (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== "bonus-config-changed") return;
+  await fetchConfiguredBonusPrograms();
+  renderChats(activeChats);
+});
 
 const loggingPauseCheck = document.getElementById("loggingPauseCheck");
 loggingPauseCheck.addEventListener("change", () => {

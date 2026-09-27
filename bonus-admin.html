@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bonus Setup</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="bonus-admin.css" />
+</head>
+<body class="bonus-admin-page">
+  <main class="bonus-admin-shell">
+    <header class="bonus-admin-head">
+      <div><div class="preview-mode-badge">ADMIN</div><h1>Bonus Setup</h1></div>
+      <a href="/" class="secondary-btn">← Test preview</a>
+    </header>
+
+    <section class="bonus-admin-card">
+      <div class="bonus-admin-section-head"><h2>Bonus configurations</h2><button id="loadConfigs" class="secondary-btn" type="button">Refresh</button></div>
+      <p id="adminStatus" class="bonus-admin-status">Loading configurations…</p>
+    </section>
+
+    <section id="configSection" class="bonus-admin-card hidden">
+      <div class="bonus-admin-section-head"><h2 id="formTitle">Add regular bonus</h2><button id="clearForm" class="secondary-btn" type="button">New</button></div>
+      <p class="bonus-admin-help">This form supports regular lookup-and-claim bonuses. Workflows requiring extra questions, activation, source-table writes, or other custom actions still need code.</p>
+      <form id="bonusForm" class="bonus-config-grid">
+        <input id="recordId" type="hidden" />
+        <label>Key<input id="key" class="input" required placeholder="weekend-reload" /><small>Unique internal name; cannot change after agents use it.</small></label>
+        <label>Display label<input id="label" class="input" required placeholder="Weekend Reload" /></label>
+        <label>Inquiry tag<input id="inquiry" class="input" required placeholder="Weekend Reload" /><small>Must match an Inquiry option in Customer Approaching.</small></label>
+        <label>Source table ID<input id="sourceTableId" class="input mono" required placeholder="tblxxxxxxxxxxxx" /></label>
+        <label>Source base app token<input id="sourceBaseToken" class="input mono" placeholder="Leave blank for the main base" /></label>
+        <label>Username field<input id="usernameField" class="input" value="Username/UID" required /></label>
+        <label>Brand field<input id="brandField" class="input" value="Brand" required /></label>
+        <label>Time field<input id="dateField" class="input" value="Time of Inspection" required /></label>
+        <label>Display/status field<input id="displayField" class="input" value="Status" required /></label>
+        <label>Eligibility rule<select id="rule" class="input settings-select">
+          <option value="any_text">Any text except terminal statuses</option>
+          <option value="starts_with">Starts with</option>
+          <option value="contains">Contains</option>
+          <option value="equals">Equals</option>
+        </select></label>
+        <label id="ruleValueLabel" class="hidden">Rule value<input id="ruleValue" class="input" placeholder="Pass" /></label>
+        <label>Record selection<select id="selection" class="input settings-select"><option value="oldest">Oldest eligible</option><option value="newest">Newest eligible</option></select></label>
+        <label class="bonus-checkbox"><input id="amountEligible" type="checkbox" /> Extract RM amount when claimed</label>
+        <label class="bonus-checkbox"><input id="active" type="checkbox" checked /> Active</label>
+        <button class="submit-btn bonus-save" type="submit">Save bonus</button>
+      </form>
+    </section>
+
+    <section id="listSection" class="bonus-admin-card hidden">
+      <h2>Configured bonuses</h2>
+      <div id="configList" class="bonus-config-list"></div>
+    </section>
+
+    <section class="bonus-admin-card">
+      <h2>One-time Lark setup</h2>
+      <p class="bonus-admin-help">Create a table named <strong>Bonus Config</strong> in the main base, add the fields below, then set its table ID as <code>LARK_TABLE_BONUS_CONFIG</code> in Cloudflare.</p>
+      <pre>Key, Label, Source Table ID, Source Base Token,
+Username Field, Brand Field, Date Field, Display Field,
+Eligibility Rule, Rule Value, Selection, Inquiry  → Text fields
+Active, Amount Eligible                           → Checkbox fields</pre>
+    </section>
+  </main>
+  <script src="bonus-admin.js"></script>
+</body>
+</html>

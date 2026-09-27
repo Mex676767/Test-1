@@ -1,0 +1,26 @@
+.bonus-admin-page { min-height: 100vh; background: var(--bg); color: var(--text); }
+.bonus-admin-shell { width: min(980px, calc(100% - 28px)); margin: 24px auto 60px; }
+.bonus-admin-head, .bonus-admin-section-head, .bonus-admin-inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bonus-admin-head h1 { display: inline-block; margin: 8px 0 18px; font: 700 25px "Space Grotesk", sans-serif; }
+.bonus-admin-card { margin-bottom: 14px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.bonus-admin-card h2 { margin: 0 0 12px; font: 600 16px "Space Grotesk", sans-serif; }
+.bonus-admin-inline .input { flex: 1; }
+.bonus-admin-status, .bonus-admin-help, .bonus-config-grid small { color: var(--text-faint); font-size: 11.5px; line-height: 1.5; }
+.bonus-admin-status.error { color: var(--danger); }
+.bonus-admin-status.success { color: var(--teal); }
+.bonus-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.bonus-config-grid label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: 11px; }
+.bonus-checkbox { flex-direction: row !important; align-items: center; padding-top: 10px; }
+.bonus-checkbox input { accent-color: var(--teal); }
+.bonus-save { grid-column: 1 / -1; }
+.bonus-config-list { display: flex; flex-direction: column; gap: 8px; }
+.bonus-config-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.bonus-config-row.inactive { opacity: .58; }
+.bonus-config-title { font-weight: 700; }
+.bonus-config-meta { margin-top: 4px; color: var(--text-faint); font-size: 10.5px; line-height: 1.45; }
+.bonus-config-actions { display: flex; align-items: center; gap: 6px; }
+.bonus-admin-card pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: var(--surface-2); color: var(--text-muted); font: 11px/1.55 "IBM Plex Mono", monospace; }
+@media (max-width: 680px) { .bonus-config-grid { grid-template-columns: 1fr; } .bonus-admin-inline { align-items: stretch; flex-direction: column; } }
+.bonus-admin-page.embedded { min-height: 0; background: transparent; }
+.bonus-admin-page.embedded .bonus-admin-shell { width: 100%; margin: 0; padding: 14px; box-sizing: border-box; }
+.bonus-admin-page.embedded .bonus-admin-head { display: none; }
