@@ -1,6 +1,6 @@
 // The C9 ticket-system integration. API credentials stay in the server-side
 // Pages environment and are never sent to this LiveChat iframe.
-const ESCALATION_TICKET_ENABLED = true;
+const ESCALATION_TICKET_ENABLED = false;
 
 /* ============================================================
    THEME
@@ -63,6 +63,7 @@ async function fetchBrandOptions() {
 let ticketFields = [];
 let ticketConfigError = "";
 async function fetchTicketConfig() {
+  if (!ESCALATION_TICKET_ENABLED) return;
   try {
     const res = await fetch("/ticket-config");
     const data = await res.json();
