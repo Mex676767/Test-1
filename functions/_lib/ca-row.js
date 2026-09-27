@@ -6,6 +6,8 @@ import { toDisplay, getRecord, TABLE_CUSTOMER_APPROACHING } from "./lark.js";
 export const CA = {
   username: "Username", brand: "Brand", agentName: "Agent Name", inquiry: "Inquiry", status: "Status",
   link: "link", amount: "Released amount", claimSecret: "Claim Secret", dob: "Player D.O.B", telegram: "Telegram",
+  vs96FeedbackQuery1: "Query 1 Feedback (VS96 Feedback)",
+  vs96FeedbackQuery2: "Query 2 Feedback (VS96 Feedback)",
 };
 
 // "link" is a Lark Link field -- {link, text}, sometimes wrapped in an array.
@@ -62,6 +64,8 @@ export function summarizeRow(r) {
     claimSecret: f[CA.claimSecret] === true,
     telegram: f[CA.telegram] === true,
     dob: typeof f[CA.dob] === "number" ? f[CA.dob] : null,
+    vs96FeedbackQuery1: toDisplay(f[CA.vs96FeedbackQuery1]).trim(),
+    vs96FeedbackQuery2: toDisplay(f[CA.vs96FeedbackQuery2]).trim(),
     link,
     threadId: parseChatLink(link).threadId,
     createdAt: Number(r.created_time) || 0,

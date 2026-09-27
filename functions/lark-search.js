@@ -18,7 +18,6 @@ const F = {
   status: "Status",
   swCheck: "SW Check",
   swChecker: "SW Checker", // LTV(Day)'s equivalent field is spelled differently from Top 10 P&L(Night)'s — confirmed from a real row, not a guess
-  swCheckerCopy: "SW Checker Copy", // LTV(Day)'s own copy field -- this, not "Status", is what actually decides claimable (see the LTV(Day) block below)
   claimedCopy: "Claimed Copy",
   bonusAmount: "Bonus Amount", // Telegram RM28's actual per-row amount (18, 8, 28, 5...) — confirmed from a real screenshot
   graceExpiry: "Expried", // yes, "Expried" (confirmed from the real column header) -- Grace Period's own expiry date, gates whether Reactivate shows in app.js
@@ -196,27 +195,21 @@ export async function handler(event) {
       findOldestClaimableRow(
         TABLE_TOP_PNL_NIGHT, uname, brandVal,
         (fields) => {
-          const display = toDisplay(fields[F.swCheck]);
+          const display = toDisplay(fields[F.swCheck]).trim();
           return fields[F.claimedCopy] !== true && !!display && !hidden(display);
         }
-      ).catch(() => null),
+      ),
 
-      // LTV(Day): the "Status" formula field was still leaving rows hidden
-      // that should've shown -- checking "SW Checker Copy" directly instead
-      // (confirmed live to be the reliable one): contains "Failed" or
-      // "Claimed" -> not claimable, contains "Pass" -> claimable. When more
-      // than one row for this Username/Brand contains "Pass", only the most
-      // recent one (by Time of Inspection) should show -- newest: true does
-      // exactly that: filters down to the Pass-only rows first, then picks
-      // the latest of those, same as scanning newest-to-oldest and stopping
-      // at the first Pass. Display text comes from the same field that was
-      // checked, so it always reflects the row actually picked.
+      // LTV(Day): read the live "SW Checker" field. Only values beginning
+      // with Pass are eligible, and recurring rows are consumed FIFO by
+      // Time of Inspection, matching Top 10 P&L.
       findOldestClaimableRow(
         TABLE_LTV_DAY, uname, brandVal,
-        (fields) => /pass/i.test(toDisplay(fields[F.swCheckerCopy])),
-        undefined,
-        { newest: true }
-      ).catch(() => null),
+        (fields) => {
+          const display = toDisplay(fields[F.swChecker]).trim();
+          return /^pass\b/i.test(display) && !hidden(display);
+        }
+      ),
 
       // Grace Period(Day): "SW Check" is both the claim flag (hide only
       // Claimed/Expired) and the displayed value. "SW Check" is a Formula
@@ -315,16 +308,16 @@ export async function handler(event) {
         { usernameField: F.uid }
       ).catch(() => null),
 
-      // VS96 Feedback Bonus: same rule as Redeem Code above -- "Status"
-      // hides Claimed/Expired, anything else (still shows as its actual
-      // text, e.g. "Eligible" / "Pass") is claimable.
-      (async () => {
-        const vs96Matches = (await searchRecords(TABLE_VS96_FEEDBACK, [
-          { field_name: F.usernameUid, operator: "is", value: [uname] },
-          { field_name: F.brand, operator: "is", value: [brandVal] },
-        ])).filter((r) => !hidden(toDisplay(r.fields[F.status])));
-        return vs96Matches[vs96Matches.length - 1] || null;
-      })().catch(() => null),
+      // VS96 Feedback Bonus: any non-empty Status is eligible except the
+      // shared terminal states. Pick the oldest eligible inspection so a
+      // player with several campaign rows is handled FIFO and deterministically.
+      findOldestClaimableRow(
+        TABLE_VS96_FEEDBACK, uname, brandVal,
+        (fields) => {
+          const status = toDisplay(fields[F.status]).trim();
+          return !!status && !hidden(status);
+        }
+      ),
     ]);
 
     return {
@@ -339,7 +332,7 @@ export async function handler(event) {
           tier,
           customerName,
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
-          ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swCheckerCopy]) : "",
+          ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",
           // Raw epoch ms, straight off the Date field -- an absolute
           // timestamp, unaffected by any of that field's own display/

@@ -91,17 +91,19 @@ export async function getTenantToken() {
 // (see lark-stale-records.js). opts.automaticFields adds created_time etc.
 export async function searchRecords(tableId, conditions, baseToken, opts = {}) {
   if (!tableId) throw new Error("Missing table ID — check env vars.");
-  // Retries once (2 attempts total, brief pause between) before giving up.
-  // lark-search.js runs ~9 of these in parallel per Look Up, each behind
-  // its own .catch(() => null) so one bonus's failure doesn't break the
-  // whole lookup -- but that also meant a transient blip (network hiccup,
+  // Retry transient Lark/network failures with short exponential backoff.
+  // lark-search.js runs many of these in parallel per Look Up. Most optional
+  // bonuses remain non-fatal, while the three core programs are allowed to
+  // fail the lookup visibly instead of masquerading as "no bonus". A transient
+  // blip (network hiccup,
   // momentary 5xx, Lark rate-limiting under 9x the concurrent load since
   // parallelizing those calls) silently dropped that one bonus from the
   // response with zero indication anything went wrong. Confirmed live: the
   // same player's Telegram RM28 ticket intermittently not showing up on a
   // re-lookup with no underlying data change in between.
   let lastErr;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const token = await getTenantToken();
       const res = await fetch(
@@ -118,7 +120,9 @@ export async function searchRecords(tableId, conditions, baseToken, opts = {}) {
       return data.data.items || [];
     } catch (err) {
       lastErr = err;
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+      if (attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+      }
     }
   }
   throw lastErr;
@@ -272,10 +276,16 @@ export async function findOldestClaimableRow(tableId, username, brand, isClaimab
   const matches = await searchRecords(tableId, [
     { field_name: usernameField || "Username/UID", operator: "is", value: [username] },
     { field_name: "Brand", operator: "is", value: [brand] },
-  ], baseToken);
+  ], baseToken, { pageSize: 500, automaticFields: true });
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
-  claimable.sort((a, b) => (findTimeOfInspection(a.fields, dateField) || 0) - (findTimeOfInspection(b.fields, dateField) || 0));
+  claimable.sort((a, b) => {
+    const byInspection = (findTimeOfInspection(a.fields, dateField) || 0) - (findTimeOfInspection(b.fields, dateField) || 0);
+    if (byInspection) return byInspection;
+    const byCreated = (Number(a.created_time) || 0) - (Number(b.created_time) || 0);
+    if (byCreated) return byCreated;
+    return String(a.record_id || "").localeCompare(String(b.record_id || ""));
+  });
   // newest: true picks the most recent claimable row instead of the oldest.
   // Grace Period specifically needs this -- it's a recurring weekly
   // challenge, and an old cycle's own row can still read as "claimable"

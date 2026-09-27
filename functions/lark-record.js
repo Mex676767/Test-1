@@ -53,6 +53,8 @@ export async function handler(event) {
     var chatLink = body.chatLink;
     var dob = body.dob;
     var telegram = body.telegram;
+    var vs96FeedbackQuery1 = String(body.vs96FeedbackQuery1 || "").trim();
+    var vs96FeedbackQuery2 = String(body.vs96FeedbackQuery2 || "").trim();
 
     // Every write here is to an existing row -- never one stamped with a
     // different Agent Name. After a chat transfer (PC crash / lost
@@ -104,6 +106,10 @@ export async function handler(event) {
     if (!recordId || !inquiry || !inquiry.length || !status) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Missing required fields" }) };
     }
+    if (inquiry.includes("VS96 Feedback bonus") && String(status).trim().toLowerCase() === "given"
+      && (!vs96FeedbackQuery1 || !vs96FeedbackQuery2)) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Both VS96 feedback answers are required before claiming" }) };
+    }
 
     var fields = {
       "Agent Name": agentName,
@@ -127,7 +133,9 @@ export async function handler(event) {
       // Was previously a UI-only toggle with no write path at all — the
       // card's Telegram switch (auto-detected, but CS-editable) now actually
       // reaches this Checkbox field on submit.
-      "Telegram": !!telegram
+      "Telegram": !!telegram,
+      "Query 1 Feedback (VS96 Feedback)": vs96FeedbackQuery1 || null,
+      "Query 2 Feedback (VS96 Feedback)": vs96FeedbackQuery2 || null
     };
 
     var record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);

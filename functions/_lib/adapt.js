@@ -27,6 +27,7 @@ export function adapt(handler) {
       body,
       queryStringParameters: Object.fromEntries(url.searchParams),
       headers: Object.fromEntries(context.request.headers),
+      env: context.env,
     };
 
     const result = await handler(event);

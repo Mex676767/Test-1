@@ -527,6 +527,8 @@ body {
 .claim-btn.claimed {
   background: var(--teal); border-color: var(--teal); color: var(--surface); cursor: default;
 }
+.claim-btn:disabled { opacity: 0.42; cursor: not-allowed; }
+.claim-btn:disabled:hover { background: none; color: var(--gold); }
 .ticket-btns { display: flex; flex-direction: row; gap: 6px; align-items: center; }
 /* Grace Period's second, always-clickable button next to Activate — lets
    CS give the customer another attempt the same day without needing the
@@ -551,6 +553,31 @@ body {
 .ticket-note {
   font-size: 10.5px; color: var(--text-faint); margin-top: 6px; text-align: center;
 }
+
+/* VS96 requires two written player-feedback answers before Claim unlocks. */
+.ticket.ticket-vs96 {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 62%, transparent);
+}
+.ticket.ticket-vs96.feedback-complete {
+  background: color-mix(in srgb, var(--teal) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--teal) 62%, transparent);
+}
+.ticket-vs96 .vs96-feedback-fields {
+  grid-column: 1 / -1; display: flex; flex-direction: column; gap: 7px; width: 100%;
+}
+.vs96-feedback-fields label { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 7px; align-items: center; }
+.vs96-feedback-fields label > span { color: var(--text); font-size: 12px; font-weight: 700; }
+.vs96-feedback-input {
+  width: 100%; min-height: 38px; resize: vertical; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 7px; padding: 8px 9px;
+  background: var(--surface); color: var(--text); font: 12px/1.35 "Inter", sans-serif;
+}
+.vs96-feedback-input:focus { outline: none; border-color: var(--teal); }
+.vs96-feedback-input:disabled { opacity: 0.72; resize: none; }
+.vs96-feedback-note { color: var(--danger); font-size: 10.5px; padding-left: 32px; }
+.feedback-complete .vs96-feedback-note { color: var(--teal); }
 
 /* Special tickets (Ang Pao / Redeem Code) — red, to visually separate
    one-off/manual bonuses from the 5 regular recurring programs (gold). */
@@ -676,7 +703,7 @@ body {
 }
 .diag-empty { font-size: 11px; color: var(--text-faint); text-align: center; padding: 4px; }
 
-/* ---------- Escalation Ticket (C9MYR CS-PYM) ---------- */
+/* ---------- C9 Ticket System ---------- */
 .escalation-slot { margin-top: 8px; }
 .escalation-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .escalation-field { flex: 1 1 160px; min-width: 160px; }
@@ -684,6 +711,19 @@ body {
 .escalation-field-wide { flex-basis: 100%; }
 .escalation-field-wide textarea.input { resize: vertical; min-height: 44px; }
 .escalation-submit-btn { margin-top: 14px; }
+.ticket-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.ticket-lookup-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.ticket-lookup-row .input { flex: 1; min-width: 0; }
+.secondary-btn { padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.secondary-btn:hover { border-color: var(--blue); color: var(--blue); }
+.secondary-btn:disabled { opacity: .55; cursor: wait; }
+.ticket-form-title { margin: 14px 0 10px; color: var(--text); font-size: 12px; font-weight: 600; }
+.ticket-status-card { padding: 10px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.ticket-status-ref { font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 600; }
+.ticket-status-pill { display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 999px; background: var(--teal-soft); color: var(--teal); font-size: 10px; font-weight: 600; }
+.ticket-status-meta { margin-top: 6px; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
+.ticket-open-link { display: inline-block; margin-top: 7px; color: var(--blue); font-size: 11px; text-decoration: none; }
+.ticket-open-link:hover { text-decoration: underline; }
 
 
 /* ---------- Multiple cases per chat ---------- */

@@ -1,8 +1,6 @@
-// Hidden from the UI (2026-09-02) while PYM builds their own ticketing
-// system to link with — all the code (state, render, backend functions)
-// stays intact underneath; flip this back to true to bring it back rather
-// than rebuilding it.
-const ESCALATION_TICKET_ENABLED = false;
+// The C9 ticket-system integration. API credentials stay in the server-side
+// Pages environment and are never sent to this LiveChat iframe.
+const ESCALATION_TICKET_ENABLED = true;
 
 /* ============================================================
    THEME
@@ -59,21 +57,22 @@ async function fetchBrandOptions() {
   } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
 }
 
-// Escalation Ticket dropdown options (Brand/Queries/Payment Gateway/VIP
-// Level) — from the C9MYR CS-PYM ESCALATION table's own fields, same
-// fetch-once-at-boot pattern.
-let escalationOptions = { brand: [], queries: [], paymentGateway: [], vipLevel: [] };
-async function fetchEscalationOptions() {
+// The ticket API returns its live field catalog, including SELECT options.
+// Keeping that catalog here means changes in the ticket system do not need a
+// corresponding hard-coded option update in this widget.
+let ticketFields = [];
+let ticketConfigError = "";
+async function fetchTicketConfig() {
   try {
-    const res = await fetch("/lark-escalation-options");
+    const res = await fetch("/ticket-config");
     const data = await res.json();
-    if (data.ok) {
-      escalationOptions = {
-        brand: data.brand || [], queries: data.queries || [],
-        paymentGateway: data.paymentGateway || [], vipLevel: data.vipLevel || [],
-      };
-    }
-  } catch (_) { /* non-fatal — Escalation Ticket dropdowns just show empty until retried */ }
+    if (!data.ok) throw new Error(data.error || "Ticket integration is unavailable");
+    ticketFields = data.fields || [];
+    ticketConfigError = "";
+  } catch (err) {
+    ticketFields = [];
+    ticketConfigError = err.message;
+  }
 }
 
 
@@ -1265,6 +1264,7 @@ function renderPlayerInfo(chatId) {
 const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
+  "vs96FeedbackQuery1", "vs96FeedbackQuery2",
 ];
 const CASE_KEYS = [
   ...CASE_CONTENT_KEYS,
@@ -1302,12 +1302,21 @@ function snapshotCase(s) {
   return o;
 }
 function loadCaseInto(s, snap) {
+  // Older persisted cases predate the VS96 fields. Clear them before loading
+  // so switching cases can never carry another player's answers across.
+  s.vs96FeedbackQuery1 = "";
+  s.vs96FeedbackQuery2 = "";
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
 }
 function usedProgramsInOtherCases(s) {
   const used = new Set();
   for (const c of (s.logs || [])) {
     for (const [k, v] of Object.entries(c.claimedPrograms || {})) if (v) used.add(k);
+    // Reconstruct claims from centrally saved Lark fields too. This covers
+    // another browser/PC and older localStorage snapshots that do not carry
+    // claimedPrograms, preventing a restored chat from showing a bonus that
+    // the same case already recorded as Given.
+    for (const key of Object.keys(claimedProgramsFromSavedCase(c))) used.add(key);
   }
   return used;
 }
@@ -1392,6 +1401,8 @@ async function addCaseFlow(chatId) {
     s.otherBrandMatches = otherBrands;
     s.claimedPrograms = {};
     s.gracePeriodActivated = false;
+    s.vs96FeedbackQuery1 = "";
+    s.vs96FeedbackQuery2 = "";
     s.inquiry = [];
     s.status = "";
     s.releasedBonusAmount = "";
@@ -1473,6 +1484,7 @@ function renderTickets(chatId) {
     if (usedElsewhere.has(p.key)) return;
     if (!isClaimableValue(r[p.key])) return;
     const def = { key: p.key, kind: "regular", label: p.label, display: r[p.key] };
+    if (p.key === "vs96Feedback") def.requiresFeedback = true;
     // Grace Period's one field packs two different states: "Pass ..." means
     // the offer just needs activating (no money changes hands yet — button
     // says Activate, doesn't consume the one-claim-per-case slot); "Activated
@@ -1538,10 +1550,14 @@ function renderTickets(chatId) {
   return `<div class="ticket-stack">` + defs.map((d) => {
     const claimed = d.key === "gracePeriod" ? !!d.done : !!s.claimedPrograms[d.key];
     const locked = d.excludeFromLock ? false : (alreadyClaimedOne && !claimed);
+    const feedbackComplete = !d.requiresFeedback || !!(
+      String(s.vs96FeedbackQuery1 || "").trim() && String(s.vs96FeedbackQuery2 || "").trim()
+    );
+    const claimDisabled = !claimed && (locked || !feedbackComplete);
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
     return `
-    <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""}">
+    <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
         <div class="ticket-icon">◆</div>
         <div class="ticket-body">
@@ -1551,7 +1567,7 @@ function renderTickets(chatId) {
         </div>
       </div>
       <div class="ticket-btns">
-        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : ""} ${!claimed && locked ? "disabled" : ""}>
+        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : "")} ${claimDisabled ? "disabled" : ""}>
           ${claimed ? doneLabel : claimLabel}
         </button>
         ${
@@ -1560,6 +1576,12 @@ function renderTickets(chatId) {
             : ""
         }
       </div>
+      ${d.requiresFeedback ? `
+        <div class="vs96-feedback-fields">
+          <label><span>Q1</span><textarea class="vs96-feedback-input" data-feedback="query1" data-chat="${chatId}" placeholder="Enter the player's first feedback…" ${claimed ? "disabled" : ""}>${escapeHtml(s.vs96FeedbackQuery1 || "")}</textarea></label>
+          <label><span>Q2</span><textarea class="vs96-feedback-input" data-feedback="query2" data-chat="${chatId}" placeholder="Enter the player's second feedback…" ${claimed ? "disabled" : ""}>${escapeHtml(s.vs96FeedbackQuery2 || "")}</textarea></label>
+          <div class="vs96-feedback-note">${feedbackComplete ? "✓ Both feedback answers collected" : "Fill in both feedback answers before claiming."}</div>
+        </div>` : ""}
     </div>`;
   }).join("") + `</div>` + (alreadyClaimedOne ? `<div class="ticket-note">Only 1 bonus can be claimed per case</div>` : "");
 }
@@ -1810,65 +1832,129 @@ function renderExpandedCard(chat) {
   `;
 }
 
-// C9MYR CS-PYM Escalation Ticket — writes straight to that department's own
-// Lark table (lark-escalation-submit.js), completely separate from the
-// Record-to-Lark-Base flow above. Only the fields that exist on the real
-// form are included; Attachment is deliberately left out for now (needs a
-// separate Lark file-upload step this doesn't do yet), and Ticket No. is a
-// formula field on their table we never touch. PIC Name isn't an input
-// here at all — always mirrors the agent name chosen in Settings.
+const TICKET_FIELD_SPECS = [
+  { stateKey: "memberUserId", keys: ["member_id"], labels: ["Member / User ID", "Member ID"], required: true },
+  { stateKey: "brand", keys: ["brand"], labels: ["Brand"], required: true },
+  { stateKey: "queries", keys: ["query_type"], labels: ["Query type", "Queries"], required: true },
+  { stateKey: "status", keys: ["status"], labels: ["Status"] },
+  { stateKey: "transactionId", keys: ["transaction_id"], labels: ["Transaction ID"] },
+  { stateKey: "paymentGateway", keys: ["payment_gateway"], labels: ["Payment Gateway"] },
+  { stateKey: "amount", keys: ["amount"], labels: ["Amount"] },
+  { stateKey: "remarks", keys: ["remarks"], labels: ["Remarks", "Remarks (CS - PYM)"] },
+  { stateKey: "vipLevel", keys: ["level", "vip_level"], labels: ["Level", "VIP Level"] },
+];
+
+function ticketFieldFor(spec) {
+  return ticketFields.find((field) => spec.keys.includes(field.key))
+    || ticketFields.find((field) => spec.labels.some((label) => label.toLowerCase() === String(field.label).toLowerCase()));
+}
+
+function claimedProgramsFromSavedCase(row) {
+  const claimed = {};
+  const inquiries = row.inquiry || [];
+  if (!row.claimSecret && String(row.status || "").trim().toLowerCase() !== "given") return claimed;
+  for (const [key, inquiry] of Object.entries(BONUS_INQUIRY_MAP)) {
+    if (inquiries.includes(inquiry)) claimed[key] = true;
+  }
+  return claimed;
+}
+
+function ticketFieldOptions(field) {
+  return (field?.options || [])
+    .filter((option) => option?.isActive !== false)
+    .map((option) => typeof option === "string"
+      ? { value: option, label: option }
+      : { value: option.value, label: option.label || option.value })
+    .filter((option) => option.value !== undefined && option.value !== null);
+}
+
+function renderTicketInput(chatId, spec) {
+  const field = ticketFieldFor(spec);
+  if (!field || field.type === "ATTACHMENT") return "";
+  const s = state[chatId];
+  const value = s.escalation[spec.stateKey] ?? "";
+  const required = spec.required || field.required || field.isRequired;
+  const label = `${escapeHtml(field.label)}${required ? " *" : ""}`;
+  const options = ticketFieldOptions(field);
+  let control;
+
+  if (field.type === "SELECT" || options.length) {
+    const values = value && !options.some((option) => String(option.value) === String(value))
+      ? [{ value, label: value }, ...options]
+      : options;
+    control = `<select class="input esc-select" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}">
+      <option value="">${required && !field.defaultValue ? "Please select" : "Use ticket default"}</option>
+      ${values.map((option) => `<option value="${escapeHtml(option.value)}" ${String(option.value) === String(value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+    </select>`;
+  } else if (field.type === "LONGTEXT" || spec.stateKey === "remarks") {
+    control = `<textarea class="input esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" placeholder="Type here" rows="2">${escapeHtml(value)}</textarea>`;
+  } else {
+    const type = field.type === "NUMBER" || field.type === "CURRENCY" ? "number" : "text";
+    const step = type === "number" ? ' step="0.01"' : "";
+    control = `<input type="${type}"${step} class="input ${type === "text" ? "mono " : ""}esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" value="${escapeHtml(value)}" placeholder="Type here" />`;
+  }
+
+  return `<div class="escalation-field ${spec.stateKey === "remarks" ? "escalation-field-wide" : ""}">
+    <label class="field-label">${label}</label>${control}
+  </div>`;
+}
+
+function renderTicketStatus(chatId) {
+  const s = state[chatId];
+  const ticket = s.ticketRecord;
+  if (!ticket) return "";
+  const statusField = ticketFields.find((field) => field.key === "status")
+    || ticketFields.find((field) => String(field.label).toLowerCase() === "status");
+  const status = statusField ? ticket.fields?.[statusField.key] : ticket.fields?.status;
+  const department = ticket.currentDepartment?.name || ticket.currentDepartment?.code || "—";
+  const updated = ticket.updatedAt ? new Date(ticket.updatedAt).toLocaleString() : "—";
+  return `<div class="ticket-status-card">
+    <div><span class="ticket-status-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-status-pill">${escapeHtml(status || "No status")}</span></div>
+    <div class="ticket-status-meta">Department: ${escapeHtml(department)} · Updated: ${escapeHtml(updated)}</div>
+    <a class="ticket-open-link" href="https://tickets.96ghq.com/tickets?q=${encodeURIComponent(ticket.ref)}" target="_blank" rel="noopener">Open in ticket system ↗</a>
+  </div>`;
+}
+
+async function loadTicketStatus(chatId, ref) {
+  const s = state[chatId];
+  const normalized = String(ref || "").trim().toUpperCase();
+  if (!normalized) throw new Error("Enter a ticket reference");
+  const res = await fetch(`/ticket-status?ref=${encodeURIComponent(normalized)}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Ticket status lookup failed");
+  s.ticketLookupRef = normalized;
+  s.ticketRecord = data.ticket;
+  s.escalationError = "";
+  saveState();
+  return data.ticket;
+}
+
+// Creates tickets through the C9 Tickets REST API and reads their latest
+// status. The API currently has no update route, so editing remains in the
+// ticket system itself.
 function renderEscalationSection(chatId) {
   const s = state[chatId];
-  if (s.escalationSubmitted) {
-    return `
-      <label class="field-label">Escalation Ticket <span class="hint">(C9MYR CS-PYM)</span></label>
-      <div class="logged-badge">✓ Escalation ticket submitted</div>`;
-  }
-  const e = s.escalation;
-  const opt = (list, current) => {
-    const all = current && !list.includes(current) ? [current, ...list] : list;
-    return `<option value="" ${!current ? "selected" : ""}>Please select</option>`
-      + all.map((v) => `<option value="${v}" ${v === current ? "selected" : ""}>${v}</option>`).join("");
-  };
+  const ref = s.ticketLookupRef || s.ticketRef || "";
   return `
-    <label class="field-label">Escalation Ticket <span class="hint">(C9MYR CS-PYM)</span></label>
-    <div class="escalation-grid">
-      <div class="escalation-field">
-        <label class="field-label">Member/User ID *</label>
-        <input type="text" class="input mono esc-input" data-chat="${chatId}" data-field="memberUserId" value="${e.memberUserId}" placeholder="Type here" />
-      </div>
-      <div class="escalation-field">
-        <label class="field-label">Brand *</label>
-        <select class="input esc-select" data-chat="${chatId}" data-field="brand">${opt(escalationOptions.brand, e.brand)}</select>
-      </div>
-      <div class="escalation-field">
-        <label class="field-label">Queries *</label>
-        <select class="input esc-select" data-chat="${chatId}" data-field="queries">${opt(escalationOptions.queries, e.queries)}</select>
-      </div>
-      <div class="escalation-field">
-        <label class="field-label">Transaction ID</label>
-        <input type="text" class="input mono esc-input" data-chat="${chatId}" data-field="transactionId" value="${e.transactionId}" placeholder="Type here" />
-      </div>
-      <div class="escalation-field">
-        <label class="field-label">Payment Gateway</label>
-        <select class="input esc-select" data-chat="${chatId}" data-field="paymentGateway">${opt(escalationOptions.paymentGateway, e.paymentGateway)}</select>
-      </div>
-      <div class="escalation-field">
-        <label class="field-label">VIP Level</label>
-        <select class="input esc-select" data-chat="${chatId}" data-field="vipLevel">${opt(escalationOptions.vipLevel, e.vipLevel)}</select>
-      </div>
-      <div class="escalation-field">
-        <label class="field-label">Amount</label>
-        <input type="number" step="0.01" class="input mono esc-input" data-chat="${chatId}" data-field="amount" value="${e.amount}" placeholder="Round to 2 decimal places" />
-      </div>
-      <div class="escalation-field escalation-field-wide">
-        <label class="field-label">Remarks (CS - PYM)</label>
-        <textarea class="input esc-input" data-chat="${chatId}" data-field="remarks" placeholder="Type here" rows="2">${e.remarks}</textarea>
-      </div>
+    <div class="ticket-section-head">
+      <label class="field-label">Ticket System</label>
+      <span class="hint">Create and check status</span>
     </div>
-    <div class="hint" style="margin:6px 0 10px">Attachment isn't supported here yet — attach it directly in Lark if needed.</div>
-    ${s.escalationError ? `<div class="record-error-banner">⚠︎ ${s.escalationError}</div>` : ""}
-    <button class="submit-btn escalation-submit-btn" data-action="submitEscalation" data-chat="${chatId}">Submit Escalation Ticket</button>
+    <div class="ticket-lookup-row">
+      <input type="text" class="input mono ticket-ref-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(ref)}" placeholder="Ticket ref, e.g. TK2609210007" />
+      <button type="button" class="secondary-btn" data-action="lookupTicket" data-chat="${escapeHtml(chatId)}">Check status</button>
+    </div>
+    ${renderTicketStatus(chatId)}
+    ${ticketConfigError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(ticketConfigError)}</div>` : ""}
+    ${!ticketFields.length || s.escalationSubmitted ? "" : `
+      <div class="ticket-form-title">Raise a new ticket</div>
+      <div class="escalation-grid">${TICKET_FIELD_SPECS.map((spec) => renderTicketInput(chatId, spec)).join("")}</div>
+      <div class="hint" style="margin:6px 0 10px">Attachments and ticket updates are handled in the ticket system.</div>
+    `}
+    ${s.escalationError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(s.escalationError)}</div>` : ""}
+    ${!ticketFields.length ? "" : s.escalationSubmitted
+      ? `<button type="button" class="secondary-btn" data-action="newTicket" data-chat="${escapeHtml(chatId)}">Create another ticket</button>`
+      : `<button class="submit-btn escalation-submit-btn" data-action="submitEscalation" data-chat="${escapeHtml(chatId)}">Raise ticket</button>`}
   `;
 }
 
@@ -1880,6 +1966,7 @@ function ensureChatState(chat) {
   if (state[chat.chatId]) return;
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
+    vs96FeedbackQuery1: "", vs96FeedbackQuery2: "",
     // Extra cases logged in this same chat (see the "Multiple cases" block
     // above renderTickets). The fields above always describe the ONE case
     // currently open for editing; earlier cases are parked in logs[].
@@ -1899,9 +1986,10 @@ function ensureChatState(chat) {
     // of them overwrite a value the agent already typed/picked.
     escalation: {
       memberUserId: "", brand: deriveFullBrandCode(chat.groupName), queries: "",
-      transactionId: "", paymentGateway: "", remarks: "", vipLevel: "", amount: "",
+      status: "", transactionId: "", paymentGateway: "", remarks: "", vipLevel: "", amount: "",
     },
     escalationSubmitted: false, escalationError: "",
+    ticketRef: "", ticketLookupRef: "", ticketRecord: null,
     // "Last username recorded" — see checkLastUsername. Runs once per chat,
     // as soon as both Brand and the resolved chat link are ready.
     // lastUsernameStarted guards against calling twice; lastUsernameLoading
@@ -2204,6 +2292,8 @@ chatListEl.addEventListener("click", async (e) => {
       s.caRecordId = caRecordId;
       s.caOwner = selectedAgent;
       s.claimedPrograms = {};
+      s.vs96FeedbackQuery1 = "";
+      s.vs96FeedbackQuery2 = "";
       s.gracePeriodActivated = false;
       s.releasedBonusAmount = "";
       s.releasedAmountRaw = "";
@@ -2248,6 +2338,17 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "claim") {
     const programKey = btn.dataset.program;
     const r = s.matchedRow;
+
+    // VS96 is only earned after CS records two separate pieces of player
+    // feedback. Keep this guard here as well as disabling the button, so a
+    // stale DOM or programmatic click cannot bypass the requirement.
+    if (programKey === "vs96Feedback" && (
+      !String(s.vs96FeedbackQuery1 || "").trim()
+      || !String(s.vs96FeedbackQuery2 || "").trim()
+    )) {
+      setStatus("Collect and fill in both VS96 feedback answers before claiming.", "error");
+      return;
+    }
 
     // Grace Period's one field packs two different states (see renderTickets)
     // and neither follows the generic claim flow below at all: "Pass ..."
@@ -2529,27 +2630,70 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "submitEscalation") {
     const e = s.escalation;
     if (!e.memberUserId || !e.brand || !e.queries) {
-      s.escalationError = "Member/User ID, Brand, and Queries are required.";
+      s.escalationError = "Member/User ID, Brand, and Query type are required.";
       card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
       return;
+    }
+    const fields = {};
+    for (const spec of TICKET_FIELD_SPECS) {
+      const field = ticketFieldFor(spec);
+      const value = e[spec.stateKey];
+      if (!field || value === "" || value === null || value === undefined) continue;
+      if (field.type === "NUMBER" || field.type === "CURRENCY") {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue)) {
+          s.escalationError = `${field.label} must be a number.`;
+          card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+          return;
+        }
+        fields[field.key] = numericValue;
+      } else {
+        fields[field.key] = value;
+      }
     }
     btn.disabled = true;
     btn.textContent = "…";
     try {
-      const res = await fetch("/lark-escalation-submit", {
+      const res = await fetch("/ticket-create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...e, picName: selectedAgent }),
+        body: JSON.stringify({ fields }),
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Submit failed");
+      s.ticketRef = data.ref;
+      s.ticketLookupRef = data.ref;
       s.escalationSubmitted = true;
       s.escalationError = "";
-      setStatus("Escalation ticket submitted.", "success");
+      try { await loadTicketStatus(chatId, data.ref); } catch (_) { /* creation succeeded; status can be retried */ }
+      setStatus(`Ticket ${data.ref} created.`, "success");
     } catch (err) {
-      s.escalationError = "Escalation submit failed: " + err.message;
+      s.escalationError = "Ticket creation failed: " + err.message;
+    }
+    saveState();
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+  }
+
+  if (btn.dataset.action === "lookupTicket") {
+    const refInput = card.querySelector(".ticket-ref-input");
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+    try {
+      await loadTicketStatus(chatId, refInput?.value);
+      setStatus(`Ticket ${s.ticketRecord.ref} status refreshed.`, "success");
+    } catch (err) {
+      s.escalationError = "Status lookup failed: " + err.message;
     }
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+  }
+
+  if (btn.dataset.action === "newTicket") {
+    s.escalationSubmitted = false;
+    s.ticketRef = "";
+    s.ticketRecord = null;
+    s.escalationError = "";
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    saveState();
   }
 
   if (btn.dataset.action === "toggleExpand") {
@@ -2691,6 +2835,33 @@ chatListEl.addEventListener("click", async (e) => {
 
 // Inquiry search box: filter as the agent types.
 chatListEl.addEventListener("input", (e) => {
+  const feedbackInput = e.target.closest(".vs96-feedback-input");
+  if (feedbackInput) {
+    const chatId = feedbackInput.dataset.chat;
+    const s = state[chatId];
+    if (!s) return;
+    if (feedbackInput.dataset.feedback === "query1") s.vs96FeedbackQuery1 = feedbackInput.value;
+    if (feedbackInput.dataset.feedback === "query2") s.vs96FeedbackQuery2 = feedbackInput.value;
+    const ticket = feedbackInput.closest(".ticket-vs96");
+    const complete = !!(
+      String(s.vs96FeedbackQuery1 || "").trim()
+      && String(s.vs96FeedbackQuery2 || "").trim()
+    );
+    ticket?.classList.toggle("feedback-complete", complete);
+    const claimBtn = ticket?.querySelector('.claim-btn[data-program="vs96Feedback"]');
+    if (claimBtn && claimBtn.dataset.action === "claim") {
+      const anotherClaimIsActive = Object.entries(s.claimedPrograms || {})
+        .some(([key, value]) => key !== "vs96Feedback" && value);
+      claimBtn.disabled = !complete || anotherClaimIsActive;
+      claimBtn.title = complete ? "" : "Fill in both player feedback answers first";
+    }
+    const note = ticket?.querySelector(".vs96-feedback-note");
+    if (note) note.textContent = complete
+      ? "✓ Both feedback answers collected"
+      : "Fill in both feedback answers before claiming.";
+    saveState();
+    return;
+  }
   const inquiryInput = e.target.closest(".inquiry-search");
   if (inquiryInput) {
     const card = inquiryInput.closest(".chat-card");
@@ -2731,6 +2902,12 @@ chatListEl.addEventListener("input", (e) => {
   }
   // Escalation Ticket text/number/textarea fields — same no-re-render,
   // just-sync-state pattern as D.O.B.
+  const ticketRefInput = e.target.closest(".ticket-ref-input");
+  if (ticketRefInput) {
+    const s = state[ticketRefInput.dataset.chat];
+    if (s) s.ticketLookupRef = ticketRefInput.value;
+    return;
+  }
   const escInput = e.target.closest(".esc-input");
   if (escInput) {
     const s = state[escInput.dataset.chat];
@@ -2977,6 +3154,8 @@ async function resyncLoggedRecord(chatId) {
         chatLink: s.chatUrl || activeChats.find((c) => c.chatId === chatId)?.link || "",
         dob: s.dob || "",
         telegram: !!s.telegram,
+        vs96FeedbackQuery1: s.vs96FeedbackQuery1 || "",
+        vs96FeedbackQuery2: s.vs96FeedbackQuery2 || "",
       }),
     });
     const data = await res.json();
@@ -3125,6 +3304,8 @@ async function submitRecord(chatId, { auto, reason } = {}) {
         chatLink: s.chatUrl || activeChats.find((c) => c.chatId === chatId)?.link || "",
         dob: s.dob || "",
         telegram: !!s.telegram,
+        vs96FeedbackQuery1: s.vs96FeedbackQuery1 || "",
+        vs96FeedbackQuery2: s.vs96FeedbackQuery2 || "",
       }),
     });
     const data = await res.json();
@@ -3184,7 +3365,7 @@ function setStatus(text, kind) {
 // loaded. Doesn't touch anything already picked on an open card.
 const OPTIONS_REFRESH_MS = 3 * 60_000;
 function refreshDropdownOptions() {
-  return Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions()]);
+  return Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchTicketConfig()]);
 }
 setInterval(refreshDropdownOptions, OPTIONS_REFRESH_MS);
 
@@ -3223,7 +3404,7 @@ loggingPauseCheck.addEventListener("change", () => {
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
-  await Promise.all([refreshDropdownOptions(), fetchEscalationOptions()]);
+  await refreshDropdownOptions();
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);
@@ -3425,7 +3606,9 @@ function caseFromLarkRow(r) {
     claimSecretManual: true, // keep what Lark has; don't auto-fill over it
     dob: epochToDateInput(r.dob),
     telegram: !!r.telegram,
-    claimedPrograms: {},
+    vs96FeedbackQuery1: r.vs96FeedbackQuery1 || "",
+    vs96FeedbackQuery2: r.vs96FeedbackQuery2 || "",
+    claimedPrograms: claimedProgramsFromSavedCase(r),
     gracePeriodActivated: false,
     logged: !!((r.inquiry || []).length && r.status),
     autoRecordError: "",
