@@ -60,8 +60,10 @@
     <iframe data-src="/knowledge/index.html" title="CS Learning Assistant" loading="lazy"></iframe>
   </section>
 
-  <!-- app.js loads the LiveChat SDK in the background with a fallback CDN.
-       This lets the shell render even when the SDK CDN is slow. -->
+  <!-- LiveChat requires its SDK to be present before the app initializes.
+       Keep this as a parser-loaded script: dynamically injecting it caused
+       some embedded sidebars to remain permanently disconnected. -->
+  <script src="https://unpkg.com/@livechat/agent-app-sdk@1.16.0/dist/agentapp.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

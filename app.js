@@ -881,6 +881,7 @@ async function checkChatStatus(chatId) {
 
 let liveChatSdkConnecting = false;
 let liveChatSdkConnectRetries = 0;
+let liveChatConnectionSlow = false;
 
 function syncInitialLiveChatProfile(widget, attempt = 0) {
   let profile = null;
@@ -902,8 +903,18 @@ function initLiveChatSdk() {
     return;
   }
   liveChatSdkConnecting = true;
+  liveChatConnectionSlow = false;
+  const slowTimer = setTimeout(() => {
+    if (!liveWidget && liveChatSdkConnecting) {
+      liveChatConnectionSlow = true;
+      setStatus("LiveChat is taking too long to connect. Click Refresh to retry.", "error");
+      renderChats(activeChats);
+    }
+  }, 12_000);
   LiveChat.createDetailsWidget().then((widget) => {
+    clearTimeout(slowTimer);
     liveChatSdkConnecting = false;
+    liveChatConnectionSlow = false;
     liveChatSdkConnectRetries = 0;
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
     liveWidget = widget;
@@ -922,6 +933,7 @@ function initLiveChatSdk() {
     widget.on("customer_profile", applyProfile);
     syncInitialLiveChatProfile(widget);
   }).catch((err) => {
+    clearTimeout(slowTimer);
     liveChatSdkConnecting = false;
     logDiagnostic("LiveChat Agent App SDK failed to connect (" + err.message + ").", "error");
     if (IS_EMBEDDED_APP && liveChatSdkConnectRetries < 3) {
@@ -931,46 +943,13 @@ function initLiveChatSdk() {
   });
 }
 
-// Loading the SDK from a normal <script> tag used to block app.js entirely
-// whenever unpkg was slow. Load it after our own UI has started instead.
-// The fallback starts alongside a slow primary without cancelling it: some
-// LiveChat environments permit unpkg but block jsDelivr, so cancelling the
-// allowed request was able to leave the card permanently blank.
-const LIVECHAT_SDK_SOURCES = [
-  "https://unpkg.com/@livechat/agent-app-sdk@1.16.0/dist/agentapp.umd.min.js",
-  "https://cdn.jsdelivr.net/npm/@livechat/agent-app-sdk@1.16.0/dist/agentapp.umd.min.js",
-];
-const liveChatSdkRequestedSources = new Set();
-let liveChatSdkFallbackTimer = null;
-
-function requestLiveChatSdkSource(source) {
-  if (liveChatSdkRequestedSources.has(source)) return;
-  liveChatSdkRequestedSources.add(source);
-  const script = document.createElement("script");
-  script.async = true;
-  script.src = source;
-  script.onload = () => initLiveChatSdk();
-  script.onerror = () => {
-    liveChatSdkRequestedSources.delete(source);
-    if (source === LIVECHAT_SDK_SOURCES[0]) requestLiveChatSdkSource(LIVECHAT_SDK_SOURCES[1]);
-  };
-  document.head.appendChild(script);
-}
-
 function loadLiveChatSdk() {
   if (typeof LiveChat !== "undefined" && LiveChat.createDetailsWidget) {
     initLiveChatSdk();
     return;
   }
-  requestLiveChatSdkSource(LIVECHAT_SDK_SOURCES[0]);
-  if (!liveChatSdkFallbackTimer) {
-    liveChatSdkFallbackTimer = setTimeout(() => {
-      liveChatSdkFallbackTimer = null;
-      if (!liveWidget && (typeof LiveChat === "undefined" || !LiveChat.createDetailsWidget)) {
-        requestLiveChatSdkSource(LIVECHAT_SDK_SOURCES[1]);
-      }
-    }, 3500);
-  }
+  logDiagnostic("LiveChat SDK was not available. Reloading this widget may restore the connection.", "error");
+  setStatus("LiveChat connection failed. Click Refresh to retry.", "error");
 }
 
 // Most LiveChat groups are named "<BRAND><DIGITS> Priority Support" —
@@ -2443,7 +2422,7 @@ function renderChatsInner(chats) {
 
   if (!chats.length) {
     const message = IS_EMBEDDED_APP && !liveWidget
-      ? "Connecting to LiveChat…"
+      ? (liveChatConnectionSlow ? "Connection is taking too long — click Refresh above to retry." : "Connecting to LiveChat…")
       : "No chat currently open — select a conversation in LiveChat to see it here.";
     chatListEl.innerHTML = `<div class="empty-state">${message}</div>`;
     return;
@@ -3746,9 +3725,17 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
     applyProfile(liveWidget.getCustomerProfile());
     setStatus("Refreshed from LiveChat.", "success");
   } else {
-    if (IS_EMBEDDED_APP) loadLiveChatSdk();
-    setStatus("Preview mode — showing sample chats until connected to LiveChat.");
-    renderChats(activeChats);
+    if (IS_EMBEDDED_APP) {
+      if (typeof LiveChat === "undefined" || !LiveChat.createDetailsWidget) {
+        location.reload();
+        return;
+      }
+      loadLiveChatSdk();
+      setStatus("Reconnecting to LiveChat…");
+    } else {
+      setStatus("Preview mode — showing sample chats until connected to LiveChat.");
+      renderChats(activeChats);
+    }
   }
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
