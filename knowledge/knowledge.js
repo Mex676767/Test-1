@@ -11,7 +11,7 @@ const norm=value=>String(value||"").toLowerCase().replace(/\s+/g," ").trim();
 const esc=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
 const terms=value=>norm(value).split(/[^a-z0-9]+/).filter(word=>word.length>2);
 
-function syncTheme(){try{document.documentElement.dataset.theme=parent.documentElement.dataset.theme||"dark"}catch(_){document.documentElement.dataset.theme="dark"}}
+function syncTheme(){try{document.documentElement.dataset.theme=parent.documentElement.dataset.theme||"dark";document.documentElement.classList.toggle("low-power",parent.documentElement.classList.contains("low-power"))}catch(_){document.documentElement.dataset.theme="dark"}}
 syncTheme();
 try{new MutationObserver(syncTheme).observe(parent.documentElement,{attributes:true,attributeFilter:["data-theme"]})}catch(_){}
 
@@ -28,7 +28,7 @@ function renderDetection(query){const detected=detectCategory(query),box=$("dete
 
 function renderGuide(item){if(!item)return;selectedGuideId=item.id;renderResults();$("detail").innerHTML=`<div class="guide-content"><div class="guide-top"><div><span class="eyebrow">${ICONS[item.category]||"◇"} ${esc(item.category)}</span><h2>${esc(item.title)}</h2><div class="guide-meta">Available for ${esc(item.brand)}</div></div><div class="guide-actions"><button type="button" class="primary-btn" data-copy>⧉ Copy reply</button><button type="button" class="secondary-btn" data-picture>▧ Picture guide</button></div></div><div class="guide-summary">${esc(item.summary)}</div><div class="guide-section-title">STEP-BY-STEP GUIDE</div><ol class="steps">${item.steps.map((step,index)=>`<li><span class="step-num">${index+1}</span><div class="step-copy"><b>${STEP_TITLES[index]||"Next step"}</b><span>${esc(step)}</span></div></li>`).join("")}</ol>${item.bonus_amounts?.length?`<div class="guide-section-title">BONUS REFERENCE</div><ul class="bonus-list">${item.bonus_amounts.map(amount=>`<li>${esc(amount)}</li>`).join("")}</ul>`:""}<div class="guide-section-title">IMPORTANT</div><div class="warning"><strong>Check before proceeding</strong>${esc(item.warning)}</div><div class="guide-section-title">REPLY TEMPLATE</div><div class="example">${esc(item.example)}</div><div id="pictureSlot"></div></div>`;$("detail").scrollIntoView({behavior:"smooth",block:"nearest"})}
 async function copyReply(item){try{await navigator.clipboard.writeText(item.example)}catch(_){const area=document.createElement("textarea");area.value=item.example;document.body.appendChild(area);area.select();document.execCommand("copy");area.remove()}const toast=$("copyToast");toast.classList.add("show");setTimeout(()=>toast.classList.remove("show"),1400)}
-function togglePicture(item){const slot=$("pictureSlot");if(slot.firstChild){slot.innerHTML="";return}slot.innerHTML=`<img class="guide-image" src="${esc(item.image)}" alt="${esc(item.title)} picture guide" />`}
+function togglePicture(item){const slot=$("pictureSlot");if(slot.firstChild){slot.innerHTML="";return}slot.innerHTML=`<img class="guide-image" src="${esc(item.image)}" alt="${esc(item.title)} picture guide" loading="lazy" decoding="async" />`}
 
 $("detectBtn").addEventListener("click",()=>renderDetection($("customerMessage").value));
 $("customerMessage").addEventListener("input",event=>{if(!norm(event.target.value))$("detection").hidden=true});

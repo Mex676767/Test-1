@@ -33,7 +33,7 @@ export function adapt(handler) {
     const result = await handler(event);
     return new Response(result.body, {
       status: result.statusCode,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(result.headers || {}) },
     });
   };
 }
