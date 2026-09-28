@@ -3,6 +3,19 @@
 // and are never sent to the browser.
 const ESCALATION_TICKET_ENABLED = true;
 
+// LiveChat runs this page inside its Details iframe. Detecting that before
+// the SDK arrives avoids briefly loading the standalone admin preview (and
+// its sample data) on slower devices.
+const IS_EMBEDDED_APP = window.self !== window.top;
+
+function safeStorageGet(key, fallback = "") {
+  try { return localStorage.getItem(key) ?? fallback; } catch (_) { return fallback; }
+}
+
+function safeStorageSet(key, value) {
+  try { localStorage.setItem(key, value); } catch (_) { /* storage can be blocked in embedded/private windows */ }
+}
+
 /* ============================================================
    THEME
    ============================================================ */
@@ -11,9 +24,12 @@ const themeToggle = document.getElementById("themeToggle");
 
 function applyTheme(theme) {
   root.setAttribute("data-theme", theme);
-  localStorage.setItem("rc-theme", theme);
+  safeStorageSet("rc-theme", theme);
 }
-applyTheme(localStorage.getItem("rc-theme") || "dark");
+applyTheme(safeStorageGet("rc-theme", "dark"));
+const lowPowerDevice = (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4)
+  || (navigator.deviceMemory && navigator.deviceMemory <= 4);
+root.classList.toggle("low-power", !!lowPowerDevice);
 
 themeToggle.addEventListener("click", () => {
   const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
@@ -27,7 +43,7 @@ themeToggle.addEventListener("click", () => {
    automatically if no agent is saved.
    ============================================================ */
 const AGENT_KEY = "rc-agent-name";
-let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
+let selectedAgent = safeStorageGet(AGENT_KEY);
 let agentOptions = [];
 
 // Global "don't log chats" toggle — for chats deliberately not wanted in
@@ -36,7 +52,7 @@ let agentOptions = [];
 // once it's unticked again — see submitRecord). Persisted so it survives
 // this widget's iframe reloading (same reason chat state itself does).
 const LOGGING_PAUSED_KEY = "rc-logging-paused";
-let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
+let loggingPaused = safeStorageGet(LOGGING_PAUSED_KEY) === "true";
 
 async function fetchAgentOptions() {
   try {
@@ -65,6 +81,7 @@ let ticketFields = [];
 let ticketDepartments = [];
 let ticketMarkets = [];
 let ticketConfigError = "";
+let ticketConfigFetched = false;
 async function fetchTicketConfig() {
   if (!ESCALATION_TICKET_ENABLED) return;
   try {
@@ -87,13 +104,15 @@ async function fetchTicketConfig() {
     ticketDepartments = [];
     ticketMarkets = [];
     ticketConfigError = err.message;
+  } finally {
+    ticketConfigFetched = true;
   }
 }
 
 
 function saveAgent(name) {
   selectedAgent = name.trim();
-  localStorage.setItem(AGENT_KEY, selectedAgent);
+  safeStorageSet(AGENT_KEY, selectedAgent);
 }
 
 // Settings panel — overlaid on top of the widget, blocking interaction
@@ -292,11 +311,11 @@ const SAMPLE_CHATS = [
 // initLiveChatSdk() replaces it with the one real active chat once (if) the
 // SDK connects. Kept as a list (not a single object) so renderChats/state
 // keying by chatId didn't need to change shape for this swap.
-let activeChats = SAMPLE_CHATS;
+let activeChats = IS_EMBEDDED_APP ? [] : SAMPLE_CHATS;
 // Standalone Pages preview is a read-only test bench. It reads the same live
 // bonus tables, but every write path is disabled until the LiveChat SDK
 // successfully connects and replaces the sample cards with a real chat.
-let previewMode = true;
+let previewMode = !IS_EMBEDDED_APP;
 let activeMainTab = "customer";
 
 function syncMainTabs() {
@@ -322,6 +341,10 @@ function syncMainTabs() {
   if (chatList) chatList.hidden = activeMainTab === "knowledge";
   const knowledgeView = document.getElementById("knowledgeView");
   if (knowledgeView) knowledgeView.hidden = activeMainTab !== "knowledge";
+  if (knowledgeAvailable && activeMainTab === "knowledge") {
+    const knowledgeFrame = knowledgeView?.querySelector("iframe[data-src]");
+    if (knowledgeFrame && !knowledgeFrame.src) knowledgeFrame.src = knowledgeFrame.dataset.src;
+  }
   const needsAttention = document.getElementById("needsAttentionPanel");
   if (needsAttention) needsAttention.style.display = activeMainTab === "customer" ? "" : "none";
 }
@@ -832,6 +855,51 @@ function initLiveChatSdk() {
   });
 }
 
+// Loading the SDK from a normal <script> tag used to block app.js entirely
+// whenever unpkg was slow. Load it after our own UI has started instead,
+// and try a second CDN if the first one errors or stalls.
+const LIVECHAT_SDK_SOURCES = [
+  "https://unpkg.com/@livechat/agent-app-sdk@1.16.0/dist/agentapp.umd.min.js",
+  "https://cdn.jsdelivr.net/npm/@livechat/agent-app-sdk@1.16.0/dist/agentapp.umd.min.js",
+];
+let liveChatSdkLoadStarted = false;
+
+function loadLiveChatSdk() {
+  if (liveChatSdkLoadStarted) return;
+  liveChatSdkLoadStarted = true;
+  if (typeof LiveChat !== "undefined" && LiveChat.createDetailsWidget) {
+    initLiveChatSdk();
+    return;
+  }
+  let sourceIndex = 0;
+  const tryNextSource = () => {
+    if (sourceIndex >= LIVECHAT_SDK_SOURCES.length) {
+      logDiagnostic("LiveChat SDK could not be loaded — use Refresh to try again.", "error");
+      liveChatSdkLoadStarted = false;
+      return;
+    }
+    const source = LIVECHAT_SDK_SOURCES[sourceIndex++];
+    const script = document.createElement("script");
+    let settled = false;
+    const finish = (loaded) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      script.onerror = null;
+      script.onload = null;
+      if (loaded && typeof LiveChat !== "undefined" && LiveChat.createDetailsWidget) initLiveChatSdk();
+      else { script.remove(); tryNextSource(); }
+    };
+    const timer = setTimeout(() => finish(false), 8000);
+    script.async = true;
+    script.src = source;
+    script.onload = () => finish(true);
+    script.onerror = () => finish(false);
+    document.head.appendChild(script);
+  };
+  tryNextSource();
+}
+
 // Most LiveChat groups are named "<BRAND><DIGITS> Priority Support" —
 // Lark's Brand lookup strips digits — "VS96 Priority Support" → "VS". Some
 // (2026-09-10, confirmed from a real Groups list: "HOT GENERAL", "EZ
@@ -956,6 +1024,9 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   if (!button || button.hidden) return;
   activeMainTab = button.dataset.mainTab;
   syncMainTabs();
+  if (activeMainTab === "tickets" && !ticketConfigFetched) {
+    fetchTicketConfig().then(() => renderChats(activeChats));
+  }
   if (activeMainTab !== "knowledge") renderChats(activeChats);
 });
 const statusEl = document.getElementById("statusBar");
@@ -3527,7 +3598,11 @@ function setStatus(text, kind) {
 // loaded. Doesn't touch anything already picked on an open card.
 const OPTIONS_REFRESH_MS = 3 * 60_000;
 function refreshDropdownOptions() {
-  return Promise.all([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchTicketConfig(), fetchConfiguredBonusPrograms()]);
+  const requests = [fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchConfiguredBonusPrograms()];
+  // Tickets are admin-preview only. Avoid a needless API request for every
+  // live agent, and fetch them lazily when the admin opens the Tickets tab.
+  if (previewMode && ESCALATION_TICKET_ENABLED) requests.push(fetchTicketConfig());
+  return Promise.allSettled(requests);
 }
 setInterval(refreshDropdownOptions, OPTIONS_REFRESH_MS);
 
@@ -3540,6 +3615,7 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
     applyProfile(liveWidget.getCustomerProfile());
     setStatus("Refreshed from LiveChat.", "success");
   } else {
+    if (IS_EMBEDDED_APP) loadLiveChatSdk();
     setStatus("Preview mode — showing sample chats until connected to LiveChat.");
     renderChats(activeChats);
   }
@@ -3555,14 +3631,15 @@ window.addEventListener("message", async (event) => {
 const loggingPauseCheck = document.getElementById("loggingPauseCheck");
 loggingPauseCheck.addEventListener("change", () => {
   loggingPaused = loggingPauseCheck.checked;
-  localStorage.setItem(LOGGING_PAUSED_KEY, String(loggingPaused));
+  safeStorageSet(LOGGING_PAUSED_KEY, String(loggingPaused));
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   logDiagnostic(loggingPaused ? "Logging paused — no chat will be recorded until this is unticked." : "Logging resumed.", loggingPaused ? "warn" : "success");
   renderChats(activeChats); // every card's bottom banner depends on this
 });
 
-// Boot sequence: fetch agent list, update badge, auto-open settings if no
-// agent saved yet (first time / cleared cache).
+// Boot sequence: paint and connect first. Network-backed dropdown options
+// then fill in asynchronously, so a slow Lark request cannot leave the
+// LiveChat sidebar looking blank on a low-end device.
 (async () => {
   // Restore any chat state saved before this widget last reloaded — must
   // happen before the first renderChats/ensureChatState call, since
@@ -3571,15 +3648,28 @@ loggingPauseCheck.addEventListener("change", () => {
   for (const chatId of Object.keys(state)) markStateSynced(chatId);
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
-  logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
+  logDiagnostic(previewMode ? "Preview mode — showing sample chats until connected to LiveChat." : "Starting LiveChat widget…");
   syncMainTabs();
-  await refreshDropdownOptions();
   updateAgentBadge();
-  if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);
   renderNeedsAttentionPanel();
-  fetchStaleRecords();
-  initLiveChatSdk();
+  loadLiveChatSdk();
+
+  // Only the agent list gates the first-time settings picker. Everything
+  // else can arrive without blocking that choice or the LiveChat SDK.
+  const agentReady = fetchAgentOptions();
+  Promise.allSettled([
+    fetchBrandOptions(),
+    fetchInquiryOptions(),
+    fetchStatusOptions(),
+    fetchConfiguredBonusPrograms(),
+  ]).then(() => {
+    if (activeChats.length) renderChats(activeChats);
+  });
+  agentReady.finally(() => {
+    if (!selectedAgent) openSettingsPanel();
+    fetchStaleRecords();
+  });
 })();
 
 // Autosave safety nets beyond the explicit saveState() calls in the click/

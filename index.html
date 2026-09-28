@@ -6,7 +6,7 @@
   <title>Customer Approaching</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -57,15 +57,11 @@
 
   <main id="chatList" class="chat-list"></main>
   <section id="knowledgeView" class="knowledge-view" hidden>
-    <iframe src="/knowledge/index.html" title="CS Learning Assistant"></iframe>
+    <iframe data-src="/knowledge/index.html" title="CS Learning Assistant" loading="lazy"></iframe>
   </section>
 
-  <!-- LiveChat Agent App SDK — provides the currently active chat (customer
-       name, chat ID) when this widget is actually running inside LiveChat's
-       Details sidebar. Loaded before app.js so `LiveChat` is defined by the
-       time app.js checks for it; harmless (just unused) when previewed
-       standalone outside LiveChat, or if this CDN fails to load. -->
-  <script src="https://unpkg.com/@livechat/agent-app-sdk@1.16.0/dist/agentapp.umd.min.js"></script>
+  <!-- app.js loads the LiveChat SDK in the background with a fallback CDN.
+       This lets the shell render even when the SDK CDN is slow. -->
   <script src="app.js"></script>
 </body>
 </html>
