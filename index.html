@@ -31,6 +31,7 @@
   <nav id="mainTabs" class="main-tabs" aria-label="App sections">
     <button type="button" class="main-tab active" data-main-tab="customer">Customer</button>
     <button type="button" id="ticketsTab" class="main-tab" data-main-tab="tickets" hidden>Tickets</button>
+    <button type="button" id="knowledgeTab" class="main-tab" data-main-tab="knowledge" hidden>Knowledge</button>
   </nav>
 
   <div id="customerTools" class="customer-tools">
@@ -55,6 +56,9 @@
   </div>
 
   <main id="chatList" class="chat-list"></main>
+  <section id="knowledgeView" class="knowledge-view" hidden>
+    <iframe src="/knowledge/index.html" title="CS Learning Assistant"></iframe>
+  </section>
 
   <!-- LiveChat Agent App SDK — provides the currently active chat (customer
        name, chat ID) when this widget is actually running inside LiveChat's

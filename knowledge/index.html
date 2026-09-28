@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CS Learning Assistant</title><link rel="stylesheet" href="knowledge.css"></head>
+<body>
+<header class="topbar">
+  <div class="logo">✦</div><div class="brand"><strong>CS Learning Assistant</strong><span>Knowledge made easier</span></div><div class="live"><i></i> PREVIEW</div>
+</header>
+<section class="intro"><div class="eyebrow">SMART DETECTION</div><h1>Find the right SOP faster.</h1><p>Different customer wording can still lead to the same category and guide.</p></section>
+<section class="trybox"><div class="label">TRY CUSTOMER MESSAGE</div><div class="tryrow"><textarea id="customerMessage" rows="2">Boss, I tried to put money in but it keeps showing error.</textarea><button id="detectBtn">DETECT</button></div></section>
+<div id="detection" class="detection hidden"></div>
+<div id="detail" class="detail hidden"></div>
+<section class="search"><span>⌕</span><input id="search" autofocus placeholder="Search knowledge, SOP or keyword..."><kbd>Ctrl K</kbd></section>
+<div class="sectionline"><span>CATEGORIES</span><small>Browse knowledge</small></div>
+<div class="quick">
+  <button data-q="Deposit"><span class="ico dep">↗</span><span><b>Deposit</b><small>1 guide</small></span></button>
+  <button data-q="Withdrawal"><span class="ico wit">↓</span><span><b>Withdrawal</b><small>1 guide</small></span></button>
+  <button data-q="Special Bonus"><span class="ico bon">★</span><span><b>Special Bonus</b><small>2 guides</small></span></button>
+  <button data-q="APP / Technical"><span class="ico app">⌁</span><span><b>APP / Technical</b><small>1 guide</small></span></button>
+</div>
+<div id="settings" class="settings"><span><b>⚡ Admin knowledge preview</b><small>Search and test detection before releasing to agents</small></span></div>
+<footer><span>CS Learning Assistant</span><span>Knowledge Preview</span></footer>
+<script src="knowledge.js"></script></body></html>

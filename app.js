@@ -301,11 +301,14 @@ let activeMainTab = "customer";
 
 function syncMainTabs() {
   const ticketsAvailable = previewMode && ESCALATION_TICKET_ENABLED;
-  if (!ticketsAvailable && activeMainTab === "tickets") activeMainTab = "customer";
+  const knowledgeAvailable = previewMode;
+  if ((!ticketsAvailable && activeMainTab === "tickets") || (!knowledgeAvailable && activeMainTab === "knowledge")) activeMainTab = "customer";
   const mainTabs = document.getElementById("mainTabs");
   if (mainTabs) mainTabs.hidden = !previewMode;
   const ticketsTab = document.getElementById("ticketsTab");
   if (ticketsTab) ticketsTab.hidden = !ticketsAvailable;
+  const knowledgeTab = document.getElementById("knowledgeTab");
+  if (knowledgeTab) knowledgeTab.hidden = !knowledgeAvailable;
   document.querySelectorAll("[data-main-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mainTab === activeMainTab);
   });
@@ -315,6 +318,10 @@ function syncMainTabs() {
   if (previewMode && customerTools && loggingToggle && loggingToggle.parentElement !== customerTools) customerTools.appendChild(loggingToggle);
   if (!previewMode && topbar && loggingToggle && loggingToggle.parentElement !== topbar) topbar.appendChild(loggingToggle);
   if (customerTools) customerTools.hidden = !previewMode || activeMainTab !== "customer";
+  const chatList = document.getElementById("chatList");
+  if (chatList) chatList.hidden = activeMainTab === "knowledge";
+  const knowledgeView = document.getElementById("knowledgeView");
+  if (knowledgeView) knowledgeView.hidden = activeMainTab !== "knowledge";
   const needsAttention = document.getElementById("needsAttentionPanel");
   if (needsAttention) needsAttention.style.display = activeMainTab === "customer" ? "" : "none";
 }
@@ -949,7 +956,7 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   if (!button || button.hidden) return;
   activeMainTab = button.dataset.mainTab;
   syncMainTabs();
-  renderChats(activeChats);
+  if (activeMainTab !== "knowledge") renderChats(activeChats);
 });
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }

@@ -93,7 +93,9 @@ body {
   display: flex; align-items: center; min-height: 36px; padding: 7px 16px;
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
-.customer-tools[hidden], .main-tab[hidden], .main-tabs[hidden] { display: none; }
+.customer-tools[hidden], .main-tab[hidden], .main-tabs[hidden], .chat-list[hidden], .knowledge-view[hidden] { display: none; }
+.knowledge-view { flex: 1; min-height: 0; background: #f7f6fb; }
+.knowledge-view iframe { display: block; width: 100%; height: 100%; min-height: 760px; border: 0; }
 
 /* Global "don't log chats" toggle — deliberately styled to stand out only
    once ticked (danger color), so an idle unticked state doesn't compete

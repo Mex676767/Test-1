@@ -1,0 +1,177 @@
+[
+  {
+    "id": "deposit-block-tc",
+    "title": "Deposit Block – Multiple Requests",
+    "category": "Deposit",
+    "brand": "TC",
+    "keywords": [
+      "multiple deposit requests",
+      "multiple deposit request",
+      "deposit blocked",
+      "cannot deposit",
+      "can't deposit",
+      "cannot make deposit",
+      "deposit error",
+      "deposit request",
+      "deposit blocked",
+      "1075",
+      "7ypra"
+    ],
+    "summary": "Member sees the “Multiple deposit requests have been made” error.",
+    "steps": [
+      "Confirm the member is facing the multiple deposit requests error.",
+      "BO → Deposit Record: check for multiple incomplete requests with Status: New.",
+      "Raise a ticket to PYM and request rejection of all incomplete deposit requests.",
+      "After PYM action, check BO and confirm the requests show Rejected.",
+      "Inform the member they can make a new deposit request."
+    ],
+    "warning": "Multiple incomplete deposit requests in a short period are considered a violation. Remind the member to complete the current request before making another one.",
+    "image": "images/deposit-block-tc.jpg",
+    "example": "Your deposit request have rejected and you can make deposit now ya boss. Please make sure not to make multiple deposit request without completing it ya next time."
+  },
+  {
+    "id": "withdraw-paylock",
+    "title": "Withdraw Paylock",
+    "category": "Withdrawal",
+    "brand": "TC / ZYRA",
+    "keywords": [
+      "paylock",
+      "withdrawal pending",
+      "withdraw pending",
+      "withdrawal stuck",
+      "cannot withdraw again",
+      "can't withdraw again",
+      "cannot make another withdrawal",
+      "withdrawal still pending",
+      "withdraw still pending",
+      "withdrawal taking long",
+      "why can't i withdraw",
+      "why cannot withdraw",
+      "withdraw again"
+    ],
+    "summary": "Previous withdrawal is still pending and may be under Paylock.",
+    "steps": [
+      "Check the backend and confirm the member has a pending withdrawal request.",
+      "Confirm with PYM whether the withdrawal is under Paylock.",
+      "Request PYM to pre-approve the pending withdrawal so the member can make another withdrawal request.",
+      "Wait for PYM to confirm the pre-approval is done.",
+      "Inform the member clearly that the previous withdrawal is still under Paylock."
+    ],
+    "warning": "Pre-approval does NOT mean the previous withdrawal has been successfully transferred. It only allows the member to make another withdrawal request.",
+    "image": "images/withdraw-paylock-tc-zyra.jpg",
+    "example": "Hi boss, as I have confirmed with my technical team, your withdrawal is under Paylock and requires 1–2 working days ya. However, I have pre-approved your withdrawal so that you can make another withdrawal request without needing to wait for your pending withdrawal to be completed ya."
+  },
+  {
+    "id": "tc-ios-app",
+    "title": "TC Download APP – iOS",
+    "category": "APP / Technical",
+    "brand": "TC",
+    "keywords": [
+      "download app",
+      "download the app",
+      "install app",
+      "install the app",
+      "iphone",
+      "ios",
+      "ios app",
+      "tc app",
+      "app download",
+      "how to install",
+      "how can i install",
+      "app cannot install"
+    ],
+    "summary": "Step-by-step guide for iPhone / iOS members to install the TC APP.",
+    "steps": [
+      "Click the Download / APP button on the platform website.",
+      "Tap Allow when the pop-up appears.",
+      "Settings → General → VPN & Device Management.",
+      "Find the TC profile and open it.",
+      "Tap Install.",
+      "Check the home screen for the APP icon."
+    ],
+    "warning": "The profile/app name may differ depending on the brand, but the download and installation flow is the same.",
+    "image": "images/tc-download-app-ios.png",
+    "example": "Boss, for iPhone/iOS, please click the APP button on our platform, tap Allow, then go to Settings → General → VPN & Device Management → find the TC profile → Install ya."
+  },
+  {
+    "id": "risk-bonus-special",
+    "title": "RISK Bonus – 7D / 14D / 19D / 24D / 30D",
+    "category": "Special Bonus",
+    "brand": "Platform",
+    "keywords": [
+      "risk bonus",
+      "risk",
+      "7d",
+      "14d",
+      "19d",
+      "24d",
+      "30d",
+      "risk bonus claim",
+      "risk bonus eligible",
+      "special bonus",
+      "bonus check",
+      "reload bonus",
+      "claim bonus",
+      "next deposit",
+      "one deposit",
+      "1 deposit",
+      "bonus after deposit"
+    ],
+    "summary": "Guide for checking eligibility and manually claiming RISK Bonus after the member makes one qualifying deposit after coming to chat.",
+    "steps": [
+      "Member comes to Live Chat and asks to check for the bonus.",
+      "CS checks and confirms whether the member is eligible for the RISK Bonus.",
+      "If eligible, inform the member that the next deposit can be used to claim the bonus.",
+      "After the member deposits and comes back to chat, verify in BO how much the member deposited after coming to chat.",
+      "Use 1 deposit transaction only. Do not add up multiple deposits.",
+      "After confirming the qualifying deposit, claim the RISK Bonus manually."
+    ],
+    "bonus_amounts": [
+      "7D: 20% Bonus | Cap RM188 | x1 Turnover | Max DP RM940",
+      "14D: 30% Bonus | Cap RM288 | x1 Turnover | Max DP RM960",
+      "30D: 40% Bonus | Cap RM388 | x1 Turnover | Max DP RM970"
+    ],
+    "warning": "A deposit made before the member came to chat must NOT be counted for the RISK Bonus claim. The qualifying bonus is based on 1 deposit transaction only, not total accumulated deposits.",
+    "image": "images/risk-bonus-special.jpg",
+    "example": "Okay boss, I have checked and you are eligible for the RISK Bonus. Please make your next deposit and come back to chat after depositing ya. I will verify the qualifying deposit and assist to claim the bonus for you."
+  },
+  {
+    "id": "grace-period-bonus",
+    "title": "Grace Period Bonus",
+    "category": "Special Bonus",
+    "brand": "Platform",
+    "keywords": [
+      "grace period",
+      "grace period bonus",
+      "grace bonus",
+      "deposit 1000",
+      "get 108",
+      "rm108",
+      "108 bonus",
+      "activate bonus",
+      "bonus activated",
+      "forgot to claim",
+      "claim later",
+      "following day",
+      "next day",
+      "bonus deactivated",
+      "bonus expired",
+      "deposit and claim"
+    ],
+    "summary": "Grace Period Bonus flow: activate before expiry, then complete the required deposit and claim on the following day.",
+    "steps": [
+      "Member can activate the bonus in Live Chat on any day before the expiry date.",
+      "Member must activate the bonus before making the required deposit.",
+      "On the following day, the member must deposit the required amount and claim the bonus on the same day.",
+      "Example: Activate on 2/9 → Deposit RM1,000 and claim RM108 on 3/9.",
+      "If the member does not make the required deposit on the following day, the bonus is deactivated.",
+      "If the required deposit was successfully completed on the correct following day but the member forgot to claim, the member can come back later to claim without activating again."
+    ],
+    "bonus_amounts": [
+      "Example: Deposit RM1,000 → Get RM108 Bonus"
+    ],
+    "warning": "If the member does not complete the required deposit on the following day, the bonus is deactivated. If the required deposit was completed on the correct day but the member forgot to claim, the member can still claim later.",
+    "image": "images/grace-period-bonus.jpg",
+    "example": "Boss, for the Grace Period Bonus, you need to activate it before the expiry date. Then on the following day, please complete the required deposit and claim the bonus on the same day ya. If the required deposit is already completed on the correct day but you forgot to claim, you can come back to chat later and we can assist with the claim ya."
+  }
+]
