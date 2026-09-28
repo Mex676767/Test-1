@@ -14,8 +14,8 @@ export function ticketSettings(env = {}) {
     : Number(env.TICKETS_MARKET_ID);
 
   return {
-    configured: Boolean(apiKey && Number.isInteger(departmentId) && departmentId > 0),
-    departmentId,
+    configured: Boolean(apiKey),
+    departmentId: Number.isInteger(departmentId) && departmentId > 0 ? departmentId : null,
     marketId: Number.isInteger(marketId) && marketId > 0 ? marketId : null,
   };
 }

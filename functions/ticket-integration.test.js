@@ -5,9 +5,7 @@ import { handler as createHandler } from "./ticket-create.js";
 import { handler as statusHandler } from "./ticket-status.js";
 
 const env = {
-  TICKETS_API_KEY: "tmk_f4241b1d707cb3942851b332afc9beae855768e3d9f8d5214dd4cb94390916bd",
-  TICKETS_TO_DEPARTMENT_ID: "2",
-  TICKETS_MARKET_ID: "3",
+  TICKETS_API_KEY: "test_ticket_key",
 };
 
 test("config returns fields without exposing ticket records", async () => {
@@ -15,7 +13,12 @@ test("config returns fields without exposing ticket records", async () => {
   global.fetch = async () => new Response(JSON.stringify({
     ok: true,
     fields: [{ key: "status", label: "Status", type: "SELECT", isActive: true }],
-    tickets: [{ ref: "TK2609210007", fields: { member_id: "private" } }],
+    tickets: [{
+      ref: "TK2609210007",
+      fields: { member_id: "private" },
+      currentDepartment: { id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" },
+      market: { id: 4, code: "MYR", label: "Malaysia", isActive: true },
+    }],
   }), { status: 200, headers: { "Content-Type": "application/json" } });
   try {
     const result = await configHandler({ httpMethod: "GET", env });
@@ -23,12 +26,14 @@ test("config returns fields without exposing ticket records", async () => {
     assert.equal(body.ok, true);
     assert.equal("tickets" in body, false);
     assert.equal(body.fields[0].key, "status");
+    assert.deepEqual(body.departments, [{ id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" }]);
+    assert.deepEqual(body.markets, [{ id: 4, code: "MYR", label: "Malaysia" }]);
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("create applies server-owned department and market ids", async () => {
+test("create applies selected department and market ids", async () => {
   const originalFetch = global.fetch;
   let requestBody;
   global.fetch = async (_url, options) => {
@@ -42,17 +47,27 @@ test("create applies server-owned department and market ids", async () => {
     const result = await createHandler({
       httpMethod: "POST",
       env,
-      body: JSON.stringify({ fields: { member_id: "member123" } }),
+      body: JSON.stringify({ toDepartmentId: 2, marketId: 4, fields: { member_id: "member123" } }),
     });
     assert.equal(result.statusCode, 201);
     assert.deepEqual(requestBody, {
       toDepartmentId: 2,
-      marketId: 3,
+      marketId: 4,
       fields: { member_id: "member123" },
     });
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test("create requires a destination department", async () => {
+  const result = await createHandler({
+    httpMethod: "POST",
+    env,
+    body: JSON.stringify({ fields: { member_id: "member123" } }),
+  });
+  assert.equal(result.statusCode, 400);
+  assert.match(JSON.parse(result.body).error, /destination department/i);
 });
 
 test("status validates refs before calling the upstream API", async () => {

@@ -13,12 +13,17 @@ export async function handler(event) {
     if (!body.fields || typeof body.fields !== "object" || Array.isArray(body.fields)) {
       return json(400, { ok: false, error: "Ticket fields are required" });
     }
+    const toDepartmentId = Number(body.toDepartmentId || settings.departmentId);
+    const marketId = Number(body.marketId || settings.marketId);
+    if (!Number.isInteger(toDepartmentId) || toDepartmentId <= 0) {
+      return json(400, { ok: false, error: "Choose a destination department" });
+    }
 
     const payload = {
-      toDepartmentId: settings.departmentId,
+      toDepartmentId,
       fields: body.fields,
     };
-    if (settings.marketId) payload.marketId = settings.marketId;
+    if (Number.isInteger(marketId) && marketId > 0) payload.marketId = marketId;
 
     const data = await ticketRequest(event.env, "/tickets", {
       method: "POST",

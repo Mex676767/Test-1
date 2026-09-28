@@ -1,6 +1,7 @@
-// The C9 ticket-system integration. API credentials stay in the server-side
-// Pages environment and are never sent to this LiveChat iframe.
-const ESCALATION_TICKET_ENABLED = false;
+// The C9 ticket-system integration is exposed only on the standalone admin
+// preview for now. API credentials stay in the server-side Pages environment
+// and are never sent to the browser.
+const ESCALATION_TICKET_ENABLED = true;
 
 /* ============================================================
    THEME
@@ -61,6 +62,8 @@ async function fetchBrandOptions() {
 // Keeping that catalog here means changes in the ticket system do not need a
 // corresponding hard-coded option update in this widget.
 let ticketFields = [];
+let ticketDepartments = [];
+let ticketMarkets = [];
 let ticketConfigError = "";
 async function fetchTicketConfig() {
   if (!ESCALATION_TICKET_ENABLED) return;
@@ -69,9 +72,20 @@ async function fetchTicketConfig() {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Ticket integration is unavailable");
     ticketFields = data.fields || [];
+    ticketDepartments = data.departments || [];
+    ticketMarkets = data.markets || [];
+    for (const s of Object.values(state)) {
+      if (!s?.escalation) continue;
+      if (!s.escalation.departmentId && data.defaultDepartmentId) s.escalation.departmentId = String(data.defaultDepartmentId);
+      if (!s.escalation.marketId && data.defaultMarketId) s.escalation.marketId = String(data.defaultMarketId);
+      if (!s.escalation.departmentId && ticketDepartments.length === 1) s.escalation.departmentId = String(ticketDepartments[0].id);
+      if (!s.escalation.marketId && ticketMarkets.length === 1) s.escalation.marketId = String(ticketMarkets[0].id);
+    }
     ticketConfigError = "";
   } catch (err) {
     ticketFields = [];
+    ticketDepartments = [];
+    ticketMarkets = [];
     ticketConfigError = err.message;
   }
 }
@@ -1859,7 +1873,7 @@ function renderExpandedCard(chat) {
         <iframe src="/bonus-admin.html?embedded=1" title="Bonus Setup Admin"></iframe>
       </details>` : ""}
 
-    ${ESCALATION_TICKET_ENABLED ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
+    ${ESCALATION_TICKET_ENABLED && previewMode ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
   `;
 }
 
@@ -1912,7 +1926,7 @@ function renderTicketInput(chatId, spec) {
   const options = ticketFieldOptions(field);
   let control;
 
-  if (field.type === "SELECT" || options.length) {
+  if (options.length) {
     const values = value && !options.some((option) => String(option.value) === String(value))
       ? [{ value, label: value }, ...options]
       : options;
@@ -1969,6 +1983,8 @@ async function loadTicketStatus(chatId, ref) {
 function renderEscalationSection(chatId) {
   const s = state[chatId];
   const ref = s.ticketLookupRef || s.ticketRef || "";
+  const departmentId = String(s.escalation.departmentId || "");
+  const marketId = String(s.escalation.marketId || "");
   return `
     <div class="ticket-section-head">
       <label class="field-label">Ticket System</label>
@@ -1982,6 +1998,20 @@ function renderEscalationSection(chatId) {
     ${ticketConfigError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(ticketConfigError)}</div>` : ""}
     ${!ticketFields.length || s.escalationSubmitted ? "" : `
       <div class="ticket-form-title">Raise a new ticket</div>
+      <div class="escalation-grid">
+        <div class="escalation-field"><label class="field-label">Destination Department *</label>
+          <select class="input esc-select" data-chat="${escapeHtml(chatId)}" data-field="departmentId">
+            <option value="">Please select</option>
+            ${ticketDepartments.map((item) => `<option value="${item.id}" ${String(item.id) === departmentId ? "selected" : ""}>${escapeHtml(item.name || item.code || item.id)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="escalation-field"><label class="field-label">Market</label>
+          <select class="input esc-select" data-chat="${escapeHtml(chatId)}" data-field="marketId">
+            <option value="">Use ticket default</option>
+            ${ticketMarkets.map((item) => `<option value="${item.id}" ${String(item.id) === marketId ? "selected" : ""}>${escapeHtml(item.label || item.code || item.id)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
       <div class="escalation-grid">${TICKET_FIELD_SPECS.map((spec) => renderTicketInput(chatId, spec)).join("")}</div>
       <div class="hint" style="margin:6px 0 10px">Attachments and ticket updates are handled in the ticket system.</div>
     `}
@@ -2021,6 +2051,7 @@ function ensureChatState(chat) {
     escalation: {
       memberUserId: "", brand: deriveFullBrandCode(chat.groupName), queries: "",
       status: "", transactionId: "", paymentGateway: "", remarks: "", vipLevel: "", amount: "",
+      departmentId: "", marketId: "",
     },
     escalationSubmitted: false, escalationError: "",
     ticketRef: "", ticketLookupRef: "", ticketRecord: null,
@@ -2684,8 +2715,8 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "submitEscalation") {
     const e = s.escalation;
-    if (!e.memberUserId || !e.brand || !e.queries) {
-      s.escalationError = "Member/User ID, Brand, and Query type are required.";
+    if (!e.departmentId || !e.memberUserId || !e.brand || !e.queries) {
+      s.escalationError = "Destination Department, Member/User ID, Brand, and Query type are required.";
       card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
       return;
     }
@@ -2712,7 +2743,11 @@ chatListEl.addEventListener("click", async (e) => {
       const res = await fetch("/ticket-create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields }),
+        body: JSON.stringify({
+          toDepartmentId: Number(e.departmentId),
+          marketId: e.marketId ? Number(e.marketId) : null,
+          fields,
+        }),
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Submit failed");
