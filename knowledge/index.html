@@ -1,22 +1,35 @@
 <!doctype html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CS Learning Assistant</title><link rel="stylesheet" href="knowledge.css"></head>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CS Knowledge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="knowledge.css" />
+</head>
 <body>
-<header class="topbar">
-  <div class="logo">✦</div><div class="brand"><strong>CS Learning Assistant</strong><span>Knowledge made easier</span></div><div class="live"><i></i> PREVIEW</div>
-</header>
-<section class="intro"><div class="eyebrow">SMART DETECTION</div><h1>Find the right SOP faster.</h1><p>Different customer wording can still lead to the same category and guide.</p></section>
-<section class="trybox"><div class="label">TRY CUSTOMER MESSAGE</div><div class="tryrow"><textarea id="customerMessage" rows="2">Boss, I tried to put money in but it keeps showing error.</textarea><button id="detectBtn">DETECT</button></div></section>
-<div id="detection" class="detection hidden"></div>
-<div id="detail" class="detail hidden"></div>
-<section class="search"><span>⌕</span><input id="search" autofocus placeholder="Search knowledge, SOP or keyword..."><kbd>Ctrl K</kbd></section>
-<div class="sectionline"><span>CATEGORIES</span><small>Browse knowledge</small></div>
-<div class="quick">
-  <button data-q="Deposit"><span class="ico dep">↗</span><span><b>Deposit</b><small>1 guide</small></span></button>
-  <button data-q="Withdrawal"><span class="ico wit">↓</span><span><b>Withdrawal</b><small>1 guide</small></span></button>
-  <button data-q="Special Bonus"><span class="ico bon">★</span><span><b>Special Bonus</b><small>2 guides</small></span></button>
-  <button data-q="APP / Technical"><span class="ico app">⌁</span><span><b>APP / Technical</b><small>1 guide</small></span></button>
-</div>
-<div id="settings" class="settings"><span><b>⚡ Admin knowledge preview</b><small>Search and test detection before releasing to agents</small></span></div>
-<footer><span>CS Learning Assistant</span><span>Knowledge Preview</span></footer>
-<script src="knowledge.js"></script></body></html>
+  <header class="knowledge-head">
+    <div class="knowledge-brand"><span class="knowledge-mark">◆</span><div><strong>CS Knowledge</strong><span>Quick SOP handbook</span></div></div>
+    <span class="preview-badge">ADMIN PREVIEW</span>
+  </header>
+  <main class="knowledge-shell">
+    <section class="detect-card">
+      <div class="section-heading"><div><span class="eyebrow">SMART DETECTION</span><h1>What did the customer ask?</h1></div><span class="hint">Paste or type their message</span></div>
+      <div class="detect-row"><textarea id="customerMessage" rows="3" placeholder="Example: Boss, why is my withdrawal still pending?">Boss, I tried to put money in but it keeps showing error.</textarea><button id="detectBtn" class="primary-btn" type="button">Detect topic</button></div>
+      <div id="detection" class="detection" hidden></div>
+    </section>
+    <section class="browse-card">
+      <label class="search-box"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search SOP, category, brand, or keyword…" autocomplete="off" /><kbd>Ctrl K</kbd></label>
+      <div id="categories" class="category-tabs" aria-label="Knowledge categories"></div>
+    </section>
+    <div class="knowledge-grid">
+      <section class="results-panel"><div class="panel-head"><div><span class="eyebrow">GUIDES</span><h2 id="resultsTitle">All knowledge</h2></div><span id="resultCount" class="count-badge"></span></div><div id="results" class="results-list"></div></section>
+      <article id="detail" class="guide-panel"><div class="guide-empty"><span class="guide-empty-icon">◇</span><h2>Select a guide</h2><p>Choose a guide to see its SOP, warning, reply template, and picture guide.</p></div></article>
+    </div>
+  </main>
+  <div id="copyToast" class="copy-toast" role="status">Message copied</div>
+  <script src="knowledge.js"></script>
+</body>
+</html>
