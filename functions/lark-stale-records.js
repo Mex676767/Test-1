@@ -1,6 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { searchRecords, getRecord, deleteRecord, toDisplay, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
-import { LIVECHAT_PATS } from "./_lib/livechat.js";
+import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
 import { CA, summarizeRow, parseChatLink, archiveUrl, isBlank } from "./_lib/ca-row.js";
 
 // Server-side half of Needs Attention. The browser-side list (app.js's
@@ -36,26 +36,54 @@ const MIN_AGE_NO_LINK_MS = 30 * 60 * 1000;
 // on close gets a chance to fill the row first.
 const MIN_AGE_ENDED_MS = 3 * 60 * 1000;
 
-// true = thread still active, false = ended, null = couldn't tell.
-async function isThreadActive(chatId, threadId) {
-  for (const pat of LIVECHAT_PATS) {
+// Resolves both status and the owning LiveChat account without exposing its
+// credential. A direct chat id is reliable even after the thread drops out
+// of list_chats' recent window; the list fallback covers archive-only links.
+async function inspectThread(chatId, threadId, preferredAccountKey) {
+  // Check the sidebar's own account first. Account 2 no longer pays for a
+  // guaranteed failed Account 1 request on every Needs Attention refresh.
+  const orderedPats = [...LIVECHAT_PATS].sort((a, b) =>
+    Number(accountKeyForPat(b) === preferredAccountKey) - Number(accountKeyForPat(a) === preferredAccountKey)
+  );
+  for (const pat of orderedPats) {
     try {
-      const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/get_chat", {
+      if (chatId) {
+        const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/get_chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
+          body: JSON.stringify({ chat_id: chatId, thread_id: threadId }),
+        });
+        const data = await res.json();
+        if (!data || data.error || !data.thread) continue; // not this account's chat -- try the next
+        return {
+          active: typeof data.thread.active === "boolean" ? data.thread.active : null,
+          accountKey: accountKeyForPat(pat),
+        };
+      }
+
+      const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/list_chats", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
-        body: JSON.stringify({ chat_id: chatId, thread_id: threadId }),
+        body: JSON.stringify({ limit: 100, sort_order: "desc" }),
       });
       const data = await res.json();
-      if (!data || data.error || !data.thread) continue; // not this account's chat -- try the next
-      return typeof data.thread.active === "boolean" ? data.thread.active : null;
+      const match = (data?.chats_summary || []).find(
+        (chat) => chat.last_thread_summary && String(chat.last_thread_summary.id) === String(threadId)
+      );
+      if (match) {
+        return {
+          active: typeof match.last_thread_summary.active === "boolean" ? match.last_thread_summary.active : null,
+          accountKey: accountKeyForPat(pat),
+        };
+      }
     } catch (_) { /* try the next account */ }
   }
-  return null;
+  return { active: null, accountKey: "" };
 }
 
 export async function handler(event) {
   try {
-    const { agentName, deleteRecordId, localRecordIds } = JSON.parse(event.body || "{}");
+    const { agentName, accountKey, deleteRecordId, localRecordIds } = JSON.parse(event.body || "{}");
     const agent = String(agentName || "").trim();
     if (!agent) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "agentName is required" }) };
@@ -92,7 +120,14 @@ export async function handler(event) {
 
     const checked = await Promise.all(candidates.map(async (r) => {
       const { chatId, threadId } = parseChatLink(r.link);
-      const active = chatId && threadId && LIVECHAT_PATS.length ? await isThreadActive(chatId, threadId) : null;
+      const inspected = threadId && LIVECHAT_PATS.length
+        ? await inspectThread(chatId, threadId, accountKey)
+        : { active: null, accountKey: "" };
+      const { active } = inspected;
+      // When the row's account can be established, never leak it into the
+      // other account's sidebar. Unidentifiable legacy rows remain visible
+      // with an "account unknown" marker so they are not silently lost.
+      if (accountKey && inspected.accountKey && inspected.accountKey !== accountKey) return null;
       if (active === true) return null; // chat still going -- agent is mid-case
       if (active === null && now - r.createdAt < MIN_AGE_NO_LINK_MS) return null;
       return {
@@ -102,6 +137,7 @@ export async function handler(event) {
         createdAt: r.createdAt,
         threadId,
         chatEnded: active === false,
+        accountKey: inspected.accountKey,
         // Ended chats only open under /archives/{thread_id}.
         openUrl: active === false ? archiveUrl(threadId) : (r.link || archiveUrl(threadId)),
       };

@@ -525,6 +525,7 @@ const groupIdFor = new Map();
 
 async function resolveBrandFromGroupId(chatId, groupID) {
   if (groupID) groupIdFor.set(chatId, groupID);
+  if (!chatId) return;
   if (!groupID) {
     // Silent before this — if the SDK profile ever lacks a groupID at all,
     // there'd be zero trace of why Brand never auto-filled. Logged once
@@ -533,7 +534,6 @@ async function resolveBrandFromGroupId(chatId, groupID) {
       rawGroupIdMissingLoggedFor.add(chatId);
       logDiagnostic(`Brand auto-detect skipped for this chat — LiveChat's SDK profile had no groupID.`, "warn");
     }
-    return;
   }
   try {
     const res = await fetch("/livechat-group-name", {
@@ -545,6 +545,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
       body: JSON.stringify({ groupID, threadId: chatId }),
     });
     const data = await res.json();
+    if (data.accountKey) setCurrentLiveChatAccount(data.accountKey, chatId);
     if (!data.ok || !data.groupName) {
       // Same deal — this used to fail completely silently, which is exactly
       // how the JUS-brand-never-detected report went untraceable. data.error
@@ -740,6 +741,7 @@ async function checkChatStatus(chatId) {
     });
     const data = await res.json();
     if (!data.ok) return;
+    if (data.accountKey) setCurrentLiveChatAccount(data.accountKey, chatId);
 
     // chatId here is actually the thread id (see livechat-chat-status.js
     // header note) — the backend resolves the real chat id via list_chats
@@ -989,6 +991,32 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
 let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card on first load
+
+// The same app origin is installed in both LiveChat accounts. Incognito
+// localStorage is shared across those tabs, while sessionStorage is scoped
+// to one top-level tab, so keep the current tab's anonymous account label in
+// sessionStorage and stamp it onto every pending chat. No PAT is exposed.
+const LIVECHAT_ACCOUNT_SESSION_KEY = "rc-livechat-account";
+let currentLiveChatAccount = "";
+try {
+  const savedAccount = sessionStorage.getItem(LIVECHAT_ACCOUNT_SESSION_KEY) || "";
+  if (/^lc[12]$/.test(savedAccount)) currentLiveChatAccount = savedAccount;
+} catch (_) { /* storage can be unavailable in hardened browser modes */ }
+
+function setCurrentLiveChatAccount(accountKey, chatId) {
+  if (!/^lc[12]$/.test(String(accountKey || ""))) return;
+  const changed = currentLiveChatAccount !== accountKey;
+  currentLiveChatAccount = accountKey;
+  try { sessionStorage.setItem(LIVECHAT_ACCOUNT_SESSION_KEY, accountKey); } catch (_) { /* non-fatal */ }
+  const targetId = chatId || activeChats[0]?.chatId;
+  if (targetId && state[targetId]) state[targetId].liveChatAccount = accountKey;
+  if (changed) {
+    staleRecords = [];
+    renderNeedsAttentionPanel();
+    scheduleNeedsAttentionRefresh(0);
+    logDiagnostic(`This tab is connected to LiveChat ${accountKey === "lc1" ? "account 1" : "account 2"}.`, "success");
+  }
+}
 
 // Persists `state` into localStorage so a lookup survives LiveChat's own
 // in-app navigation and a plain page refresh — both just reload this
@@ -2111,6 +2139,7 @@ function ensureChatState(chat) {
   if (state[chat.chatId]) return;
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
+    liveChatAccount: currentLiveChatAccount,
     vs96FeedbackQuery1: "", vs96FeedbackQuery2: "",
     // Extra cases logged in this same chat (see the "Multiple cases" block
     // above renderTickets). The fields above always describe the ONE case
@@ -3393,6 +3422,7 @@ async function submitRecord(chatId, { auto, reason } = {}) {
     s.autoRecordError = "";
     logDiagnostic(`Chat closed — marked Unknown, not recorded.`, "success");
     renderChats(activeChats);
+    renderNeedsAttentionPanel();
     return;
   }
 
@@ -3440,6 +3470,7 @@ async function submitRecord(chatId, { auto, reason } = {}) {
   // agent's, since localStorage is shared across tabs but a shared/kiosk
   // browser can otherwise mix different agents' work together in the list.
   s.agentName = selectedAgent;
+  s.liveChatAccount = currentLiveChatAccount;
 
   // Brand and Status are both discrete picks from a dropdown now (no free
   // text), written to state the instant they're clicked — state is always
@@ -3510,6 +3541,8 @@ async function submitRecord(chatId, { auto, reason } = {}) {
     markCaseRecorded(s);
     setStatus(`Logged ${s.username} to Lark Base${auto ? ` (auto — ${reasonText.toLowerCase()})` : ""}.`, "success");
     renderChats(activeChats);
+    renderNeedsAttentionPanel();
+    scheduleNeedsAttentionRefresh(200);
   } catch (err) {
     if (auto) {
       s.autoRecordError = `Auto-record failed (${err.message}) — fill in and click Record to Lark Base manually.`;
@@ -3671,6 +3704,7 @@ window.addEventListener("storage", (e) => {
   if (e.key !== STATE_STORAGE_KEY) return;
   saveState();
   renderNeedsAttentionPanel();
+  scheduleNeedsAttentionRefresh(300);
 });
 window.addEventListener("pagehide", saveState);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });
@@ -3701,6 +3735,9 @@ async function sweepPendingChats() {
   for (const [chatId, saved] of Object.entries(persisted)) {
     if (chatId === currentChatId) continue; // already covered by its own tight poll
     if (!saved || saved.logged) continue;
+    // Two LiveChat accounts share this origin's incognito localStorage.
+    // Never sweep or auto-record another account's pending chat.
+    if (currentLiveChatAccount && saved.liveChatAccount !== currentLiveChatAccount) continue;
     // Another agent's case (shared browser) -- theirs to record, not ours.
     if (saved.caOwner && saved.caOwner !== selectedAgent) continue;
     // Adopt the persisted copy only if this tab has no live copy of its own
@@ -3745,6 +3782,7 @@ setInterval(sweepPendingChats, PENDING_SWEEP_MS);
 // kiosk browser used by multiple agents across shifts doesn't mix other
 // agents' incomplete chats into this one's list.
 function getIncompleteChats() {
+  if (IS_EMBEDDED_APP && !currentLiveChatAccount) return [];
   let persisted;
   try {
     persisted = loadPersistedState();
@@ -3753,7 +3791,8 @@ function getIncompleteChats() {
   }
   return Object.entries(persisted)
     .filter(([, s]) => s && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError
-      && s.agentName === selectedAgent)
+      && s.agentName === selectedAgent
+      && (!currentLiveChatAccount || s.liveChatAccount === currentLiveChatAccount))
     .map(([chatId, s]) => ({
       chatId,
       username: s.username || "(no username)",
@@ -3860,6 +3899,7 @@ function caseFromLarkRow(r) {
     loggedSnapshot: "",
     caLinkSaved: !!r.link,
     caOwner: selectedAgent, // lark-chat-records only returns this agent's own rows
+    liveChatAccount: currentLiveChatAccount,
   };
   if (c.logged) c.loggedSnapshot = caseContentJson(c);
   return c;
@@ -3903,6 +3943,7 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
   if (latest.brand) s.brand = latest.brand;
   if (!s.chatUrl && /\/chats\//.test(latest.link)) s.chatUrl = latest.link;
   s.agentName = selectedAgent;
+  s.liveChatAccount = currentLiveChatAccount;
   s.restoredFromLark = true;
   if (archived) {
     s.chatOpen = false;
@@ -3924,6 +3965,17 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
 // agent's own rows, never anyone else's.
 const STALE_POLL_MS = 60_000;
 let staleRecords = [];
+let needsAttentionRefreshTimer = null;
+
+// Coalesces bursts from recording, storage events and panel opens into one
+// request. This makes the badge feel immediate without adding a busy poll.
+function scheduleNeedsAttentionRefresh(delay = 150) {
+  clearTimeout(needsAttentionRefreshTimer);
+  needsAttentionRefreshTimer = setTimeout(() => {
+    needsAttentionRefreshTimer = null;
+    if (!document.hidden) fetchStaleRecords();
+  }, delay);
+}
 
 function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -3939,6 +3991,13 @@ function formatAge(ms) {
 
 async function fetchStaleRecords() {
   if (!selectedAgent) { staleRecords = []; renderNeedsAttentionPanel(); return; }
+  // Do not briefly mix both accounts while the first chat is still being
+  // identified. setCurrentLiveChatAccount triggers this again immediately.
+  if (IS_EMBEDDED_APP && !currentLiveChatAccount) {
+    staleRecords = [];
+    renderNeedsAttentionPanel();
+    return;
+  }
   const agentAtRequest = selectedAgent;
   try {
     const res = await fetch("/lark-stale-records", {
@@ -3946,6 +4005,7 @@ async function fetchStaleRecords() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         agentName: agentAtRequest,
+        accountKey: currentLiveChatAccount,
         localRecordIds: getIncompleteChats().map((c) => c.recordId).filter(Boolean),
       }),
     });
@@ -3968,6 +4028,7 @@ async function fetchStaleRecords() {
 // a chat this browser has open) are left out, so nothing shows twice and an
 // in-progress case isn't flagged.
 function getStaleLarkRecords() {
+  if (IS_EMBEDDED_APP && !currentLiveChatAccount) return [];
   let persisted = {};
   try { persisted = loadPersistedState(); } catch (_) { /* non-fatal */ }
   const localByRecord = new Map();
@@ -3977,6 +4038,7 @@ function getStaleLarkRecords() {
   const shownLocally = new Set(getIncompleteChats().map((c) => c.recordId).filter(Boolean));
   return staleRecords
     .filter((r) => {
+      if (currentLiveChatAccount && r.accountKey && r.accountKey !== currentLiveChatAccount) return false;
       if (shownLocally.has(r.recordId)) return false;
       const local = localByRecord.get(r.recordId);
       if (!local) return true;
@@ -4076,7 +4138,7 @@ function renderNeedsAttentionPanel() {
   `).join("") + stale.map((r) => `
     <div class="na-item">
       <div class="na-item-username">${escapeHtml(r.username)} · ${escapeHtml(r.brand)}</div>
-      <div class="na-item-reason">${r.chatEnded ? "Chat ended" : "Not finished"} — no Inquiry/Status in Lark (looked up ${formatAge(now - r.createdAt)})</div>
+      <div class="na-item-reason">${r.chatEnded ? "Chat ended" : "Not finished"}${r.accountKey ? "" : " · account unknown"} — no Inquiry/Status in Lark (looked up ${formatAge(now - r.createdAt)})</div>
       <div class="na-item-actions">
         ${r.chatUrl ? `<a class="na-item-link" href="${escapeHtml(r.chatUrl)}" target="_blank">Open ↗</a>` : ""}
         <button type="button" class="na-item-ignore" data-action="removeStale" data-record="${escapeHtml(r.recordId)}" title="Delete this empty row from Lark">Remove</button>
@@ -4095,12 +4157,18 @@ document.getElementById("needsAttentionList").addEventListener("click", (e) => {
 setInterval(() => {
   if (!document.hidden) fetchStaleRecords();
 }, STALE_POLL_MS);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) scheduleNeedsAttentionRefresh(150);
+});
 
 document.getElementById("needsAttentionToggle").addEventListener("click", () => {
   const listEl = document.getElementById("needsAttentionList");
   const toggleBtn = document.getElementById("needsAttentionToggle");
   const willOpen = listEl.classList.contains("hidden");
-  if (willOpen) renderNeedsAttentionPanel(); // refresh contents right before showing, not just the count badge
+  if (willOpen) {
+    renderNeedsAttentionPanel();
+    scheduleNeedsAttentionRefresh(0);
+  }
   listEl.classList.toggle("hidden", !willOpen);
   toggleBtn.classList.toggle("open", willOpen);
 });

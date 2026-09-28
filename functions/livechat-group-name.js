@@ -1,5 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
-import { LIVECHAT_PATS } from "./_lib/livechat.js";
+import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
 
 // Resolves the LiveChat group(s) a chat belongs to into a real group name,
 // e.g. "NOW32 Priority Support", via LiveChat's own APIs. Brand
@@ -66,14 +66,14 @@ async function findThreadOwner(threadId, realChatId) {
     try {
       if (realChatId) {
         const chat = await agentAction(pat, "get_chat", { chat_id: realChatId });
-        if (chat && chat.thread) return { pat, chatId: realChatId };
+        if (chat && chat.thread) return { pat, chatId: realChatId, accountKey: accountKeyForPat(pat) };
         continue;
       }
       const data = await agentAction(pat, "list_chats", { limit: 100, sort_order: "desc" });
       const m = (data.chats_summary || []).find(
         (c) => c.last_thread_summary && String(c.last_thread_summary.id) === String(threadId)
       );
-      if (m) return { pat, chatId: m.id };
+      if (m) return { pat, chatId: m.id, accountKey: accountKeyForPat(pat) };
     } catch (_) { /* this account can't see it -- try the next */ }
   }
   return null;
@@ -114,12 +114,12 @@ export async function handler(event) {
           .map((g) => g.name);
         const chosen = names.find((n) => PRIORITY_RE.test(n)) || null;
         if (chosen) {
-          return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: chosen, groups: names, resolvedBy: "chat-owner-account" }) };
+          return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: chosen, groups: names, accountKey: owner.accountKey, resolvedBy: "chat-owner-account" }) };
         }
         // The owning account IS known, so don't fall through to the
         // cross-account guess below -- just report there's no Priority
         // Support group and leave Brand for a manual pick.
-        return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: null, groups: names, error: `Chat isn't in a Priority Support group (its groups: ${names.length ? names.join(", ") : "none found"}) — Brand left blank.` }) };
+        return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: null, groups: names, accountKey: owner.accountKey, error: `Chat isn't in a Priority Support group (its groups: ${names.length ? names.join(", ") : "none found"}) — Brand left blank.` }) };
       }
     }
 
@@ -136,14 +136,14 @@ export async function handler(event) {
       try {
         const groups = await fetchGroups(pat);
         const match = groups.find((g) => String(g.id) === String(groupID));
-        if (match && PRIORITY_RE.test(match.name)) hits.push(match.name); // non-Priority-Support groups never count
+        if (match && PRIORITY_RE.test(match.name)) hits.push({ name: match.name, accountKey: accountKeyForPat(pat) }); // non-Priority-Support groups never count
       } catch (err) {
         lastErr = err;
       }
     }
-    const distinct = [...new Set(hits)];
+    const distinct = [...new Set(hits.map((hit) => hit.name))];
     if (distinct.length === 1) {
-      return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: distinct[0], groups: distinct, resolvedBy: "unique-group-id" }) };
+      return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: distinct[0], groups: distinct, accountKey: hits.length === 1 ? hits[0].accountKey : "", resolvedBy: "unique-group-id" }) };
     }
     if (distinct.length > 1) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: null, error: `Group ID ${groupID} exists in more than one LiveChat account (${distinct.join(" / ")}) and this chat's account couldn't be determined — pick Brand manually.` }) };

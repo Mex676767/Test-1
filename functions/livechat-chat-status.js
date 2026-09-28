@@ -1,5 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
-import { LIVECHAT_PATS } from "./_lib/livechat.js";
+import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
 
 // Reuses the same LiveChat PAT(s) as livechat-group-name.js, against
 // LiveChat's Agent Chat API — this is where per-chat data lives, not group
@@ -122,6 +122,7 @@ export async function handler(event) {
               chatId: body.realChatId,
               threadId,
               chatUrl,
+              accountKey: accountKeyForPat(pat),
               raw: { id: data.id, thread: data.thread, users: data.users },
             }),
           };
@@ -133,6 +134,7 @@ export async function handler(event) {
     let lastData = null;
     let lastErr = null;
     let totalSearched = 0;
+    let matchedPat = "";
     for (const pat of LIVECHAT_PATS) {
       try {
         const data = await listChatsFor(pat);
@@ -140,7 +142,7 @@ export async function handler(event) {
         const chats = data.chats_summary || [];
         totalSearched += chats.length;
         match = chats.find((c) => c.last_thread_summary && String(c.last_thread_summary.id) === String(threadId));
-        if (match) break;
+        if (match) { matchedPat = pat; break; }
       } catch (err) {
         lastErr = err; // keep trying the remaining accounts
       }
@@ -178,6 +180,7 @@ export async function handler(event) {
         chatId: realChatId,
         threadId,
         chatUrl,
+        accountKey: accountKeyForPat(matchedPat),
         raw: { id: match.id, last_thread_summary: thread, users: match.users }, // small, targeted — kept for app.js to surface if detection still looks wrong
       }),
     };
