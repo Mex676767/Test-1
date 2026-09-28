@@ -312,11 +312,15 @@ const SAMPLE_CHATS = [
 // initLiveChatSdk() replaces it with the one real active chat once (if) the
 // SDK connects. Kept as a list (not a single object) so renderChats/state
 // keying by chatId didn't need to change shape for this swap.
-let activeChats = SAMPLE_CHATS;
+// Inside LiveChat, start with an empty lightweight shell. Rendering the full
+// preview card before the SDK resolves wastes a large DOM build on every chat
+// switch, only for the SDK to replace it a moment later. The standalone admin
+// preview keeps the sample card exactly as before.
+let activeChats = IS_EMBEDDED_APP ? [] : SAMPLE_CHATS;
 // Standalone Pages preview is a read-only test bench. It reads the same live
 // bonus tables, but every write path is disabled until the LiveChat SDK
 // successfully connects and replaces the sample cards with a real chat.
-let previewMode = true;
+let previewMode = !IS_EMBEDDED_APP;
 let activeMainTab = "customer";
 
 function syncMainTabs() {
@@ -3563,7 +3567,9 @@ async function refreshDropdownOptions() {
   }
   if (!IS_EMBEDDED_APP) await fetchTicketConfig();
 }
-setInterval(refreshDropdownOptions, OPTIONS_REFRESH_MS);
+setInterval(() => {
+  if (!document.hidden) refreshDropdownOptions();
+}, OPTIONS_REFRESH_MS);
 
 document.getElementById("refreshBtn").addEventListener("click", () => {
   refreshDropdownOptions();
@@ -3595,8 +3601,19 @@ loggingPauseCheck.addEventListener("change", () => {
   renderChats(activeChats); // every card's bottom banner depends on this
 });
 
-// Boot sequence: fetch agent list, update badge, auto-open settings if no
-// agent saved yet (first time / cleared cache).
+// Schedules non-critical work after the first paint. requestIdleCallback is
+// especially helpful on low-end devices; the timeout keeps the work from
+// being postponed forever in a busy LiveChat window.
+function runWhenIdle(task, timeout = 1500) {
+  if ("requestIdleCallback" in window) {
+    window.requestIdleCallback(task, { timeout });
+  } else {
+    setTimeout(task, Math.min(timeout, 500));
+  }
+}
+
+// Boot sequence: connect to LiveChat first. Lark option lists, stale-record
+// checks and the settings UI must not compete with the SDK handshake.
 (async () => {
   // Restore any chat state saved before this widget last reloaded — must
   // happen before the first renderChats/ensureChatState call, since
@@ -3605,28 +3622,47 @@ loggingPauseCheck.addEventListener("change", () => {
   for (const chatId of Object.keys(state)) markStateSynced(chatId);
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
-  logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
+  if (!IS_EMBEDDED_APP) logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
   syncMainTabs();
-  const optionsReady = refreshDropdownOptions();
-  // Preserve a small settling window for LiveChat's iframe handshake, but
-  // never let Lark hold the card back for more than 1.2 seconds.
-  await Promise.all([
-    Promise.race([optionsReady, new Promise((resolve) => setTimeout(resolve, 1200))]),
-    new Promise((resolve) => setTimeout(resolve, 250)),
-  ]);
   updateAgentBadge();
-  if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);
-  renderNeedsAttentionPanel();
-  fetchStaleRecords();
+
+  // Keep this as one call with no retries: repeated createDetailsWidget()
+  // handshakes are what caused the earlier timeout loop.
   initLiveChatSdk();
+
+  const optionsReady = refreshDropdownOptions();
+  if (!selectedAgent) {
+    // Give the agent-name list a short chance to arrive, while never holding
+    // the LiveChat connection or the first paint behind the network.
+    await Promise.race([
+      optionsReady,
+      new Promise((resolve) => setTimeout(resolve, 1200)),
+    ]);
+    openSettingsPanel();
+  }
+
+  optionsReady.finally(() => {
+    // Brand detection may have started before the Lark option list arrived.
+    // Retry it once with the populated list rather than leaving Brand blank.
+    const chatId = activeChats[0]?.chatId;
+    const groupID = chatId ? groupIdFor.get(chatId) : null;
+    if (chatId && groupID && !state[chatId]?.brand) resolveBrandFromGroupId(chatId, groupID);
+  });
+
+  runWhenIdle(() => {
+    renderNeedsAttentionPanel();
+    fetchStaleRecords();
+  }, 2000);
 })();
 
 // Autosave safety nets beyond the explicit saveState() calls in the click/
 // input/change handlers below — covers state mutated outside those (e.g.
 // applyProfile's auto brand/telegram detection, checkLastUsername,
 // checkChatStatus) and the moment this iframe actually goes away.
-setInterval(saveState, 3000);
+setInterval(() => {
+  if (!document.hidden) saveState();
+}, 10_000);
 // Another tab just wrote state (e.g. finished recording a chat from a Needs
 // Attention "Open" tab) -- pick it up and refresh the panel right away
 // instead of waiting for the next sweep. saveState() only adopts/writes
@@ -4056,7 +4092,9 @@ document.getElementById("needsAttentionList").addEventListener("click", (e) => {
   if (!btn) return;
   ignoreAttention(btn.dataset.chat);
 });
-setInterval(fetchStaleRecords, STALE_POLL_MS);
+setInterval(() => {
+  if (!document.hidden) fetchStaleRecords();
+}, STALE_POLL_MS);
 
 document.getElementById("needsAttentionToggle").addEventListener("click", () => {
   const listEl = document.getElementById("needsAttentionList");
@@ -4153,6 +4191,11 @@ async function checkForUpdate() {
   }
 }
 
-checkForUpdate();
-setInterval(checkForUpdate, UPDATE_CHECK_MS);
+// Do not launch four cache-bypassing update requests during the SDK's most
+// timing-sensitive startup window. The deployed version still gets checked
+// shortly after the card is ready and every minute while visible.
+setTimeout(checkForUpdate, 30_000);
+setInterval(() => {
+  if (!document.hidden) checkForUpdate();
+}, UPDATE_CHECK_MS);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });

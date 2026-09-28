@@ -45,12 +45,12 @@ body {
   display: flex; flex-direction: column; min-height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: "Inter", -apple-system, "Segoe UI", sans-serif;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 13.5px;
   transition: background 0.2s ease, color 0.2s ease;
 }
 
-.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+.mono { font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; }
 
 /* ---------- Topbar ---------- */
 /* Two explicit rows instead of relying on flex-wrap fallback — at real
@@ -66,7 +66,7 @@ body {
 .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .brand-mark { color: var(--blue); font-size: 15px; flex-shrink: 0; }
 .brand-name {
-  font-family: "Space Grotesk", sans-serif; font-weight: 600;
+  font-family: "Segoe UI", sans-serif; font-weight: 600;
   font-size: 15px; letter-spacing: 0.01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -193,7 +193,7 @@ body {
 }
 .chat-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .chat-card-head-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-.chat-name { font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 15px; }
+.chat-name { font-family: "Segoe UI", sans-serif; font-weight: 600; font-size: 15px; }
 .preview-mode-badge {
   color: var(--teal); background: var(--teal-soft); border-radius: 999px;
   padding: 4px 8px; font-size: 9.5px; font-weight: 700; letter-spacing: .05em;
@@ -425,7 +425,7 @@ body {
 .dob-cal-jump-picker { position: relative; flex: 1; min-width: 0; }
 .dob-cal-jump-display {
   width: 100%; text-align: center;
-  font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 12.5px;
+  font-family: "Segoe UI", sans-serif; font-weight: 600; font-size: 12.5px;
   background: none; border: 1px solid transparent; color: var(--text);
   border-radius: 6px; padding: 3px 2px; cursor: pointer;
 }
@@ -543,9 +543,9 @@ body {
 .ticket-meta .ticket-date {
   display: inline-block; padding: 0 5px; border-radius: 4px;
   background: color-mix(in srgb, var(--gold) 22%, transparent);
-  color: var(--text); font-weight: 700; font-family: "IBM Plex Mono", monospace;
+  color: var(--text); font-weight: 700; font-family: "Cascadia Mono", Consolas, monospace;
 }
-.ticket-meta .amount { font-family: "IBM Plex Mono", monospace; color: var(--gold); font-weight: 600; }
+.ticket-meta .amount { font-family: "Cascadia Mono", Consolas, monospace; color: var(--gold); font-weight: 600; }
 /* Risk Player's "Date Expired" line under the ticket -- color escalates
    the closer/past the deadline is, reusing the theme's existing accent
    colors rather than introducing a new one: --text-faint with plenty of
@@ -650,7 +650,7 @@ body {
 .submit-btn {
   margin-top: 18px; width: 100%; background: var(--blue); color: white; border: none;
   padding: 11px; border-radius: 9px; font-size: 13.5px; font-weight: 600; cursor: pointer;
-  font-family: "Space Grotesk", sans-serif; letter-spacing: 0.01em;
+  font-family: "Segoe UI", sans-serif; letter-spacing: 0.01em;
 }
 .submit-btn:hover { filter: brightness(1.08); }
 .submit-btn:disabled { background: var(--surface-2); color: var(--text-faint); cursor: not-allowed; }
@@ -696,7 +696,7 @@ body {
 }
 .settings-head {
   display: flex; align-items: center; justify-content: center; gap: 10px;
-  font-family: "Space Grotesk", sans-serif; font-size: 18px; font-weight: 700;
+  font-family: "Segoe UI", sans-serif; font-size: 18px; font-weight: 700;
   color: var(--text); margin-bottom: 12px;
 }
 .settings-close {
@@ -711,7 +711,7 @@ body {
 .settings-select {
   width: 100%; padding: 12px 14px; font-size: 15px; border-radius: 8px;
   background: var(--surface); border: 1px solid var(--border); color: var(--text);
-  font-family: "Inter", sans-serif; appearance: auto; cursor: pointer;
+  font-family: "Segoe UI", sans-serif; appearance: auto; cursor: pointer;
 }
 .settings-select:focus { border-color: var(--blue); outline: none; }
 .settings-text {
@@ -736,7 +736,7 @@ body {
 .diag-entry.diag-error { color: var(--danger); }
 .diag-entry.diag-success { color: var(--teal); }
 .diag-time {
-  font-family: "IBM Plex Mono", monospace; color: var(--text-faint); font-size: 10px; margin-right: 6px;
+  font-family: "Cascadia Mono", Consolas, monospace; color: var(--text-faint); font-size: 10px; margin-right: 6px;
 }
 .diag-empty { font-size: 11px; color: var(--text-faint); text-align: center; padding: 4px; }
 
@@ -756,7 +756,7 @@ body {
 .secondary-btn:disabled { opacity: .55; cursor: wait; }
 .ticket-form-title { margin: 14px 0 10px; color: var(--text); font-size: 12px; font-weight: 600; }
 .ticket-status-card { padding: 10px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
-.ticket-status-ref { font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 600; }
+.ticket-status-ref { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; font-weight: 600; }
 .ticket-status-pill { display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 999px; background: var(--teal-soft); color: var(--teal); font-size: 10px; font-weight: 600; }
 .ticket-status-meta { margin-top: 6px; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
 .ticket-attachment-summary { margin-top: 6px; color: var(--text-muted); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
