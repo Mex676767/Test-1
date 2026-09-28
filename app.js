@@ -882,6 +882,17 @@ async function checkChatStatus(chatId) {
 let liveChatSdkConnecting = false;
 let liveChatSdkConnectRetries = 0;
 let liveChatConnectionSlow = false;
+const LIVECHAT_RECOVERY_KEY = "rc-livechat-sdk-recovery";
+
+function recoverStalledLiveChatOnce() {
+  if (!IS_EMBEDDED_APP) return;
+  try {
+    const lastRecovery = Number(sessionStorage.getItem(LIVECHAT_RECOVERY_KEY) || 0);
+    if (Date.now() - lastRecovery < 2 * 60 * 1000) return;
+    sessionStorage.setItem(LIVECHAT_RECOVERY_KEY, String(Date.now()));
+    location.reload();
+  } catch (_) { /* Refresh remains available when session storage is blocked */ }
+}
 
 function syncInitialLiveChatProfile(widget, attempt = 0) {
   let profile = null;
@@ -909,6 +920,7 @@ function initLiveChatSdk() {
       liveChatConnectionSlow = true;
       setStatus("LiveChat is taking too long to connect. Click Refresh to retry.", "error");
       renderChats(activeChats);
+      setTimeout(recoverStalledLiveChatOnce, 300);
     }
   }, 12_000);
   LiveChat.createDetailsWidget().then((widget) => {
@@ -950,6 +962,12 @@ function loadLiveChatSdk() {
   }
   logDiagnostic("LiveChat SDK was not available. Reloading this widget may restore the connection.", "error");
   setStatus("LiveChat connection failed. Click Refresh to retry.", "error");
+}
+
+function startLiveChatSdkWhenReady() {
+  const start = () => setTimeout(loadLiveChatSdk, 500);
+  if (document.readyState === "complete") start();
+  else window.addEventListener("load", start, { once: true });
 }
 
 // Most LiveChat groups are named "<BRAND><DIGITS> Priority Support" —
@@ -3771,17 +3789,22 @@ loggingPauseCheck.addEventListener("change", () => {
   updateAgentBadge();
   renderChats(activeChats);
   renderNeedsAttentionPanel();
-  loadLiveChatSdk();
   if (!selectedAgent && agentOptions.length) openSettingsPanel();
 
   // Cached options are already usable; refresh all lists in one request.
   // The old individual endpoints are retained as a fallback during rollout.
-  fetchBootstrapOptionsWithFallback().then(() => {
+  const optionsReady = fetchBootstrapOptionsWithFallback();
+  optionsReady.then(() => {
     lastOptionsRefreshAt = Date.now();
     if (activeChats.length) renderChats(activeChats);
     if (!selectedAgent && !document.getElementById("settingsOverlay")) openSettingsPanel();
     fetchStaleRecords();
   });
+  // The previous stable build initialized the SDK only after its startup
+  // option requests. Preserve that settling time, but cap it so a slow API
+  // can never hold the card hostage.
+  await Promise.race([optionsReady, new Promise((resolve) => setTimeout(resolve, 1500))]);
+  startLiveChatSdkWhenReady();
 })();
 
 // Autosave safety nets beyond the explicit saveState() calls in the click/
