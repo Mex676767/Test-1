@@ -2,33 +2,7 @@
 // preview for now. API credentials stay in the server-side Pages environment
 // and are never sent to the browser.
 const ESCALATION_TICKET_ENABLED = true;
-
-// LiveChat runs this page inside its Details iframe. Detecting that before
-// the SDK arrives avoids briefly loading the standalone admin preview (and
-// its sample data) on slower devices.
 const IS_EMBEDDED_APP = window.self !== window.top;
-
-function safeStorageGet(key, fallback = "") {
-  try { return localStorage.getItem(key) ?? fallback; } catch (_) { return fallback; }
-}
-
-function safeStorageSet(key, value) {
-  try { localStorage.setItem(key, value); } catch (_) { /* storage can be blocked in embedded/private windows */ }
-}
-
-const OPTION_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-function readOptionCache(key, fallback = []) {
-  try {
-    const cached = JSON.parse(sessionStorage.getItem("rc-options-" + key) || "null");
-    return cached && Date.now() - cached.savedAt < OPTION_CACHE_MAX_AGE_MS && Array.isArray(cached.value)
-      ? cached.value
-      : fallback;
-  } catch (_) { return fallback; }
-}
-
-function writeOptionCache(key, value) {
-  try { sessionStorage.setItem("rc-options-" + key, JSON.stringify({ savedAt: Date.now(), value })); } catch (_) { /* non-fatal */ }
-}
 
 /* ============================================================
    THEME
@@ -38,12 +12,9 @@ const themeToggle = document.getElementById("themeToggle");
 
 function applyTheme(theme) {
   root.setAttribute("data-theme", theme);
-  safeStorageSet("rc-theme", theme);
+  localStorage.setItem("rc-theme", theme);
 }
-applyTheme(safeStorageGet("rc-theme", "dark"));
-const lowPowerDevice = (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4)
-  || (navigator.deviceMemory && navigator.deviceMemory <= 4);
-root.classList.toggle("low-power", !!lowPowerDevice);
+applyTheme(localStorage.getItem("rc-theme") || "dark");
 
 themeToggle.addEventListener("click", () => {
   const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
@@ -57,8 +28,8 @@ themeToggle.addEventListener("click", () => {
    automatically if no agent is saved.
    ============================================================ */
 const AGENT_KEY = "rc-agent-name";
-let selectedAgent = safeStorageGet(AGENT_KEY);
-let agentOptions = readOptionCache("agents");
+let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
+let agentOptions = [];
 
 // Global "don't log chats" toggle — for chats deliberately not wanted in
 // Lark data at all (unlike Unknown player, which is per-chat and permanent
@@ -66,31 +37,25 @@ let agentOptions = readOptionCache("agents");
 // once it's unticked again — see submitRecord). Persisted so it survives
 // this widget's iframe reloading (same reason chat state itself does).
 const LOGGING_PAUSED_KEY = "rc-logging-paused";
-let loggingPaused = safeStorageGet(LOGGING_PAUSED_KEY) === "true";
+let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
 
 async function fetchAgentOptions() {
   try {
     const res = await fetch("/lark-pic-list");
     const data = await res.json();
-    if (data.ok) {
-      agentOptions = data.pics || [];
-      writeOptionCache("agents", agentOptions);
-    }
+    if (data.ok) agentOptions = data.pics || [];
   } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
 }
 
 // Brand's dropdown options — real Brand values from Customer Approaching's
 // own field, not free text (see renderAutoFields). Fetched once at boot,
 // same as agentOptions.
-let brandOptions = readOptionCache("brands");
+let brandOptions = [];
 async function fetchBrandOptions() {
   try {
     const res = await fetch("/lark-brand-list");
     const data = await res.json();
-    if (data.ok) {
-      brandOptions = data.brands || [];
-      writeOptionCache("brands", brandOptions);
-    }
+    if (data.ok) brandOptions = data.brands || [];
   } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
 }
 
@@ -101,7 +66,6 @@ let ticketFields = [];
 let ticketDepartments = [];
 let ticketMarkets = [];
 let ticketConfigError = "";
-let ticketConfigFetched = false;
 async function fetchTicketConfig() {
   if (!ESCALATION_TICKET_ENABLED) return;
   try {
@@ -124,15 +88,13 @@ async function fetchTicketConfig() {
     ticketDepartments = [];
     ticketMarkets = [];
     ticketConfigError = err.message;
-  } finally {
-    ticketConfigFetched = true;
   }
 }
 
 
 function saveAgent(name) {
   selectedAgent = name.trim();
-  safeStorageSet(AGENT_KEY, selectedAgent);
+  localStorage.setItem(AGENT_KEY, selectedAgent);
 }
 
 // Settings panel — overlaid on top of the widget, blocking interaction
@@ -220,44 +182,35 @@ const BONUS_PROGRAMS = [
   { key: "mooncake", label: "Mooncake Bonus" },
   { key: "vs96Feedback", label: "VS96 Feedback" },
 ];
-let configuredBonusPrograms = readOptionCache("bonuses");
+let configuredBonusPrograms = [];
 function allBonusPrograms() { return [...BONUS_PROGRAMS, ...configuredBonusPrograms]; }
 async function fetchConfiguredBonusPrograms() {
   try {
     const res = await fetch("/bonus-config");
     const data = await res.json();
     configuredBonusPrograms = data.ok && Array.isArray(data.configs) ? data.configs : [];
-    writeOptionCache("bonuses", configuredBonusPrograms);
   } catch (_) {
     configuredBonusPrograms = [];
   }
 }
 
+// Agent, Brand, Inquiry and Status all come from the same Lark table. The
+// combined endpoint reads that table once, instead of making four duplicate
+// field requests plus a separate bonus-config request during startup.
 async function fetchBootstrapOptions() {
   try {
     const res = await fetch("/app-bootstrap");
     const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "Bootstrap options unavailable");
-    if (Array.isArray(data.agents)) { agentOptions = data.agents; writeOptionCache("agents", agentOptions); }
-    if (Array.isArray(data.brands)) { brandOptions = data.brands; writeOptionCache("brands", brandOptions); }
-    if (Array.isArray(data.inquiries) && data.inquiries.length) { inquiryOptions = data.inquiries; writeOptionCache("inquiries", inquiryOptions); }
-    if (Array.isArray(data.statuses) && data.statuses.length) { statusOptions = data.statuses; writeOptionCache("statuses", statusOptions); }
-    if (Array.isArray(data.bonuses)) { configuredBonusPrograms = data.bonuses; writeOptionCache("bonuses", configuredBonusPrograms); }
+    if (!res.ok || !data.ok) return false;
+    if (Array.isArray(data.agents)) agentOptions = data.agents;
+    if (Array.isArray(data.brands)) brandOptions = data.brands;
+    if (Array.isArray(data.inquiries) && data.inquiries.length) inquiryOptions = data.inquiries;
+    if (Array.isArray(data.statuses) && data.statuses.length) statusOptions = data.statuses;
+    if (Array.isArray(data.bonuses)) configuredBonusPrograms = data.bonuses;
     return true;
   } catch (_) {
     return false;
   }
-}
-
-async function fetchBootstrapOptionsWithFallback() {
-  if (await fetchBootstrapOptions()) return;
-  await Promise.allSettled([
-    fetchAgentOptions(),
-    fetchBrandOptions(),
-    fetchInquiryOptions(),
-    fetchStatusOptions(),
-    fetchConfiguredBonusPrograms(),
-  ]);
 }
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
@@ -359,11 +312,11 @@ const SAMPLE_CHATS = [
 // initLiveChatSdk() replaces it with the one real active chat once (if) the
 // SDK connects. Kept as a list (not a single object) so renderChats/state
 // keying by chatId didn't need to change shape for this swap.
-let activeChats = IS_EMBEDDED_APP ? [] : SAMPLE_CHATS;
+let activeChats = SAMPLE_CHATS;
 // Standalone Pages preview is a read-only test bench. It reads the same live
 // bonus tables, but every write path is disabled until the LiveChat SDK
 // successfully connects and replaces the sample cards with a real chat.
-let previewMode = !IS_EMBEDDED_APP;
+let previewMode = true;
 let activeMainTab = "customer";
 
 function syncMainTabs() {
@@ -390,8 +343,8 @@ function syncMainTabs() {
   const knowledgeView = document.getElementById("knowledgeView");
   if (knowledgeView) knowledgeView.hidden = activeMainTab !== "knowledge";
   if (knowledgeAvailable && activeMainTab === "knowledge") {
-    const knowledgeFrame = knowledgeView?.querySelector("iframe[data-src]");
-    if (knowledgeFrame && !knowledgeFrame.src) knowledgeFrame.src = knowledgeFrame.dataset.src;
+    const frame = knowledgeView?.querySelector("iframe[data-src]");
+    if (frame && !frame.src) frame.src = frame.dataset.src;
   }
   const needsAttention = document.getElementById("needsAttentionPanel");
   if (needsAttention) needsAttention.style.display = activeMainTab === "customer" ? "" : "none";
@@ -732,7 +685,6 @@ const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payl
 const firstCheckLoggedFor = new Set(); // one confirmation per chat that get_chat succeeded at all
 const errorLoggedFor = new Set(); // avoid spamming the same persistent error every 20s
 const autoMissingLoggedFor = new Map(); // chatId -> last "missing" list logged by submitRecord's auto path, so sweepPendingChats retrying a permanently-incomplete chat doesn't spam the identical message every 8s forever
-const chatStatusInFlight = new Set();
 
 function stopChatStatusPolling() {
   if (chatStatusPollTimer) {
@@ -768,8 +720,7 @@ function startChatStatusPolling(chatId) {
 // check, just from a different caller and cadence.
 async function checkChatStatus(chatId) {
   const s = state[chatId];
-  if (!s || !s.chatOpen || s.logged || chatStatusInFlight.has(chatId)) return;
-  chatStatusInFlight.add(chatId);
+  if (!s || !s.chatOpen || s.logged) return;
   try {
     // Once a previous check has resolved s.chatUrl, pull the real chat_id
     // back out of it (https://my.livechatinc.com/chats/{chatId}/{threadId})
@@ -876,58 +827,14 @@ async function checkChatStatus(chatId) {
       renderNeedsAttentionPanel(); // reflect immediately if that submit left this chat incomplete
     }
   } catch (_) { /* non-fatal — just try again next tick */ }
-  finally { chatStatusInFlight.delete(chatId); }
-}
-
-let liveChatSdkConnecting = false;
-let liveChatSdkConnectRetries = 0;
-let liveChatConnectionSlow = false;
-const LIVECHAT_RECOVERY_KEY = "rc-livechat-sdk-recovery";
-
-function recoverStalledLiveChatOnce() {
-  if (!IS_EMBEDDED_APP) return;
-  try {
-    const lastRecovery = Number(sessionStorage.getItem(LIVECHAT_RECOVERY_KEY) || 0);
-    if (Date.now() - lastRecovery < 2 * 60 * 1000) return;
-    sessionStorage.setItem(LIVECHAT_RECOVERY_KEY, String(Date.now()));
-    location.reload();
-  } catch (_) { /* Refresh remains available when session storage is blocked */ }
-}
-
-function syncInitialLiveChatProfile(widget, attempt = 0) {
-  let profile = null;
-  try { profile = widget.getCustomerProfile(); } catch (_) { /* context may still be starting */ }
-  if (profile?.chat?.id) {
-    if (String(activeChats[0]?.chatId || "") !== String(profile.chat.id)) applyProfile(profile);
-    return;
-  }
-  if (attempt === 0) applyProfile(profile);
-  if (attempt < 8 && liveWidget === widget) {
-    setTimeout(() => syncInitialLiveChatProfile(widget, attempt + 1), 350 + attempt * 250);
-  }
 }
 
 function initLiveChatSdk() {
-  if (liveWidget || liveChatSdkConnecting) return;
   if (typeof LiveChat === "undefined" || !LiveChat.createDetailsWidget) {
-    logDiagnostic("LiveChat Agent App SDK script has not loaded yet.");
+    logDiagnostic("LiveChat Agent App SDK script not found — staying in demo/preview mode.");
     return;
   }
-  liveChatSdkConnecting = true;
-  liveChatConnectionSlow = false;
-  const slowTimer = setTimeout(() => {
-    if (!liveWidget && liveChatSdkConnecting) {
-      liveChatConnectionSlow = true;
-      setStatus("LiveChat is taking too long to connect. Click Refresh to retry.", "error");
-      renderChats(activeChats);
-      setTimeout(recoverStalledLiveChatOnce, 300);
-    }
-  }, 12_000);
   LiveChat.createDetailsWidget().then((widget) => {
-    clearTimeout(slowTimer);
-    liveChatSdkConnecting = false;
-    liveChatConnectionSlow = false;
-    liveChatSdkConnectRetries = 0;
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
     liveWidget = widget;
     previewMode = false;
@@ -942,32 +849,11 @@ function initLiveChatSdk() {
     // like real data when it wasn't.
     activeChats = [];
     renderChats(activeChats);
+    applyProfile(widget.getCustomerProfile());
     widget.on("customer_profile", applyProfile);
-    syncInitialLiveChatProfile(widget);
   }).catch((err) => {
-    clearTimeout(slowTimer);
-    liveChatSdkConnecting = false;
-    logDiagnostic("LiveChat Agent App SDK failed to connect (" + err.message + ").", "error");
-    if (IS_EMBEDDED_APP && liveChatSdkConnectRetries < 3) {
-      liveChatSdkConnectRetries += 1;
-      setTimeout(initLiveChatSdk, liveChatSdkConnectRetries * 1200);
-    }
+    logDiagnostic("LiveChat Agent App SDK failed to connect (" + err.message + ") — staying in demo/preview mode.", "error");
   });
-}
-
-function loadLiveChatSdk() {
-  if (typeof LiveChat !== "undefined" && LiveChat.createDetailsWidget) {
-    initLiveChatSdk();
-    return;
-  }
-  logDiagnostic("LiveChat SDK was not available. Reloading this widget may restore the connection.", "error");
-  setStatus("LiveChat connection failed. Click Refresh to retry.", "error");
-}
-
-function startLiveChatSdkWhenReady() {
-  const start = () => setTimeout(loadLiveChatSdk, 500);
-  if (document.readyState === "complete") start();
-  else window.addEventListener("load", start, { once: true });
 }
 
 // Most LiveChat groups are named "<BRAND><DIGITS> Priority Support" —
@@ -1010,7 +896,7 @@ function deriveFullBrandCode(groupName) {
 // it ever fails outright, e.g. preview mode with no Lark configured) --
 // kept as a snapshot of the real list so the app never opens on an empty
 // Inquiry dropdown.
-const DEFAULT_INQUIRY_OPTIONS = [
+let inquiryOptions = [
   "Free Spin", "Ang Pao", "Deposit Challenge", "Feedback", "TOP P&L",
   "TOP LTV", "Grace Period", "1D", "3D", "7D", "14D", "19D", "21D",
   "24D", "30D", "Complain", "Ask free credit", "WD/DP problem",
@@ -1029,15 +915,11 @@ const DEFAULT_INQUIRY_OPTIONS = [
   "Goal321", "TO NOT UPDATED", "Rescue Bonus", "TOP Deposit",
   "Maintenance", "Telegram Transition Message", "Unclear Inquiries",
 ];
-let inquiryOptions = readOptionCache("inquiries", DEFAULT_INQUIRY_OPTIONS);
 async function fetchInquiryOptions() {
   try {
     const res = await fetch("/lark-inquiry-list");
     const data = await res.json();
-    if (data.ok && data.options && data.options.length) {
-      inquiryOptions = data.options;
-      writeOptionCache("inquiries", inquiryOptions);
-    }
+    if (data.ok && data.options && data.options.length) inquiryOptions = data.options;
   } catch (_) { /* non-fatal — keeps whatever list it already had */ }
 }
 
@@ -1080,15 +962,12 @@ function programHasAmount(key) {
 
 // Fetched live from Lark's own Status field, same as inquiryOptions above —
 // this fallback is only shown until that first fetch resolves.
-let statusOptions = readOptionCache("statuses", ["Solved", "Unsolved", "Given", "Not given", "Activated"]);
+let statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
 async function fetchStatusOptions() {
   try {
     const res = await fetch("/lark-status-list");
     const data = await res.json();
-    if (data.ok && data.options && data.options.length) {
-      statusOptions = data.options;
-      writeOptionCache("statuses", statusOptions);
-    }
+    if (data.ok && data.options && data.options.length) statusOptions = data.options;
   } catch (_) { /* non-fatal — keeps whatever list it already had */ }
 }
 
@@ -1101,9 +980,6 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   if (!button || button.hidden) return;
   activeMainTab = button.dataset.mainTab;
   syncMainTabs();
-  if (activeMainTab === "tickets" && !ticketConfigFetched) {
-    fetchTicketConfig().then(() => renderChats(activeChats));
-  }
   if (activeMainTab !== "knowledge") renderChats(activeChats);
 });
 const statusEl = document.getElementById("statusBar");
@@ -1119,25 +995,6 @@ let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card 
 // in localStorage forever.
 const STATE_STORAGE_KEY = "rc-chat-state";
 const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const STATE_MAX_COMPLETED_ENTRIES = 200;
-
-function pruneStoredState(raw, now = Date.now()) {
-  const kept = {};
-  const completed = [];
-  for (const [chatId, entry] of Object.entries(raw || {})) {
-    if (!entry || now - (entry._savedAt || 0) >= STATE_MAX_AGE_MS) continue;
-    // Incomplete cases are never removed by the size cap. Only the newest
-    // completed history is retained, which bounds JSON parsing on accounts
-    // handling hundreds of chats per week.
-    if (!entry.logged) kept[chatId] = entry;
-    else completed.push([chatId, entry]);
-  }
-  completed
-    .sort((a, b) => (b[1]._savedAt || 0) - (a[1]._savedAt || 0))
-    .slice(0, STATE_MAX_COMPLETED_ENTRIES)
-    .forEach(([chatId, entry]) => { kept[chatId] = entry; });
-  return kept;
-}
 
 // Several copies of this widget can be alive at once against the same
 // localStorage (the LiveChat window's own widget, plus the extra tab a
@@ -1156,13 +1013,6 @@ function stateSnapshot(s) {
 }
 function markStateSynced(chatId) {
   lastSyncedJson.set(chatId, stateSnapshot(state[chatId]));
-}
-
-function hasUnsavedStateChanges() {
-  for (const [chatId, value] of Object.entries(state)) {
-    if (stateSnapshot(value) !== lastSyncedJson.get(chatId)) return true;
-  }
-  return false;
 }
 
 function saveState() {
@@ -1222,7 +1072,10 @@ function saveState() {
       dirty = true;
     }
     if (dirty) {
-      raw = pruneStoredState(raw, now);
+      // Keep other tabs' chats, but still prune anything nobody has touched in a week.
+      for (const [chatId, entry] of Object.entries(raw)) {
+        if (!entry || now - (entry._savedAt || 0) >= STATE_MAX_AGE_MS) delete raw[chatId];
+      }
       localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
     }
     if (adopted && typeof renderNeedsAttentionPanel === "function") renderNeedsAttentionPanel();
@@ -1231,11 +1084,7 @@ function saveState() {
 
 function loadPersistedState() {
   try {
-    const stored = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}");
-    const raw = pruneStoredState(stored);
-    if (Object.keys(raw).length !== Object.keys(stored).length) {
-      localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
-    }
+    const raw = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}");
     const now = Date.now();
     const fresh = {};
     for (const [chatId, s] of Object.entries(raw)) {
@@ -2439,10 +2288,7 @@ function renderChatsInner(chats) {
   chatListEl.innerHTML = "";
 
   if (!chats.length) {
-    const message = IS_EMBEDDED_APP && !liveWidget
-      ? (liveChatConnectionSlow ? "Connection is taking too long — click Refresh above to retry." : "Connecting to LiveChat…")
-      : "No chat currently open — select a conversation in LiveChat to see it here.";
-    chatListEl.innerHTML = `<div class="empty-state">${message}</div>`;
+    chatListEl.innerHTML = `<div class="empty-state">No chat currently open — select a conversation in LiveChat to see it here.</div>`;
     return;
   }
 
@@ -2525,24 +2371,16 @@ function closeAllDropdowns() {
 // The cases bar ("Save changes" appears once a logged case is edited) is
 // refreshed after any click / input / change inside a card, since many
 // handlers only update their own slot instead of re-rendering the card.
-const pendingCaseSlotRefresh = new Set();
 function refreshCasesSlotLater(e) {
   const id = e.target.closest && e.target.closest(".chat-card")?.dataset.chatId;
-  const s = id && state[id];
-  if (!s || (!s.logged && !s.logs?.some((item) => item.logged)) || pendingCaseSlotRefresh.has(id)) return;
-  pendingCaseSlotRefresh.add(id);
-  requestAnimationFrame(() => {
-    pendingCaseSlotRefresh.delete(id);
+  if (!id) return;
+  setTimeout(() => {
     const card = chatListEl.querySelector(`.chat-card[data-chat-id="${id}"]`);
     const slot = card && card.querySelector(".cases-slot");
     if (slot && state[id]) slot.innerHTML = renderCasesBar(id);
-  });
+  }, 0);
 }
 ["click", "input", "change"].forEach((t) => chatListEl.addEventListener(t, refreshCasesSlotLater));
-
-// The admin form is large and normally stays collapsed. Give it a URL only
-// when somebody opens the panel so preview startup does not parse a second
-// page, fetch its data, or build its controls in the background.
 chatListEl.addEventListener("toggle", (event) => {
   const details = event.target.closest?.(".bonus-admin-embed");
   if (!details?.open) return;
@@ -3718,21 +3556,14 @@ function setStatus(text, kind) {
 // day would otherwise only ever see whatever was live when it first
 // loaded. Doesn't touch anything already picked on an open card.
 const OPTIONS_REFRESH_MS = 3 * 60_000;
-let optionsRefreshInFlight = null;
-let lastOptionsRefreshAt = 0;
-function refreshDropdownOptions() {
-  if (optionsRefreshInFlight) return optionsRefreshInFlight;
-  const requests = [fetchBootstrapOptionsWithFallback()];
-  // Tickets are admin-preview only. Avoid a needless API request for every
-  // live agent, and fetch them lazily when the admin opens the Tickets tab.
-  if (previewMode && ESCALATION_TICKET_ENABLED) requests.push(fetchTicketConfig());
-  optionsRefreshInFlight = Promise.allSettled(requests).finally(() => {
-    lastOptionsRefreshAt = Date.now();
-    optionsRefreshInFlight = null;
-  });
-  return optionsRefreshInFlight;
+async function refreshDropdownOptions() {
+  const loaded = await fetchBootstrapOptions();
+  if (!loaded) {
+    await Promise.allSettled([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchConfiguredBonusPrograms()]);
+  }
+  if (!IS_EMBEDDED_APP) await fetchTicketConfig();
 }
-setInterval(() => { if (!document.hidden) refreshDropdownOptions(); }, OPTIONS_REFRESH_MS);
+setInterval(refreshDropdownOptions, OPTIONS_REFRESH_MS);
 
 document.getElementById("refreshBtn").addEventListener("click", () => {
   refreshDropdownOptions();
@@ -3743,17 +3574,8 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
     applyProfile(liveWidget.getCustomerProfile());
     setStatus("Refreshed from LiveChat.", "success");
   } else {
-    if (IS_EMBEDDED_APP) {
-      if (typeof LiveChat === "undefined" || !LiveChat.createDetailsWidget) {
-        location.reload();
-        return;
-      }
-      loadLiveChatSdk();
-      setStatus("Reconnecting to LiveChat…");
-    } else {
-      setStatus("Preview mode — showing sample chats until connected to LiveChat.");
-      renderChats(activeChats);
-    }
+    setStatus("Preview mode — showing sample chats until connected to LiveChat.");
+    renderChats(activeChats);
   }
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
@@ -3767,15 +3589,14 @@ window.addEventListener("message", async (event) => {
 const loggingPauseCheck = document.getElementById("loggingPauseCheck");
 loggingPauseCheck.addEventListener("change", () => {
   loggingPaused = loggingPauseCheck.checked;
-  safeStorageSet(LOGGING_PAUSED_KEY, String(loggingPaused));
+  localStorage.setItem(LOGGING_PAUSED_KEY, String(loggingPaused));
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   logDiagnostic(loggingPaused ? "Logging paused — no chat will be recorded until this is unticked." : "Logging resumed.", loggingPaused ? "warn" : "success");
   renderChats(activeChats); // every card's bottom banner depends on this
 });
 
-// Boot sequence: paint and connect first. Network-backed dropdown options
-// then fill in asynchronously, so a slow Lark request cannot leave the
-// LiveChat sidebar looking blank on a low-end device.
+// Boot sequence: fetch agent list, update badge, auto-open settings if no
+// agent saved yet (first time / cleared cache).
 (async () => {
   // Restore any chat state saved before this widget last reloaded — must
   // happen before the first renderChats/ensureChatState call, since
@@ -3784,37 +3605,28 @@ loggingPauseCheck.addEventListener("change", () => {
   for (const chatId of Object.keys(state)) markStateSynced(chatId);
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
-  logDiagnostic(previewMode ? "Preview mode — showing sample chats until connected to LiveChat." : "Starting LiveChat widget…");
+  logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
   syncMainTabs();
+  const optionsReady = refreshDropdownOptions();
+  // Preserve a small settling window for LiveChat's iframe handshake, but
+  // never let Lark hold the card back for more than 1.2 seconds.
+  await Promise.all([
+    Promise.race([optionsReady, new Promise((resolve) => setTimeout(resolve, 1200))]),
+    new Promise((resolve) => setTimeout(resolve, 250)),
+  ]);
   updateAgentBadge();
+  if (!selectedAgent) openSettingsPanel();
   renderChats(activeChats);
   renderNeedsAttentionPanel();
-  if (!selectedAgent && agentOptions.length) openSettingsPanel();
-
-  // Cached options are already usable; refresh all lists in one request.
-  // The old individual endpoints are retained as a fallback during rollout.
-  const optionsReady = fetchBootstrapOptionsWithFallback();
-  optionsReady.then(() => {
-    lastOptionsRefreshAt = Date.now();
-    if (activeChats.length) renderChats(activeChats);
-    if (!selectedAgent && !document.getElementById("settingsOverlay")) openSettingsPanel();
-    fetchStaleRecords();
-  });
-  // The previous stable build initialized the SDK only after its startup
-  // option requests. Preserve that settling time, but cap it so a slow API
-  // can never hold the card hostage.
-  await Promise.race([optionsReady, new Promise((resolve) => setTimeout(resolve, 1500))]);
-  startLiveChatSdkWhenReady();
+  fetchStaleRecords();
+  initLiveChatSdk();
 })();
 
 // Autosave safety nets beyond the explicit saveState() calls in the click/
 // input/change handlers below — covers state mutated outside those (e.g.
 // applyProfile's auto brand/telegram detection, checkLastUsername,
 // checkChatStatus) and the moment this iframe actually goes away.
-// Skip the expensive localStorage parse/merge/write when state is unchanged.
-// Explicit actions still save immediately, while this quieter safety net
-// catches background mutations within at most ten seconds.
-setInterval(() => { if (hasUnsavedStateChanges()) saveState(); }, 10_000);
+setInterval(saveState, 3000);
 // Another tab just wrote state (e.g. finished recording a chat from a Needs
 // Attention "Open" tab) -- pick it up and refresh the panel right away
 // instead of waiting for the next sweep. saveState() only adopts/writes
@@ -3826,9 +3638,6 @@ window.addEventListener("storage", (e) => {
 });
 window.addEventListener("pagehide", saveState);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && Date.now() - lastOptionsRefreshAt >= OPTIONS_REFRESH_MS) refreshDropdownOptions();
-});
 
 // LiveChat's Agent App "Details" widget (createDetailsWidget, see
 // initLiveChatSdk) only ever runs for whichever ONE chat is currently
@@ -3844,12 +3653,8 @@ document.addEventListener("visibilitychange", () => {
 // closed while the agent was looking at a different one. checkChatStatus
 // itself is safe to call this way — see its own header note.
 const PENDING_SWEEP_MS = 8_000;
-let pendingSweepInFlight = false;
 
 async function sweepPendingChats() {
-  if (pendingSweepInFlight) return;
-  pendingSweepInFlight = true;
-  try {
   let persisted;
   try {
     persisted = loadPersistedState();
@@ -3889,10 +3694,7 @@ async function sweepPendingChats() {
       await checkChatStatus(chatId);
     }
   }
-  renderNeedsAttentionPanel(persisted);
-  } finally {
-    pendingSweepInFlight = false;
-  }
+  renderNeedsAttentionPanel();
 }
 setInterval(sweepPendingChats, PENDING_SWEEP_MS);
 
@@ -3906,10 +3708,12 @@ setInterval(sweepPendingChats, PENDING_SWEEP_MS);
 // conversation). Filtered to s.agentName === selectedAgent so a shared/
 // kiosk browser used by multiple agents across shifts doesn't mix other
 // agents' incomplete chats into this one's list.
-function getIncompleteChats(persistedInput) {
-  let persisted = persistedInput;
-  if (!persisted) {
-    try { persisted = loadPersistedState(); } catch (_) { return []; }
+function getIncompleteChats() {
+  let persisted;
+  try {
+    persisted = loadPersistedState();
+  } catch (_) {
+    return [];
   }
   return Object.entries(persisted)
     .filter(([, s]) => s && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError
@@ -4084,7 +3888,6 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
 // agent's own rows, never anyone else's.
 const STALE_POLL_MS = 60_000;
 let staleRecords = [];
-let staleFetchInFlight = false;
 
 function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -4099,10 +3902,7 @@ function formatAge(ms) {
 }
 
 async function fetchStaleRecords() {
-  if (staleFetchInFlight || document.hidden) return;
   if (!selectedAgent) { staleRecords = []; renderNeedsAttentionPanel(); return; }
-  staleFetchInFlight = true;
-  try {
   const agentAtRequest = selectedAgent;
   try {
     const res = await fetch("/lark-stale-records", {
@@ -4126,19 +3926,14 @@ async function fetchStaleRecords() {
     return;
   }
   renderNeedsAttentionPanel();
-  } finally {
-    staleFetchInFlight = false;
-  }
 }
 
 // Rows the local list already covers (or that are still being worked on in
 // a chat this browser has open) are left out, so nothing shows twice and an
 // in-progress case isn't flagged.
-function getStaleLarkRecords(persistedInput) {
-  let persisted = persistedInput || {};
-  if (!persistedInput) {
-    try { persisted = loadPersistedState(); } catch (_) { /* non-fatal */ }
-  }
+function getStaleLarkRecords() {
+  let persisted = {};
+  try { persisted = loadPersistedState(); } catch (_) { /* non-fatal */ }
   const localByRecord = new Map();
   for (const s of [...Object.values(persisted), ...Object.values(state)]) {
     if (s && s.caRecordId) localByRecord.set(s.caRecordId, s);
@@ -4215,33 +4010,25 @@ function ignoreAttention(chatId) {
   renderNeedsAttentionPanel();
 }
 
-let lastNeedsAttentionMarkup = null;
-let lastNeedsAttentionCount = "";
-function renderNeedsAttentionPanel(persistedInput) {
+function renderNeedsAttentionPanel() {
   const panel = document.getElementById("needsAttentionPanel");
   const countEl = document.getElementById("needsAttentionCount");
   const listEl = document.getElementById("needsAttentionList");
   if (!panel || !countEl || !listEl) return;
 
-  const incomplete = getIncompleteChats(persistedInput);
-  const stale = getStaleLarkRecords(persistedInput);
+  const incomplete = getIncompleteChats();
+  const stale = getStaleLarkRecords();
   const total = incomplete.length + stale.length;
   if (!total) {
     panel.classList.add("hidden");
-    if (lastNeedsAttentionMarkup !== "") {
-      listEl.innerHTML = "";
-      countEl.textContent = "";
-      lastNeedsAttentionMarkup = "";
-      lastNeedsAttentionCount = "";
-    }
     return;
   }
   panel.classList.remove("hidden");
-  const nextCount = total === 1
+  countEl.textContent = total === 1
     ? "⚠ 1 chat needs attention"
     : `⚠ ${total} chats need attention`;
   const now = Date.now();
-  const nextMarkup = incomplete.map((c) => `
+  listEl.innerHTML = incomplete.map((c) => `
     <div class="na-item">
       <div class="na-item-username">${c.username}</div>
       <div class="na-item-reason">${c.reason}</div>
@@ -4260,14 +4047,6 @@ function renderNeedsAttentionPanel(persistedInput) {
       </div>
     </div>
   `).join("");
-  if (nextCount !== lastNeedsAttentionCount) {
-    countEl.textContent = nextCount;
-    lastNeedsAttentionCount = nextCount;
-  }
-  if (nextMarkup !== lastNeedsAttentionMarkup) {
-    listEl.innerHTML = nextMarkup;
-    lastNeedsAttentionMarkup = nextMarkup;
-  }
 }
 
 document.getElementById("needsAttentionList").addEventListener("click", (e) => {
@@ -4278,7 +4057,6 @@ document.getElementById("needsAttentionList").addEventListener("click", (e) => {
   ignoreAttention(btn.dataset.chat);
 });
 setInterval(fetchStaleRecords, STALE_POLL_MS);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) fetchStaleRecords(); });
 
 document.getElementById("needsAttentionToggle").addEventListener("click", () => {
   const listEl = document.getElementById("needsAttentionList");
@@ -4329,17 +4107,15 @@ async function fetchDeployVersion() {
 }
 
 async function fetchDeploySignature() {
-  // Normal deployments provide version.json, so one small request is
-  // enough. The three HEAD requests remain only as a compatibility fallback
-  // for environments where that build file has not been configured.
-  const deployVersion = await fetchDeployVersion();
-  if (deployVersion) return deployVersion;
-  const fileParts = await Promise.all(UPDATE_FILES.map(async (f) => {
-    const res = await fetch(f, { method: "HEAD", cache: "no-store" });
-    if (!res.ok) throw new Error(f + " " + res.status);
-    return f + "=" + (res.headers.get("etag") || res.headers.get("last-modified") || res.headers.get("content-length") || "");
-  }));
-  return fileParts.join("|");
+  const [deployVersion, ...fileParts] = await Promise.all([
+    fetchDeployVersion(),
+    ...UPDATE_FILES.map(async (f) => {
+      const res = await fetch(f, { method: "HEAD", cache: "no-store" });
+      if (!res.ok) throw new Error(f + " " + res.status);
+      return f + "=" + (res.headers.get("etag") || res.headers.get("last-modified") || res.headers.get("content-length") || "");
+    }),
+  ]);
+  return [deployVersion, ...fileParts].filter(Boolean).join("|");
 }
 
 function isSafeToAutoReload() {
@@ -4365,7 +4141,6 @@ function reloadWhenSafe() {
 }
 
 async function checkForUpdate() {
-  if (document.hidden) return;
   try {
     const sig = await fetchDeploySignature();
     if (updateBaseline === null) { updateBaseline = sig; return; }

@@ -50,25 +50,6 @@ body {
   transition: background 0.2s ease, color 0.2s ease;
 }
 
-/* Low-memory/low-core devices spend less time painting decorative effects.
-   Functionality and layout stay identical; only motion and large shadows
-   are reduced. */
-:root.low-power *,
-:root.low-power *::before,
-:root.low-power *::after {
-  animation: none !important;
-  scroll-behavior: auto !important;
-  transition: none !important;
-}
-:root.low-power .chat-card,
-:root.low-power .settings-panel,
-:root.low-power .inquiry-dropdown,
-:root.low-power .status-dropdown,
-:root.low-power .brand-dropdown,
-:root.low-power .dob-calendar {
-  box-shadow: none !important;
-}
-
 .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
 
 /* ---------- Topbar ---------- */
