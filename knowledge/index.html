@@ -11,13 +11,14 @@
 </head>
 <body>
   <header class="knowledge-head">
-    <div class="knowledge-brand"><span class="knowledge-mark">◆</span><div><strong>CS Knowledge</strong><span>Quick SOP handbook</span></div></div>
+    <div class="knowledge-brand"><img src="logo.svg" alt="" /><div><strong>CS Knowledge Hub</strong><span>Answers, SOPs and ready replies</span></div></div>
     <span class="preview-badge">ADMIN PREVIEW</span>
   </header>
   <main class="knowledge-shell">
     <section class="detect-card">
-      <div class="section-heading"><div><span class="eyebrow">SMART DETECTION</span><h1>What did the customer ask?</h1></div><span class="hint">Paste or type their message</span></div>
-      <div class="detect-row"><textarea id="customerMessage" rows="3" placeholder="Example: Boss, why is my withdrawal still pending?">Boss, I tried to put money in but it keeps showing error.</textarea><button id="detectBtn" class="primary-btn" type="button">Detect topic</button></div>
+      <div class="hero-orb hero-orb-one"></div><div class="hero-orb hero-orb-two"></div>
+      <div class="section-heading"><div><span class="eyebrow">✦ SMART DETECTION</span><h1>Turn a customer message<br />into the right next step.</h1><p>Paste their wording and let the handbook find the closest category and SOP.</p></div><div class="hero-stats"><span><b>5</b> guides</span><span><b>4</b> categories</span></div></div>
+      <div class="detect-row"><textarea id="customerMessage" rows="3" placeholder="Example: Boss, why is my withdrawal still pending?">Boss, I tried to put money in but it keeps showing error.</textarea><button id="detectBtn" class="primary-btn" type="button"><span>✦</span> Detect topic</button></div>
       <div id="detection" class="detection" hidden></div>
     </section>
     <section class="browse-card">
@@ -26,7 +27,7 @@
     </section>
     <div class="knowledge-grid">
       <section class="results-panel"><div class="panel-head"><div><span class="eyebrow">GUIDES</span><h2 id="resultsTitle">All knowledge</h2></div><span id="resultCount" class="count-badge"></span></div><div id="results" class="results-list"></div></section>
-      <article id="detail" class="guide-panel"><div class="guide-empty"><span class="guide-empty-icon">◇</span><h2>Select a guide</h2><p>Choose a guide to see its SOP, warning, reply template, and picture guide.</p></div></article>
+      <article id="detail" class="guide-panel"><div class="guide-empty"><div class="empty-illustration"><img src="logo.svg" alt="" /></div><span class="eyebrow">READY WHEN YOU ARE</span><h2>Select a guide</h2><p>Choose a guide to see its SOP, important checks, ready reply, and picture walkthrough.</p></div></article>
     </div>
   </main>
   <div id="copyToast" class="copy-toast" role="status">Message copied</div>
