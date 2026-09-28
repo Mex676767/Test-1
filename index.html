@@ -26,11 +26,19 @@
       </div>
     </div>
     <span id="agentBadge" class="agent-badge unset">⚠︎ No agent set</span>
+  </header>
+
+  <nav id="mainTabs" class="main-tabs" aria-label="App sections">
+    <button type="button" class="main-tab active" data-main-tab="customer">Customer</button>
+    <button type="button" id="ticketsTab" class="main-tab" data-main-tab="tickets" hidden>Tickets</button>
+  </nav>
+
+  <div id="customerTools" class="customer-tools">
     <label id="loggingPauseToggle" class="logging-pause-toggle" title="When ticked, no chat gets recorded to Lark Base at all -- for chats you deliberately don't want counted. Applies to every chat until unticked.">
       <input type="checkbox" id="loggingPauseCheck" />
       <span>Don't log chats</span>
     </label>
-  </header>
+  </div>
 
   <div id="statusBar" class="status-bar hidden"></div>
 

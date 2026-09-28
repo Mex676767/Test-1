@@ -297,6 +297,27 @@ let activeChats = SAMPLE_CHATS;
 // bonus tables, but every write path is disabled until the LiveChat SDK
 // successfully connects and replaces the sample cards with a real chat.
 let previewMode = true;
+let activeMainTab = "customer";
+
+function syncMainTabs() {
+  const ticketsAvailable = previewMode && ESCALATION_TICKET_ENABLED;
+  if (!ticketsAvailable && activeMainTab === "tickets") activeMainTab = "customer";
+  const mainTabs = document.getElementById("mainTabs");
+  if (mainTabs) mainTabs.hidden = !previewMode;
+  const ticketsTab = document.getElementById("ticketsTab");
+  if (ticketsTab) ticketsTab.hidden = !ticketsAvailable;
+  document.querySelectorAll("[data-main-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mainTab === activeMainTab);
+  });
+  const customerTools = document.getElementById("customerTools");
+  const loggingToggle = document.getElementById("loggingPauseToggle");
+  const topbar = document.querySelector(".topbar");
+  if (previewMode && customerTools && loggingToggle && loggingToggle.parentElement !== customerTools) customerTools.appendChild(loggingToggle);
+  if (!previewMode && topbar && loggingToggle && loggingToggle.parentElement !== topbar) topbar.appendChild(loggingToggle);
+  if (customerTools) customerTools.hidden = !previewMode || activeMainTab !== "customer";
+  const needsAttention = document.getElementById("needsAttentionPanel");
+  if (needsAttention) needsAttention.style.display = activeMainTab === "customer" ? "" : "none";
+}
 
 // Builds our chat shape from the SDK's ICustomerProfile. One remaining gap,
 // confirmed from the SDK's own type definitions (not just undocumented) —
@@ -786,6 +807,8 @@ function initLiveChatSdk() {
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
     liveWidget = widget;
     previewMode = false;
+    activeMainTab = "customer";
+    syncMainTabs();
     // We're definitely embedded in real LiveChat now (this promise only
     // resolves inside an actual Agent App) — stop showing demo data
     // immediately, even before we know whether a chat happens to be
@@ -921,6 +944,13 @@ async function fetchStatusOptions() {
    RENDER
    ============================================================ */
 const chatListEl = document.getElementById("chatList");
+document.getElementById("mainTabs")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-main-tab]");
+  if (!button || button.hidden) return;
+  activeMainTab = button.dataset.mainTab;
+  syncMainTabs();
+  renderChats(activeChats);
+});
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
 let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card on first load
@@ -1873,7 +1903,17 @@ function renderExpandedCard(chat) {
         <iframe src="/bonus-admin.html?embedded=1" title="Bonus Setup Admin"></iframe>
       </details>` : ""}
 
-    ${ESCALATION_TICKET_ENABLED && previewMode ? `<div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>` : ""}
+  `;
+}
+
+function renderAdminTicketWorkspace(chat) {
+  return `
+    <div class="chat-card-head ticket-workspace-head">
+      <div><span class="chat-name">Tickets</span><div class="hint">Admin preview · ${escapeHtml(chat.customerName)}</div></div>
+      <span class="preview-mode-badge ticket-live-badge">CREATES REAL TICKETS</span>
+    </div>
+    <div class="ticket-admin-warning">This admin preview is connected to the live ticket API. Raising a ticket here creates a real ticket.</div>
+    <div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>
   `;
 }
 
@@ -1956,9 +1996,14 @@ function renderTicketStatus(chatId) {
   const status = statusField ? ticket.fields?.[statusField.key] : ticket.fields?.status;
   const department = ticket.currentDepartment?.name || ticket.currentDepartment?.code || "—";
   const updated = ticket.updatedAt ? new Date(ticket.updatedAt).toLocaleString() : "—";
+  const attachments = Array.isArray(ticket.fields?.attachment) ? ticket.fields.attachment : [];
+  const attachmentSummary = attachments.length
+    ? `<div class="ticket-attachment-summary"><strong>Attachments:</strong> ${attachments.map((item) => escapeHtml(item?.name || "Attached file")).join(", ")}</div>`
+    : "";
   return `<div class="ticket-status-card">
     <div><span class="ticket-status-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-status-pill">${escapeHtml(status || "No status")}</span></div>
     <div class="ticket-status-meta">Department: ${escapeHtml(department)} · Updated: ${escapeHtml(updated)}</div>
+    ${attachmentSummary}
     <a class="ticket-open-link" href="https://tickets.96ghq.com/tickets?q=${encodeURIComponent(ticket.ref)}" target="_blank" rel="noopener">Open in ticket system ↗</a>
   </div>`;
 }
@@ -2013,7 +2058,8 @@ function renderEscalationSection(chatId) {
         </div>
       </div>
       <div class="escalation-grid">${TICKET_FIELD_SPECS.map((spec) => renderTicketInput(chatId, spec)).join("")}</div>
-      <div class="hint" style="margin:6px 0 10px">Attachments and ticket updates are handled in the ticket system.</div>
+      ${ticketFields.some((field) => field.type === "ATTACHMENT") ? `<div class="ticket-api-note"><strong>Attachment</strong><span>The API returns attachment metadata but does not currently provide an upload endpoint. Create the ticket first, then add files using “Open in ticket system”.</span></div>` : ""}
+      <div class="hint" style="margin:6px 0 10px">Ticket updates are handled in the ticket system until its API adds an update method.</div>
     `}
     ${s.escalationError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(s.escalationError)}</div>` : ""}
     ${!ticketFields.length ? "" : s.escalationSubmitted
@@ -2219,6 +2265,15 @@ function renderChatsInner(chats) {
   // the "expand the first chat" default needs to see the whole list.
   for (const chat of chats) {
     ensureChatState(chat);
+  }
+  if (previewMode && activeMainTab === "tickets") {
+    const chat = chats[0];
+    const card = document.createElement("div");
+    card.className = "chat-card ticket-workspace-card";
+    card.dataset.chatId = chat.chatId;
+    card.innerHTML = renderAdminTicketWorkspace(chat);
+    chatListEl.appendChild(card);
+    return;
   }
   // Default: expand exactly one chat (the first) on first load only, so
   // agents land on a usable full card and see how the pattern works. Must
@@ -3510,6 +3565,7 @@ loggingPauseCheck.addEventListener("change", () => {
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
+  syncMainTabs();
   await refreshDropdownOptions();
   updateAgentBadge();
   if (!selectedAgent) openSettingsPanel();

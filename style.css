@@ -79,13 +79,30 @@ body {
 .agent-badge.set { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 40%, transparent); }
 .agent-badge.unset { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 
+.main-tabs {
+  display: flex; gap: 4px; padding: 8px 16px 0; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.main-tab {
+  border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-muted);
+  padding: 8px 12px 10px; font: 600 12px "Inter", sans-serif; cursor: pointer;
+}
+.main-tab:hover { color: var(--text); }
+.main-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+.customer-tools {
+  display: flex; align-items: center; min-height: 36px; padding: 7px 16px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.customer-tools[hidden], .main-tab[hidden], .main-tabs[hidden] { display: none; }
+
 /* Global "don't log chats" toggle — deliberately styled to stand out only
    once ticked (danger color), so an idle unticked state doesn't compete
    for attention with the agent badge right next to it. */
 .logging-pause-toggle {
-  display: flex; align-items: center; gap: 6px; margin-top: 6px;
+  display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;
 }
+.topbar .logging-pause-toggle { margin-top: 6px; }
 .logging-pause-toggle input { accent-color: var(--danger); width: 13px; height: 13px; cursor: pointer; }
 .logging-pause-toggle.active { color: var(--danger); font-weight: 600; }
 
@@ -740,8 +757,22 @@ body {
 .ticket-status-ref { font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 600; }
 .ticket-status-pill { display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 999px; background: var(--teal-soft); color: var(--teal); font-size: 10px; font-weight: 600; }
 .ticket-status-meta { margin-top: 6px; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
+.ticket-attachment-summary { margin-top: 6px; color: var(--text-muted); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.ticket-attachment-summary strong { color: var(--text); }
 .ticket-open-link { display: inline-block; margin-top: 7px; color: var(--blue); font-size: 11px; text-decoration: none; }
 .ticket-open-link:hover { text-decoration: underline; }
+.ticket-workspace-card { align-self: flex-start; width: 100%; flex: 0 0 auto; }
+.ticket-workspace-head { margin-bottom: 12px; }
+.ticket-live-badge { color: var(--gold); background: var(--gold-soft); }
+.ticket-admin-warning {
+  margin-bottom: 14px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  border-radius: 8px; background: var(--gold-soft); color: var(--gold); font-size: 11px; line-height: 1.45;
+}
+.ticket-api-note {
+  display: flex; flex-direction: column; gap: 3px; margin: 10px 0; padding: 10px;
+  border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted); font-size: 11px; line-height: 1.45;
+}
+.ticket-api-note strong { color: var(--text); }
 
 
 /* ---------- Multiple cases per chat ---------- */
