@@ -2174,7 +2174,11 @@ function ticketFieldOptions(field) {
     .map((option) => typeof option === "string"
       ? { value: option, label: option }
       : Array.isArray(option)
-        ? { value: option[0], label: option[1] || option[0] }
+        // The ticket API accepts either a choice's internal value or its
+        // visible label. Use the label for documented fallback choices so
+        // the browser does not expose both (for example IN_PROGRESS and
+        // PYM PROCESSING) in the datalist popup.
+        ? { value: option[1] || option[0], label: option[1] || option[0] }
         : { value: option.value, label: option.label || option.value })
     .filter((option) => option.value !== undefined && option.value !== null);
 }
@@ -2200,7 +2204,7 @@ function renderTicketInput(chatId, spec) {
   } else if (options.length && (field.type === "SELECT" || field.type === "MULTISELECT")) {
     const listId = `ticket-options-${String(chatId).replace(/[^a-z0-9_-]/gi, "-")}-${spec.stateKey}`;
     control = `<input type="text" list="${listId}" class="input mono esc-input ticket-combo-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" value="${escapeHtml(value)}" placeholder="Select or type an exact value" />
-      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("")}</datalist>`;
+      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option.value)}"></option>`).join("")}</datalist>`;
   } else if (field.type === "LONGTEXT" || spec.stateKey === "remarks") {
     control = `<textarea class="input esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" placeholder="Type here" rows="2">${escapeHtml(value)}</textarea>`;
   } else {
