@@ -10,22 +10,28 @@ export async function handler(event) {
 
   try {
     const data = await ticketRequest(event.env, `/tickets/${encodeURIComponent(ref)}`);
+    // The current API wraps a single record as { ticket, fields }, where
+    // top-level fields is the field catalog. Older deployments returned the
+    // ticket directly. Support both shapes and never mistake the catalog
+    // array for the ticket's field-value object.
+    const record = data.ticket || data.record || data;
+    const recordFields = record.fields && !Array.isArray(record.fields) ? record.fields : {};
     return json(200, {
       ok: true,
       ticket: {
-        ref: data.ref,
-        fields: data.fields || {},
-        currentDepartment: data.currentDepartment || null,
-        raisedByDepartment: data.raisedByDepartment || null,
-        market: data.market || null,
-        raisedBy: data.raisedBy ? { id: data.raisedBy.id, name: data.raisedBy.name, email: data.raisedBy.email } : null,
-        assignees: Array.isArray(data.assignees)
-          ? data.assignees.map(({ id, name, email }) => ({ id, name, email }))
+        ref: record.ref,
+        fields: recordFields,
+        currentDepartment: record.currentDepartment || null,
+        raisedByDepartment: record.raisedByDepartment || null,
+        market: record.market || null,
+        raisedBy: record.raisedBy ? { id: record.raisedBy.id, name: record.raisedBy.name, email: record.raisedBy.email } : null,
+        assignees: Array.isArray(record.assignees)
+          ? record.assignees.map(({ id, name, email }) => ({ id, name, email }))
           : [],
-        createdAt: data.createdAt || null,
-        updatedAt: data.updatedAt || null,
-        commentCount: Number(data.commentCount || 0),
-        attachmentCount: Number(data.attachmentCount || 0),
+        createdAt: record.createdAt || null,
+        updatedAt: record.updatedAt || null,
+        commentCount: Number(record.commentCount || 0),
+        attachmentCount: Number(record.attachmentCount || 0),
       },
     });
   } catch (err) {

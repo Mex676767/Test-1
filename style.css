@@ -747,6 +747,20 @@ body {
 .escalation-field .field-label { margin: 0 0 6px; }
 .escalation-field-wide { flex-basis: 100%; }
 .escalation-field-wide textarea.input { resize: vertical; min-height: 44px; }
+.ticket-choice { position: relative; width: 100%; }
+.ticket-choice-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 35px; color: var(--text); text-align: left; cursor: pointer; }
+.ticket-choice-trigger:hover, .ticket-choice-trigger[aria-expanded="true"] { border-color: var(--blue); }
+.ticket-choice-placeholder { color: var(--text-faint); }
+.ticket-choice-chevron { flex: 0 0 auto; color: var(--text-faint); font-size: 14px; transition: transform .15s ease; }
+.ticket-choice-trigger[aria-expanded="true"] .ticket-choice-chevron { transform: rotate(180deg); }
+.ticket-choice-menu { position: absolute; z-index: 80; top: calc(100% + 5px); left: 0; width: max(100%, 240px); max-width: min(420px, 90vw); padding: 6px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 14px 36px rgba(0, 0, 0, .34); }
+.ticket-choice-search-wrap { padding-bottom: 5px; }
+.ticket-choice-search { width: 100%; min-height: 32px; }
+.ticket-choice-options { display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow-y: auto; scrollbar-width: thin; }
+.ticket-choice-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 11px; line-height: 1.35; text-align: left; cursor: pointer; }
+.ticket-choice-option:hover, .ticket-choice-option.selected { background: color-mix(in srgb, var(--blue) 15%, var(--surface-2)); color: var(--blue); }
+.ticket-choice-option span { color: var(--teal); font-weight: 700; }
+.ticket-choice-empty { padding: 12px 8px; color: var(--text-faint); font-size: 10.5px; text-align: center; }
 .escalation-submit-btn { margin-top: 14px; }
 .ticket-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .ticket-lookup-row { display: flex; gap: 8px; margin-bottom: 10px; }

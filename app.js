@@ -2050,7 +2050,7 @@ const TICKET_FALLBACK_OPTIONS = {
     ["classic_idr", "Classic"], ["silver_idr", "Silver"], ["gold_idr", "Gold"], ["platinum_idr", "Platinum"],
     ["emerald_idr", "Emerald"], ["sapphire_idr", "Sapphire"], ["ruby_idr", "Ruby"], ["diamond_idr", "Diamond"],
   ],
-  member_platform: ["tcbo", "SPIN321", "PP96", "MY36", "ACE33", "OMG67", "EZ96", "BM69", "AS126", "HOT321", "RM68", "VS96"],
+  member_platform: ["tcbo", "CS96", "SPIN321", "PP96", "MY36", "ACE33", "OMG67", "EZ96", "BM69", "AS126", "HOT321", "RM68", "VS96"],
 };
 
 // File objects cannot be serialized into localStorage. Keep them only in
@@ -2169,7 +2169,8 @@ function ticketFieldOptions(field) {
   const liveOptions = field?.options || [];
   const fallbackKey = ({ brand: "member_platform", level: "member_level", vip_level: "member_level" })[field?.key] || field?.key;
   const fallback = TICKET_FALLBACK_OPTIONS[fallbackKey] || [];
-  return (liveOptions.length ? liveOptions : fallback)
+  const seen = new Set();
+  return [...liveOptions, ...fallback]
     .filter((option) => option?.isActive !== false)
     .map((option) => typeof option === "string"
       ? { value: option, label: option }
@@ -2180,7 +2181,37 @@ function ticketFieldOptions(field) {
         // PYM PROCESSING) in the datalist popup.
         ? { value: option[1] || option[0], label: option[1] || option[0] }
         : { value: option.value, label: option.label || option.value })
-    .filter((option) => option.value !== undefined && option.value !== null);
+    .filter((option) => option.value !== undefined && option.value !== null)
+    .filter((option) => {
+      const key = String(option.label || option.value).trim().toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function renderTicketChoice(chatId, stateKey, value, options, { placeholder = "Please select", allowEmpty = true } = {}) {
+  const normalized = options.map((option) => typeof option === "string"
+    ? { value: option, label: option }
+    : { value: String(option.value ?? ""), label: String(option.label ?? option.value ?? "") });
+  if (value && !normalized.some((option) => option.value === String(value))) {
+    normalized.unshift({ value: String(value), label: String(value) });
+  }
+  const selected = normalized.find((option) => option.value === String(value));
+  return `<div class="ticket-choice" data-ticket-choice="${escapeHtml(stateKey)}">
+    <button type="button" class="input ticket-choice-trigger" data-action="toggleTicketChoice" data-chat="${escapeHtml(chatId)}" aria-haspopup="listbox" aria-expanded="false">
+      <span class="${selected ? "" : "ticket-choice-placeholder"}">${escapeHtml(selected?.label || placeholder)}</span>
+      <span class="ticket-choice-chevron">⌄</span>
+    </button>
+    <div class="ticket-choice-menu hidden" role="listbox">
+      <div class="ticket-choice-search-wrap"><input type="search" class="input ticket-choice-search" placeholder="Search options…" autocomplete="off" /></div>
+      <div class="ticket-choice-options">
+        ${allowEmpty ? `<button type="button" class="ticket-choice-option ${!value ? "selected" : ""}" data-action="selectTicketChoice" data-chat="${escapeHtml(chatId)}" data-field="${escapeHtml(stateKey)}" data-value="" data-search="${escapeHtml(placeholder.toLowerCase())}">${escapeHtml(placeholder)}</button>` : ""}
+        ${normalized.map((option) => `<button type="button" class="ticket-choice-option ${String(option.value) === String(value) ? "selected" : ""}" data-action="selectTicketChoice" data-chat="${escapeHtml(chatId)}" data-field="${escapeHtml(stateKey)}" data-value="${escapeHtml(option.value)}" data-search="${escapeHtml(option.label.toLowerCase())}">${escapeHtml(option.label)}${String(option.value) === String(value) ? "<span>✓</span>" : ""}</button>`).join("")}
+      </div>
+      <div class="ticket-choice-empty hidden">No matching option</div>
+    </div>
+  </div>`;
 }
 
 function renderTicketInput(chatId, spec) {
@@ -2193,24 +2224,19 @@ function renderTicketInput(chatId, spec) {
   const options = ticketFieldOptions(field);
   let control;
 
-  if (options.length && Array.isArray(field.options) && field.options.length) {
-    const values = value && !options.some((option) => String(option.value) === String(value))
-      ? [{ value, label: value }, ...options]
-      : options;
-    control = `<select class="input esc-select" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}">
-      <option value="">${required && !field.defaultValue ? "Please select" : "Use ticket default"}</option>
-      ${values.map((option) => `<option value="${escapeHtml(option.value)}" ${String(option.value) === String(value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-    </select>`;
-  } else if (options.length && (field.type === "SELECT" || field.type === "MULTISELECT")) {
-    const listId = `ticket-options-${String(chatId).replace(/[^a-z0-9_-]/gi, "-")}-${spec.stateKey}`;
-    control = `<input type="text" list="${listId}" class="input mono esc-input ticket-combo-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" value="${escapeHtml(value)}" placeholder="Select or type an exact value" />
-      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option.value)}"></option>`).join("")}</datalist>`;
+  if (options.length) {
+    control = renderTicketChoice(chatId, spec.stateKey, value, options, {
+      placeholder: required && !field.defaultValue ? "Please select" : "Use ticket default",
+      allowEmpty: !required || Boolean(field.defaultValue),
+    });
   } else if (field.type === "LONGTEXT" || spec.stateKey === "remarks") {
     control = `<textarea class="input esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" placeholder="Type here" rows="2">${escapeHtml(value)}</textarea>`;
   } else {
-    const type = field.type === "NUMBER" || field.type === "CURRENCY" ? "number" : "text";
-    const step = type === "number" ? ' step="0.01"' : "";
-    control = `<input type="${type}"${step} class="input ${type === "text" ? "mono " : ""}esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" value="${escapeHtml(value)}" placeholder="Type here" />`;
+    const numeric = field.type === "NUMBER" || field.type === "CURRENCY";
+    // Use a text input with a decimal keyboard hint instead of type=number.
+    // This keeps the field numeric while removing browser spinner buttons and
+    // accidental mouse-wheel / ArrowUp / ArrowDown value changes.
+    control = `<input type="text"${numeric ? ' inputmode="decimal" data-ticket-numeric="true"' : ""} class="input mono esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" value="${escapeHtml(value)}" placeholder="Type here" />`;
   }
 
   return `<div class="escalation-field ${spec.stateKey === "remarks" ? "escalation-field-wide" : ""}">
@@ -2359,16 +2385,10 @@ function renderEscalationSection(chatId) {
       <div class="ticket-form-title">Raise a new ticket</div>
       <div class="escalation-grid">
         <div class="escalation-field"><label class="field-label">Destination Department *</label>
-          <select class="input esc-select" data-chat="${escapeHtml(chatId)}" data-field="departmentId">
-            <option value="">Please select</option>
-            ${ticketDepartments.map((item) => `<option value="${item.id}" ${String(item.id) === departmentId ? "selected" : ""}>${escapeHtml(item.name || item.code || item.id)}</option>`).join("")}
-          </select>
+          ${renderTicketChoice(chatId, "departmentId", departmentId, ticketDepartments.map((item) => ({ value: item.id, label: item.name || item.code || item.id })), { placeholder: "Please select", allowEmpty: false })}
         </div>
         <div class="escalation-field"><label class="field-label">Market</label>
-          <select class="input esc-select" data-chat="${escapeHtml(chatId)}" data-field="marketId">
-            <option value="">Use ticket default</option>
-            ${ticketMarkets.map((item) => `<option value="${item.id}" ${String(item.id) === marketId ? "selected" : ""}>${escapeHtml(item.label || item.code || item.id)}</option>`).join("")}
-          </select>
+          ${renderTicketChoice(chatId, "marketId", marketId, ticketMarkets.map((item) => ({ value: item.id, label: item.label || item.code || item.id })), { placeholder: "Use ticket default", allowEmpty: true })}
         </div>
       </div>
       <div class="escalation-grid">${TICKET_FIELD_SPECS.map((spec) => renderTicketInput(chatId, spec)).join("")}</div>
@@ -2704,6 +2724,27 @@ chatListEl.addEventListener("click", async (e) => {
     if (files.length) ticketAttachmentsByChat.set(chatId, files);
     else ticketAttachmentsByChat.delete(chatId);
     s.ticketAttachmentError = "";
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "toggleTicketChoice") {
+    const choice = btn.closest(".ticket-choice");
+    const menu = choice?.querySelector(".ticket-choice-menu");
+    if (!menu) return;
+    const willOpen = menu.classList.contains("hidden");
+    card.querySelectorAll(".ticket-choice-menu").forEach((item) => item.classList.add("hidden"));
+    card.querySelectorAll(".ticket-choice-trigger").forEach((item) => item.setAttribute("aria-expanded", "false"));
+    if (willOpen) {
+      menu.classList.remove("hidden");
+      btn.setAttribute("aria-expanded", "true");
+      menu.querySelector(".ticket-choice-search")?.focus();
+    }
+    return;
+  }
+
+  if (btn.dataset.action === "selectTicketChoice") {
+    s.escalation[btn.dataset.field] = btn.dataset.value || "";
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
@@ -3368,6 +3409,19 @@ chatListEl.addEventListener("click", async (e) => {
 
 // Inquiry search box: filter as the agent types.
 chatListEl.addEventListener("input", (e) => {
+  const ticketChoiceSearch = e.target.closest(".ticket-choice-search");
+  if (ticketChoiceSearch) {
+    const menu = ticketChoiceSearch.closest(".ticket-choice-menu");
+    const query = ticketChoiceSearch.value.trim().toLowerCase();
+    let visible = 0;
+    menu?.querySelectorAll(".ticket-choice-option").forEach((option) => {
+      const matches = !query || String(option.dataset.search || "").includes(query);
+      option.classList.toggle("hidden", !matches);
+      if (matches) visible++;
+    });
+    menu?.querySelector(".ticket-choice-empty")?.classList.toggle("hidden", visible > 0);
+    return;
+  }
   const feedbackInput = e.target.closest(".vs96-feedback-input");
   if (feedbackInput) {
     const chatId = feedbackInput.dataset.chat;
@@ -3450,6 +3504,13 @@ chatListEl.addEventListener("input", (e) => {
   const escInput = e.target.closest(".esc-input");
   if (escInput) {
     const s = state[escInput.dataset.chat];
+    if (escInput.dataset.ticketNumeric === "true") {
+      const cleaned = escInput.value.replace(/[^0-9.]/g, "");
+      const decimalAt = cleaned.indexOf(".");
+      escInput.value = decimalAt < 0
+        ? cleaned
+        : cleaned.slice(0, decimalAt + 1) + cleaned.slice(decimalAt + 1).replaceAll(".", "");
+    }
     if (s) s.escalation[escInput.dataset.field] = escInput.value;
     return;
   }
@@ -4050,6 +4111,12 @@ chatListEl.addEventListener("paste", (event) => {
   const chatId = picker.dataset.chat;
   addTicketAttachments(chatId, files);
   picker.closest(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest?.(".ticket-choice")) return;
+  document.querySelectorAll(".ticket-choice-menu").forEach((menu) => menu.classList.add("hidden"));
+  document.querySelectorAll(".ticket-choice-trigger").forEach((trigger) => trigger.setAttribute("aria-expanded", "false"));
 });
 window.addEventListener("pagehide", saveState);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });

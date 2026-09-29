@@ -16,7 +16,7 @@ test("config returns fields without exposing ticket records", async () => {
     fields: [{ key: "status", label: "Status", type: "SELECT", isActive: true }],
     tickets: [{
       ref: "TK2609210007",
-      fields: { member_id: "private" },
+      fields: { member_id: "private", status: "PYM_SOLVED" },
       currentDepartment: { id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" },
       market: { id: 4, code: "MYR", label: "Malaysia", isActive: true },
     }],
@@ -27,6 +27,7 @@ test("config returns fields without exposing ticket records", async () => {
     assert.equal(body.ok, true);
     assert.equal("tickets" in body, false);
     assert.equal(body.fields[0].key, "status");
+    assert.deepEqual(body.fields[0].options, [{ value: "PYM_SOLVED", label: "PYM_SOLVED", isActive: true }]);
     assert.deepEqual(body.departments, [{ id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" }]);
     assert.deepEqual(body.markets, [{ id: 4, code: "MYR", label: "Malaysia" }]);
   } finally {
@@ -119,16 +120,19 @@ test("status returns the ticket metadata needed by the in-app detail panel", asy
   const originalFetch = global.fetch;
   global.fetch = async () => new Response(JSON.stringify({
     ok: true,
-    ref: "TK2609210007",
-    fields: { status: "OPEN", member_id: "member123" },
-    currentDepartment: { id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" },
-    market: { id: 4, code: "MYR", label: "Malaysia" },
-    raisedBy: { id: 9, name: "Nina", email: "nina@example.com", avatarUrl: "private" },
-    assignees: [{ id: 10, name: "Pao", email: "pao@example.com", extra: "private" }],
-    createdAt: "2026-09-21T03:10:00.000Z",
-    updatedAt: "2026-09-21T03:20:00.000Z",
-    commentCount: 2,
-    attachmentCount: 1,
+    fields: [{ key: "status", label: "Status", type: "SELECT" }],
+    ticket: {
+      ref: "TK2609210007",
+      fields: { status: "OPEN", member_id: "member123" },
+      currentDepartment: { id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" },
+      market: { id: 4, code: "MYR", label: "Malaysia" },
+      raisedBy: { id: 9, name: "Nina", email: "nina@example.com", avatarUrl: "private" },
+      assignees: [{ id: 10, name: "Pao", email: "pao@example.com", extra: "private" }],
+      createdAt: "2026-09-21T03:10:00.000Z",
+      updatedAt: "2026-09-21T03:20:00.000Z",
+      commentCount: 2,
+      attachmentCount: 1,
+    },
   }), { status: 200, headers: { "Content-Type": "application/json" } });
   try {
     const result = await statusHandler({ httpMethod: "GET", env, queryStringParameters: { ref: "TK2609210007" } });

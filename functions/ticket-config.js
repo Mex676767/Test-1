@@ -25,10 +25,23 @@ export async function handler(event) {
     const markets = uniqueById(tickets.map((ticket) => ticket.market))
       .filter((market) => market.isActive !== false)
       .map(({ id, code, label, currency }) => ({ id: Number(id), code, label, currency }));
+    const fields = (data.fields || [])
+      .filter((field) => field.isActive !== false)
+      .map((field) => {
+        if (field.type !== "SELECT" && field.type !== "MULTISELECT") return field;
+        const observed = tickets.flatMap((ticket) => {
+          const value = ticket.fields?.[field.key];
+          return Array.isArray(value) ? value : [value];
+        }).filter((value) => value !== undefined && value !== null && String(value).trim());
+        const options = Array.from(new Set(observed.map(String)))
+          .sort((a, b) => a.localeCompare(b))
+          .map((value) => ({ value, label: value, isActive: true }));
+        return { ...field, options };
+      });
     return json(200, {
       ok: true,
       configured: true,
-      fields: (data.fields || []).filter((field) => field.isActive !== false),
+      fields,
       departments,
       markets,
       defaultDepartmentId: settings.departmentId,
