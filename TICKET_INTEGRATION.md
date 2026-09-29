@@ -15,9 +15,17 @@ Configure these environment variables on the deployed Pages project:
   `https://tickets.96ghq.com/api/v1`.
 
 After saving the variables, redeploy the Pages project. The widget reads the
-live ticket field catalog, so changes to select options appear without a code
-change.
+live ticket field catalog. The API catalog does not include SELECT choices, so
+the app includes the choices verified in the live dashboard and accepts typed
+exact values for new choices added later.
 
-The ticket API currently supports list, read, and create. It has no update or
-attachment-upload endpoint, so the widget links agents to the ticket system for
-those actions.
+The admin Tickets workspace supports search, record details, status checks and
+ticket creation. Files can be selected or pasted and are attached during
+creation. Opened tickets are watched every 30 seconds while the Tickets tab is
+active; the app reports status, comment-count, file-count, or updated-time
+changes in its notification panel.
+
+The ticket API currently supports list, read, and create. It does not expose an
+update route, comment contents, comment posting, history, or log entries. The
+app shows their counts and links to the dashboard, but those website features
+cannot be replicated until matching REST endpoints are added.

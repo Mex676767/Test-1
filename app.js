@@ -66,6 +66,25 @@ let ticketFields = [];
 let ticketDepartments = [];
 let ticketMarkets = [];
 let ticketConfigError = "";
+const TICKET_DEPARTMENT_FALLBACKS = [
+  ["CS", "Customer Service"], ["IA", "Internal Audit"], ["PYM", "Payment"], ["PYM_MYR", "PAYMENT MYR/PHP/PKR"],
+  ["CMP", "Compliance"], ["QA", "Quality Assurance"], ["RTN", "Retention"], ["DEV", "Developer"],
+  ["MXNCS", "MXN Customer Service"], ["MYRCS", "MYR Customer Service"], ["THBCS", "THB Customer Service"],
+].map(([code, name]) => ({ id: code, code, name }));
+const TICKET_MARKET_FALLBACKS = [
+  ["BDT", "Bangladesh"], ["IDR", "Indonesia"], ["MXN", "Mexico"], ["MYR", "Malaysia"], ["PHP", "Philippines"],
+  ["PKR", "Pakistan"], ["THB", "Thailand"], ["WOWMYR", "WOW88 Malaysia"], ["WOWIDR", "WOW88 Indonesia"],
+].map(([code, label]) => ({ id: code, code, label }));
+
+function mergeTicketChoices(live, fallback) {
+  const seen = new Set();
+  return [...live, ...fallback].filter((item) => {
+    const key = String(item.code || item.name || item.label || item.id).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 async function fetchTicketConfig() {
   if (!ESCALATION_TICKET_ENABLED) return;
   try {
@@ -73,8 +92,8 @@ async function fetchTicketConfig() {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Ticket integration is unavailable");
     ticketFields = data.fields || [];
-    ticketDepartments = data.departments || [];
-    ticketMarkets = data.markets || [];
+    ticketDepartments = mergeTicketChoices(data.departments || [], TICKET_DEPARTMENT_FALLBACKS);
+    ticketMarkets = mergeTicketChoices(data.markets || [], TICKET_MARKET_FALLBACKS);
     for (const s of Object.values(state)) {
       if (!s?.escalation) continue;
       if (!s.escalation.departmentId && data.defaultDepartmentId) s.escalation.departmentId = String(data.defaultDepartmentId);
@@ -1973,29 +1992,74 @@ function renderAdminTicketWorkspace(chat) {
   return `
     <div class="chat-card-head ticket-workspace-head">
       <div><span class="chat-name">Tickets</span><div class="hint">Admin preview · ${escapeHtml(chat.customerName)}</div></div>
-      <span class="preview-mode-badge ticket-live-badge">CREATES REAL TICKETS</span>
+      <div class="ticket-head-actions">
+        <button type="button" class="ticket-notification-button" data-action="clearTicketNotifications" data-chat="${escapeHtml(chat.chatId)}" title="Clear ticket notifications">🔔 <span>${ticketNotifications.length}</span></button>
+        <span class="preview-mode-badge ticket-live-badge">CREATES REAL TICKETS</span>
+      </div>
     </div>
     <div class="ticket-admin-warning">This admin preview is connected to the live ticket API. Raising a ticket here creates a real ticket.</div>
+    ${renderTicketNotifications()}
     <div class="escalation-slot">${renderEscalationSection(chat.chatId)}</div>
   `;
 }
 
 const TICKET_FIELD_SPECS = [
   { stateKey: "memberUserId", keys: ["member_id"], labels: ["Member / User ID", "Member ID"], required: true },
-  { stateKey: "brand", keys: ["brand"], labels: ["Brand"], required: true },
+  { stateKey: "brand", keys: ["member_platform", "brand"], labels: ["Brand"], required: true },
   { stateKey: "queries", keys: ["query_type"], labels: ["Query type", "Queries"], required: true },
   { stateKey: "status", keys: ["status"], labels: ["Status"] },
   { stateKey: "transactionId", keys: ["transaction_id"], labels: ["Transaction ID"] },
   { stateKey: "paymentGateway", keys: ["payment_gateway"], labels: ["Payment Gateway"] },
   { stateKey: "amount", keys: ["amount"], labels: ["Amount"] },
   { stateKey: "remarks", keys: ["remarks"], labels: ["Remarks", "Remarks (CS - PYM)"] },
-  { stateKey: "vipLevel", keys: ["level", "vip_level"], labels: ["Level", "VIP Level"] },
+  { stateKey: "vipLevel", keys: ["member_level", "level", "vip_level"], labels: ["Level", "VIP Level"] },
 ];
+
+// GET /tickets describes SELECT fields but intentionally omits their choices.
+// These documented values make those fields selectable while the datalist still
+// accepts additional live values that the ticket team may add later.
+const TICKET_FALLBACK_OPTIONS = {
+  status: [
+    ["OPEN", "Open"], ["IN_PROGRESS", "PYM PROCESSING"], ["COMP_PROCESSING", "COMP PROCESSING"],
+    ["CS_TO_FOLLOW_UP", "CS TO FOLLOW UP"], ["PYM_TO_FOLLOW_UP", "PYM TO FOLLOW UP"],
+    ["SOLVED", "CS TEAM SOLVED"], ["X_VOID_TICKET", "X. VOID TICKET"],
+    ["ONSITE_TEAM_DONE", "QA TEAM DONE"], ["UNSOLVED_TICKET", "UNSOLVED TICKET"],
+    ["PYM_SOLVED", "PYM TEAM SOLVED"], ["COMP_TEAM_SOLVED", "COMP TEAM SOLVED"], ["Closed", "Closed"],
+  ],
+  query_type: [
+    ["dp_not_credited", "DP NOT CREDITED"], ["wd_delay", "WD DELAY"], ["missing_wd", "MISSING WD"],
+    ["kyc_chg_acc_name", "KYC CHG ACC/NAME"], ["REFUND", "REFUND"], ["pg_wrong_approve", "PG WRONG APPROVE"],
+    ["pym_wd_pending_to_nar", "PYM - WD PENDING (TO/NAR)"],
+    ["pym_wd_pending_invalid_acc", "PYM - WD PENDING (INVALID ACC)"], ["OTHERS", "OTHERS"],
+    ["cancel_deposit", "Cancel Deposit"], ["birthday_bonus", "Birthday Bonus"], ["credit_adjustment", "Credit Adjustment"],
+    "VVIP WOW Manual Rebate", "(VIP-Slot) OFF (50% VIP Bonus, min dep 100, max Bonus 500, x2TO)",
+    "(VIP-Sports) OFF (20% VIP Bonus, min dep 30, max Bonus 300, x5TO)",
+    "(VIP-Live) OFF (20% VIP Bonus, min dep 30, max Bonus 300, x5TO)",
+    "RA RT Claim Petroleum Receipt Campaign", "Offline Promo Adjustment", "DP SLIP VERIFICATION",
+    "DUPLICATED ACCOUNT", "OTHERS (FOR PYM)", "OTHERS (FOR CS/CBD)", "Adjustment Purpose (Compliance)",
+    "VVIP TOP P&L BONUS", "VVIP LTV 70 BONUS", "VVIP Grace Period BONUS", "VVIP Risk Player BONUS", "VVIP Complain Players",
+  ],
+  payment_gateway: [
+    "KAAZPAY", "PAYMIER", "GOPAY", "SPEEDPAY", "DGPAY", "METAPAY", "PAYESSENCE", "TRUEPAY", "FPAY", "WINPAY", "ONEPAY", "RAPIDPAY",
+    "SUPERPAY", "GLOBEPAY", "GMPAY", "EPICPAY", "NOVAPAY", "XXXPAY", "VDPAY", "SEAPAY", "KIRAPAY", "PAYEX", "THE7PAY", "KOIPAY",
+    "AKAIPAY", "NOT BELONG TO ANY PG'S", "CANCEL WITHDRAWAL", "DirectPay", "CANCEL DEPOSIT", "JAYAPAY", "APOLLO PAY", "SG PAY",
+    "DUMPLING PAY (DPP)", "RM PAY", "GCASH PAY", "MM PAY", "GXP PAY", "XPAY", "ALL2PAY", "SODA PAY", "U2C PAY", "TARSPAY",
+  ],
+  member_level: [
+    ["0_3", "0-3"], ["4_8", "4-8"], ["9_and_above", "9 and above"], ["VVIP", "VVIP"],
+    ["classic_idr", "Classic"], ["silver_idr", "Silver"], ["gold_idr", "Gold"], ["platinum_idr", "Platinum"],
+    ["emerald_idr", "Emerald"], ["sapphire_idr", "Sapphire"], ["ruby_idr", "Ruby"], ["diamond_idr", "Diamond"],
+  ],
+  member_platform: ["tcbo", "SPIN321", "PP96", "MY36", "ACE33", "OMG67", "EZ96", "BM69", "AS126", "HOT321", "RM68", "VS96"],
+};
 
 // File objects cannot be serialized into localStorage. Keep them only in
 // memory for the current admin-preview tab; incognito clears them with the
 // session and a completed ticket clears them immediately.
 const ticketAttachmentsByChat = new Map();
+const ticketSearchResultsByChat = new Map();
+const watchedTicketSnapshots = new Map();
+let ticketNotifications = [];
 const TICKET_ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
 const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024;
 
@@ -2015,16 +2079,72 @@ function renderTicketAttachments(chatId) {
       <button type="button" data-action="removeTicketAttachment" data-chat="${escapeHtml(chatId)}" data-index="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button>
     </div>`).join("");
   return `
-    <div class="ticket-attachment-picker">
+    <div class="ticket-attachment-picker" data-chat="${escapeHtml(chatId)}" tabindex="0" aria-label="Ticket attachments. Choose files or paste from the clipboard.">
       <label class="field-label">${escapeHtml(field.label || "Attachment")}</label>
       <label class="ticket-file-button">
         <input type="file" class="ticket-attachment-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple />
         <span>${files.length ? "+ Add more files" : "Choose files"}</span>
       </label>
-      <div class="ticket-attachment-help">PNG, JPG, WEBP or PDF · under 1MB each · up to 6 files</div>
+      <div class="ticket-attachment-help">PNG, JPG, WEBP or PDF · under 1MB each · up to 6 files · click here and press Ctrl+V to paste</div>
       ${rows ? `<div class="ticket-attachment-list">${rows}</div>` : ""}
       ${s?.ticketAttachmentError ? `<div class="ticket-attachment-error">${escapeHtml(s.ticketAttachmentError)}</div>` : ""}
     </div>`;
+}
+
+function addTicketAttachments(chatId, addedFiles) {
+  const s = state[chatId];
+  if (!s) return false;
+  const existing = ticketAttachmentsByChat.get(chatId) || [];
+  const added = Array.from(addedFiles || []).filter(Boolean);
+  const combined = [...existing, ...added];
+  let error = "";
+  if (!added.length) error = "The clipboard did not contain an image, PDF, or file.";
+  else if (combined.length > 6) error = "You can attach up to 6 files.";
+  else {
+    const invalid = added.find((file) => !file.size || file.size >= TICKET_ATTACHMENT_MAX_BYTES || !TICKET_ATTACHMENT_TYPES.has(file.type));
+    if (invalid) {
+      error = !invalid.size
+        ? `${invalid.name || "Attachment"} is empty.`
+        : invalid.size >= TICKET_ATTACHMENT_MAX_BYTES
+          ? `${invalid.name || "Attachment"} must be under 1MB.`
+          : `${invalid.name || "Attachment"} must be PNG, JPG, WEBP, or PDF.`;
+    }
+  }
+  if (!error) ticketAttachmentsByChat.set(chatId, combined);
+  s.ticketAttachmentError = error;
+  return !error;
+}
+
+function ticketStatusValue(ticket) {
+  return String(ticket?.fields?.status || "");
+}
+
+function renderTicketNotifications() {
+  if (!ticketNotifications.length) return "";
+  return `<div class="ticket-notification-panel">
+    ${ticketNotifications.slice(0, 5).map((item) => `<div><strong>${escapeHtml(item.ref)}</strong><span>${escapeHtml(item.message)}</span><small>${escapeHtml(new Date(item.time).toLocaleTimeString())}</small></div>`).join("")}
+  </div>`;
+}
+
+function rememberTicketSnapshot(ticket, notify = true) {
+  if (!ticket?.ref) return;
+  const next = {
+    updatedAt: ticket.updatedAt || "",
+    status: ticketStatusValue(ticket),
+    commentCount: Number(ticket.commentCount || 0),
+    attachmentCount: Number(ticket.attachmentCount || 0),
+  };
+  const previous = watchedTicketSnapshots.get(ticket.ref);
+  watchedTicketSnapshots.set(ticket.ref, next);
+  if (!notify || !previous || JSON.stringify(previous) === JSON.stringify(next)) return;
+  const changes = [];
+  if (previous.status !== next.status) changes.push(`status changed to ${next.status || "blank"}`);
+  if (next.commentCount > previous.commentCount) changes.push(`${next.commentCount - previous.commentCount} new comment${next.commentCount - previous.commentCount === 1 ? "" : "s"}`);
+  if (next.attachmentCount > previous.attachmentCount) changes.push(`${next.attachmentCount - previous.attachmentCount} new file${next.attachmentCount - previous.attachmentCount === 1 ? "" : "s"}`);
+  if (!changes.length) changes.push("ticket details were updated");
+  ticketNotifications.unshift({ ref: ticket.ref, message: changes.join(" · "), time: Date.now() });
+  ticketNotifications = ticketNotifications.slice(0, 20);
+  setStatus(`${ticket.ref}: ${changes.join(" · ")}`, "success");
 }
 
 function ticketFieldFor(spec) {
@@ -2046,11 +2166,16 @@ function claimedProgramsFromSavedCase(row) {
 }
 
 function ticketFieldOptions(field) {
-  return (field?.options || [])
+  const liveOptions = field?.options || [];
+  const fallbackKey = ({ brand: "member_platform", level: "member_level", vip_level: "member_level" })[field?.key] || field?.key;
+  const fallback = TICKET_FALLBACK_OPTIONS[fallbackKey] || [];
+  return (liveOptions.length ? liveOptions : fallback)
     .filter((option) => option?.isActive !== false)
     .map((option) => typeof option === "string"
       ? { value: option, label: option }
-      : { value: option.value, label: option.label || option.value })
+      : Array.isArray(option)
+        ? { value: option[0], label: option[1] || option[0] }
+        : { value: option.value, label: option.label || option.value })
     .filter((option) => option.value !== undefined && option.value !== null);
 }
 
@@ -2064,7 +2189,7 @@ function renderTicketInput(chatId, spec) {
   const options = ticketFieldOptions(field);
   let control;
 
-  if (options.length) {
+  if (options.length && Array.isArray(field.options) && field.options.length) {
     const values = value && !options.some((option) => String(option.value) === String(value))
       ? [{ value, label: value }, ...options]
       : options;
@@ -2072,6 +2197,10 @@ function renderTicketInput(chatId, spec) {
       <option value="">${required && !field.defaultValue ? "Please select" : "Use ticket default"}</option>
       ${values.map((option) => `<option value="${escapeHtml(option.value)}" ${String(option.value) === String(value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
     </select>`;
+  } else if (options.length && (field.type === "SELECT" || field.type === "MULTISELECT")) {
+    const listId = `ticket-options-${String(chatId).replace(/[^a-z0-9_-]/gi, "-")}-${spec.stateKey}`;
+    control = `<input type="text" list="${listId}" class="input mono esc-input ticket-combo-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" value="${escapeHtml(value)}" placeholder="Select or type an exact value" />
+      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("")}</datalist>`;
   } else if (field.type === "LONGTEXT" || spec.stateKey === "remarks") {
     control = `<textarea class="input esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" placeholder="Type here" rows="2">${escapeHtml(value)}</textarea>`;
   } else {
@@ -2085,6 +2214,39 @@ function renderTicketInput(chatId, spec) {
   </div>`;
 }
 
+function ticketFieldLabel(key) {
+  return ticketFields.find((field) => field.key === key)?.label || key.replaceAll("_", " ");
+}
+
+function ticketFieldDisplay(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (Array.isArray(value)) {
+    return value.map((item) => typeof item === "object" ? item?.name || item?.label || "Attached file" : item).join(", ");
+  }
+  if (typeof value === "object") return value.name || value.label || value.code || "—";
+  return String(value);
+}
+
+function renderTicketSearchResults(chatId) {
+  const result = ticketSearchResultsByChat.get(chatId);
+  if (!result) return "";
+  if (result.loading) return `<div class="ticket-results-empty">Loading tickets…</div>`;
+  if (result.error) return `<div class="record-error-banner">⚠︎ ${escapeHtml(result.error)}</div>`;
+  if (!result.tickets?.length) return `<div class="ticket-results-empty">No tickets found.</div>`;
+  return `<div class="ticket-results">
+    ${result.tickets.slice(0, 30).map((ticket) => {
+      const status = ticket.fields?.status || "No status";
+      const member = ticket.fields?.member_id || "No member ID";
+      const department = ticket.currentDepartment?.name || ticket.currentDepartment?.code || "No department";
+      return `<button type="button" class="ticket-result" data-action="openTicketResult" data-chat="${escapeHtml(chatId)}" data-ref="${escapeHtml(ticket.ref)}">
+        <span><strong>${escapeHtml(ticket.ref)}</strong><small>${escapeHtml(member)} · ${escapeHtml(department)}</small></span>
+        <span class="ticket-status-pill">${escapeHtml(status)}</span>
+      </button>`;
+    }).join("")}
+    ${result.total > result.tickets.length ? `<div class="ticket-results-empty">Showing ${result.tickets.length} of ${result.total} tickets. Refine the search to narrow it down.</div>` : ""}
+  </div>`;
+}
+
 function renderTicketStatus(chatId) {
   const s = state[chatId];
   const ticket = s.ticketRecord;
@@ -2094,19 +2256,39 @@ function renderTicketStatus(chatId) {
   const status = statusField ? ticket.fields?.[statusField.key] : ticket.fields?.status;
   const department = ticket.currentDepartment?.name || ticket.currentDepartment?.code || "—";
   const updated = ticket.updatedAt ? new Date(ticket.updatedAt).toLocaleString() : "—";
+  const created = ticket.createdAt ? new Date(ticket.createdAt).toLocaleString() : "—";
+  const raisedBy = ticket.raisedBy?.name || ticket.raisedBy?.email || "—";
+  const market = ticket.market?.label || ticket.market?.code || "—";
+  const assignees = Array.isArray(ticket.assignees) && ticket.assignees.length
+    ? ticket.assignees.map((person) => person?.name || person?.email).filter(Boolean).join(", ")
+    : "Unassigned";
   const attachments = Array.isArray(ticket.fields?.attachment) ? ticket.fields.attachment : [];
   const attachmentSummary = attachments.length
     ? `<div class="ticket-attachment-summary"><strong>Attachments:</strong> ${attachments.map((item) => escapeHtml(item?.name || "Attached file")).join(", ")}</div>`
     : "";
+  const fieldRows = Object.entries(ticket.fields || {})
+    .filter(([key]) => key !== "attachment")
+    .map(([key, value]) => `<div class="ticket-detail-row"><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(ticketFieldDisplay(value))}</strong></div>`)
+    .join("");
   return `<div class="ticket-status-card">
-    <div><span class="ticket-status-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-status-pill">${escapeHtml(status || "No status")}</span></div>
-    <div class="ticket-status-meta">Department: ${escapeHtml(department)} · Updated: ${escapeHtml(updated)}</div>
+    <div class="ticket-status-heading"><div><span class="ticket-status-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-status-pill">${escapeHtml(status || "No status")}</span></div><span class="hint">${Number(ticket.commentCount || 0)} comments · ${Number(ticket.attachmentCount || attachments.length)} files</span></div>
+    <div class="ticket-status-meta">Department: ${escapeHtml(department)} · Market: ${escapeHtml(market)} · Updated: ${escapeHtml(updated)}</div>
+    <div class="ticket-detail-grid">
+      <div class="ticket-detail-row"><span>Created</span><strong>${escapeHtml(created)}</strong></div>
+      <div class="ticket-detail-row"><span>Raised by</span><strong>${escapeHtml(raisedBy)}</strong></div>
+      <div class="ticket-detail-row"><span>Assignees</span><strong>${escapeHtml(assignees)}</strong></div>
+      ${fieldRows}
+    </div>
     ${attachmentSummary}
+    <div class="ticket-conversation-panel">
+      <div class="ticket-conversation-head"><strong>Conversation</strong><span>${Number(ticket.commentCount || 0)} comments</span></div>
+      <p>The current ticket API returns the comment count but not the comment thread or history. Reading and posting replies here will switch on once the ticket API adds comment endpoints.</p>
+    </div>
     <a class="ticket-open-link" href="https://tickets.96ghq.com/tickets?q=${encodeURIComponent(ticket.ref)}" target="_blank" rel="noopener">Open in ticket system ↗</a>
   </div>`;
 }
 
-async function loadTicketStatus(chatId, ref) {
+async function loadTicketStatus(chatId, ref, { silent = false } = {}) {
   const s = state[chatId];
   const normalized = String(ref || "").trim().toUpperCase();
   if (!normalized) throw new Error("Enter a ticket reference");
@@ -2115,10 +2297,35 @@ async function loadTicketStatus(chatId, ref) {
   if (!data.ok) throw new Error(data.error || "Ticket status lookup failed");
   s.ticketLookupRef = normalized;
   s.ticketRecord = data.ticket;
+  rememberTicketSnapshot(data.ticket, !silent);
   s.escalationError = "";
   saveState();
   return data.ticket;
 }
+
+async function searchTickets(chatId, query) {
+  ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [] });
+  const res = await fetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Ticket search failed");
+  ticketSearchResultsByChat.set(chatId, { loading: false, tickets: data.tickets || [], total: data.total || 0 });
+  return data;
+}
+
+async function pollTicketUpdates() {
+  if (activeMainTab !== "tickets" || !watchedTicketSnapshots.size) return;
+  for (const ref of watchedTicketSnapshots.keys()) {
+    const owner = Object.entries(state).find(([, value]) => value?.ticketRecord?.ref === ref);
+    if (!owner) continue;
+    try {
+      const [chatId] = owner;
+      await loadTicketStatus(chatId, ref);
+      const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .escalation-slot`);
+      if (slot) slot.innerHTML = renderEscalationSection(chatId);
+    } catch (_) { /* a temporary poll failure should not interrupt the agent */ }
+  }
+}
+setInterval(pollTicketUpdates, 30000);
 
 // Creates tickets through the C9 Tickets REST API and reads their latest
 // status. The API currently has no update route, so editing remains in the
@@ -2131,8 +2338,13 @@ function renderEscalationSection(chatId) {
   return `
     <div class="ticket-section-head">
       <label class="field-label">Ticket System</label>
-      <span class="hint">Create and check status</span>
+      <span class="hint">Browse, create and check status</span>
     </div>
+    <div class="ticket-search-row">
+      <input type="search" class="input ticket-search-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(s.ticketSearchQuery || "")}" placeholder="Search ticket ref, member ID, or ticket fields" />
+      <button type="button" class="secondary-btn" data-action="searchTickets" data-chat="${escapeHtml(chatId)}">Search tickets</button>
+    </div>
+    ${renderTicketSearchResults(chatId)}
     <div class="ticket-lookup-row">
       <input type="text" class="input mono ticket-ref-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(ref)}" placeholder="Ticket ref, e.g. TK2609210007" />
       <button type="button" class="secondary-btn" data-action="lookupTicket" data-chat="${escapeHtml(chatId)}">Check status</button>
@@ -2157,7 +2369,7 @@ function renderEscalationSection(chatId) {
       </div>
       <div class="escalation-grid">${TICKET_FIELD_SPECS.map((spec) => renderTicketInput(chatId, spec)).join("")}</div>
       ${renderTicketAttachments(chatId)}
-      <div class="hint" style="margin:6px 0 10px">Attachments are uploaded with the new ticket. Existing tickets still cannot be edited through the API.</div>
+      <div class="hint" style="margin:6px 0 10px">Attachments are uploaded with the new ticket. Existing tickets, comments and history cannot be changed through the current API.</div>
     `}
     ${s.escalationError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(s.escalationError)}</div>` : ""}
     ${!ticketFields.length ? "" : s.escalationSubmitted
@@ -2199,7 +2411,7 @@ function ensureChatState(chat) {
       departmentId: "", marketId: "",
     },
     escalationSubmitted: false, escalationError: "", ticketAttachmentError: "",
-    ticketRef: "", ticketLookupRef: "", ticketRecord: null,
+    ticketRef: "", ticketLookupRef: "", ticketRecord: null, ticketSearchQuery: "",
     // "Last username recorded" — see checkLastUsername. Runs once per chat,
     // as soon as both Brand and the resolved chat link are ready.
     // lastUsernameStarted guards against calling twice; lastUsernameLoading
@@ -2488,6 +2700,36 @@ chatListEl.addEventListener("click", async (e) => {
     if (files.length) ticketAttachmentsByChat.set(chatId, files);
     else ticketAttachmentsByChat.delete(chatId);
     s.ticketAttachmentError = "";
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "clearTicketNotifications") {
+    ticketNotifications = [];
+    renderChats(activeChats);
+    return;
+  }
+
+  if (btn.dataset.action === "searchTickets") {
+    btn.disabled = true;
+    btn.textContent = "Searching…";
+    try {
+      await searchTickets(chatId, s.ticketSearchQuery || "");
+      s.escalationError = "";
+    } catch (err) {
+      ticketSearchResultsByChat.set(chatId, { loading: false, tickets: [], error: err.message });
+    }
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "openTicketResult") {
+    try {
+      await loadTicketStatus(chatId, btn.dataset.ref, { silent: true });
+      s.escalationError = "";
+    } catch (err) {
+      s.escalationError = "Ticket lookup failed: " + err.message;
+    }
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
@@ -3195,6 +3437,12 @@ chatListEl.addEventListener("input", (e) => {
     if (s) s.ticketLookupRef = ticketRefInput.value;
     return;
   }
+  const ticketSearchInput = e.target.closest(".ticket-search-input");
+  if (ticketSearchInput) {
+    const s = state[ticketSearchInput.dataset.chat];
+    if (s) s.ticketSearchQuery = ticketSearchInput.value;
+    return;
+  }
   const escInput = e.target.closest(".esc-input");
   if (escInput) {
     const s = state[escInput.dataset.chat];
@@ -3234,25 +3482,7 @@ chatListEl.addEventListener("change", (e) => {
   const attachmentInput = e.target.closest(".ticket-attachment-input");
   if (attachmentInput) {
     const chatId = attachmentInput.dataset.chat;
-    const s = state[chatId];
-    if (!s) return;
-    const existing = ticketAttachmentsByChat.get(chatId) || [];
-    const added = Array.from(attachmentInput.files || []);
-    const combined = [...existing, ...added];
-    let error = "";
-    if (combined.length > 6) error = "You can attach up to 6 files.";
-    else {
-      const invalid = added.find((file) => !file.size || file.size >= TICKET_ATTACHMENT_MAX_BYTES || !TICKET_ATTACHMENT_TYPES.has(file.type));
-      if (invalid) {
-        error = !invalid.size
-          ? `${invalid.name} is empty.`
-          : invalid.size >= TICKET_ATTACHMENT_MAX_BYTES
-            ? `${invalid.name} must be under 1MB.`
-            : `${invalid.name} must be PNG, JPG, WEBP, or PDF.`;
-      }
-    }
-    if (!error) ticketAttachmentsByChat.set(chatId, combined);
-    s.ticketAttachmentError = error;
+    addTicketAttachments(chatId, attachmentInput.files);
     attachmentInput.closest(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
@@ -3802,6 +4032,20 @@ window.addEventListener("storage", (e) => {
   saveState();
   renderNeedsAttentionPanel();
   scheduleNeedsAttentionRefresh(300);
+});
+
+chatListEl.addEventListener("paste", (event) => {
+  const picker = event.target.closest?.(".ticket-attachment-picker");
+  if (!picker) return;
+  const files = Array.from(event.clipboardData?.items || [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (!files.length) return;
+  event.preventDefault();
+  const chatId = picker.dataset.chat;
+  addTicketAttachments(chatId, files);
+  picker.closest(".escalation-slot").innerHTML = renderEscalationSection(chatId);
 });
 window.addEventListener("pagehide", saveState);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });

@@ -16,7 +16,16 @@ export async function handler(event) {
         ref: data.ref,
         fields: data.fields || {},
         currentDepartment: data.currentDepartment || null,
+        raisedByDepartment: data.raisedByDepartment || null,
+        market: data.market || null,
+        raisedBy: data.raisedBy ? { id: data.raisedBy.id, name: data.raisedBy.name, email: data.raisedBy.email } : null,
+        assignees: Array.isArray(data.assignees)
+          ? data.assignees.map(({ id, name, email }) => ({ id, name, email }))
+          : [],
+        createdAt: data.createdAt || null,
         updatedAt: data.updatedAt || null,
+        commentCount: Number(data.commentCount || 0),
+        attachmentCount: Number(data.attachmentCount || 0),
       },
     });
   } catch (err) {

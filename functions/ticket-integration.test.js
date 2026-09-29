@@ -3,6 +3,7 @@ import test from "node:test";
 import { handler as configHandler } from "./ticket-config.js";
 import { handler as createHandler, onRequest as createOnRequest } from "./ticket-create.js";
 import { handler as statusHandler } from "./ticket-status.js";
+import { handler as listHandler } from "./ticket-list.js";
 
 const env = {
   TICKETS_API_KEY: "test_ticket_key",
@@ -112,4 +113,53 @@ test("status validates refs before calling the upstream API", async () => {
   });
   assert.equal(result.statusCode, 400);
   assert.match(JSON.parse(result.body).error, /ticket reference/i);
+});
+
+test("status returns the ticket metadata needed by the in-app detail panel", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({
+    ok: true,
+    ref: "TK2609210007",
+    fields: { status: "OPEN", member_id: "member123" },
+    currentDepartment: { id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" },
+    market: { id: 4, code: "MYR", label: "Malaysia" },
+    raisedBy: { id: 9, name: "Nina", email: "nina@example.com", avatarUrl: "private" },
+    assignees: [{ id: 10, name: "Pao", email: "pao@example.com", extra: "private" }],
+    createdAt: "2026-09-21T03:10:00.000Z",
+    updatedAt: "2026-09-21T03:20:00.000Z",
+    commentCount: 2,
+    attachmentCount: 1,
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await statusHandler({ httpMethod: "GET", env, queryStringParameters: { ref: "TK2609210007" } });
+    const body = JSON.parse(result.body);
+    assert.equal(body.ticket.commentCount, 2);
+    assert.equal(body.ticket.market.code, "MYR");
+    assert.deepEqual(body.ticket.assignees, [{ id: 10, name: "Pao", email: "pao@example.com" }]);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("ticket list forwards search and returns scoped ticket summaries", async () => {
+  const originalFetch = global.fetch;
+  let requestedUrl;
+  global.fetch = async (url) => {
+    requestedUrl = String(url);
+    return new Response(JSON.stringify({
+      ok: true,
+      total: 1,
+      tickets: [{ ref: "TK2609210007", fields: { status: "OPEN" }, assignees: [], commentCount: 1 }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    const result = await listHandler({ httpMethod: "GET", env, queryStringParameters: { q: "member 123" } });
+    const body = JSON.parse(result.body);
+    assert.equal(body.total, 1);
+    assert.equal(body.tickets[0].ref, "TK2609210007");
+    assert.match(requestedUrl, /q=member\+123/);
+    assert.match(requestedUrl, /sort=updatedAt%3Adesc/);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
