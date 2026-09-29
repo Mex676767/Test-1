@@ -1387,7 +1387,7 @@ function renderPlayerInfo(chatId) {
   }
   if (s.matchedRow) {
     if (s.matchedRow.customerName) {
-      parts.push(`<span><span class="pi-label">Name</span> ${s.matchedRow.customerName}</span>`);
+      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName)}</span><button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">⧉</button></span>`);
     }
     parts.push(`<span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span>`);
     if (s.forcedVipFor && !s.matchedRow.tier) {
@@ -1395,6 +1395,27 @@ function renderPlayerInfo(chatId) {
     }
   }
   return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
+}
+
+async function copyPlainText(value) {
+  const text = String(value || "");
+  if (!text) throw new Error("Nothing to copy");
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (_) { /* embedded browsers may deny Clipboard API access */ }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Copy was blocked by the browser");
 }
 
 // ---------------------------------------------------------------------
@@ -2735,6 +2756,21 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "resetPreview") {
     resetPreviewCard(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "copyPlayerName") {
+    const fullName = s.matchedRow?.customerName;
+    await copyPlainText(fullName);
+    btn.textContent = "✓";
+    btn.classList.add("copied");
+    btn.title = "Copied";
+    setTimeout(() => {
+      if (!btn.isConnected) return;
+      btn.textContent = "⧉";
+      btn.classList.remove("copied");
+      btn.title = "Copy full name";
+    }, 1200);
     return;
   }
 

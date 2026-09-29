@@ -517,6 +517,14 @@ body {
   text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;
   color: var(--text-faint); margin-right: 3px;
 }
+.player-name-line { display: inline-flex; align-items: center; gap: 4px; }
+.player-name-copy {
+  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+  padding: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2);
+  color: var(--text-faint); font: 600 11px/1 "Inter", sans-serif; cursor: pointer;
+}
+.player-name-copy:hover { border-color: var(--blue); color: var(--blue); }
+.player-name-copy.copied { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
 
 /* ---------- Bonus ticket ---------- */
 .ticket-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
