@@ -2165,6 +2165,26 @@ function claimedProgramsFromSavedCase(row) {
   return claimed;
 }
 
+function ticketChoiceSlug(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function ticketChoiceDisplayLabel(fieldKey, rawValue, rawLabel = rawValue) {
+  const fallback = TICKET_FALLBACK_OPTIONS[fieldKey] || [];
+  const candidates = [rawValue, rawLabel].map(ticketChoiceSlug);
+  const compactCandidates = candidates.map((value) => value.replaceAll("_", ""));
+  for (const option of fallback) {
+    const value = Array.isArray(option) ? option[0] : option;
+    const label = Array.isArray(option) ? option[1] : option;
+    const aliases = [ticketChoiceSlug(value), ticketChoiceSlug(label)];
+    if (aliases.some((alias) => candidates.includes(alias) || compactCandidates.includes(alias.replaceAll("_", "")))) return String(label);
+  }
+  const raw = String(rawLabel || rawValue || "").trim();
+  if (!raw.includes("_") && !/^[a-z]+\d+$/i.test(raw)) return raw;
+  if (/^[a-z]+\d+$/i.test(raw)) return raw.toUpperCase();
+  return raw.split("_").filter(Boolean).map((word) => word.toUpperCase()).join(" ");
+}
+
 function ticketFieldOptions(field) {
   const liveOptions = field?.options || [];
   const fallbackKey = ({ brand: "member_platform", level: "member_level", vip_level: "member_level" })[field?.key] || field?.key;
@@ -2172,15 +2192,12 @@ function ticketFieldOptions(field) {
   const seen = new Set();
   return [...liveOptions, ...fallback]
     .filter((option) => option?.isActive !== false)
-    .map((option) => typeof option === "string"
-      ? { value: option, label: option }
-      : Array.isArray(option)
-        // The ticket API accepts either a choice's internal value or its
-        // visible label. Use the label for documented fallback choices so
-        // the browser does not expose both (for example IN_PROGRESS and
-        // PYM PROCESSING) in the datalist popup.
-        ? { value: option[1] || option[0], label: option[1] || option[0] }
-        : { value: option.value, label: option.label || option.value })
+    .map((option) => {
+      if (typeof option === "string") return { value: option, label: option };
+      if (Array.isArray(option)) return { value: option[0], label: option[1] || option[0] };
+      const value = option.value;
+      return { value, label: ticketChoiceDisplayLabel(fallbackKey, value, option.label || value) };
+    })
     .filter((option) => option.value !== undefined && option.value !== null)
     .filter((option) => {
       const key = String(option.label || option.value).trim().toLowerCase();
@@ -2194,10 +2211,13 @@ function renderTicketChoice(chatId, stateKey, value, options, { placeholder = "P
   const normalized = options.map((option) => typeof option === "string"
     ? { value: option, label: option }
     : { value: String(option.value ?? ""), label: String(option.label ?? option.value ?? "") });
-  if (value && !normalized.some((option) => option.value === String(value))) {
+  let selected = normalized.find((option) => option.value === String(value)
+    || option.label.toLowerCase() === String(value).toLowerCase());
+  if (value && !selected) {
     normalized.unshift({ value: String(value), label: String(value) });
+    selected = normalized[0];
   }
-  const selected = normalized.find((option) => option.value === String(value));
+  const selectedValue = selected?.value;
   return `<div class="ticket-choice" data-ticket-choice="${escapeHtml(stateKey)}">
     <button type="button" class="input ticket-choice-trigger" data-action="toggleTicketChoice" data-chat="${escapeHtml(chatId)}" aria-haspopup="listbox" aria-expanded="false">
       <span class="${selected ? "" : "ticket-choice-placeholder"}">${escapeHtml(selected?.label || placeholder)}</span>
@@ -2207,7 +2227,7 @@ function renderTicketChoice(chatId, stateKey, value, options, { placeholder = "P
       <div class="ticket-choice-search-wrap"><input type="search" class="input ticket-choice-search" placeholder="Search options…" autocomplete="off" /></div>
       <div class="ticket-choice-options">
         ${allowEmpty ? `<button type="button" class="ticket-choice-option ${!value ? "selected" : ""}" data-action="selectTicketChoice" data-chat="${escapeHtml(chatId)}" data-field="${escapeHtml(stateKey)}" data-value="" data-search="${escapeHtml(placeholder.toLowerCase())}">${escapeHtml(placeholder)}</button>` : ""}
-        ${normalized.map((option) => `<button type="button" class="ticket-choice-option ${String(option.value) === String(value) ? "selected" : ""}" data-action="selectTicketChoice" data-chat="${escapeHtml(chatId)}" data-field="${escapeHtml(stateKey)}" data-value="${escapeHtml(option.value)}" data-search="${escapeHtml(option.label.toLowerCase())}">${escapeHtml(option.label)}${String(option.value) === String(value) ? "<span>✓</span>" : ""}</button>`).join("")}
+        ${normalized.map((option) => `<button type="button" class="ticket-choice-option ${String(option.value) === String(selectedValue) ? "selected" : ""}" data-action="selectTicketChoice" data-chat="${escapeHtml(chatId)}" data-field="${escapeHtml(stateKey)}" data-value="${escapeHtml(option.value)}" data-search="${escapeHtml(option.label.toLowerCase())}">${escapeHtml(option.label)}${String(option.value) === String(selectedValue) ? "<span>✓</span>" : ""}</button>`).join("")}
       </div>
       <div class="ticket-choice-empty hidden">No matching option</div>
     </div>
@@ -2733,8 +2753,8 @@ chatListEl.addEventListener("click", async (e) => {
     const menu = choice?.querySelector(".ticket-choice-menu");
     if (!menu) return;
     const willOpen = menu.classList.contains("hidden");
-    card.querySelectorAll(".ticket-choice-menu").forEach((item) => item.classList.add("hidden"));
-    card.querySelectorAll(".ticket-choice-trigger").forEach((item) => item.setAttribute("aria-expanded", "false"));
+    document.querySelectorAll(".ticket-choice-menu").forEach((item) => item.classList.add("hidden"));
+    document.querySelectorAll(".ticket-choice-trigger").forEach((item) => item.setAttribute("aria-expanded", "false"));
     if (willOpen) {
       menu.classList.remove("hidden");
       btn.setAttribute("aria-expanded", "true");

@@ -754,6 +754,7 @@ body {
 .ticket-choice-chevron { flex: 0 0 auto; color: var(--text-faint); font-size: 14px; transition: transform .15s ease; }
 .ticket-choice-trigger[aria-expanded="true"] .ticket-choice-chevron { transform: rotate(180deg); }
 .ticket-choice-menu { position: absolute; z-index: 80; top: calc(100% + 5px); left: 0; width: max(100%, 240px); max-width: min(420px, 90vw); padding: 6px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 14px 36px rgba(0, 0, 0, .34); }
+.ticket-choice-menu.hidden, .ticket-choice-option.hidden, .ticket-choice-empty.hidden { display: none; }
 .ticket-choice-search-wrap { padding-bottom: 5px; }
 .ticket-choice-search { width: 100%; min-height: 32px; }
 .ticket-choice-options { display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow-y: auto; scrollbar-width: thin; }
