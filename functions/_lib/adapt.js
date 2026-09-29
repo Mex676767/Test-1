@@ -17,14 +17,18 @@ export function adapt(handler) {
     initLivechatEnv(context.env);
 
     let body = "";
+    let formData = null;
     try {
-      body = await context.request.text();
+      const contentType = context.request.headers.get("content-type") || "";
+      if (/^multipart\/form-data\b/i.test(contentType)) formData = await context.request.formData();
+      else body = await context.request.text();
     } catch (_) { /* no body, e.g. a GET */ }
 
     const url = new URL(context.request.url);
     const event = {
       httpMethod: context.request.method,
       body,
+      formData,
       queryStringParameters: Object.fromEntries(url.searchParams),
       headers: Object.fromEntries(context.request.headers),
       env: context.env,

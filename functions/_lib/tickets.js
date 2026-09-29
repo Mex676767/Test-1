@@ -23,12 +23,13 @@ export function ticketSettings(env = {}) {
 export async function ticketRequest(env, path, options = {}) {
   const { apiKey, baseUrl } = config(env);
   if (!apiKey) throw new Error("Ticket API key is not configured");
+  const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
 
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.body && !isMultipart ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     },
   });
@@ -54,5 +55,5 @@ export function json(statusCode, body) {
 
 export function ticketError(err) {
   const status = Number(err.statusCode);
-  return json(status >= 400 && status < 500 ? status : 500, { ok: false, error: err.message });
+  return json(status >= 400 && status < 600 ? status : 500, { ok: false, error: err.message });
 }

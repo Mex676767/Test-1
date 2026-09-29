@@ -9,27 +9,52 @@ export async function handler(event) {
       return json(503, { ok: false, error: "Ticket integration is not configured" });
     }
 
-    const body = JSON.parse(event.body || "{}");
+    let body;
+    const attachments = [];
+    if (event.formData) {
+      const ticketPart = event.formData.get("ticket");
+      if (typeof ticketPart !== "string") {
+        return json(400, { ok: false, error: "The multipart request needs a ticket JSON part" });
+      }
+      body = JSON.parse(ticketPart);
+      for (const [field, value] of event.formData.entries()) {
+        if (field === "ticket" || typeof value === "string") continue;
+        attachments.push({ field, file: value });
+      }
+    } else {
+      body = JSON.parse(event.body || "{}");
+    }
     if (!body.fields || typeof body.fields !== "object" || Array.isArray(body.fields)) {
       return json(400, { ok: false, error: "Ticket fields are required" });
     }
-    const toDepartmentId = Number(body.toDepartmentId || settings.departmentId);
-    const marketId = Number(body.marketId || settings.marketId);
-    if (!Number.isInteger(toDepartmentId) || toDepartmentId <= 0) {
+    if (!String(body.fields.toDepartment || body.fields.Department || body.fields["Send to"] || "").trim()) {
       return json(400, { ok: false, error: "Choose a destination department" });
     }
 
-    const payload = {
-      toDepartmentId,
-      fields: body.fields,
-    };
-    if (Number.isInteger(marketId) && marketId > 0) payload.marketId = marketId;
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
+    const counts = new Map();
+    let totalSize = 0;
+    for (const { field, file } of attachments) {
+      counts.set(field, (counts.get(field) || 0) + 1);
+      totalSize += Number(file.size) || 0;
+      if (counts.get(field) > 6) return json(400, { ok: false, error: `${field} allows at most 6 files` });
+      if (!file.size) return json(400, { ok: false, error: `${file.name || "Attachment"} is empty` });
+      if (file.size >= 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under 1MB` });
+      if (!allowedTypes.has(file.type)) return json(400, { ok: false, error: `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF` });
+    }
+    if (totalSize > 10 * 1024 * 1024) return json(413, { ok: false, error: "The complete ticket request must be under 10MB" });
 
-    const data = await ticketRequest(event.env, "/tickets", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    return json(201, { ok: true, id: data.id, ref: data.ref });
+    let requestBody;
+    if (attachments.length) {
+      requestBody = new FormData();
+      requestBody.append("ticket", JSON.stringify({ fields: body.fields }));
+      for (const { field, file } of attachments) requestBody.append(field, file, file.name);
+    } else {
+      requestBody = JSON.stringify({ fields: body.fields });
+    }
+
+    const data = await ticketRequest(event.env, "/tickets", { method: "POST", body: requestBody });
+    return json(201, { ok: true, id: data.id, ref: data.ref, attachments: data.attachments || [] });
   } catch (err) {
     if (err instanceof SyntaxError) return json(400, { ok: false, error: "Malformed JSON" });
     return ticketError(err);

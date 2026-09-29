@@ -1992,6 +1992,41 @@ const TICKET_FIELD_SPECS = [
   { stateKey: "vipLevel", keys: ["level", "vip_level"], labels: ["Level", "VIP Level"] },
 ];
 
+// File objects cannot be serialized into localStorage. Keep them only in
+// memory for the current admin-preview tab; incognito clears them with the
+// session and a completed ticket clears them immediately.
+const ticketAttachmentsByChat = new Map();
+const TICKET_ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
+const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024;
+
+function ticketAttachmentField() {
+  return ticketFields.find((field) => field.type === "ATTACHMENT") || null;
+}
+
+function renderTicketAttachments(chatId) {
+  const field = ticketAttachmentField();
+  if (!field) return "";
+  const s = state[chatId];
+  const files = ticketAttachmentsByChat.get(chatId) || [];
+  const rows = files.map((file, index) => `
+    <div class="ticket-attachment-item">
+      <span title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+      <small>${Math.max(1, Math.ceil(file.size / 1024))}KB</small>
+      <button type="button" data-action="removeTicketAttachment" data-chat="${escapeHtml(chatId)}" data-index="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button>
+    </div>`).join("");
+  return `
+    <div class="ticket-attachment-picker">
+      <label class="field-label">${escapeHtml(field.label || "Attachment")}</label>
+      <label class="ticket-file-button">
+        <input type="file" class="ticket-attachment-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple />
+        <span>${files.length ? "+ Add more files" : "Choose files"}</span>
+      </label>
+      <div class="ticket-attachment-help">PNG, JPG, WEBP or PDF · under 1MB each · up to 6 files</div>
+      ${rows ? `<div class="ticket-attachment-list">${rows}</div>` : ""}
+      ${s?.ticketAttachmentError ? `<div class="ticket-attachment-error">${escapeHtml(s.ticketAttachmentError)}</div>` : ""}
+    </div>`;
+}
+
 function ticketFieldFor(spec) {
   return ticketFields.find((field) => spec.keys.includes(field.key))
     || ticketFields.find((field) => spec.labels.some((label) => label.toLowerCase() === String(field.label).toLowerCase()));
@@ -2121,8 +2156,8 @@ function renderEscalationSection(chatId) {
         </div>
       </div>
       <div class="escalation-grid">${TICKET_FIELD_SPECS.map((spec) => renderTicketInput(chatId, spec)).join("")}</div>
-      ${ticketFields.some((field) => field.type === "ATTACHMENT") ? `<div class="ticket-api-note"><strong>Attachment</strong><span>The API returns attachment metadata but does not currently provide an upload endpoint. Create the ticket first, then add files using “Open in ticket system”.</span></div>` : ""}
-      <div class="hint" style="margin:6px 0 10px">Ticket updates are handled in the ticket system until its API adds an update method.</div>
+      ${renderTicketAttachments(chatId)}
+      <div class="hint" style="margin:6px 0 10px">Attachments are uploaded with the new ticket. Existing tickets still cannot be edited through the API.</div>
     `}
     ${s.escalationError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(s.escalationError)}</div>` : ""}
     ${!ticketFields.length ? "" : s.escalationSubmitted
@@ -2163,7 +2198,7 @@ function ensureChatState(chat) {
       status: "", transactionId: "", paymentGateway: "", remarks: "", vipLevel: "", amount: "",
       departmentId: "", marketId: "",
     },
-    escalationSubmitted: false, escalationError: "",
+    escalationSubmitted: false, escalationError: "", ticketAttachmentError: "",
     ticketRef: "", ticketLookupRef: "", ticketRecord: null,
     // "Last username recorded" — see checkLastUsername. Runs once per chat,
     // as soon as both Brand and the resolved chat link are ready.
@@ -2231,6 +2266,7 @@ function resetPreviewCard(chatId) {
   const chat = SAMPLE_CHATS.find((item) => item.chatId === chatId);
   if (!chat) return;
   delete state[chatId];
+  ticketAttachmentsByChat.delete(chatId);
   lastSyncedJson.delete(chatId);
   ensureChatState(chat);
   state[chatId].expanded = true;
@@ -2443,6 +2479,16 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "resetPreview") {
     resetPreviewCard(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "removeTicketAttachment") {
+    const files = [...(ticketAttachmentsByChat.get(chatId) || [])];
+    files.splice(Number(btn.dataset.index), 1);
+    if (files.length) ticketAttachmentsByChat.set(chatId, files);
+    else ticketAttachmentsByChat.delete(chatId);
+    s.ticketAttachmentError = "";
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
 
@@ -2862,24 +2908,48 @@ chatListEl.addEventListener("click", async (e) => {
         fields[field.key] = value;
       }
     }
+    const selectedDepartment = ticketDepartments.find((item) => String(item.id) === String(e.departmentId));
+    if (!selectedDepartment) {
+      s.escalationError = "Choose a valid destination department.";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      return;
+    }
+    fields.toDepartment = selectedDepartment.code || selectedDepartment.name;
+    if (e.marketId) {
+      const selectedMarket = ticketMarkets.find((item) => String(item.id) === String(e.marketId));
+      if (!selectedMarket) {
+        s.escalationError = "Choose a valid market.";
+        card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+        return;
+      }
+      fields.market = selectedMarket.code || selectedMarket.label;
+    }
     btn.disabled = true;
-    btn.textContent = "…";
+    btn.textContent = "Creating…";
     try {
-      const res = await fetch("/ticket-create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          toDepartmentId: Number(e.departmentId),
-          marketId: e.marketId ? Number(e.marketId) : null,
-          fields,
-        }),
-      });
+      const files = ticketAttachmentsByChat.get(chatId) || [];
+      let requestBody;
+      let headers;
+      if (files.length) {
+        const form = new FormData();
+        form.append("ticket", JSON.stringify({ fields }));
+        const attachmentField = ticketAttachmentField();
+        const partName = attachmentField?.key || attachmentField?.label || "Attachment";
+        for (const file of files) form.append(partName, file, file.name);
+        requestBody = form;
+      } else {
+        headers = { "Content-Type": "application/json" };
+        requestBody = JSON.stringify({ fields });
+      }
+      const res = await fetch("/ticket-create", { method: "POST", headers, body: requestBody });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Submit failed");
       s.ticketRef = data.ref;
       s.ticketLookupRef = data.ref;
       s.escalationSubmitted = true;
       s.escalationError = "";
+      s.ticketAttachmentError = "";
+      ticketAttachmentsByChat.delete(chatId);
       try { await loadTicketStatus(chatId, data.ref); } catch (_) { /* creation succeeded; status can be retried */ }
       setStatus(`Ticket ${data.ref} created.`, "success");
     } catch (err) {
@@ -2907,6 +2977,8 @@ chatListEl.addEventListener("click", async (e) => {
     s.ticketRef = "";
     s.ticketRecord = null;
     s.escalationError = "";
+    s.ticketAttachmentError = "";
+    ticketAttachmentsByChat.delete(chatId);
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     saveState();
   }
@@ -3159,6 +3231,31 @@ chatListEl.addEventListener("input", (e) => {
 // selectBrand action handler above, since it's a custom dropdown, not a
 // native <select>, anymore.)
 chatListEl.addEventListener("change", (e) => {
+  const attachmentInput = e.target.closest(".ticket-attachment-input");
+  if (attachmentInput) {
+    const chatId = attachmentInput.dataset.chat;
+    const s = state[chatId];
+    if (!s) return;
+    const existing = ticketAttachmentsByChat.get(chatId) || [];
+    const added = Array.from(attachmentInput.files || []);
+    const combined = [...existing, ...added];
+    let error = "";
+    if (combined.length > 6) error = "You can attach up to 6 files.";
+    else {
+      const invalid = added.find((file) => !file.size || file.size >= TICKET_ATTACHMENT_MAX_BYTES || !TICKET_ATTACHMENT_TYPES.has(file.type));
+      if (invalid) {
+        error = !invalid.size
+          ? `${invalid.name} is empty.`
+          : invalid.size >= TICKET_ATTACHMENT_MAX_BYTES
+            ? `${invalid.name} must be under 1MB.`
+            : `${invalid.name} must be PNG, JPG, WEBP, or PDF.`;
+      }
+    }
+    if (!error) ticketAttachmentsByChat.set(chatId, combined);
+    s.ticketAttachmentError = error;
+    attachmentInput.closest(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
   // Claim Secret: auto-ticked on claim, but editable. If the record was
   // already written to Lark (claims auto-submit), push the edit through too,
   // otherwise it would only change on screen.

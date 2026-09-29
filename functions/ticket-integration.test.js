@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handler as configHandler } from "./ticket-config.js";
-import { handler as createHandler } from "./ticket-create.js";
+import { handler as createHandler, onRequest as createOnRequest } from "./ticket-create.js";
 import { handler as statusHandler } from "./ticket-status.js";
 
 const env = {
@@ -33,7 +33,7 @@ test("config returns fields without exposing ticket records", async () => {
   }
 });
 
-test("create applies selected department and market ids", async () => {
+test("create forwards the updated field-based ticket payload", async () => {
   const originalFetch = global.fetch;
   let requestBody;
   global.fetch = async (_url, options) => {
@@ -47,13 +47,11 @@ test("create applies selected department and market ids", async () => {
     const result = await createHandler({
       httpMethod: "POST",
       env,
-      body: JSON.stringify({ toDepartmentId: 2, marketId: 4, fields: { member_id: "member123" } }),
+      body: JSON.stringify({ fields: { toDepartment: "PYM_MYR", market: "MYR", member_id: "member123" } }),
     });
     assert.equal(result.statusCode, 201);
     assert.deepEqual(requestBody, {
-      toDepartmentId: 2,
-      marketId: 4,
-      fields: { member_id: "member123" },
+      fields: { toDepartment: "PYM_MYR", market: "MYR", member_id: "member123" },
     });
   } finally {
     global.fetch = originalFetch;
@@ -68,6 +66,42 @@ test("create requires a destination department", async () => {
   });
   assert.equal(result.statusCode, 400);
   assert.match(JSON.parse(result.body).error, /destination department/i);
+});
+
+test("create forwards attachment files in the ticket multipart request", async () => {
+  const originalFetch = global.fetch;
+  let upstreamBody;
+  let upstreamHeaders;
+  global.fetch = async (_url, options) => {
+    upstreamBody = options.body;
+    upstreamHeaders = options.headers;
+    return new Response(JSON.stringify({
+      ok: true,
+      id: 413,
+      ref: "TK2609210008",
+      attachments: [{ field: "attachment", name: "receipt.png", mime: "image/png", size: 3 }],
+    }), { status: 201, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    const formData = new FormData();
+    formData.append("ticket", JSON.stringify({ fields: { toDepartment: "PYM_MYR", member_id: "member123" } }));
+    formData.append("attachment", new Blob(["png"], { type: "image/png" }), "receipt.png");
+    const result = await createOnRequest({
+      env,
+      request: new Request("https://example.test/ticket-create", { method: "POST", body: formData }),
+    });
+    const response = await result.json();
+    assert.equal(result.status, 201);
+    assert.equal(response.attachments[0].name, "receipt.png");
+    assert.ok(upstreamBody instanceof FormData);
+    assert.deepEqual(JSON.parse(upstreamBody.get("ticket")), {
+      fields: { toDepartment: "PYM_MYR", member_id: "member123" },
+    });
+    assert.equal(upstreamBody.get("attachment").name, "receipt.png");
+    assert.equal("Content-Type" in upstreamHeaders, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("status validates refs before calling the upstream API", async () => {
