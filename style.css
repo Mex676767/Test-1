@@ -525,6 +525,7 @@ body {
 }
 .player-name-copy:hover { border-color: var(--blue); color: var(--blue); }
 .player-name-copy.copied { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
+.player-name-copy svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---------- Bonus ticket ---------- */
 .ticket-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }

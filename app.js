@@ -1375,6 +1375,8 @@ function renderDobCalendar(chatId) {
 // renderAutoFields). "Last username recorded" shows as soon as
 // checkLastUsername resolves — before any Look Up, unlike Tier, which
 // still only shows once matched.
+const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg>`;
+
 function renderPlayerInfo(chatId) {
   const s = state[chatId];
   const parts = [];
@@ -1387,7 +1389,7 @@ function renderPlayerInfo(chatId) {
   }
   if (s.matchedRow) {
     if (s.matchedRow.customerName) {
-      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName)}</span><button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">⧉</button></span>`);
+      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName)}</span><button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button></span>`);
     }
     parts.push(`<span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span>`);
     if (s.forcedVipFor && !s.matchedRow.tier) {
@@ -2767,7 +2769,7 @@ chatListEl.addEventListener("click", async (e) => {
     btn.title = "Copied";
     setTimeout(() => {
       if (!btn.isConnected) return;
-      btn.textContent = "⧉";
+      btn.innerHTML = COPY_ICON_SVG;
       btn.classList.remove("copied");
       btn.title = "Copy full name";
     }, 1200);
