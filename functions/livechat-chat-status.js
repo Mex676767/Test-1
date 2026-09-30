@@ -45,6 +45,26 @@ async function listChatsFor(pat) {
   return data;
 }
 
+// An /archives/{thread_id} URL only gives us the thread id. list_chats is
+// intentionally limited to recent chats, but list_archives supports an exact
+// thread_ids filter. Use it when the recent lookup misses so old archive links
+// can still be resolved without paging through the license's full history.
+export async function getArchiveForThread(pat, threadId) {
+  const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/list_archives", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
+    body: JSON.stringify({ filters: { thread_ids: [String(threadId)] } }),
+  });
+  const data = await res.json();
+  if (data && data.error) {
+    throw new Error(data.error.message || JSON.stringify(data.error));
+  }
+  const match = (data?.chats || []).find(
+    (chat) => chat?.thread && String(chat.thread.id) === String(threadId)
+  ) || null;
+  return { data, match };
+}
+
 // Targeted alternative to list_chats once we already know a thread's real
 // chat_id (see the module header note on chat_id vs thread_id) -- list_chats
 // only ever returns the 100 most recently active chats per account, so a
@@ -148,12 +168,39 @@ export async function handler(event) {
       }
     }
 
+    // Exact fallback for an older /archives/{thread_id} link. Unlike
+    // list_chats, list_archives can filter directly by thread id, so this
+    // remains fast even when a license has tens of thousands of chats.
     if (!match) {
-      if (lastErr && !lastData) throw lastErr; // every account's own request failed outright — surface it, not a false "not found"
-      // Not necessarily "closed" — could just be off the first 100 results
-      // for a very busy agent (on whichever account it's actually under).
-      // Surfaced distinctly so this doesn't get misread as a confirmed
-      // close and trigger a false auto-record.
+      let archiveData = null;
+      for (const pat of LIVECHAT_PATS) {
+        try {
+          const result = await getArchiveForThread(pat, threadId);
+          archiveData = result.data;
+          if (!result.match) continue;
+
+          const archive = result.match;
+          const archiveThread = archive.thread || {};
+          return {
+            statusCode: 200,
+            body: JSON.stringify({
+              ok: true,
+              isActive: typeof archiveThread.active === "boolean" ? archiveThread.active : false,
+              isTelegram: detectTelegram(archive.users),
+              chatId: archive.id,
+              threadId,
+              chatUrl: `https://my.livechatinc.com/chats/${archive.id}/${threadId}`,
+              accountKey: accountKeyForPat(pat),
+              lookup: "archive",
+              raw: { id: archive.id, thread: archiveThread, users: archive.users },
+            }),
+          };
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      if (lastErr && !lastData && !archiveData) throw lastErr; // every account's request failed outright
       return {
         statusCode: 200,
         body: JSON.stringify({
@@ -162,7 +209,7 @@ export async function handler(event) {
           isTelegram: null,
           notFound: true,
           threadId,
-          raw: { found_chats: lastData?.found_chats ?? null, searched: totalSearched, accountsChecked: LIVECHAT_PATS.length },
+          raw: { found_chats: lastData?.found_chats ?? archiveData?.found_chats ?? null, searched: totalSearched, accountsChecked: LIVECHAT_PATS.length },
         }),
       };
     }
