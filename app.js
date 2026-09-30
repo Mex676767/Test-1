@@ -1,6 +1,5 @@
-// The C9 ticket-system integration is exposed only on the standalone admin
-// preview for now. API credentials stay in the server-side Pages environment
-// and are never sent to the browser.
+// The C9 ticket-system integration keeps its credentials in the server-side
+// Pages environment; the browser only receives the fields it needs.
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
 
@@ -342,13 +341,50 @@ let activeChats = IS_EMBEDDED_APP ? [] : SAMPLE_CHATS;
 let previewMode = !IS_EMBEDDED_APP;
 let activeMainTab = "customer";
 
+// Department access is intentionally session-only. Each incognito LiveChat
+// window gets its own value, and closing that window clears it. Until a valid
+// LiveChat group response arrives, use the smaller CS view.
+const DEPARTMENT_SESSION_KEY = "rc-agent-department";
+let currentDepartment = "cs";
+try {
+  const savedDepartment = sessionStorage.getItem(DEPARTMENT_SESSION_KEY);
+  if (savedDepartment === "rtn" || savedDepartment === "cs") currentDepartment = savedDepartment;
+} catch (_) { /* sessionStorage may be unavailable in a hardened iframe */ }
+
+function departmentFromGroups(groups) {
+  const names = Array.isArray(groups) ? groups.map((name) => String(name || "").trim()) : [];
+  return names.some((name) => /^priority\s+(?:96|tc)$/i.test(name)) ? "rtn" : "cs";
+}
+
+function setDepartmentFromGroups(groups) {
+  if (!Array.isArray(groups)) return;
+  const previousTab = activeMainTab;
+  currentDepartment = departmentFromGroups(groups);
+  try { sessionStorage.setItem(DEPARTMENT_SESSION_KEY, currentDepartment); } catch (_) {}
+  syncMainTabs();
+  if (activeMainTab !== previousTab) renderChats(activeChats);
+}
+
+function mainTabAvailability() {
+  const rtn = previewMode || currentDepartment === "rtn";
+  return {
+    customer: rtn,
+    tickets: ESCALATION_TICKET_ENABLED,
+    blast: rtn,
+    knowledge: true,
+  };
+}
+
 function syncMainTabs() {
-  const ticketsAvailable = previewMode && ESCALATION_TICKET_ENABLED;
-  const blastAvailable = previewMode;
-  const knowledgeAvailable = previewMode;
-  if ((!ticketsAvailable && activeMainTab === "tickets") || (!blastAvailable && activeMainTab === "blast") || (!knowledgeAvailable && activeMainTab === "knowledge")) activeMainTab = "customer";
+  const available = mainTabAvailability();
+  const { tickets: ticketsAvailable, blast: blastAvailable, knowledge: knowledgeAvailable } = available;
+  if (!available[activeMainTab]) {
+    activeMainTab = ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
+  }
   const mainTabs = document.getElementById("mainTabs");
-  if (mainTabs) mainTabs.hidden = !previewMode;
+  if (mainTabs) mainTabs.hidden = false;
+  const retentionTab = document.getElementById("retentionTab");
+  if (retentionTab) retentionTab.hidden = !available.customer;
   const ticketsTab = document.getElementById("ticketsTab");
   if (ticketsTab) ticketsTab.hidden = !ticketsAvailable;
   const blastTab = document.getElementById("blastTab");
@@ -574,6 +610,20 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     });
     const data = await res.json();
     if (data.accountKey) setCurrentLiveChatAccount(data.accountKey, chatId);
+    // Group names also carry the department marker. Run this before the
+    // Brand early-return because Priority 96 / Priority TC deliberately do
+    // not count as brand groups.
+    if (data.ok && Array.isArray(data.departmentGroups)) {
+      // Authoritative: these are the groups assigned to the LiveChat agent
+      // identified from the active conversation. No RTN marker means CS.
+      setDepartmentFromGroups(data.departmentGroups);
+    } else if (data.ok && Array.isArray(data.groups)
+      && data.groups.some((name) => /^priority\s+(?:96|tc)$/i.test(String(name || "").trim()))) {
+      // Useful fallback when the chat itself explicitly exposes an RTN
+      // access group, but never downgrade a saved RTN session merely because
+      // an ordinary brand group omitted the agent's department groups.
+      setDepartmentFromGroups(data.groups);
+    }
     if (!data.ok || !data.groupName) {
       // Same deal — this used to fail completely silently, which is exactly
       // how the JUS-brand-never-detected report went untraceable. data.error
@@ -872,7 +922,6 @@ function initLiveChatSdk() {
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
     liveWidget = widget;
     previewMode = false;
-    activeMainTab = "customer";
     syncMainTabs();
     // We're definitely embedded in real LiveChat now (this promise only
     // resolves inside an actual Agent App) — stop showing demo data
@@ -2654,7 +2703,7 @@ function renderChatsInner(chats) {
   for (const chat of chats) {
     ensureChatState(chat);
   }
-  if (previewMode && activeMainTab === "tickets") {
+  if (activeMainTab === "tickets") {
     const chat = chats[0];
     const card = document.createElement("div");
     card.className = "chat-card ticket-workspace-card";
@@ -4120,7 +4169,7 @@ async function refreshDropdownOptions() {
   if (!loaded) {
     await Promise.allSettled([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchConfiguredBonusPrograms()]);
   }
-  if (!IS_EMBEDDED_APP) await fetchTicketConfig();
+  await fetchTicketConfig();
 }
 setInterval(() => {
   if (!document.hidden) refreshDropdownOptions();
@@ -4198,6 +4247,7 @@ function runWhenIdle(task, timeout = 1500) {
   }
 
   optionsReady.finally(() => {
+    if (activeMainTab === "tickets") renderChats(activeChats);
     // Brand detection may have started before the Lark option list arrived.
     // Retry it once with the populated list rather than leaving Brand blank.
     const chatId = activeChats[0]?.chatId;

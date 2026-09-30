@@ -24,6 +24,7 @@ import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
 // brand group...) is ignored -- if the chat has no Priority Support group,
 // Brand is left blank for a manual pick rather than guessed.
 const groupsCacheByPat = new Map(); // pat -> { data, expiry }
+const agentsCacheByPat = new Map(); // pat -> { data, expiry }
 
 // Tolerant on purpose: also matches a typo'd "Priorty Support".
 const PRIORITY_RE = /prior\w*\s+support/i;
@@ -45,6 +46,25 @@ async function fetchGroups(pat) {
   }
 
   groupsCacheByPat.set(pat, { data, expiry: now + 10 * 60_000 });
+  return data;
+}
+
+async function fetchAgents(pat) {
+  const now = Date.now();
+  const cached = agentsCacheByPat.get(pat);
+  if (cached && now < cached.expiry) return cached.data;
+
+  const res = await fetch("https://api.livechatinc.com/v3.6/configuration/action/list_agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
+    body: JSON.stringify({ fields: ["groups"] }),
+  });
+  const data = await res.json();
+  if (!Array.isArray(data)) {
+    const msg = (data && data.error && (data.error.message || JSON.stringify(data.error))) || "Unexpected response from LiveChat list_agents";
+    throw new Error(msg);
+  }
+  agentsCacheByPat.set(pat, { data, expiry: now + 10 * 60_000 });
   return data;
 }
 
@@ -85,6 +105,39 @@ function groupIdsOf(chat) {
   return ids.map(String);
 }
 
+function agentIdFromChat(chat) {
+  const users = Array.isArray(chat?.users) ? chat.users : [];
+  const agentIds = new Set(users.filter((user) => user?.type === "agent").map((user) => String(user.id)));
+  const threads = [chat?.thread, ...(Array.isArray(chat?.threads) ? chat.threads : [])].filter(Boolean);
+  const events = threads.flatMap((thread) => Array.isArray(thread.events) ? thread.events : []);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const authorId = String(events[index]?.author_id || "");
+    if (agentIds.has(authorId)) return authorId;
+  }
+  return agentIds.size === 1 ? [...agentIds][0] : "";
+}
+
+function groupIdsOfAgent(agent) {
+  const raw = Array.isArray(agent?.groups) ? agent.groups : Array.isArray(agent?.group_ids) ? agent.group_ids : [];
+  return raw.map((group) => String(typeof group === "object" ? group?.id : group)).filter(Boolean);
+}
+
+async function departmentGroupsForAgent(pat, chat, groups) {
+  const agentId = agentIdFromChat(chat);
+  if (!agentId) return null;
+  try {
+    const agents = await fetchAgents(pat);
+    const agent = agents.find((item) => String(item?.id) === agentId);
+    if (!agent) return null;
+    const ids = new Set(groupIdsOfAgent(agent));
+    return groups.filter((group) => ids.has(String(group.id))).map((group) => group.name);
+  } catch (_) {
+    // Some PATs may not include the optional agents--all:ro scope. Brand
+    // detection should still work, so department resolution stays optional.
+    return null;
+  }
+}
+
 export async function handler(event) {
   try {
     if (!LIVECHAT_PATS.length) {
@@ -100,9 +153,10 @@ export async function handler(event) {
       const owner = await findThreadOwner(threadId, realChatId);
       if (owner) {
         let ids = [];
+        let ownedChat = null;
         try {
-          const chat = await agentAction(owner.pat, "get_chat", { chat_id: owner.chatId, thread_id: threadId });
-          ids = groupIdsOf(chat);
+          ownedChat = await agentAction(owner.pat, "get_chat", { chat_id: owner.chatId, thread_id: threadId });
+          ids = groupIdsOf(ownedChat);
         } catch (_) { /* fall back to just the SDK's own group id below */ }
         if (groupID) ids.push(String(groupID)); // meaningful here: it's scoped to the right account now
         ids = [...new Set(ids)];
@@ -112,14 +166,15 @@ export async function handler(event) {
           .map((id) => groups.find((g) => String(g.id) === id))
           .filter(Boolean)
           .map((g) => g.name);
+        const departmentGroups = ownedChat ? await departmentGroupsForAgent(owner.pat, ownedChat, groups) : null;
         const chosen = names.find((n) => PRIORITY_RE.test(n)) || null;
         if (chosen) {
-          return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: chosen, groups: names, accountKey: owner.accountKey, resolvedBy: "chat-owner-account" }) };
+          return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: chosen, groups: names, departmentGroups, accountKey: owner.accountKey, resolvedBy: "chat-owner-account" }) };
         }
         // The owning account IS known, so don't fall through to the
         // cross-account guess below -- just report there's no Priority
         // Support group and leave Brand for a manual pick.
-        return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: null, groups: names, accountKey: owner.accountKey, error: `Chat isn't in a Priority Support group (its groups: ${names.length ? names.join(", ") : "none found"}) — Brand left blank.` }) };
+        return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: null, groups: names, departmentGroups, accountKey: owner.accountKey, error: `Chat isn't in a Priority Support group (its groups: ${names.length ? names.join(", ") : "none found"}) — Brand left blank.` }) };
       }
     }
 
