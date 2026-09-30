@@ -28,6 +28,7 @@
   <nav id="mainTabs" class="main-tabs" aria-label="App sections">
     <button type="button" class="main-tab active" data-main-tab="customer">Customer</button>
     <button type="button" id="ticketsTab" class="main-tab" data-main-tab="tickets" hidden>Tickets</button>
+    <button type="button" id="blastTab" class="main-tab" data-main-tab="blast" hidden>Blast</button>
     <button type="button" id="knowledgeTab" class="main-tab" data-main-tab="knowledge" hidden>Knowledge</button>
   </nav>
 
@@ -53,6 +54,9 @@
   </div>
 
   <main id="chatList" class="chat-list"></main>
+  <section id="blastView" class="blast-view" hidden>
+    <iframe data-src="/blast/index.html" loading="lazy" title="LiveChat Engagement"></iframe>
+  </section>
   <section id="knowledgeView" class="knowledge-view" hidden>
     <iframe data-src="/knowledge/index.html" loading="lazy" title="CS Learning Assistant"></iframe>
   </section>

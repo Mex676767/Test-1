@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LiveChat Auto — Settings</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0f12;
+      --surface: #161a20;
+      --surface2: #1e242d;
+      --border: #2a3140;
+      --accent: #4ade80;
+      --accent-dim: rgba(74, 222, 128, 0.12);
+      --accent-glow: rgba(74, 222, 128, 0.25);
+      --text: #e8edf5;
+      --text-dim: #6b7a90;
+      --danger: #f87171;
+      --danger-dim: rgba(248, 113, 113, 0.1);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+
+    .container { width: min(760px, 100%); }
+
+    .header { margin-bottom: 32px; }
+
+    .back-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: none; border: 1px solid var(--border);
+      color: var(--text-dim); padding: 6px 12px;
+      border-radius: 8px; cursor: pointer;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px; margin-bottom: 20px;
+      transition: all 0.15s;
+      text-decoration: none;
+    }
+    .back-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    h1 {
+      font-size: 22px; font-weight: 600;
+      color: var(--text);
+    }
+    h1 span { color: var(--accent); }
+    .subtitle { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+
+    .card-title {
+      font-size: 11px; font-weight: 600;
+      letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--text-dim); margin-bottom: 16px;
+    }
+
+    /* Message list */
+    .msg-list { display: flex; flex-direction: column; gap: 10px; }
+
+    .msg-item {
+      display: flex; align-items: flex-start; gap: 10px;
+    }
+
+    .msg-num {
+      width: 24px; height: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600;
+      color: var(--accent);
+      flex-shrink: 0; margin-top: 2px;
+      font-family: 'DM Mono', monospace;
+    }
+
+    .msg-textarea {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      color: var(--text);
+      outline: none;
+      resize: vertical;
+      min-height: 52px;
+      line-height: 1.5;
+      transition: border-color 0.15s;
+    }
+    .msg-textarea:focus { border-color: var(--accent); }
+    .msg-textarea::placeholder { color: var(--text-dim); }
+
+    .remove-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      width: 30px; height: 30px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; margin-top: 2px;
+      transition: all 0.15s;
+    }
+    .remove-btn:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-dim); }
+
+    .add-btn {
+      width: 100%;
+      padding: 10px;
+      background: var(--surface2);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--text-dim);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-top: 10px;
+    }
+    .add-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+    /* Info box */
+    .info-box {
+      background: var(--accent-dim);
+      border: 1px solid rgba(74, 222, 128, 0.2);
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-size: 12.5px;
+      color: var(--text-dim);
+      line-height: 1.7;
+      margin-bottom: 20px;
+    }
+    .info-box strong { color: var(--accent); }
+
+    /* Save button */
+    .save-btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--accent);
+      color: #0a1a0d;
+      border: none;
+      border-radius: 10px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+      transition: all 0.15s;
+      text-transform: uppercase;
+    }
+    .save-btn:hover { background: #6ee7a0; box-shadow: 0 4px 20px var(--accent-glow); }
+
+    .saved-toast {
+      text-align: center;
+      font-size: 13px;
+      color: var(--accent);
+      margin-top: 12px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .saved-toast.show { opacity: 1; }
+
+    .failure-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .failure-head .card-title { margin: 0; flex: 1; }
+    .failure-count { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--danger); }
+    .failure-actions { display: flex; gap: 7px; }
+    .small-btn {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
+      border-radius: 7px; padding: 5px 9px; font: 11px 'DM Sans', sans-serif; cursor: pointer;
+    }
+    .small-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .small-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+    .failure-list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+    .failure-empty { color: var(--text-dim); font-size: 12px; text-align: center; padding: 20px 8px; }
+    .failure-item { background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--danger); border-radius: 8px; padding: 10px 12px; }
+    .failure-meta { display: flex; justify-content: space-between; gap: 10px; color: var(--text-dim); font: 10px 'DM Mono', monospace; margin-bottom: 6px; }
+    .failure-stage { color: var(--danger); font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+    .failure-reason { color: var(--text); font-size: 12px; line-height: 1.45; margin-bottom: 6px; word-break: break-word; }
+    .failure-link { color: #60a5fa; font: 10px 'DM Mono', monospace; word-break: break-all; text-decoration: none; }
+    .failure-link:hover { text-decoration: underline; }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <a class="back-btn" href="index.html">← Back to Blast</a>
+    <h1>Live<span>Chat</span> Auto — Settings</h1>
+    <p class="subtitle">Configure your canned responses sent to each chat</p>
+  </div>
+
+  <div class="info-box">
+    <strong>How it works:</strong> Messages are sent in order (1 → 2 → 3 → 4) with a delay between each.
+    After all messages are sent, the chat is automatically <strong>archived</strong>.
+    You can add up to 6 messages.
+  </div>
+
+  <div class="card">
+    <div class="card-title">Canned Messages (in order)</div>
+    <div class="msg-list" id="msgList"></div>
+    <button class="add-btn" id="addMsg">+ Add Message</button>
+  </div>
+
+  <div class="card">
+    <div class="failure-head">
+      <div class="card-title">Skipped / Failed Chats</div>
+      <span class="failure-count" id="failureCount">0</span>
+      <div class="failure-actions">
+        <button class="small-btn" id="copyFailures">Copy</button>
+        <button class="small-btn danger" id="clearFailures">Clear</button>
+      </div>
+    </div>
+    <div class="failure-list" id="failureList"></div>
+  </div>
+
+  <button class="save-btn" id="saveBtn">Save Settings</button>
+  <div class="saved-toast" id="savedToast">✓ Settings saved successfully</div>
+
+</div>
+<script src="web-adapter.js"></script>
+<script src="settings.js"></script>
+</body>
+</html>

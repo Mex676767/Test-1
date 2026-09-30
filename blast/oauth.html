@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Connecting LiveChat</title>
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d0f12;color:#e8edf5;font:14px "Segoe UI",sans-serif}
+    div{max-width:420px;padding:28px;border:1px solid #2a3140;border-radius:14px;background:#161a20;text-align:center}
+    p{color:#9aa6b7;line-height:1.55}
+  </style>
+</head>
+<body><div><strong id="title">Connecting your LiveChat account…</strong><p id="message">This window will close automatically.</p></div>
+<script>
+  const params = new URLSearchParams(location.hash.slice(1));
+  const token = params.get("access_token");
+  const expiresIn = Number(params.get("expires_in") || 28800);
+  const state = params.get("state") || "";
+  const payload = token
+    ? { source: "ca-livechat-oauth", type: "SUCCESS", token, expiresAt: Date.now() + expiresIn * 1000, state }
+    : { source: "ca-livechat-oauth", type: "ERROR", error: params.get("error_description") || params.get("error") || "Authorization was not completed.", state };
+  if (window.opener) {
+    window.opener.postMessage(payload, location.origin);
+    document.getElementById("title").textContent = token ? "LiveChat connected" : "Could not connect LiveChat";
+    document.getElementById("message").textContent = token ? "You can return to the Blast tab." : payload.error;
+    if (token) setTimeout(() => window.close(), 500);
+  } else {
+    document.getElementById("title").textContent = "Open this from the Blast tab";
+    document.getElementById("message").textContent = "The authorization result could not be returned to the app.";
+  }
+</script></body>
+</html>

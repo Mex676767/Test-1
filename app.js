@@ -344,12 +344,15 @@ let activeMainTab = "customer";
 
 function syncMainTabs() {
   const ticketsAvailable = previewMode && ESCALATION_TICKET_ENABLED;
+  const blastAvailable = previewMode;
   const knowledgeAvailable = previewMode;
-  if ((!ticketsAvailable && activeMainTab === "tickets") || (!knowledgeAvailable && activeMainTab === "knowledge")) activeMainTab = "customer";
+  if ((!ticketsAvailable && activeMainTab === "tickets") || (!blastAvailable && activeMainTab === "blast") || (!knowledgeAvailable && activeMainTab === "knowledge")) activeMainTab = "customer";
   const mainTabs = document.getElementById("mainTabs");
   if (mainTabs) mainTabs.hidden = !previewMode;
   const ticketsTab = document.getElementById("ticketsTab");
   if (ticketsTab) ticketsTab.hidden = !ticketsAvailable;
+  const blastTab = document.getElementById("blastTab");
+  if (blastTab) blastTab.hidden = !blastAvailable;
   const knowledgeTab = document.getElementById("knowledgeTab");
   if (knowledgeTab) knowledgeTab.hidden = !knowledgeAvailable;
   document.querySelectorAll("[data-main-tab]").forEach((button) => {
@@ -362,7 +365,13 @@ function syncMainTabs() {
   if (!previewMode && topbar && loggingToggle && loggingToggle.parentElement !== topbar) topbar.appendChild(loggingToggle);
   if (customerTools) customerTools.hidden = !previewMode || activeMainTab !== "customer";
   const chatList = document.getElementById("chatList");
-  if (chatList) chatList.hidden = activeMainTab === "knowledge";
+  if (chatList) chatList.hidden = activeMainTab === "knowledge" || activeMainTab === "blast";
+  const blastView = document.getElementById("blastView");
+  if (blastView) blastView.hidden = activeMainTab !== "blast";
+  if (blastAvailable && activeMainTab === "blast") {
+    const frame = blastView?.querySelector("iframe[data-src]");
+    if (frame && !frame.src) frame.src = frame.dataset.src;
+  }
   const knowledgeView = document.getElementById("knowledgeView");
   if (knowledgeView) knowledgeView.hidden = activeMainTab !== "knowledge";
   if (knowledgeAvailable && activeMainTab === "knowledge") {
@@ -1005,7 +1014,7 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   if (!button || button.hidden) return;
   activeMainTab = button.dataset.mainTab;
   syncMainTabs();
-  if (activeMainTab !== "knowledge") renderChats(activeChats);
+  if (activeMainTab !== "knowledge" && activeMainTab !== "blast") renderChats(activeChats);
 });
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
