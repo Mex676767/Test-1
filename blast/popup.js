@@ -206,7 +206,7 @@ addChatBtn.addEventListener('click', () => {
 function renderDefaultPreview() {
   defMsgCount.textContent = defaultMessages.length;
   if (!defaultMessages.length) {
-    defMsgList.innerHTML = '<div class="empty-note">No default messages — open ⚙ Settings</div>';
+    defMsgList.innerHTML = '<div class="empty-note">No default messages. Open Messages to create one.</div>';
     return;
   }
   defMsgList.innerHTML = defaultMessages.map((m, i) =>
@@ -253,7 +253,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     statusText.innerHTML = '✓ All chats completed';
     prog.textContent = '';
     startBtn.className = 'btn btn-go';
-    startBtn.textContent = '▶ Start Automation';
+    startBtn.textContent = 'Start automation';
     startBtn.disabled = false;
     addLog('✓ Automation finished', 'ok');
   }
@@ -269,7 +269,7 @@ startBtn.addEventListener('click', () => {
     running = false;
     chrome.storage.sync.set({ isRunning: false });
     startBtn.className = 'btn btn-go';
-    startBtn.textContent = '▶ Start Automation';
+    startBtn.textContent = 'Start automation';
     statusText.textContent = 'Stopped';
     return;
   }
