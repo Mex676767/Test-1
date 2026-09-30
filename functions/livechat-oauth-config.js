@@ -2,7 +2,7 @@ import { adapt } from "./_lib/adapt.js";
 
 export async function handler(event) {
   const redirectUri = String(
-    event.env?.LIVECHAT_REDIRECT_URI || "https://test-1-7wpp.pages.dev/blast/oauth.html"
+    event.env?.LIVECHAT_REDIRECT_URI || "https://test-1-7wp.pages.dev/blast/oauth.html"
   ).trim();
   const clients = [
     { key: "lc1", label: "LiveChat Account 1", clientId: String(event.env?.LIVECHAT_CLIENT_ID || "").trim() },

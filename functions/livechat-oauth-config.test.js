@@ -6,7 +6,7 @@ test("returns separate OAuth clients for two LiveChat licenses", async () => {
   const result = await handler({ env: { LIVECHAT_CLIENT_ID: "first", LIVECHAT_CLIENT_ID_2: "second" } });
   const body = JSON.parse(result.body);
   assert.equal(body.configured, true);
-  assert.equal(body.redirectUri, "https://test-1-7wpp.pages.dev/blast/oauth.html");
+  assert.equal(body.redirectUri, "https://test-1-7wp.pages.dev/blast/oauth.html");
   assert.deepEqual(body.clients, [
     { key: "lc1", label: "LiveChat Account 1", clientId: "first" },
     { key: "lc2", label: "LiveChat Account 2", clientId: "second" },
