@@ -33,7 +33,11 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'concurrency', 'chatEntries'
   const delay = d.delay || 3;
   delaySlider.value = delay;
   delayVal.textContent = delay + 's';
-  concurrencySelect.value = String(Math.min(3, Math.max(1, Number(d.concurrency) || 2)));
+  const savedConcurrency = Number(d.concurrency);
+  const concurrency = [1, 3, 5, 8, 10].includes(savedConcurrency)
+    ? savedConcurrency
+    : savedConcurrency === 2 ? 3 : 5;
+  concurrencySelect.value = String(concurrency);
 
   // Large queues exceed chrome.storage.sync's per-item quota, so keep them local.
   // Fall back to the old sync value once to migrate existing installations.

@@ -74,15 +74,26 @@
   async function action(name, body, formData) {
     const accessToken = token();
     if (!accessToken) throw new Error("Your agent authorization expired. Connect LiveChat again.");
-    const response = await fetch(`https://api.livechatinc.com/v3.6/agent/action/${name}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, ...(formData ? {} : { "Content-Type": "application/json" }) },
-      body: formData || JSON.stringify(body || {}),
-    });
-    const text = await response.text();
-    let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (_) {}
-    if (!response.ok || data.error) throw new Error(data.error?.message || data.error || `${name} failed (${response.status})`);
-    return data;
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const response = await fetch(`https://api.livechatinc.com/v3.6/agent/action/${name}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, ...(formData ? {} : { "Content-Type": "application/json" }) },
+        body: formData || JSON.stringify(body || {}),
+      });
+      const text = await response.text();
+      let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (_) {}
+      const errorType = String(data.error?.type || data.error?.code || "").toLowerCase();
+      const isRateLimited = response.status === 429 || errorType === "too_many_requests";
+      if (isRateLimited && attempt < maxAttempts) {
+        const retryAfter = Number(response.headers?.get?.("retry-after"));
+        await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 600 * (2 ** (attempt - 1)));
+        continue;
+      }
+      if (!response.ok || data.error) throw new Error(data.error?.message || data.error || `${name} failed (${response.status})`);
+      return data;
+    }
+    throw new Error(`${name} was rate limited. Try a lower speed.`);
   }
 
   const dataUrlFile = (dataUrl, fileName) => {
@@ -142,7 +153,7 @@
     stopRequested = false;
     let cursor = 0;
     const worker = async () => { while (!stopRequested) { const index = cursor++; if (index >= jobs.length) return; await runJob(jobs[index], index, jobs.length, delay); } };
-    await Promise.all(Array.from({ length: Math.min(3, Math.max(1, concurrency || 1), jobs.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));
     emit({ type: "DONE" });
   }
 
