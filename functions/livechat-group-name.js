@@ -36,7 +36,7 @@ async function fetchGroups(pat) {
   const res = await fetch("https://api.livechatinc.com/v3.6/configuration/action/list_groups", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
-    body: JSON.stringify({ fields: ["agent_priorities"] }),
+    body: JSON.stringify({}),
   });
   const data = await res.json();
   if (!Array.isArray(data)) {
@@ -94,9 +94,15 @@ async function departmentGroupsForSignedInAgent(pat, agentToken, groups) {
     const info = await infoRes.json();
     const agentId = String(info?.account_id || "");
     if (!agentId) return null;
-    return groups
-      .filter((group) => Object.prototype.hasOwnProperty.call(group.agent_priorities || {}, agentId))
-      .map((group) => group.name);
+    const agentRes = await fetch("https://api.livechatinc.com/v3.6/configuration/action/get_agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + agentToken },
+      body: JSON.stringify({ id: agentId, fields: ["groups"] }),
+    });
+    const agent = await agentRes.json();
+    if (agent?.error) throw new Error(agent.error.message || JSON.stringify(agent.error));
+    const ids = new Set((agent.groups || []).map((group) => String(group?.id ?? group)));
+    return groups.filter((group) => ids.has(String(group.id))).map((group) => group.name);
   } catch (_) {
     // Some PATs may not include the optional agents--all:ro scope. Brand
     // detection should still work, so department resolution stays optional.

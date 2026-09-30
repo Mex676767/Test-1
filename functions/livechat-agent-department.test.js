@@ -12,12 +12,16 @@ test("detects RTN from the signed-in agent's Priority 96 membership", async (t) 
       assert.equal(options.headers.Authorization, "Bearer agent-token");
       return { ok: true, json: async () => ({ account_id: "agent@example.com" }) };
     }
+    if (String(url).endsWith("/get_agent")) {
+      assert.equal(options.headers.Authorization, "Bearer agent-token");
+      assert.deepEqual(JSON.parse(options.body), { id: "agent@example.com", fields: ["groups"] });
+      return { ok: true, json: async () => ({ groups: [{ id: 4 }, { id: 9 }] }) };
+    }
     if (String(url).endsWith("/list_groups")) {
-      assert.deepEqual(JSON.parse(options.body), { fields: ["agent_priorities"] });
       return { ok: true, json: async () => ([
-        { id: 4, name: "AC69 Priority Support", agent_priorities: { "agent@example.com": "normal" } },
-        { id: 9, name: "Priority 96", agent_priorities: { "agent@example.com": "normal" } },
-        { id: 12, name: "CS 96A", agent_priorities: { "someone-else@example.com": "normal" } },
+        { id: 4, name: "AC69 Priority Support" },
+        { id: 9, name: "Priority 96" },
+        { id: 12, name: "CS 96A" },
       ]) };
     }
     throw new Error(`Unexpected URL: ${url}`);
