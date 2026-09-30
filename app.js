@@ -272,6 +272,8 @@ async function requirePreviewLiveChatLogin() {
   }
 
   return new Promise((resolve) => {
+    const preferredKey = currentLiveChatAccount || previouslySelected;
+    const orderedClients = [...clients].sort((left, right) => Number(right.key === preferredKey) - Number(left.key === preferredKey));
     const overlay = document.createElement("div");
     overlay.id = "liveChatLoginOverlay";
     overlay.className = "settings-overlay";
@@ -281,7 +283,7 @@ async function requirePreviewLiveChatLogin() {
         <div class="settings-head">Connect LiveChat</div>
         <p class="settings-hint">Sign in with your own agent account first. Your assigned groups will set up the correct workspace automatically.</p>
         <div class="login-actions">
-          ${clients.map((client, index) => `<button type="button" class="submit-btn login-account" data-account="${escapeHtml(client.key)}">Connect workspace ${index + 1}</button>`).join("")}
+          <button type="button" class="submit-btn" id="liveChatConnectButton">Connect LiveChat</button>
         </div>
         <div id="liveChatLoginStatus" class="login-status"></div>
       </div>`;
@@ -290,17 +292,34 @@ async function requirePreviewLiveChatLogin() {
     const status = overlay.querySelector("#liveChatLoginStatus");
     let pendingState = "";
     let pendingClient = null;
+    let attemptIndex = -1;
+    const connectButton = overlay.querySelector("#liveChatConnectButton");
     const showError = (message) => {
       status.textContent = message;
       status.className = "login-status error";
-      overlay.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+      connectButton.disabled = false;
+    };
+    const startNextAttempt = () => {
+      attemptIndex += 1;
+      pendingClient = orderedClients[attemptIndex] || null;
+      if (!pendingClient) return false;
+      pendingState = crypto.randomUUID();
+      connectButton.disabled = true;
+      status.textContent = attemptIndex ? "Checking your other LiveChat workspace…" : "Complete the login in the new window…";
+      status.className = "login-status";
+      const redirectUri = config.redirectUri || `${location.origin}/blast/oauth.html`;
+      const url = new URL("https://accounts.livechat.com/");
+      url.search = new URLSearchParams({ response_type: "token", client_id: pendingClient.clientId, redirect_uri: redirectUri, state: pendingState, prompt: "consent" }).toString();
+      const popup = window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
+      if (!popup) showError("Your browser blocked the LiveChat login window. Allow popups and try again.");
+      return Boolean(popup);
     };
     const onMessage = async (event) => {
       let callbackOrigin = location.origin;
       try { callbackOrigin = new URL(config.redirectUri).origin; } catch (_) {}
       if (event.origin !== callbackOrigin || event.data?.source !== "ca-livechat-oauth" || event.data.state !== pendingState) return;
       if (event.data.type !== "SUCCESS" || !pendingClient) {
-        showError(event.data.error || "LiveChat login was not completed.");
+        if (!startNextAttempt()) showError(event.data.error || "LiveChat login was not completed.");
         return;
       }
       try {
@@ -314,23 +333,17 @@ async function requirePreviewLiveChatLogin() {
         overlay.remove();
         resolve();
       } catch (error) {
-        showError(error.message);
+        try {
+          sessionStorage.removeItem(`ca-livechat-agent-token:${pendingClient?.key || ""}`);
+          sessionStorage.removeItem(`ca-livechat-agent-token-expiry:${pendingClient?.key || ""}`);
+        } catch (_) {}
+        if (!startNextAttempt()) showError(error.message);
       }
     };
     window.addEventListener("message", onMessage);
-    overlay.querySelectorAll(".login-account").forEach((button) => {
-      button.addEventListener("click", () => {
-        pendingClient = clients.find((client) => client.key === button.dataset.account);
-        if (!pendingClient) return;
-        pendingState = crypto.randomUUID();
-        overlay.querySelectorAll("button").forEach((item) => { item.disabled = true; });
-        status.textContent = "Complete the login in the new window…";
-        status.className = "login-status";
-        const redirectUri = config.redirectUri || `${location.origin}/blast/oauth.html`;
-        const url = new URL("https://accounts.livechat.com/");
-        url.search = new URLSearchParams({ response_type: "token", client_id: pendingClient.clientId, redirect_uri: redirectUri, state: pendingState, prompt: "consent" }).toString();
-        window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
-      });
+    connectButton.addEventListener("click", () => {
+      attemptIndex = -1;
+      startNextAttempt();
     });
   });
 }
