@@ -6,7 +6,7 @@ import {
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
   TABLE_TELEGRAM28, TABLE_MOONCAKE, TABLE_VS96_FEEDBACK,
 } from "./_lib/lark.js";
-import { readOwnership, ownedBy } from "./_lib/ca-row.js";
+import { readOwnership, ownedBy, summarizeRow, parseChatLink } from "./_lib/ca-row.js";
 import { isConfiguredBonusEligible, listBonusConfigs } from "./_lib/bonus-config.js";
 
 const F = {
@@ -25,6 +25,37 @@ const F = {
   riskExpiry: "Date Expired", // Risk Player(Day)'s own expiry date column -- confirmed from the real column header
   uid: "UID", // Mooncake bonus's own username column -- confirmed from a real screenshot; plain "UID", not "Username/UID" like most other bonus tables (same situation as Risk Player's plain "Username").
 };
+
+// A repeated Look Up for the same chat used to delete its still-blank row
+// and create a replacement. If that best-effort delete hit a transient Lark
+// failure, the replacement became a second row and the abandoned first row
+// later appeared under Needs Attention. Reuse the one blank row for this
+// exact agent/player/brand/thread instead. If an older deployment already
+// produced several blank twins, keep the oldest deterministically and remove
+// the rest so concurrent callers converge on the same record.
+async function reusableBlankCase(agent, username, brand, link) {
+  const threadId = parseChatLink(link).threadId;
+  if (!threadId) return null;
+  const rows = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
+    { field_name: F.agentName, operator: "is", value: [agent] },
+    { field_name: F.username, operator: "is", value: [username] },
+    { field_name: F.brand, operator: "is", value: [brand] },
+    { field_name: "Inquiry", operator: "isEmpty", value: [] },
+    { field_name: "Status", operator: "isEmpty", value: [] },
+  ], undefined, { pageSize: 100, automaticFields: true });
+  const matches = rows.map(summarizeRow)
+    .filter((row) => row.agent === agent && row.username === username && row.brand === brand
+      && row.threadId === threadId && !row.inquiry.length && !row.status)
+    .sort((a, b) => (a.createdAt - b.createdAt) || a.recordId.localeCompare(b.recordId));
+  if (!matches.length) return null;
+  await Promise.allSettled(matches.slice(1).map(async (row) => {
+    // Re-check immediately before deletion. A concurrent submit may have
+    // completed the row after the search snapshot was returned.
+    const { owner, blank } = await readOwnership(row.recordId);
+    if (blank && ownedBy(owner, agent)) await deleteRecord(TABLE_CUSTOMER_APPROACHING, row.recordId);
+  }));
+  return matches[0].recordId;
+}
 
 // Word-boundary substring, not startsWith/=== -- real Status/SW Check
 // values embed "claimed"/"expired"/"failed" in different positions per
@@ -115,13 +146,14 @@ export async function handler(event) {
       return Object.fromEntries(pairs);
     }).catch(() => ({}));
 
-    // One Customer Approaching row per chat, not one per Look Up click —
-    // if the agent looks up again for the same chat (typo fix, re-check,
-    // etc.), the frontend passes back the record it created last time here
-    // so it can be deleted first. Non-fatal: if the delete fails (already
-    // gone, etc.) the old row just lingers rather than blocking the new
-    // lookup. Only ever sent for a chat that hasn't been logged yet (see
-    // app.js) -- a completed case is never deleted by a stray re-lookup.
+    const chatLink = String(link || "").trim();
+    let caRecordId = !preview && chatLink
+      ? await reusableBlankCase(agentVal, uname, brandVal, chatLink).catch(() => null)
+      : null;
+
+    // One Customer Approaching row per chat, not one per Look Up click. If
+    // the old record is for a different username/brand it is replaced; an
+    // exact matching blank record found above is retained and reused.
     //
     // Only this agent's own still-blank row is ever removed: after a chat
     // transfer (PC crash / lost connection) the previous agent's row stays
@@ -129,11 +161,15 @@ export async function handler(event) {
     if (!preview && previousRecordId) {
       try {
         const { owner, blank } = await readOwnership(previousRecordId);
-        if (blank && ownedBy(owner, agentVal)) await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId);
+        if (blank && ownedBy(owner, agentVal) && previousRecordId !== caRecordId) {
+          await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId);
+        }
       } catch (_) { /* non-fatal */ }
     }
 
-    // Always create a fresh record — each Look Up is a new case. This row
+    // Reuse this chat's existing blank record when Look Up is repeated. A
+    // deliberate "+ Log another case" only runs after the current row has
+    // been completed, so it still creates a fresh row below. This row
     // is only a target for the final Record submit now (Agent Name, Brand,
     // Inquiry, Status, Player D.O.B, etc.) — none of the actual bonus data
     // below comes from its Lookup columns anymore (see the 2026-08-29
@@ -144,15 +180,15 @@ export async function handler(event) {
     // lark-stale-records.js. "link" is a Lark Link field, hence {link, text}.
     // If the link write is ever rejected, retry without it rather than
     // failing the whole Look Up.
-    let caRecordId = null;
     if (!preview) {
       const baseFields = { [F.username]: uname, [F.brand]: brandVal, [F.agentName]: agentVal };
-      const chatLink = String(link || "").trim();
-      const created = chatLink
-        ? await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } })
-            .catch(() => createRecord(TABLE_CUSTOMER_APPROACHING, baseFields))
-        : await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
-      caRecordId = created.record_id;
+      if (!caRecordId) {
+        const created = chatLink
+          ? await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } })
+              .catch(() => createRecord(TABLE_CUSTOMER_APPROACHING, baseFields))
+          : await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
+        caRecordId = created.record_id;
+      }
     }
 
     // Every lookup below is fully independent of the others (and of
@@ -346,6 +382,14 @@ export async function handler(event) {
       ),
     ]);
     const configuredBonuses = await configuredBonusRowsP;
+
+    // A second request can begin at the same moment and pass the pre-create
+    // check above before either row exists. Re-run the same deterministic
+    // coalescing after the slower bonus reads; both requests then return the
+    // same surviving record instead of leaving a blank twin behind.
+    if (!preview && link) {
+      caRecordId = await reusableBlankCase(agentVal, uname, brandVal, link).catch(() => caRecordId);
+    }
 
     return {
       statusCode: 200,
