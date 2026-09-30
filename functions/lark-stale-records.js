@@ -35,14 +35,9 @@ const MIN_AGE_NO_LINK_MS = 30 * 60 * 1000;
 // Chat known to have ended: short grace so the widget's own auto-record
 // on close gets a chance to fill the row first.
 const MIN_AGE_ENDED_MS = 3 * 60 * 1000;
-// Only repair the exact duplicate pattern produced by the old replacement
-// lookup: a blank row first, followed almost immediately by its completed
-// twin. A real "+ Log another case" creates the blank row after the completed
-// one, so it is deliberately excluded.
-const DUPLICATE_LOOKUP_WINDOW_MS = 60 * 1000;
-
 async function removeCompletedTwinDuplicate(row) {
-  if (!row.threadId || !row.createdAt) return false;
+  const exactLink = String(row.link || "").trim().replace(/\/$/, "");
+  if (!exactLink) return false;
   const related = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
     { field_name: CA.agentName, operator: "is", value: [row.agent] },
     { field_name: CA.username, operator: "is", value: [row.username] },
@@ -50,10 +45,8 @@ async function removeCompletedTwinDuplicate(row) {
   ], undefined, { pageSize: 100, automaticFields: true });
   const completedTwin = related.map(summarizeRow).some((candidate) =>
     candidate.recordId !== row.recordId
-    && candidate.threadId === row.threadId
-    && candidate.inquiry.length > 0 && !!candidate.status
-    && candidate.createdAt >= row.createdAt
-    && candidate.createdAt - row.createdAt <= DUPLICATE_LOOKUP_WINDOW_MS
+    && String(candidate.link || "").trim().replace(/\/$/, "") === exactLink
+    && candidate.inquiry.length > 0
   );
   if (!completedTwin) return false;
   await deleteRecord(TABLE_CUSTOMER_APPROACHING, row.recordId);
@@ -143,11 +136,6 @@ export async function handler(event) {
       && now - r.createdAt >= MIN_AGE_ENDED_MS);
 
     const checked = await Promise.all(candidates.map(async (r) => {
-      // Repair duplicates left by the former delete-and-recreate lookup.
-      // On any uncertainty or API failure the row remains visible.
-      try {
-        if (await removeCompletedTwinDuplicate(r)) return null;
-      } catch (_) { /* continue with the normal attention check */ }
       const { chatId, threadId } = parseChatLink(r.link);
       const inspected = threadId && LIVECHAT_PATS.length
         ? await inspectThread(chatId, threadId, accountKey)
@@ -159,6 +147,14 @@ export async function handler(event) {
       if (accountKey && inspected.accountKey && inspected.accountKey !== accountKey) return null;
       if (active === true) return null; // chat still going -- agent is mid-case
       if (active === null && now - r.createdAt < MIN_AGE_NO_LINK_MS) return null;
+      // Once the chat has ended, remove only an empty row whose exact saved
+      // link also belongs to a completed row. All rows containing Inquiry
+      // remain untouched, allowing several legitimate cases in one chat.
+      if (active === false) {
+        try {
+          if (await removeCompletedTwinDuplicate(r)) return null;
+        } catch (_) { /* keep it visible on any uncertainty */ }
+      }
       return {
         recordId: r.recordId,
         username: r.username,

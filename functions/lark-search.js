@@ -34,8 +34,8 @@ const F = {
 // produced several blank twins, keep the oldest deterministically and remove
 // the rest so concurrent callers converge on the same record.
 async function reusableBlankCase(agent, username, brand, link) {
-  const threadId = parseChatLink(link).threadId;
-  if (!threadId) return null;
+  const exactLink = String(link || "").trim().replace(/\/$/, "");
+  if (!parseChatLink(exactLink).threadId) return null;
   const rows = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
     { field_name: F.agentName, operator: "is", value: [agent] },
     { field_name: F.username, operator: "is", value: [username] },
@@ -45,7 +45,8 @@ async function reusableBlankCase(agent, username, brand, link) {
   ], undefined, { pageSize: 100, automaticFields: true });
   const matches = rows.map(summarizeRow)
     .filter((row) => row.agent === agent && row.username === username && row.brand === brand
-      && row.threadId === threadId && !row.inquiry.length && !row.status)
+      && String(row.link || "").trim().replace(/\/$/, "") === exactLink
+      && !row.inquiry.length && !row.status)
     .sort((a, b) => (a.createdAt - b.createdAt) || a.recordId.localeCompare(b.recordId));
   if (!matches.length) return null;
   await Promise.allSettled(matches.slice(1).map(async (row) => {
