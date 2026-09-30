@@ -1,6 +1,9 @@
 import { adapt } from "./_lib/adapt.js";
 
 export async function handler(event) {
+  const redirectUri = String(
+    event.env?.LIVECHAT_REDIRECT_URI || "https://test-1-7wpp.pages.dev/blast/oauth.html"
+  ).trim();
   const clients = [
     { key: "lc1", label: "LiveChat Account 1", clientId: String(event.env?.LIVECHAT_CLIENT_ID || "").trim() },
     // Accept the unseparated name as a compatibility alias, but document the
@@ -13,6 +16,7 @@ export async function handler(event) {
       ok: true,
       configured: clients.length > 0,
       clients,
+      redirectUri,
       // Kept for one-account deployments and older cached frontend code.
       clientId: clients[0]?.clientId || "",
     }),

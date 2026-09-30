@@ -20,7 +20,10 @@
     ? { source: "ca-livechat-oauth", type: "SUCCESS", token, expiresAt: Date.now() + expiresIn * 1000, state }
     : { source: "ca-livechat-oauth", type: "ERROR", error: params.get("error_description") || params.get("error") || "Authorization was not completed.", state };
   if (window.opener) {
-    window.opener.postMessage(payload, location.origin);
+    // The main preview can be opened through a Cloudflare alias while this
+    // callback stays on the canonical registered origin. OAuth state is
+    // verified by the opener before it accepts the token.
+    window.opener.postMessage(payload, "*");
     document.getElementById("title").textContent = token ? "LiveChat connected" : "Could not connect LiveChat";
     document.getElementById("message").textContent = token ? "You can return to the Blast tab." : payload.error;
     if (token) setTimeout(() => window.close(), 500);

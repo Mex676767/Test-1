@@ -2,9 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>LiveChat Auto Responder</title>
+  <title>Customer Blast</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap');
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :root{
       --bg:#0d0f12;--s1:#161a20;--s2:#1e242d;--bd:#2a3140;
@@ -153,20 +152,42 @@
     .img-pane{display:none;flex:1;flex-direction:column;}
     .img-pane.on{display:flex;}
 
-    ::-webkit-scrollbar{width:4px;}
-    ::-webkit-scrollbar-thumb{background:var(--bd);border-radius:4px;}
+    /* Customer Approaching theme */
+    :root{
+      --bg:#101216;--s1:#191c22;--s2:#21252d;--bd:#2a2e37;
+      --accent:#4f8cf0;--ad:rgba(79,140,240,.13);--ag:rgba(79,140,240,.28);
+      --txt:#eef0f3;--dim:#8991a1;--red:#ea6363;--rd:rgba(234,99,99,.13);
+      --warn:#e3b341;--success:#35d0a8;
+    }
+    body,input,textarea,button,select{font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,sans-serif!important}
+    .hdr{padding:12px 16px;background:var(--s1)}
+    .logo-dot{width:9px;height:9px;border-radius:1px;background:var(--accent);box-shadow:none;animation:none;transform:rotate(45deg)}
+    .logo-txt{font-size:15px}.logo-txt span{color:var(--accent)}
+    .tabs{padding:0 8px}.tab-btn{padding:12px 10px;text-transform:none;letter-spacing:0;font-size:12px}
+    .bridge-banner{margin:12px 14px 0!important;padding:11px 13px!important;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent)!important;background:var(--ad)!important;color:var(--txt)!important}
+    .chat-row,.default-card,.delay-row,.status,.log,.bulk-hint{border-radius:8px}
+    .row-num{color:var(--accent)}
+    .btn-go,.bulk-load-btn{background:var(--accent);color:#fff}
+    .btn-go:hover,.bulk-load-btn:hover{background:#6b9df1;box-shadow:0 4px 18px var(--ag)}
+    .log-line.ok,.bulk-status.ok{color:var(--success)}
+    .default-item:first-child{border-left-color:var(--accent)}
+    .bulk-col-label.link{color:var(--warn)}
+    .bulk-col-label.img,.img-file-name{color:var(--accent)}
+    .img-subtab.active{background:var(--ad);border-color:var(--accent);color:var(--accent)}
+    .img-url-area:focus,.img-file-wrap.has-file,.img-pick-btn:hover{border-color:var(--accent)}
+    .body,.bulk-body{padding:16px;gap:14px}
+    @media(max-width:1050px){.bulk-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bulk-col:last-child{grid-column:1/-1}}
+    @media(max-width:620px){.bulk-grid{grid-template-columns:1fr}.bulk-col:last-child{grid-column:auto}.delay-row{align-items:flex-start;flex-wrap:wrap}}
+    html,body{scrollbar-width:none;-ms-overflow-style:none}
+    ::-webkit-scrollbar{display:none}
   </style>
 </head>
 <body>
 
-<div class="bridge-banner" id="bridgeBanner" style="margin:12px 14px 0;padding:11px 13px;border:1px solid rgba(251,191,36,.35);border-radius:10px;background:rgba(251,191,36,.08);color:#fbbf24;font-size:11px;line-height:1.55">
-  <strong>Admin preview</strong> · Queue building and bulk import are ready for testing. Live sending stays locked until the per-agent LiveChat authorization is connected, so KPI credit cannot accidentally be assigned to the shared admin account.
-</div>
-
 <div class="hdr">
   <div class="logo">
     <div class="logo-dot"></div>
-    <div class="logo-txt">Live<span>Chat</span> Auto</div>
+    <div class="logo-txt">Customer <span>Blast</span></div>
   </div>
   <div class="hdr-right">
     <button class="icon-btn" id="openSettings" title="Default messages">⚙</button>
@@ -177,6 +198,10 @@
 <div class="tabs">
   <button class="tab-btn active" data-tab="manual">✉ Manual</button>
   <button class="tab-btn" data-tab="bulk">⚡ Bulk Import</button>
+</div>
+
+<div class="bridge-banner" id="bridgeBanner">
+  <strong>Admin preview</strong> · Connect the correct LiveChat agent before sending so KPI credit follows that agent.
 </div>
 
 <!-- MANUAL TAB -->

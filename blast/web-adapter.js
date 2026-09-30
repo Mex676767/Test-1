@@ -151,9 +151,12 @@
     sessionStorage.setItem(STATE_KEY, state);
     sessionStorage.setItem(PENDING_ACCOUNT_KEY, client.key);
     sessionStorage.setItem(SELECTED_ACCOUNT_KEY, client.key);
-    const redirectUri = `${location.origin}/blast/oauth.html`;
+    // Use the exact URI registered in Developer Console. Cloudflare preview
+    // aliases can have a different origin, which LiveChat rejects even when
+    // the rest of the OAuth request is correct.
+    const redirectUri = oauthConfig.redirectUri || `${location.origin}/blast/oauth.html`;
     const url = new URL("https://accounts.livechat.com/");
-    url.search = new URLSearchParams({ response_type: "token", client_id: client.clientId, redirect_uri: redirectUri, state }).toString();
+    url.search = new URLSearchParams({ response_type: "token", client_id: client.clientId, redirect_uri: redirectUri, state, prompt: "consent" }).toString();
     window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
   }
 
@@ -182,9 +185,10 @@
     button.addEventListener("click", () => client && connectAgent(client));
   }
 
-  let oauthConfig = { configured: false, clients: [], clientId: "" };
+  let oauthConfig = { configured: false, clients: [], clientId: "", redirectUri: "" };
   window.addEventListener("message", (event) => {
-    if (event.origin !== location.origin || event.data?.source !== "ca-livechat-oauth") return;
+    const callbackOrigin = oauthConfig.redirectUri ? new URL(oauthConfig.redirectUri).origin : location.origin;
+    if (event.origin !== callbackOrigin || event.data?.source !== "ca-livechat-oauth") return;
     if (event.data.state !== sessionStorage.getItem(STATE_KEY)) return;
     if (event.data.type === "SUCCESS") {
       const accountKey = sessionStorage.getItem(PENDING_ACCOUNT_KEY) || selectedAccount();

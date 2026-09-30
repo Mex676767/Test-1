@@ -2,30 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>LiveChat Auto — Settings</title>
+  <title>Customer Blast — Settings</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap');
-
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #0d0f12;
-      --surface: #161a20;
-      --surface2: #1e242d;
-      --border: #2a3140;
-      --accent: #4ade80;
-      --accent-dim: rgba(74, 222, 128, 0.12);
-      --accent-glow: rgba(74, 222, 128, 0.25);
-      --text: #e8edf5;
-      --text-dim: #6b7a90;
-      --danger: #f87171;
-      --danger-dim: rgba(248, 113, 113, 0.1);
+      --bg: #101216;
+      --surface: #191c22;
+      --surface2: #21252d;
+      --border: #2a2e37;
+      --accent: #4f8cf0;
+      --accent-dim: rgba(79, 140, 240, 0.13);
+      --accent-glow: rgba(79, 140, 240, 0.28);
+      --text: #eef0f3;
+      --text-dim: #8991a1;
+      --danger: #ea6363;
+      --danger-dim: rgba(234, 99, 99, 0.1);
     }
 
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: 'DM Sans', sans-serif;
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
       min-height: 100vh;
       display: flex;
       justify-content: center;
@@ -41,7 +39,7 @@
       background: none; border: 1px solid var(--border);
       color: var(--text-dim); padding: 6px 12px;
       border-radius: 8px; cursor: pointer;
-      font-family: 'DM Sans', sans-serif;
+      font-family: inherit;
       font-size: 12px; margin-bottom: 20px;
       transition: all 0.15s;
       text-decoration: none;
@@ -94,7 +92,7 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 10px 12px;
-      font-family: 'DM Sans', sans-serif;
+      font-family: inherit;
       font-size: 13px;
       color: var(--text);
       outline: none;
@@ -127,7 +125,7 @@
       border: 1px dashed var(--border);
       border-radius: 8px;
       color: var(--text-dim);
-      font-family: 'DM Sans', sans-serif;
+      font-family: inherit;
       font-size: 13px;
       cursor: pointer;
       transition: all 0.15s;
@@ -153,10 +151,10 @@
       width: 100%;
       padding: 14px;
       background: var(--accent);
-      color: #0a1a0d;
+      color: #fff;
       border: none;
       border-radius: 10px;
-      font-family: 'DM Sans', sans-serif;
+      font-family: inherit;
       font-size: 14px;
       font-weight: 700;
       cursor: pointer;
@@ -164,7 +162,7 @@
       transition: all 0.15s;
       text-transform: uppercase;
     }
-    .save-btn:hover { background: #6ee7a0; box-shadow: 0 4px 20px var(--accent-glow); }
+    .save-btn:hover { background: #6b9df1; box-shadow: 0 4px 20px var(--accent-glow); }
 
     .saved-toast {
       text-align: center;
@@ -182,7 +180,7 @@
     .failure-actions { display: flex; gap: 7px; }
     .small-btn {
       background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
-      border-radius: 7px; padding: 5px 9px; font: 11px 'DM Sans', sans-serif; cursor: pointer;
+      border-radius: 7px; padding: 5px 9px; font: 11px "Segoe UI", sans-serif; cursor: pointer;
     }
     .small-btn:hover { border-color: var(--accent); color: var(--accent); }
     .small-btn.danger:hover { border-color: var(--danger); color: var(--danger); }

@@ -33,6 +33,11 @@ when that browser session closes.
 6. Add `/blast/oauth.html` as an allowed redirect on both OAuth clients, then
    redeploy.
 
+The app uses `https://test-1-7wpp.pages.dev/blast/oauth.html` as its canonical
+callback even when the preview is opened through a Cloudflare deployment
+alias. To use another permanent domain, set `LIVECHAT_REDIRECT_URI` to the
+exact URI registered in both Developer Console apps.
+
 ## Agent flow
 
 1. Open the standalone admin preview and select **Blast**.
