@@ -2,6 +2,9 @@
 // Pages environment; the browser only receives the fields it needs.
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
+// Department-based sections are being tested in the standalone preview.
+// Keep them out of the installed LiveChat widget until rollout is approved.
+const DEPARTMENT_TABS_LIVE = false;
 
 /* ============================================================
    THEME
@@ -366,6 +369,9 @@ function setDepartmentFromGroups(groups) {
 }
 
 function mainTabAvailability() {
+  if (!previewMode && !DEPARTMENT_TABS_LIVE) {
+    return { customer: true, tickets: false, blast: false, knowledge: false };
+  }
   const rtn = previewMode || currentDepartment === "rtn";
   return {
     customer: rtn,
@@ -382,7 +388,7 @@ function syncMainTabs() {
     activeMainTab = ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
   }
   const mainTabs = document.getElementById("mainTabs");
-  if (mainTabs) mainTabs.hidden = false;
+  if (mainTabs) mainTabs.hidden = !previewMode && !DEPARTMENT_TABS_LIVE;
   const retentionTab = document.getElementById("retentionTab");
   if (retentionTab) retentionTab.hidden = !available.customer;
   const ticketsTab = document.getElementById("ticketsTab");
@@ -922,6 +928,7 @@ function initLiveChatSdk() {
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
     liveWidget = widget;
     previewMode = false;
+    if (!DEPARTMENT_TABS_LIVE) activeMainTab = "customer";
     syncMainTabs();
     // We're definitely embedded in real LiveChat now (this promise only
     // resolves inside an actual Agent App) — stop showing demo data
@@ -2703,7 +2710,7 @@ function renderChatsInner(chats) {
   for (const chat of chats) {
     ensureChatState(chat);
   }
-  if (activeMainTab === "tickets") {
+  if ((previewMode || DEPARTMENT_TABS_LIVE) && activeMainTab === "tickets") {
     const chat = chats[0];
     const card = document.createElement("div");
     card.className = "chat-card ticket-workspace-card";
@@ -4169,7 +4176,7 @@ async function refreshDropdownOptions() {
   if (!loaded) {
     await Promise.allSettled([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchConfiguredBonusPrograms()]);
   }
-  await fetchTicketConfig();
+  if (!IS_EMBEDDED_APP || DEPARTMENT_TABS_LIVE) await fetchTicketConfig();
 }
 setInterval(() => {
   if (!document.hidden) refreshDropdownOptions();
