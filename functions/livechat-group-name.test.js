@@ -23,18 +23,15 @@ test("returns the signed-in OAuth agent's assigned groups for department access"
       };
     }
     if (action === "list_groups") {
+      assert.deepEqual(JSON.parse(options.body), { fields: ["agent_priorities"] });
       return { json: async () => ([
-        { id: 10, name: "AS126 Priority Support" },
-        { id: 20, name: "Priority 96" },
+        { id: 10, name: "AS126 Priority Support", agent_priorities: { "agent-1": "normal" } },
+        { id: 20, name: "Priority 96", agent_priorities: { "agent-1": "normal" } },
       ]) };
     }
     if (action === "info") {
       assert.equal(options.headers.Authorization, "Bearer signed-in-token");
       return { json: async () => ({ account_id: "agent-1" }) };
-    }
-    if (action === "get_agent") {
-      assert.deepEqual(JSON.parse(options.body), { id: "agent-1", fields: ["groups"] });
-      return { json: async () => ({ id: "agent-1", groups: [{ id: 10 }, { id: 20 }] }) };
     }
     throw new Error(`Unexpected URL: ${url}`);
   };

@@ -36,7 +36,7 @@ async function fetchGroups(pat) {
   const res = await fetch("https://api.livechatinc.com/v3.6/configuration/action/list_groups", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ fields: ["agent_priorities"] }),
   });
   const data = await res.json();
   if (!Array.isArray(data)) {
@@ -85,22 +85,6 @@ function groupIdsOf(chat) {
   return ids.map(String);
 }
 
-async function configurationAction(pat, action, payload) {
-  const res = await fetch("https://api.livechatinc.com/v3.6/configuration/action/" + action, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
-    body: JSON.stringify(payload || {}),
-  });
-  const data = await res.json();
-  if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-  return data;
-}
-
-function groupIdsOfAgent(agent) {
-  const raw = Array.isArray(agent?.groups) ? agent.groups : Array.isArray(agent?.group_ids) ? agent.group_ids : [];
-  return raw.map((group) => String(typeof group === "object" ? group?.id : group)).filter(Boolean);
-}
-
 async function departmentGroupsForSignedInAgent(pat, agentToken, groups) {
   if (!agentToken) return null;
   try {
@@ -110,9 +94,9 @@ async function departmentGroupsForSignedInAgent(pat, agentToken, groups) {
     const info = await infoRes.json();
     const agentId = String(info?.account_id || "");
     if (!agentId) return null;
-    const agent = await configurationAction(pat, "get_agent", { id: agentId, fields: ["groups"] });
-    const ids = new Set(groupIdsOfAgent(agent));
-    return groups.filter((group) => ids.has(String(group.id))).map((group) => group.name);
+    return groups
+      .filter((group) => Object.prototype.hasOwnProperty.call(group.agent_priorities || {}, agentId))
+      .map((group) => group.name);
   } catch (_) {
     // Some PATs may not include the optional agents--all:ro scope. Brand
     // detection should still work, so department resolution stays optional.
