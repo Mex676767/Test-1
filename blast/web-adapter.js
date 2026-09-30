@@ -11,6 +11,7 @@
   const STATE_KEY = "ca-livechat-oauth-state";
   const PENDING_ACCOUNT_KEY = "ca-livechat-oauth-pending-account";
   const SELECTED_ACCOUNT_KEY = "ca-livechat-selected-account";
+  const DETECTED_ACCOUNT_KEY = "rc-livechat-account";
   let stopRequested = false;
 
   const readArea = (name) => { try { return JSON.parse(localStorage.getItem(prefix + name) || "{}"); } catch (_) { return {}; } };
@@ -36,9 +37,15 @@
   });
   const emit = (message) => runtimeListeners.forEach((fn) => fn(message, {}, () => {}));
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const selectedAccount = () => sessionStorage.getItem(SELECTED_ACCOUNT_KEY) || "lc1";
+  const validAccountKey = (value) => /^lc[12]$/.test(String(value || "")) ? String(value) : "";
+  const detectedAccount = () => {
+    const own = validAccountKey(sessionStorage.getItem(DETECTED_ACCOUNT_KEY));
+    if (own) return own;
+    try { return validAccountKey(window.parent?.sessionStorage?.getItem(DETECTED_ACCOUNT_KEY)); } catch (_) { return ""; }
+  };
+  const selectedAccount = () => detectedAccount() || validAccountKey(sessionStorage.getItem(SELECTED_ACCOUNT_KEY));
   const accountStorageKey = (base, accountKey) => `${base}:${accountKey || selectedAccount()}`;
-  const token = (accountKey = selectedAccount()) => Number(sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, accountKey)) || 0) > Date.now()
+  const token = (accountKey = selectedAccount()) => accountKey && Number(sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, accountKey)) || 0) > Date.now()
     ? sessionStorage.getItem(accountStorageKey(TOKEN_KEY, accountKey)) || ""
     : "";
 
@@ -58,6 +65,18 @@
     writeArea("local", { ...old, failureLog: [entry, ...(old.failureLog || [])].slice(0, 500) }, old);
   }
 
+  async function detectAccountFromUrl(url) {
+    const ids = extractIds(url);
+    if (!ids.threadId) return "";
+    const response = await fetch("/livechat-chat-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId: ids.threadId, ...(ids.chatId ? { realChatId: ids.chatId } : {}) }),
+    });
+    const data = await response.json();
+    return response.ok && data.ok ? validAccountKey(data.accountKey) : "";
+  }
+
   async function resolveChat(url) {
     const ids = extractIds(url);
     if (ids.chatId) return { ...ids, isActive: null };
@@ -66,7 +85,7 @@
     const data = await response.json();
     if (!response.ok || !data.ok || !data.chatId) throw new Error(data.error || "This archive is outside the recent lookup window.");
     if (data.accountKey && data.accountKey !== selectedAccount()) {
-      throw new Error(`This link belongs to ${data.accountKey === "lc1" ? "LiveChat Account 1" : "LiveChat Account 2"}. Switch accounts above before sending.`);
+      throw new Error("This chat belongs to the other LiveChat workspace. Open the app there and reconnect before sending.");
     }
     return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive };
   }
@@ -171,32 +190,72 @@
     window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
   }
 
+  async function accountForConnection(clients) {
+    const workspaceAccount = detectedAccount();
+    if (clients.some((client) => client.key === workspaceAccount)) return workspaceAccount;
+
+    const firstUrl = (readArea("local").chatEntries || []).find((entry) => String(entry?.url || "").trim())?.url;
+    if (firstUrl) {
+      const detected = await detectAccountFromUrl(firstUrl);
+      if (detected) {
+        sessionStorage.setItem(SELECTED_ACCOUNT_KEY, detected);
+        return detected;
+      }
+    }
+
+    const connected = clients.filter((client) => Boolean(token(client.key)));
+    if (connected.length === 1) return connected[0].key;
+
+    const previous = validAccountKey(sessionStorage.getItem(SELECTED_ACCOUNT_KEY));
+    return clients.some((client) => client.key === previous) ? previous : "";
+  }
+
   function renderConnection(config) {
     const banner = document.getElementById("bridgeBanner");
     if (!banner) return;
     const clients = Array.isArray(config.clients) && config.clients.length
       ? config.clients
       : (config.clientId ? [{ key: "lc1", label: "LiveChat Account 1", clientId: config.clientId }] : []);
-    let accountKey = selectedAccount();
-    if (!clients.some((client) => client.key === accountKey)) accountKey = clients[0]?.key || "lc1";
-    sessionStorage.setItem(SELECTED_ACCOUNT_KEY, accountKey);
+    const accountKey = selectedAccount();
     const client = clients.find((item) => item.key === accountKey);
     const connected = Boolean(token(accountKey));
-    const accountPicker = clients.length > 1
-      ? `<select id="agentAccountSelect" class="connection-select">${clients.map((item) => `<option value="${item.key}"${item.key === accountKey ? " selected" : ""}>${item.label}</option>`).join("")}</select>`
-      : "";
-    banner.innerHTML = `<div class="connection-card${connected ? " is-connected" : ""}"><div class="connection-state"><span class="connection-dot"></span><div class="connection-copy"><div class="connection-title">${connected ? "Agent connected" : "Connect an agent"}</div><div class="connection-note">${connected ? `${client?.label || "LiveChat"} · Messages count toward this agent's KPI.` : config.configured ? `Choose the correct LiveChat account before sending.` : "LiveChat OAuth has not been configured yet."}</div></div></div><div class="connection-controls">${accountPicker}<button id="agentConnectBtn" class="connection-button">${connected ? "Reconnect" : "Connect"}</button></div></div>`;
-    document.getElementById("agentAccountSelect")?.addEventListener("change", (event) => {
-      sessionStorage.setItem(SELECTED_ACCOUNT_KEY, event.target.value);
-      renderConnection(config);
-    });
+    const connectionNote = connected
+      ? ""
+      : config.configured
+        ? "Detected automatically from this workspace or the first chat link."
+        : "LiveChat OAuth has not been configured yet.";
+    banner.innerHTML = `<div class="connection-card${connected ? " is-connected" : ""}"><div class="connection-state"><span class="connection-dot"></span><div class="connection-copy"><div class="connection-title">LiveChat Account</div>${connectionNote ? `<div class="connection-note">${connectionNote}</div>` : ""}</div></div><div class="connection-controls"><button id="agentConnectBtn" class="connection-button">${connected ? "Reconnect" : "Connect"}</button></div></div>`;
     const button = document.getElementById("agentConnectBtn");
-    button.disabled = !client;
-    button.style.opacity = client ? "1" : ".45";
-    button.addEventListener("click", () => client && connectAgent(client));
+    button.disabled = !clients.length;
+    button.style.opacity = clients.length ? "1" : ".45";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Detecting…";
+      try {
+        const detectedKey = await accountForConnection(clients);
+        const detectedClient = clients.find((item) => item.key === detectedKey);
+        if (!detectedClient) {
+          const note = banner.querySelector(".connection-note");
+          if (note) note.textContent = "Open a customer chat or paste one archive link so the LiveChat Account can be detected.";
+          button.textContent = "Connect";
+          button.disabled = false;
+          return;
+        }
+        sessionStorage.setItem(SELECTED_ACCOUNT_KEY, detectedKey);
+        connectAgent(detectedClient);
+      } catch (_) {
+        const note = banner.querySelector(".connection-note");
+        if (note) note.textContent = "Could not detect this LiveChat Account. Open a customer chat and try again.";
+        button.textContent = "Connect";
+        button.disabled = false;
+      }
+    });
   }
 
   let oauthConfig = { configured: false, clients: [], clientId: "", redirectUri: "" };
+  window.addEventListener("storage", (event) => {
+    if (event.storageArea === sessionStorage && event.key === DETECTED_ACCOUNT_KEY) renderConnection(oauthConfig);
+  });
   window.addEventListener("message", (event) => {
     const callbackOrigin = oauthConfig.redirectUri ? new URL(oauthConfig.redirectUri).origin : location.origin;
     if (event.origin !== callbackOrigin || event.data?.source !== "ca-livechat-oauth") return;
