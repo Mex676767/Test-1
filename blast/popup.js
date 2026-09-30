@@ -10,6 +10,10 @@ const defMsgList  = document.getElementById('defMsgList');
 const delaySlider = document.getElementById('delaySlider');
 const delayVal    = document.getElementById('delayVal');
 const concurrencySelect = document.getElementById('concurrencySelect');
+const concurrencyPicker = document.getElementById('concurrencyPicker');
+const concurrencyTrigger = document.getElementById('concurrencyTrigger');
+const concurrencyLabel = document.getElementById('concurrencyLabel');
+const concurrencyMenu = document.getElementById('concurrencyMenu');
 const startBtn    = document.getElementById('startBtn');
 const status      = document.getElementById('status');
 const statusText  = document.getElementById('statusText');
@@ -28,16 +32,18 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // ── Load ──────────────────────────────────────────────────────────────────────
-chrome.storage.sync.get(['cannedMessages', 'delay', 'concurrency', 'chatEntries', 'isRunning'], (d) => {
+chrome.storage.sync.get(['cannedMessages', 'delay', 'concurrency', 'concurrencyVersion', 'chatEntries', 'isRunning'], (d) => {
   defaultMessages = d.cannedMessages || [];
   const delay = d.delay || 3;
   delaySlider.value = delay;
   delayVal.textContent = delay + 's';
   const savedConcurrency = Number(d.concurrency);
-  const concurrency = [1, 3, 5, 8, 10].includes(savedConcurrency)
+  const concurrency = d.concurrencyVersion === 2 && [1, 3, 5, 8, 10].includes(savedConcurrency)
     ? savedConcurrency
-    : savedConcurrency === 2 ? 3 : 5;
+    : 5;
   concurrencySelect.value = String(concurrency);
+  updateConcurrencyPicker();
+  if (d.concurrencyVersion !== 2) chrome.storage.sync.set({ concurrency: 5, concurrencyVersion: 2 });
 
   // Large queues exceed chrome.storage.sync's per-item quota, so keep them local.
   // Fall back to the old sync value once to migrate existing installations.
@@ -225,8 +231,46 @@ delaySlider.addEventListener('input', () => {
   chrome.storage.sync.set({ delay: v });
 });
 
+function updateConcurrencyPicker() {
+  const selected = concurrencySelect.options[concurrencySelect.selectedIndex];
+  concurrencyLabel.textContent = selected?.textContent || '5 — Balanced';
+  concurrencyMenu.querySelectorAll('.speed-option').forEach((option) => {
+    const active = option.dataset.value === concurrencySelect.value;
+    option.classList.toggle('selected', active);
+    option.setAttribute('aria-selected', String(active));
+  });
+}
+
+function closeConcurrencyPicker() {
+  concurrencyPicker.classList.remove('open');
+  concurrencyTrigger.setAttribute('aria-expanded', 'false');
+}
+
+concurrencyTrigger.addEventListener('click', () => {
+  const opening = !concurrencyPicker.classList.contains('open');
+  concurrencyPicker.classList.toggle('open', opening);
+  concurrencyTrigger.setAttribute('aria-expanded', String(opening));
+});
+
+concurrencyMenu.querySelectorAll('.speed-option').forEach((option) => {
+  option.addEventListener('click', () => {
+    concurrencySelect.value = option.dataset.value;
+    concurrencySelect.dispatchEvent(new Event('change', { bubbles: true }));
+    closeConcurrencyPicker();
+  });
+});
+
+document.addEventListener('click', (event) => {
+  if (!concurrencyPicker.contains(event.target)) closeConcurrencyPicker();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeConcurrencyPicker();
+});
+
 concurrencySelect.addEventListener('change', () => {
-  chrome.storage.sync.set({ concurrency: Number(concurrencySelect.value) });
+  updateConcurrencyPicker();
+  chrome.storage.sync.set({ concurrency: Number(concurrencySelect.value), concurrencyVersion: 2 });
 });
 
 // ── Save ──────────────────────────────────────────────────────────────────────

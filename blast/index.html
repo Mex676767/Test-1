@@ -230,6 +230,18 @@
     .delay-row label{font-size:11px}.delay-row input[type=range]{grid-column:1/-1;width:100%}
     .delay-row select{min-width:126px;padding:6px 8px}
     .delay-val{font-size:11px}.divider{height:1px;background:var(--bd)}
+    .speed-picker{position:relative;min-width:156px;justify-self:end}
+    .speed-select-native{position:absolute!important;width:1px!important;height:1px!important;opacity:0!important;pointer-events:none!important}
+    .speed-trigger{width:100%;height:36px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 11px;border:1px solid var(--bd);border-radius:8px;background:var(--s2);color:var(--txt);font-size:11px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}
+    .speed-trigger:hover,.speed-picker.open .speed-trigger{border-color:rgba(79,140,240,.7);background:#242a34}
+    .speed-chevron{width:7px;height:7px;border-right:1.5px solid var(--dim);border-bottom:1.5px solid var(--dim);transform:rotate(45deg) translateY(-2px);transition:transform .15s}
+    .speed-picker.open .speed-chevron{transform:rotate(225deg) translate(-1px,-1px)}
+    .speed-menu{position:absolute;right:0;bottom:calc(100% + 7px);z-index:20;width:100%;padding:5px;border:1px solid var(--bd);border-radius:10px;background:#20242c;box-shadow:0 14px 34px rgba(0,0,0,.38);display:none}
+    .speed-picker.open .speed-menu{display:flex;flex-direction:column;gap:2px}
+    .speed-option{width:100%;display:flex;align-items:center;justify-content:space-between;border:0;border-radius:7px;background:transparent;color:var(--dim);padding:8px 9px;font-size:11px;text-align:left;cursor:pointer}
+    .speed-option:hover{background:rgba(255,255,255,.045);color:var(--txt)}
+    .speed-option.selected{background:var(--ad);color:#8eb7fb}
+    .speed-option.selected::after{content:"✓";color:var(--accent);font-weight:700}
     .status{padding:11px 12px}.log{max-height:140px}.btn{padding:12px;text-transform:none;letter-spacing:0;border-radius:9px}
 
     .bulk-body{padding:0}.bulk-workspace{background:rgba(25,28,34,.88);border:1px solid var(--bd);border-radius:13px;padding:16px}
@@ -321,13 +333,25 @@
         <div class="divider"></div>
         <div class="delay-row">
           <label>Chats at once</label>
-          <select id="concurrencySelect" title="Use fewer workers on lower-end devices">
-            <option value="1">1 — safest</option>
-            <option value="3">3 — stable</option>
-            <option value="5" selected>5 — balanced</option>
-            <option value="8">8 — fast</option>
-            <option value="10">10 — maximum</option>
-          </select>
+          <div class="speed-picker" id="concurrencyPicker">
+            <select id="concurrencySelect" class="speed-select-native" title="Use fewer workers on lower-end devices" tabindex="-1" aria-hidden="true">
+              <option value="1">1 — Safest</option>
+              <option value="3">3 — Stable</option>
+              <option value="5" selected>5 — Balanced</option>
+              <option value="8">8 — Fast</option>
+              <option value="10">10 — Maximum</option>
+            </select>
+            <button type="button" class="speed-trigger" id="concurrencyTrigger" aria-haspopup="listbox" aria-expanded="false">
+              <span id="concurrencyLabel">5 — Balanced</span><span class="speed-chevron"></span>
+            </button>
+            <div class="speed-menu" id="concurrencyMenu" role="listbox" aria-label="Chats at once">
+              <button type="button" class="speed-option" data-value="1" role="option">1 — Safest</button>
+              <button type="button" class="speed-option" data-value="3" role="option">3 — Stable</button>
+              <button type="button" class="speed-option selected" data-value="5" role="option">5 — Balanced</button>
+              <button type="button" class="speed-option" data-value="8" role="option">8 — Fast</button>
+              <button type="button" class="speed-option" data-value="10" role="option">10 — Maximum</button>
+            </div>
+          </div>
         </div>
       </section>
 
