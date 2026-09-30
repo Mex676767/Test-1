@@ -24,7 +24,6 @@ import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
 // brand group...) is ignored -- if the chat has no Priority Support group,
 // Brand is left blank for a manual pick rather than guessed.
 const groupsCacheByPat = new Map(); // pat -> { data, expiry }
-const agentsCacheByPat = new Map(); // pat -> { data, expiry }
 
 // Tolerant on purpose: also matches a typo'd "Priorty Support".
 const PRIORITY_RE = /prior\w*\s+support/i;
@@ -46,25 +45,6 @@ async function fetchGroups(pat) {
   }
 
   groupsCacheByPat.set(pat, { data, expiry: now + 10 * 60_000 });
-  return data;
-}
-
-async function fetchAgents(pat) {
-  const now = Date.now();
-  const cached = agentsCacheByPat.get(pat);
-  if (cached && now < cached.expiry) return cached.data;
-
-  const res = await fetch("https://api.livechatinc.com/v3.6/configuration/action/list_agents", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
-    body: JSON.stringify({ fields: ["groups"] }),
-  });
-  const data = await res.json();
-  if (!Array.isArray(data)) {
-    const msg = (data && data.error && (data.error.message || JSON.stringify(data.error))) || "Unexpected response from LiveChat list_agents";
-    throw new Error(msg);
-  }
-  agentsCacheByPat.set(pat, { data, expiry: now + 10 * 60_000 });
   return data;
 }
 
@@ -105,16 +85,15 @@ function groupIdsOf(chat) {
   return ids.map(String);
 }
 
-function agentIdFromChat(chat) {
-  const users = Array.isArray(chat?.users) ? chat.users : [];
-  const agentIds = new Set(users.filter((user) => user?.type === "agent").map((user) => String(user.id)));
-  const threads = [chat?.thread, ...(Array.isArray(chat?.threads) ? chat.threads : [])].filter(Boolean);
-  const events = threads.flatMap((thread) => Array.isArray(thread.events) ? thread.events : []);
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const authorId = String(events[index]?.author_id || "");
-    if (agentIds.has(authorId)) return authorId;
-  }
-  return agentIds.size === 1 ? [...agentIds][0] : "";
+async function configurationAction(pat, action, payload) {
+  const res = await fetch("https://api.livechatinc.com/v3.6/configuration/action/" + action, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await res.json();
+  if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+  return data;
 }
 
 function groupIdsOfAgent(agent) {
@@ -122,13 +101,16 @@ function groupIdsOfAgent(agent) {
   return raw.map((group) => String(typeof group === "object" ? group?.id : group)).filter(Boolean);
 }
 
-async function departmentGroupsForAgent(pat, chat, groups) {
-  const agentId = agentIdFromChat(chat);
-  if (!agentId) return null;
+async function departmentGroupsForSignedInAgent(pat, agentToken, groups) {
+  if (!agentToken) return null;
   try {
-    const agents = await fetchAgents(pat);
-    const agent = agents.find((item) => String(item?.id) === agentId);
-    if (!agent) return null;
+    const infoRes = await fetch("https://accounts.livechat.com/v2/info", {
+      headers: { Authorization: "Bearer " + agentToken },
+    });
+    const info = await infoRes.json();
+    const agentId = String(info?.account_id || "");
+    if (!agentId) return null;
+    const agent = await configurationAction(pat, "get_agent", { id: agentId, fields: ["groups"] });
     const ids = new Set(groupIdsOfAgent(agent));
     return groups.filter((group) => ids.has(String(group.id))).map((group) => group.name);
   } catch (_) {
@@ -143,7 +125,7 @@ export async function handler(event) {
     if (!LIVECHAT_PATS.length) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: null }) };
     }
-    const { groupID, threadId, realChatId } = JSON.parse(event.body || "{}");
+    const { groupID, threadId, realChatId, agentTokens = {} } = JSON.parse(event.body || "{}");
     if (!groupID && !threadId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "groupID or threadId is required" }) };
     }
@@ -166,7 +148,7 @@ export async function handler(event) {
           .map((id) => groups.find((g) => String(g.id) === id))
           .filter(Boolean)
           .map((g) => g.name);
-        const departmentGroups = ownedChat ? await departmentGroupsForAgent(owner.pat, ownedChat, groups) : null;
+        const departmentGroups = await departmentGroupsForSignedInAgent(owner.pat, agentTokens[owner.accountKey], groups);
         const chosen = names.find((n) => PRIORITY_RE.test(n)) || null;
         if (chosen) {
           return { statusCode: 200, body: JSON.stringify({ ok: true, groupName: chosen, groups: names, departmentGroups, accountKey: owner.accountKey, resolvedBy: "chat-owner-account" }) };

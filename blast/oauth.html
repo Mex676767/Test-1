@@ -25,7 +25,7 @@
     // verified by the opener before it accepts the token.
     window.opener.postMessage(payload, "*");
     document.getElementById("title").textContent = token ? "LiveChat connected" : "Could not connect LiveChat";
-    document.getElementById("message").textContent = token ? "You can return to the Blast tab." : payload.error;
+    document.getElementById("message").textContent = token ? "You can return to the app." : payload.error;
     if (token) setTimeout(() => window.close(), 500);
   } else {
     document.getElementById("title").textContent = "Open this from the Blast tab";

@@ -5,6 +5,7 @@ const IS_EMBEDDED_APP = window.self !== window.top;
 // Department-based sections are being tested in the standalone preview.
 // Keep them out of the installed LiveChat widget until rollout is approved.
 const DEPARTMENT_TABS_LIVE = false;
+const PREVIEW_LOGIN_GATE = !IS_EMBEDDED_APP;
 
 /* ============================================================
    THEME
@@ -215,6 +216,125 @@ async function fetchConfiguredBonusPrograms() {
   }
 }
 
+function applyDepartmentChrome() {
+  if (!previewMode && !DEPARTMENT_TABS_LIVE) {
+    document.getElementById("settingsBtn")?.removeAttribute("hidden");
+    document.getElementById("agentBadge")?.removeAttribute("hidden");
+    return;
+  }
+  const rtn = currentDepartment === "rtn";
+  const settingsButton = document.getElementById("settingsBtn");
+  const agentBadge = document.getElementById("agentBadge");
+  if (settingsButton) settingsButton.hidden = !rtn;
+  if (agentBadge) agentBadge.hidden = !rtn;
+}
+
+async function resolveLoggedInDepartment(accountKey, token) {
+  const response = await fetch("/livechat-agent-department", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accountKey, agentToken: token }),
+  });
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.error || "Could not identify this LiveChat agent.");
+  setCurrentLiveChatAccount(accountKey);
+  setDepartmentFromGroups(data.groups || []);
+  activeMainTab = data.department === "rtn" ? "customer" : "tickets";
+  applyDepartmentChrome();
+  syncMainTabs();
+  renderChats(activeChats);
+  return data;
+}
+
+async function requirePreviewLiveChatLogin() {
+  if (!PREVIEW_LOGIN_GATE) return;
+  const response = await fetch("/livechat-oauth-config", { cache: "no-store" });
+  const config = await response.json();
+  const clients = Array.isArray(config.clients) ? config.clients : [];
+  if (!clients.length) throw new Error("LiveChat login has not been configured yet.");
+
+  const validToken = (accountKey) => {
+    try {
+      const expiry = Number(sessionStorage.getItem(`ca-livechat-agent-token-expiry:${accountKey}`) || 0);
+      return expiry > Date.now() ? sessionStorage.getItem(`ca-livechat-agent-token:${accountKey}`) || "" : "";
+    } catch (_) { return ""; }
+  };
+  const previouslySelected = (() => {
+    try { return sessionStorage.getItem("ca-livechat-selected-account") || ""; } catch (_) { return ""; }
+  })();
+  const connected = clients.filter((client) => validToken(client.key));
+  const automatic = connected.find((client) => client.key === previouslySelected) || (connected.length === 1 ? connected[0] : null);
+  if (automatic) {
+    try {
+      await resolveLoggedInDepartment(automatic.key, validToken(automatic.key));
+      return;
+    } catch (_) { /* show the login screen so the agent can reconnect */ }
+  }
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.id = "liveChatLoginOverlay";
+    overlay.className = "settings-overlay";
+    overlay.innerHTML = `
+      <div class="settings-panel login-panel">
+        <div class="login-mark">◆</div>
+        <div class="settings-head">Connect LiveChat</div>
+        <p class="settings-hint">Sign in with your own agent account first. Your assigned groups will set up the correct workspace automatically.</p>
+        <div class="login-actions">
+          ${clients.map((client, index) => `<button type="button" class="submit-btn login-account" data-account="${escapeHtml(client.key)}">Connect workspace ${index + 1}</button>`).join("")}
+        </div>
+        <div id="liveChatLoginStatus" class="login-status"></div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const status = overlay.querySelector("#liveChatLoginStatus");
+    let pendingState = "";
+    let pendingClient = null;
+    const showError = (message) => {
+      status.textContent = message;
+      status.className = "login-status error";
+      overlay.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+    };
+    const onMessage = async (event) => {
+      let callbackOrigin = location.origin;
+      try { callbackOrigin = new URL(config.redirectUri).origin; } catch (_) {}
+      if (event.origin !== callbackOrigin || event.data?.source !== "ca-livechat-oauth" || event.data.state !== pendingState) return;
+      if (event.data.type !== "SUCCESS" || !pendingClient) {
+        showError(event.data.error || "LiveChat login was not completed.");
+        return;
+      }
+      try {
+        sessionStorage.setItem(`ca-livechat-agent-token:${pendingClient.key}`, event.data.token);
+        sessionStorage.setItem(`ca-livechat-agent-token-expiry:${pendingClient.key}`, String(event.data.expiresAt));
+        sessionStorage.setItem("ca-livechat-selected-account", pendingClient.key);
+        status.textContent = "Checking your assigned groups…";
+        status.className = "login-status";
+        await resolveLoggedInDepartment(pendingClient.key, event.data.token);
+        window.removeEventListener("message", onMessage);
+        overlay.remove();
+        resolve();
+      } catch (error) {
+        showError(error.message);
+      }
+    };
+    window.addEventListener("message", onMessage);
+    overlay.querySelectorAll(".login-account").forEach((button) => {
+      button.addEventListener("click", () => {
+        pendingClient = clients.find((client) => client.key === button.dataset.account);
+        if (!pendingClient) return;
+        pendingState = crypto.randomUUID();
+        overlay.querySelectorAll("button").forEach((item) => { item.disabled = true; });
+        status.textContent = "Complete the login in the new window…";
+        status.className = "login-status";
+        const redirectUri = config.redirectUri || `${location.origin}/blast/oauth.html`;
+        const url = new URL("https://accounts.livechat.com/");
+        url.search = new URLSearchParams({ response_type: "token", client_id: pendingClient.clientId, redirect_uri: redirectUri, state: pendingState, prompt: "consent" }).toString();
+        window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
+      });
+    });
+  });
+}
+
 // Agent, Brand, Inquiry and Status all come from the same Lark table. The
 // combined endpoint reads that table once, instead of making four duplicate
 // field requests plus a separate bonus-config request during startup.
@@ -372,7 +492,7 @@ function mainTabAvailability() {
   if (!previewMode && !DEPARTMENT_TABS_LIVE) {
     return { customer: true, tickets: false, blast: false, knowledge: false };
   }
-  const rtn = previewMode || currentDepartment === "rtn";
+  const rtn = currentDepartment === "rtn";
   return {
     customer: rtn,
     tickets: ESCALATION_TICKET_ENABLED,
@@ -593,6 +713,18 @@ function applyProfile(profile) {
 const detectedBrandFor = new Map();
 const groupIdFor = new Map();
 
+function liveChatAgentTokens() {
+  const tokens = {};
+  try {
+    for (const accountKey of ["lc1", "lc2"]) {
+      const expiry = Number(sessionStorage.getItem(`ca-livechat-agent-token-expiry:${accountKey}`) || 0);
+      const token = sessionStorage.getItem(`ca-livechat-agent-token:${accountKey}`) || "";
+      if (token && expiry > Date.now()) tokens[accountKey] = token;
+    }
+  } catch (_) { /* OAuth remains optional until the agent connects LiveChat */ }
+  return tokens;
+}
+
 async function resolveBrandFromGroupId(chatId, groupID) {
   if (groupID) groupIdFor.set(chatId, groupID);
   if (!chatId) return;
@@ -612,7 +744,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
       // chatId here is the thread id (see chatFromProfile) -- lets the server
       // find which LiveChat account owns the chat, since a group ID alone is
       // only unique within one account.
-      body: JSON.stringify({ groupID, threadId: chatId }),
+      body: JSON.stringify({ groupID, threadId: chatId, agentTokens: liveChatAgentTokens() }),
     });
     const data = await res.json();
     if (data.accountKey) setCurrentLiveChatAccount(data.accountKey, chatId);
@@ -620,15 +752,9 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     // Brand early-return because Priority 96 / Priority TC deliberately do
     // not count as brand groups.
     if (data.ok && Array.isArray(data.departmentGroups)) {
-      // Authoritative: these are the groups assigned to the LiveChat agent
-      // identified from the active conversation. No RTN marker means CS.
+      // Authoritative: these belong to the signed-in OAuth agent, rather
+      // than whichever agent most recently participated in this chat.
       setDepartmentFromGroups(data.departmentGroups);
-    } else if (data.ok && Array.isArray(data.groups)
-      && data.groups.some((name) => /^priority\s+(?:96|tc)$/i.test(String(name || "").trim()))) {
-      // Useful fallback when the chat itself explicitly exposes an RTN
-      // access group, but never downgrade a saved RTN session merely because
-      // an ordinary brand group omitted the agent's department groups.
-      setDepartmentFromGroups(data.groups);
     }
     if (!data.ok || !data.groupName) {
       // Same deal — this used to fail completely silently, which is exactly
@@ -4234,6 +4360,7 @@ function runWhenIdle(task, timeout = 1500) {
   loggingPauseCheck.checked = loggingPaused;
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   if (!IS_EMBEDDED_APP) logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
+  applyDepartmentChrome();
   syncMainTabs();
   updateAgentBadge();
   renderChats(activeChats);
@@ -4243,7 +4370,19 @@ function runWhenIdle(task, timeout = 1500) {
   initLiveChatSdk();
 
   const optionsReady = refreshDropdownOptions();
-  if (!selectedAgent) {
+  if (PREVIEW_LOGIN_GATE) {
+    try {
+      await requirePreviewLiveChatLogin();
+    } catch (error) {
+      logDiagnostic(`LiveChat login setup failed: ${error.message}`, "error");
+      const overlay = document.createElement("div");
+      overlay.className = "settings-overlay";
+      overlay.innerHTML = `<div class="settings-panel"><div class="settings-head">LiveChat login unavailable</div><p class="settings-hint">${escapeHtml(error.message)}</p></div>`;
+      document.body.appendChild(overlay);
+      return;
+    }
+  }
+  if (currentDepartment === "rtn" && !selectedAgent) {
     // Give the agent-name list a short chance to arrive, while never holding
     // the LiveChat connection or the first paint behind the network.
     await Promise.race([
