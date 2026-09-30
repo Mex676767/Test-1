@@ -3810,6 +3810,67 @@ document.addEventListener("click", (e) => {
   });
 });
 
+const recordSubmitInFlight = new Map();
+const recordRetryTimers = new Map();
+const recordRetryAttempts = new Map();
+
+function clearRecordRetry(chatId) {
+  const timer = recordRetryTimers.get(chatId);
+  if (timer) clearTimeout(timer);
+  recordRetryTimers.delete(chatId);
+  recordRetryAttempts.delete(chatId);
+}
+
+// Same-record updates are idempotent, so retrying a dropped request is safe:
+// it can only write the same final values again, never create another row.
+async function writeLarkRecord(payload) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch("/lark-record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      let data;
+      try { data = await res.json(); } catch (_) { data = null; }
+      if (!res.ok || !data?.ok) {
+        const err = new Error(data?.error || `Record failed (${res.status || "network error"})`);
+        err.retryable = !res.status || res.status >= 500;
+        throw err;
+      }
+      return data;
+    } catch (err) {
+      lastError = err;
+      const retryable = err?.retryable || err instanceof TypeError || /failed to fetch|network/i.test(String(err?.message || ""));
+      if (!retryable || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
+    }
+  }
+  throw lastError || new Error("Record failed");
+}
+
+function scheduleRecordRetry(chatId) {
+  const s = state[chatId];
+  if (!s || s.logged || recordRetryTimers.has(chatId)) return;
+  const attempt = (recordRetryAttempts.get(chatId) || 0) + 1;
+  recordRetryAttempts.set(chatId, attempt);
+  const delay = Math.min(5_000 * (2 ** (attempt - 1)), 60_000);
+  const timer = setTimeout(async () => {
+    recordRetryTimers.delete(chatId);
+    const current = state[chatId];
+    if (!current || current.logged || current.isUnknown) return clearRecordRetry(chatId);
+    await submitRecord(chatId, { auto: true, reason: "Retrying the interrupted save" });
+  }, delay);
+  recordRetryTimers.set(chatId, timer);
+}
+
+function shouldResumeInterruptedSave(s) {
+  return !!(s && !s.logged && !s.isUnknown && s.caRecordId && s.username && s.brand
+    && (s.inquiry || []).length && s.status
+    && /failed to fetch|network|save interrupted/i.test(String(s.autoRecordError || "")));
+}
+
 // Re-sends an already-logged chat's record with its current values -- used
 // when something is edited AFTER the instant claim auto-submit (submitRecord
 // returns early once s.logged is set, so it can't do this itself).
@@ -3822,10 +3883,7 @@ async function resyncLoggedRecord(chatId) {
     return false;
   }
   try {
-    const res = await fetch("/lark-record", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    await writeLarkRecord({
         recordId: s.caRecordId,
         agentName: selectedAgent,
         brand: s.brand,
@@ -3839,10 +3897,7 @@ async function resyncLoggedRecord(chatId) {
         telegram: !!s.telegram,
         vs96FeedbackQuery1: s.vs96FeedbackQuery1 || "",
         vs96FeedbackQuery2: s.vs96FeedbackQuery2 || "",
-      }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || "Update failed");
+      });
     markCaseRecorded(s);
     setStatus("Changes saved to Lark Base.", "success");
     return true;
@@ -3858,7 +3913,18 @@ async function resyncLoggedRecord(chatId) {
 // Always re-queries the card by chatId rather than taking a DOM reference,
 // since renderChats() can have rebuilt the card (e.g. right before an
 // auto-record call) and made any earlier reference stale.
-async function submitRecord(chatId, { auto, reason } = {}) {
+async function submitRecord(chatId, options = {}) {
+  if (recordSubmitInFlight.has(chatId)) return recordSubmitInFlight.get(chatId);
+  const task = submitRecordOnce(chatId, options);
+  recordSubmitInFlight.set(chatId, task);
+  try {
+    return await task;
+  } finally {
+    if (recordSubmitInFlight.get(chatId) === task) recordSubmitInFlight.delete(chatId);
+  }
+}
+
+async function submitRecordOnce(chatId, { auto, reason } = {}) {
   const s = state[chatId];
   if (previewMode) return;
   if (!s || s.logged) return;
@@ -3972,10 +4038,7 @@ async function submitRecord(chatId, { auto, reason } = {}) {
   if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Recording…"; }
 
   try {
-    const res = await fetch("/lark-record", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    await writeLarkRecord({
         recordId: s.caRecordId,
         agentName: selectedAgent,
         brand: s.brand,
@@ -3992,21 +4055,21 @@ async function submitRecord(chatId, { auto, reason } = {}) {
         telegram: !!s.telegram,
         vs96FeedbackQuery1: s.vs96FeedbackQuery1 || "",
         vs96FeedbackQuery2: s.vs96FeedbackQuery2 || "",
-      }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || "Record failed");
+      });
     s.logged = true;
+    clearRecordRetry(chatId);
     markCaseRecorded(s);
+    saveState();
     setStatus(`Logged ${s.username} to Lark Base${auto ? ` (auto — ${reasonText.toLowerCase()})` : ""}.`, "success");
     renderChats(activeChats);
     renderNeedsAttentionPanel();
     scheduleNeedsAttentionRefresh(200);
   } catch (err) {
     if (auto) {
-      s.autoRecordError = `Auto-record failed (${err.message}) — fill in and click Record to Lark Base manually.`;
+      s.autoRecordError = `Save interrupted (${err.message}) — retrying automatically.`;
       logDiagnostic(s.autoRecordError, "error");
       renderChats(activeChats);
+      scheduleRecordRetry(chatId);
     } else {
       if (submitBtn) {
         submitBtn.disabled = false;
@@ -4145,6 +4208,17 @@ function runWhenIdle(task, timeout = 1500) {
   runWhenIdle(() => {
     renderNeedsAttentionPanel();
     fetchStaleRecords();
+    // Recover claims saved by an older app version that stopped at
+    // "Auto-record failed (Failed to fetch)" while the chat was still open.
+    if (!loggingPaused) {
+      for (const [chatId, saved] of Object.entries(state)) {
+        if (shouldResumeInterruptedSave(saved)
+          && (!currentLiveChatAccount || saved.liveChatAccount === currentLiveChatAccount)
+          && (!saved.caOwner || saved.caOwner === selectedAgent)) {
+          scheduleRecordRetry(chatId);
+        }
+      }
+    }
   }, 2000);
 })();
 
