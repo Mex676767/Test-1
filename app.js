@@ -6,6 +6,10 @@ const IS_EMBEDDED_APP = window.self !== window.top;
 // Keep them out of the installed LiveChat widget until rollout is approved.
 const DEPARTMENT_TABS_LIVE = false;
 const PREVIEW_LOGIN_GATE = !IS_EMBEDDED_APP;
+// Temporary preview fallback. Turn this back on after agents--my:ro has
+// been added to both LiveChat OAuth clients.
+const AUTOMATIC_DEPARTMENT_DETECTION = false;
+const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
 
 /* ============================================================
    THEME
@@ -246,6 +250,43 @@ async function resolveLoggedInDepartment(accountKey, token) {
   return data;
 }
 
+function applyManualDepartment(accountKey, department) {
+  setCurrentLiveChatAccount(accountKey);
+  currentDepartment = department === "rtn" ? "rtn" : "cs";
+  try { sessionStorage.setItem(DEPARTMENT_SESSION_KEY, currentDepartment); } catch (_) {}
+  try { sessionStorage.setItem(MANUAL_DEPARTMENT_SESSION_KEY, currentDepartment); } catch (_) {}
+  activeMainTab = currentDepartment === "rtn" ? "customer" : "tickets";
+  applyDepartmentChrome();
+  syncMainTabs();
+  renderChats(activeChats);
+}
+
+function requireManualDepartment(accountKey, existingOverlay = null) {
+  return new Promise((resolve) => {
+    const overlay = existingOverlay || document.createElement("div");
+    overlay.id = "liveChatLoginOverlay";
+    overlay.className = "settings-overlay";
+    overlay.innerHTML = `
+      <div class="settings-panel login-panel">
+        <div class="login-mark">◆</div>
+        <div class="settings-head">Choose your department</div>
+        <p class="settings-hint">This is temporary while automatic LiveChat group detection is being tested.</p>
+        <div class="login-actions">
+          <button type="button" class="submit-btn" data-department="rtn">Retention</button>
+          <button type="button" class="secondary-btn department-choice" data-department="cs">Customer Service</button>
+        </div>
+      </div>`;
+    if (!existingOverlay) document.body.appendChild(overlay);
+    overlay.querySelectorAll("[data-department]").forEach((button) => {
+      button.addEventListener("click", () => {
+        applyManualDepartment(accountKey, button.dataset.department);
+        overlay.remove();
+        resolve();
+      });
+    });
+  });
+}
+
 async function requirePreviewLiveChatLogin() {
   if (!PREVIEW_LOGIN_GATE) return;
   const response = await fetch("/livechat-oauth-config", { cache: "no-store" });
@@ -266,7 +307,16 @@ async function requirePreviewLiveChatLogin() {
   const automatic = connected.find((client) => client.key === previouslySelected) || (connected.length === 1 ? connected[0] : null);
   if (automatic) {
     try {
-      await resolveLoggedInDepartment(automatic.key, validToken(automatic.key));
+      if (AUTOMATIC_DEPARTMENT_DETECTION) await resolveLoggedInDepartment(automatic.key, validToken(automatic.key));
+      else {
+        let savedManualDepartment = "";
+        try { savedManualDepartment = sessionStorage.getItem(MANUAL_DEPARTMENT_SESSION_KEY) || ""; } catch (_) {}
+        if (savedManualDepartment === "rtn" || savedManualDepartment === "cs") {
+          applyManualDepartment(automatic.key, savedManualDepartment);
+        } else {
+          await requireManualDepartment(automatic.key);
+        }
+      }
       return;
     } catch (_) { /* show the login screen so the agent can reconnect */ }
   }
@@ -326,9 +376,13 @@ async function requirePreviewLiveChatLogin() {
         sessionStorage.setItem(`ca-livechat-agent-token:${pendingClient.key}`, event.data.token);
         sessionStorage.setItem(`ca-livechat-agent-token-expiry:${pendingClient.key}`, String(event.data.expiresAt));
         sessionStorage.setItem("ca-livechat-selected-account", pendingClient.key);
-        status.textContent = "Checking your assigned groups…";
+        status.textContent = AUTOMATIC_DEPARTMENT_DETECTION ? "Checking your assigned groups…" : "LiveChat connected.";
         status.className = "login-status";
-        await resolveLoggedInDepartment(pendingClient.key, event.data.token);
+        if (AUTOMATIC_DEPARTMENT_DETECTION) {
+          await resolveLoggedInDepartment(pendingClient.key, event.data.token);
+        } else {
+          await requireManualDepartment(pendingClient.key, overlay);
+        }
         window.removeEventListener("message", onMessage);
         overlay.remove();
         resolve();
