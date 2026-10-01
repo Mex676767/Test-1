@@ -629,6 +629,34 @@ body {
 .vs96-feedback-note { color: var(--danger); font-size: 10.5px; padding-left: 32px; }
 .feedback-complete .vs96-feedback-note { color: var(--teal); }
 
+/* Risk Player needs the customer's actual reload amount before its capped
+   percentage claim can be calculated. */
+.ticket.ticket-risk-player {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+}
+.ticket-risk-player .risk-amount-fields {
+  grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px; align-items: stretch; width: 100%;
+}
+.risk-amount-fields label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.risk-amount-fields label > span, .risk-claim-preview > span {
+  color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+}
+.risk-reload-input {
+  width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 9px; background: var(--surface); color: var(--text);
+  font: 12px "Cascadia Mono", Consolas, monospace;
+}
+.risk-reload-input:focus { outline: none; border-color: var(--gold); }
+.risk-reload-input:disabled { opacity: .7; }
+.risk-claim-preview {
+  min-width: 96px; display: flex; flex-direction: column; justify-content: center;
+  border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; background: var(--surface);
+}
+.risk-claim-preview strong { color: var(--text-muted); font-size: 13px; }
+.risk-claim-preview.ready strong { color: var(--gold); }
+.risk-claim-preview small { color: var(--text-faint); font-size: 9px; white-space: nowrap; }
+
 /* Special tickets (Ang Pao / Redeem Code) — red, to visually separate
    one-off/manual bonuses from the 5 regular recurring programs (gold). */
 .ticket.ticket-special {

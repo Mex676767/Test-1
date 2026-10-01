@@ -422,8 +422,9 @@ async function fetchBootstrapOptions() {
 }
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
-// Released Amount only ever applies to these — Risk Player, 12h VIP Booster,
-// Redeem Code, and Special Reload don't carry a claimable monetary amount.
+// Released Amount normally comes directly from these programs. Risk Player
+// is calculated separately from the agent-entered customer reload amount.
+// 12h VIP Booster, Redeem Code, and Special Reload don't carry an amount.
 // Grace Period is included here for documentation, but never reaches the
 // generic claim flow that reads this set — it has its own separate handling
 // (see the claim handler) since one field packs two very different states.
@@ -442,6 +443,28 @@ function extractAmountNumber(str) {
   if (rmMatch) return rmMatch[1];
   const match = s.match(/-?\d+(?:\.\d+)?/);
   return match ? match[0] : "";
+}
+
+const RISK_PLAYER_CAPS = { 20: 188, 30: 288, 40: 388 };
+
+function riskPlayerCalculation(display, reloadAmount) {
+  const percentageMatch = String(display || "").match(/\b(20|30|40)\s*%/i);
+  const percentage = percentageMatch ? Number(percentageMatch[1]) : 0;
+  const cap = RISK_PLAYER_CAPS[percentage] || 0;
+  const reload = Number(String(reloadAmount || "").trim());
+  if (!percentage || !Number.isFinite(reload) || reload <= 0) {
+    return { valid: false, percentage, cap, reload: 0, claim: 0, formattedClaim: "" };
+  }
+  const claim = Math.min(reload * percentage / 100, cap);
+  const rounded = Math.round((claim + Number.EPSILON) * 100) / 100;
+  return {
+    valid: true,
+    percentage,
+    cap,
+    reload,
+    claim: rounded,
+    formattedClaim: Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, ""),
+  };
 }
 
 // One-line summary shown on a collapsed card — lets an agent glance across
@@ -1692,7 +1715,7 @@ async function copyPlainText(value) {
 const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
-  "vs96FeedbackQuery1", "vs96FeedbackQuery2",
+  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount",
 ];
 const CASE_KEYS = [
   ...CASE_CONTENT_KEYS,
@@ -1734,6 +1757,7 @@ function loadCaseInto(s, snap) {
   // so switching cases can never carry another player's answers across.
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
+  s.riskReloadAmount = "";
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
 }
 function usedProgramsInOtherCases(s) {
@@ -1832,6 +1856,7 @@ async function addCaseFlow(chatId) {
     s.gracePeriodActivated = false;
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
+    s.riskReloadAmount = "";
     s.inquiry = [];
     s.status = "";
     s.releasedBonusAmount = "";
@@ -1982,11 +2007,13 @@ function renderTickets(chatId) {
     const feedbackComplete = !d.requiresFeedback || !!(
       String(s.vs96FeedbackQuery1 || "").trim() && String(s.vs96FeedbackQuery2 || "").trim()
     );
-    const claimDisabled = !claimed && (locked || !feedbackComplete);
+    const riskCalculation = d.key === "riskPlayer" ? riskPlayerCalculation(d.display, s.riskReloadAmount) : null;
+    const riskComplete = !riskCalculation || riskCalculation.valid;
+    const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete);
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
     return `
-    <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
+    <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
         <div class="ticket-icon">◆</div>
         <div class="ticket-body">
@@ -1996,7 +2023,7 @@ function renderTickets(chatId) {
         </div>
       </div>
       <div class="ticket-btns">
-        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : "")} ${claimDisabled ? "disabled" : ""}>
+        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : (!riskComplete ? 'title="Enter the customer reload amount first"' : ""))} ${claimDisabled ? "disabled" : ""}>
           ${claimed ? doneLabel : claimLabel}
         </button>
         ${
@@ -2005,6 +2032,18 @@ function renderTickets(chatId) {
             : ""
         }
       </div>
+      ${riskCalculation ? `
+        <div class="risk-amount-fields">
+          <label>
+            <span>Customer reload (RM)</span>
+            <input type="text" inputmode="decimal" class="risk-reload-input" data-chat="${chatId}" placeholder="Enter reload amount" value="${escapeHtml(s.riskReloadAmount || "")}" ${claimed ? "disabled" : ""} />
+          </label>
+          <div class="risk-claim-preview ${riskCalculation.valid ? "ready" : ""}">
+            <span>Claim amount</span>
+            <strong class="risk-claim-value">${riskCalculation.valid ? `RM${riskCalculation.formattedClaim}` : "—"}</strong>
+            <small>${riskCalculation.percentage ? `${riskCalculation.percentage}% · Max RM${riskCalculation.cap}` : "Percentage unavailable"}</small>
+          </div>
+        </div>` : ""}
       ${d.requiresFeedback ? `
         <div class="vs96-feedback-fields">
           <label><span>Q1</span><textarea class="vs96-feedback-input" data-feedback="query1" data-chat="${chatId}" placeholder="Enter the player's first feedback…" ${claimed ? "disabled" : ""}>${escapeHtml(s.vs96FeedbackQuery1 || "")}</textarea></label>
@@ -2712,7 +2751,7 @@ function ensureChatState(chat) {
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     liveChatAccount: currentLiveChatAccount,
-    vs96FeedbackQuery1: "", vs96FeedbackQuery2: "",
+    vs96FeedbackQuery1: "", vs96FeedbackQuery2: "", riskReloadAmount: "",
     // Extra cases logged in this same chat (see the "Multiple cases" block
     // above renderTickets). The fields above always describe the ONE case
     // currently open for editing; earlier cases are parked in logs[].
@@ -3150,6 +3189,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.claimedPrograms = {};
       s.vs96FeedbackQuery1 = "";
       s.vs96FeedbackQuery2 = "";
+      s.riskReloadAmount = "";
       s.gracePeriodActivated = false;
       s.releasedBonusAmount = "";
       s.releasedAmountRaw = "";
@@ -3203,6 +3243,14 @@ chatListEl.addEventListener("click", async (e) => {
       || !String(s.vs96FeedbackQuery2 || "").trim()
     )) {
       setStatus("Collect and fill in both VS96 feedback answers before claiming.", "error");
+      return;
+    }
+
+    const riskClaim = programKey === "riskPlayer"
+      ? riskPlayerCalculation(r?.riskPlayer, s.riskReloadAmount)
+      : null;
+    if (riskClaim && !riskClaim.valid) {
+      setStatus("Enter the customer's reload amount before claiming Risk Player.", "error");
       return;
     }
 
@@ -3282,10 +3330,9 @@ chatListEl.addEventListener("click", async (e) => {
       { key: "specialReload", label: "Special Reload (Ang Pao)", display: r.specialReload?.status },
     ];
     // Released Amount only ever applies to Top 10 P&L / LTV / Telegram RM28
-    // (Grace Period has its own separate handling above) — Risk Player, 12h
-    // VIP Booster, Redeem Code, and Special Reload don't carry a claimable
-    // monetary amount, so claiming one of those must leave it blank rather
-    // than stuffing its status text in there.
+    // (Grace Period has its own separate handling above). Risk Player uses
+    // riskClaim, calculated from the customer reload amount and capped by
+    // tier. 12h VIP Booster, Redeem Code, and Special Reload stay blank.
     //
     // The Amount box shows just the bare number now (e.g. "18"), not the
     // label/status text it used to ("Top 10 P&L: Pass RM18") -- confirmed
@@ -3297,7 +3344,9 @@ chatListEl.addEventListener("click", async (e) => {
     // the naive "first number found" pattern used here previously for
     // escalation.amount would have grabbed "09" instead of "58").
     const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && programHasAmount(src.key));
-    const claimedAmount = claimedSources.map((src) => extractAmountNumber(src.display)).filter(Boolean).join(" | ");
+    const claimedAmount = riskClaim?.valid
+      ? riskClaim.formattedClaim
+      : claimedSources.map((src) => extractAmountNumber(src.display)).filter(Boolean).join(" | ");
     s.releasedBonusAmount = claimedAmount;
     s.releasedAmountRaw = claimedAmount;
     if (!s.claimSecretManual) s.claimSecret = true;
@@ -3762,6 +3811,33 @@ chatListEl.addEventListener("input", (e) => {
     if (note) note.textContent = complete
       ? "✓ Both feedback answers collected"
       : "Fill in both feedback answers before claiming.";
+    saveState();
+    return;
+  }
+  const riskReloadInput = e.target.closest(".risk-reload-input");
+  if (riskReloadInput) {
+    const chatId = riskReloadInput.dataset.chat;
+    const s = state[chatId];
+    if (!s) return;
+    const cleaned = riskReloadInput.value.replace(/[^0-9.]/g, "");
+    const decimalAt = cleaned.indexOf(".");
+    riskReloadInput.value = decimalAt < 0
+      ? cleaned
+      : cleaned.slice(0, decimalAt + 1) + cleaned.slice(decimalAt + 1).replaceAll(".", "");
+    s.riskReloadAmount = riskReloadInput.value;
+    const calculation = riskPlayerCalculation(s.matchedRow?.riskPlayer, s.riskReloadAmount);
+    const ticket = riskReloadInput.closest(".ticket-risk-player");
+    const preview = ticket?.querySelector(".risk-claim-preview");
+    preview?.classList.toggle("ready", calculation.valid);
+    const value = ticket?.querySelector(".risk-claim-value");
+    if (value) value.textContent = calculation.valid ? `RM${calculation.formattedClaim}` : "—";
+    const claimBtn = ticket?.querySelector('.claim-btn[data-program="riskPlayer"]');
+    if (claimBtn && claimBtn.dataset.action === "claim") {
+      const anotherClaimIsActive = Object.entries(s.claimedPrograms || {})
+        .some(([key, active]) => key !== "riskPlayer" && active);
+      claimBtn.disabled = !calculation.valid || anotherClaimIsActive;
+      claimBtn.title = calculation.valid ? "" : "Enter the customer reload amount first";
+    }
     saveState();
     return;
   }
