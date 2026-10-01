@@ -73,7 +73,17 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'concurrency', 'concurrencyV
   }
 });
 
-openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
+if (window.parent !== window) {
+  openSettings.hidden = true;
+} else {
+  openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
+}
+
+window.addEventListener('message', (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== 'blast-settings-updated') return;
+  defaultMessages = Array.isArray(event.data.cannedMessages) ? event.data.cannedMessages : [];
+  renderDefaultPreview();
+});
 
 // ── Render all chat rows ──────────────────────────────────────────────────────
 function renderAll() {
@@ -216,7 +226,7 @@ addChatBtn.addEventListener('click', () => {
 function renderDefaultPreview() {
   defMsgCount.textContent = defaultMessages.length;
   if (!defaultMessages.length) {
-    defMsgList.innerHTML = '<div class="empty-note">No default messages. Open Messages to create one.</div>';
+    defMsgList.innerHTML = '<div class="empty-note">No default messages. Open Settings to create one.</div>';
     return;
   }
   defMsgList.innerHTML = defaultMessages.map((m, i) =>

@@ -37,8 +37,25 @@ themeToggle.addEventListener("click", () => {
    automatically if no agent is saved.
    ============================================================ */
 const AGENT_KEY = "rc-agent-name";
+const BLAST_SYNC_STORAGE_KEY = "ca-livechat-engagement:sync";
+const BLAST_LOCAL_STORAGE_KEY = "ca-livechat-engagement:local";
 let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
 let agentOptions = [];
+
+function readBlastStorage(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "{}"); }
+  catch (_) { return {}; }
+}
+
+function saveBlastMessages(messages) {
+  const current = readBlastStorage(BLAST_SYNC_STORAGE_KEY);
+  const cannedMessages = messages.map((message) => message.trim()).filter(Boolean).slice(0, 6);
+  localStorage.setItem(BLAST_SYNC_STORAGE_KEY, JSON.stringify({ ...current, cannedMessages }));
+  document.querySelector("#blastView iframe")?.contentWindow?.postMessage({
+    type: "blast-settings-updated",
+    cannedMessages,
+  }, window.location.origin);
+}
 
 // Global "don't log chats" toggle — for chats deliberately not wanted in
 // Lark data at all (unlike Unknown player, which is per-chat and permanent
@@ -129,15 +146,20 @@ function saveAgent(name) {
 // until an agent is chosen.
 function openSettingsPanel() {
   document.getElementById("settingsOverlay")?.remove();
+  let blastMessages = readBlastStorage(BLAST_SYNC_STORAGE_KEY).cannedMessages;
+  blastMessages = Array.isArray(blastMessages) && blastMessages.length ? blastMessages.slice(0, 6) : ["", "", ""];
+  const blastFailures = readBlastStorage(BLAST_LOCAL_STORAGE_KEY).failureLog;
+  const failureLog = Array.isArray(blastFailures) ? blastFailures : [];
   const overlay = document.createElement("div");
   overlay.id = "settingsOverlay";
   overlay.className = "settings-overlay";
   overlay.innerHTML = `
     <div class="settings-panel">
       <div class="settings-head">
-        <span>⚙ Agent Settings</span>
+        <span>⚙ Settings</span>
         ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
+      <div class="settings-section-title">Agent</div>
       <p class="settings-hint">Select your name before handling any case. This will be logged as the Agent Name for every record you submit.</p>
       ${agentOptions.length
         ? `<select class="input settings-select" id="agentSelect">
@@ -146,7 +168,26 @@ function openSettingsPanel() {
            </select>`
         : `<input type="text" class="input settings-text" id="agentSelect" placeholder="Type your name (e.g. 96 Edwin)" value="${selectedAgent}" />`
       }
-      <button class="submit-btn" id="settingsSave" style="margin-top:10px">Save &amp; Continue</button>
+      <div class="settings-divider"></div>
+      <div class="settings-section-title">Blast message templates</div>
+      <p class="settings-hint settings-hint-compact">Sent in order when a queued chat has no custom message. Add up to 6 messages.</p>
+      <div class="settings-message-list" id="settingsMessageList"></div>
+      <button class="settings-add-message" id="settingsAddMessage" type="button">+ Add message</button>
+
+      <details class="settings-failures">
+        <summary>Skipped / failed Blast chats <span>${failureLog.length}</span></summary>
+        <div class="settings-failure-list">
+          ${failureLog.length ? failureLog.slice(0, 20).map((entry) => `
+            <div class="settings-failure-item">
+              <strong>${escapeHtml(entry.stage || "Failed")}</strong>
+              <span>${escapeHtml(entry.reason || "Unknown error")}</span>
+            </div>
+          `).join("") : `<div class="diag-empty">No skipped or failed chats recorded.</div>`}
+        </div>
+        ${failureLog.length ? `<button class="settings-clear-failures" id="settingsClearFailures" type="button">Clear failed-chat log</button>` : ""}
+      </details>
+
+      <button class="submit-btn" id="settingsSave" style="margin-top:16px">Save &amp; Continue</button>
 
       <div class="settings-diagnostics">
         <div class="settings-diagnostics-head">Diagnostics</div>
@@ -156,10 +197,49 @@ function openSettingsPanel() {
   `;
   document.body.appendChild(overlay);
 
+  const renderBlastMessages = () => {
+    const list = document.getElementById("settingsMessageList");
+    list.innerHTML = blastMessages.map((message, index) => `
+      <div class="settings-message-row">
+        <span>${index + 1}</span>
+        <textarea class="settings-message-input" data-index="${index}" rows="2" placeholder="Message ${index + 1}">${escapeHtml(message)}</textarea>
+        <button type="button" class="settings-remove-message" data-index="${index}" title="Remove message">×</button>
+      </div>
+    `).join("");
+    list.querySelectorAll(".settings-message-input").forEach((input) => {
+      input.addEventListener("input", () => { blastMessages[Number(input.dataset.index)] = input.value; });
+    });
+    list.querySelectorAll(".settings-remove-message").forEach((button) => {
+      button.addEventListener("click", () => {
+        blastMessages.splice(Number(button.dataset.index), 1);
+        if (!blastMessages.length) blastMessages.push("");
+        renderBlastMessages();
+      });
+    });
+    document.getElementById("settingsAddMessage").hidden = blastMessages.length >= 6;
+  };
+  renderBlastMessages();
+
+  document.getElementById("settingsAddMessage").addEventListener("click", () => {
+    if (blastMessages.length >= 6) return;
+    blastMessages.push("");
+    renderBlastMessages();
+    const inputs = document.querySelectorAll(".settings-message-input");
+    inputs[inputs.length - 1]?.focus();
+  });
+
+  document.getElementById("settingsClearFailures")?.addEventListener("click", () => {
+    const current = readBlastStorage(BLAST_LOCAL_STORAGE_KEY);
+    delete current.failureLog;
+    localStorage.setItem(BLAST_LOCAL_STORAGE_KEY, JSON.stringify(current));
+    document.getElementById("settingsClearFailures")?.closest(".settings-failures")?.remove();
+  });
+
   document.getElementById("settingsSave").addEventListener("click", () => {
     const val = document.getElementById("agentSelect").value.trim();
     if (!val) { setStatus("Choose your name before continuing.", "error"); return; }
     saveAgent(val);
+    saveBlastMessages(blastMessages);
     overlay.remove();
     updateAgentBadge();
     staleRecords = [];
