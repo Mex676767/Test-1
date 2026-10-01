@@ -12,6 +12,7 @@
   const PENDING_ACCOUNT_KEY = "ca-livechat-oauth-pending-account";
   const SELECTED_ACCOUNT_KEY = "ca-livechat-selected-account";
   const DETECTED_ACCOUNT_KEY = "rc-livechat-account";
+  const AGENT_ACCOUNT_ID_KEY = "ca-livechat-agent-account-id";
   let stopRequested = false;
   let pauseRequested = false;
   let pauseWaiters = [];
@@ -61,6 +62,34 @@
   const token = (accountKey = selectedAccount()) => accountKey && Number(sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, accountKey)) || 0) > Date.now()
     ? sessionStorage.getItem(accountStorageKey(TOKEN_KEY, accountKey)) || ""
     : "";
+  let nextActionAt = 0;
+  let actionThrottle = Promise.resolve();
+
+  const waitForActionSlot = () => {
+    const slot = actionThrottle.then(async () => {
+      const wait = Math.max(0, nextActionAt - Date.now());
+      if (wait) await sleep(wait);
+      nextActionAt = Date.now() + 300;
+    });
+    actionThrottle = slot.catch(() => {});
+    return slot;
+  };
+
+  async function currentAgentAccountId() {
+    const accountKey = selectedAccount();
+    const storageKey = accountStorageKey(AGENT_ACCOUNT_ID_KEY, accountKey);
+    const cached = sessionStorage.getItem(storageKey);
+    if (cached) return cached;
+    const accessToken = token(accountKey);
+    if (!accessToken) throw new Error("Your agent authorization expired. Connect LiveChat again.");
+    const response = await fetch("https://accounts.livechat.com/v2/info", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = await response.json();
+    if (!response.ok || !data.account_id) throw new Error("Could not identify the connected LiveChat agent. Reconnect and try again.");
+    sessionStorage.setItem(storageKey, String(data.account_id));
+    return String(data.account_id);
+  }
 
   function extractIds(url) {
     try {
@@ -105,7 +134,7 @@
       if (data.accountKey && data.accountKey !== selectedAccount()) {
         throw new Error("This chat belongs to the other LiveChat workspace. Open the app there and reconnect before sending.");
       }
-      return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive };
+      return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive, users: data.raw?.users || [] };
     }
     if (!ids.threadId) throw new Error("The LiveChat archive link is invalid.");
     const response = await fetch("/livechat-chat-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: ids.threadId }) });
@@ -114,14 +143,15 @@
     if (data.accountKey && data.accountKey !== selectedAccount()) {
       throw new Error("This chat belongs to the other LiveChat workspace. Open the app there and reconnect before sending.");
     }
-    return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive };
+    return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive, users: data.raw?.users || [] };
   }
 
   async function action(name, body, formData) {
     const accessToken = token();
     if (!accessToken) throw new Error("Your agent authorization expired. Connect LiveChat again.");
-    const maxAttempts = 4;
+    const maxAttempts = 8;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      await waitForActionSlot();
       const response = await fetch(`https://api.livechatinc.com/v3.6/agent/action/${name}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}`, ...(formData ? {} : { "Content-Type": "application/json" }) },
@@ -130,16 +160,25 @@
       const text = await response.text();
       let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (_) {}
       const errorType = String(data.error?.type || data.error?.code || "").toLowerCase();
-      const isRateLimited = response.status === 429 || errorType === "too_many_requests";
-      if (isRateLimited && attempt < maxAttempts) {
+      const isTransient = response.status === 429 || response.status >= 500 || ["too_many_requests", "request_timeout", "service_unavailable", "internal"].includes(errorType);
+      if (isTransient && attempt < maxAttempts) {
         const retryAfter = Number(response.headers?.get?.("retry-after"));
-        await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 600 * (2 ** (attempt - 1)));
+        const backoff = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : Math.min(30000, 1000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 400);
+        await sleep(backoff);
         continue;
       }
-      if (!response.ok || data.error) throw new Error(data.error?.message || data.error || `${name} failed (${response.status})`);
+      if (!response.ok || data.error) {
+        const message = data.error?.message || (typeof data.error === "string" ? data.error : "") || `${name} failed (${response.status})`;
+        if (["missing_access", "authorization"].includes(errorType)) {
+          throw new Error(`${message}. This agent does not have access to the chat's group.`);
+        }
+        throw new Error(message);
+      }
       return data;
     }
-    throw new Error(`${name} was rate limited. Try a lower speed.`);
+    throw new Error(`${name} stayed rate limited after automatic retries. Try again later.`);
   }
 
   const dataUrlFile = (dataUrl, fileName) => {
@@ -167,6 +206,8 @@
 
   async function runJob(job, index, total, delay, claimedChatIds) {
     let resumed = false;
+    let temporarilyAddedAgent = false;
+    let agentAccountId = "";
     let chatId = "";
     try {
       emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
@@ -183,6 +224,19 @@
           resumed = true;
         } catch (error) {
           if (!/already.+active|active.+already/i.test(error.message)) throw error;
+        }
+      } else {
+        agentAccountId = await currentAgentAccountId();
+        const alreadyPresent = (chat.users || []).some((user) => String(user?.id || "") === agentAccountId);
+        if (!alreadyPresent) {
+          await action("add_user_to_chat", {
+            chat_id: chat.chatId,
+            user_id: agentAccountId,
+            user_type: "agent",
+            visibility: "all",
+            ignore_requester_presence: true,
+          });
+          temporarilyAddedAgent = true;
         }
       }
       for (let i = 0; i < job.messages.length; i += 1) {
@@ -207,6 +261,15 @@
         logType: stopped ? "info" : "err",
       });
     } finally {
+      if (temporarilyAddedAgent && chatId && agentAccountId) {
+        try {
+          await action("remove_user_from_chat", {
+            chat_id: chatId,
+            user_id: agentAccountId,
+            user_type: "agent",
+          });
+        } catch (_) {}
+      }
       // Do not leave a customer chat open when a later message or image fails.
       if (resumed && chatId) {
         try { await action("deactivate_chat", { id: chatId, ignore_requester_presence: true }); } catch (_) {}
