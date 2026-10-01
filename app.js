@@ -4449,7 +4449,8 @@ function runWhenIdle(task, timeout = 1500) {
       return;
     }
   }
-  if (currentDepartment === "rtn" && !selectedAgent) {
+  const liveWidgetStillUsesOriginalSetup = !previewMode && !DEPARTMENT_TABS_LIVE;
+  if ((liveWidgetStillUsesOriginalSetup || currentDepartment === "rtn") && !selectedAgent) {
     // Give the agent-name list a short chance to arrive, while never holding
     // the LiveChat connection or the first paint behind the network.
     await Promise.race([
