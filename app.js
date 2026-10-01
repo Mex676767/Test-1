@@ -5,7 +5,9 @@ const IS_EMBEDDED_APP = window.self !== window.top;
 // Department-based sections are being tested in the standalone preview.
 // Keep them out of the installed LiveChat widget until rollout is approved.
 const DEPARTMENT_TABS_LIVE = false;
-const PREVIEW_LOGIN_GATE = !IS_EMBEDDED_APP;
+const BLAST_LIVE = true;
+const DEPARTMENT_SEPARATION_ENABLED = false;
+const PREVIEW_LOGIN_GATE = false;
 // Temporary preview fallback. Turn this back on after agents--my:ro has
 // been added to both LiveChat OAuth clients.
 const AUTOMATIC_DEPARTMENT_DETECTION = false;
@@ -221,7 +223,7 @@ async function fetchConfiguredBonusPrograms() {
 }
 
 function applyDepartmentChrome() {
-  if (!previewMode && !DEPARTMENT_TABS_LIVE) {
+  if (!DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE)) {
     document.getElementById("settingsBtn")?.removeAttribute("hidden");
     document.getElementById("agentBadge")?.removeAttribute("hidden");
     return;
@@ -579,8 +581,11 @@ function setDepartmentFromGroups(groups) {
 }
 
 function mainTabAvailability() {
-  if (!previewMode && !DEPARTMENT_TABS_LIVE) {
-    return { customer: true, tickets: false, blast: false, knowledge: false };
+  if (!previewMode) {
+    return { customer: true, tickets: false, blast: BLAST_LIVE, knowledge: false };
+  }
+  if (!DEPARTMENT_SEPARATION_ENABLED) {
+    return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: true, knowledge: true };
   }
   const rtn = currentDepartment === "rtn";
   return {
@@ -598,7 +603,7 @@ function syncMainTabs() {
     activeMainTab = ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
   }
   const mainTabs = document.getElementById("mainTabs");
-  if (mainTabs) mainTabs.hidden = !previewMode && !DEPARTMENT_TABS_LIVE;
+  if (mainTabs) mainTabs.hidden = !previewMode && !DEPARTMENT_TABS_LIVE && !BLAST_LIVE;
   const retentionTab = document.getElementById("retentionTab");
   if (retentionTab) retentionTab.hidden = !available.customer;
   const ticketsTab = document.getElementById("ticketsTab");
@@ -4525,8 +4530,8 @@ function runWhenIdle(task, timeout = 1500) {
       return;
     }
   }
-  const liveWidgetStillUsesOriginalSetup = !previewMode && !DEPARTMENT_TABS_LIVE;
-  if ((liveWidgetStillUsesOriginalSetup || currentDepartment === "rtn") && !selectedAgent) {
+  const originalAgentSetup = !DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE);
+  if ((originalAgentSetup || currentDepartment === "rtn") && !selectedAgent) {
     // Give the agent-name list a short chance to arrive, while never holding
     // the LiveChat connection or the first paint behind the network.
     await Promise.race([
