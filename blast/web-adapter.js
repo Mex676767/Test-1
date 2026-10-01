@@ -13,6 +13,19 @@
   const SELECTED_ACCOUNT_KEY = "ca-livechat-selected-account";
   const DETECTED_ACCOUNT_KEY = "rc-livechat-account";
   let stopRequested = false;
+  let pauseRequested = false;
+  let pauseWaiters = [];
+
+  const setPaused = (next) => {
+    pauseRequested = next;
+    if (!next) {
+      pauseWaiters.forEach((resolve) => resolve());
+      pauseWaiters = [];
+    }
+  };
+  const waitWhilePaused = () => pauseRequested && !stopRequested
+    ? new Promise((resolve) => pauseWaiters.push(resolve))
+    : Promise.resolve();
 
   const readArea = (name) => { try { return JSON.parse(localStorage.getItem(prefix + name) || "{}"); } catch (_) { return {}; } };
   const writeArea = (name, next, previous) => {
@@ -158,8 +171,15 @@
       }
       emit({ type: "PROGRESS", text: `Completed chat ${index + 1} of ${total}`, progress: `${index + 1}/${total}`, log: `✓ Chat ${index + 1} sent as the connected agent`, logType: "ok" });
     } catch (error) {
-      recordFailure(job, index, "LiveChat API", error.message);
-      emit({ type: "PROGRESS", text: `Chat ${index + 1} failed`, progress: `${index + 1}/${total}`, log: `✗ Chat ${index + 1}: ${error.message}`, logType: "err" });
+      const stopped = stopRequested && error.message === "Stopped by user";
+      if (!stopped) recordFailure(job, index, "LiveChat API", error.message);
+      emit({
+        type: "PROGRESS",
+        text: stopped ? "Stopping…" : `Chat ${index + 1} failed`,
+        progress: `${index + 1}/${total}`,
+        log: stopped ? `■ Chat ${index + 1} stopped before completion` : `✗ Chat ${index + 1}: ${error.message}`,
+        logType: stopped ? "info" : "err",
+      });
     } finally {
       // Do not leave a customer chat open when a later message or image fails.
       if (resumed && chatId) {
@@ -170,10 +190,19 @@
 
   async function runJobs(jobs, delay, concurrency) {
     stopRequested = false;
+    setPaused(false);
     let cursor = 0;
-    const worker = async () => { while (!stopRequested) { const index = cursor++; if (index >= jobs.length) return; await runJob(jobs[index], index, jobs.length, delay); } };
+    const worker = async () => {
+      while (!stopRequested) {
+        await waitWhilePaused();
+        if (stopRequested) return;
+        const index = cursor++;
+        if (index >= jobs.length) return;
+        await runJob(jobs[index], index, jobs.length, delay);
+      }
+    };
     await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));
-    emit({ type: "DONE" });
+    emit({ type: "DONE", stopped: stopRequested });
   }
 
   function connectAgent(client) {
@@ -276,7 +305,18 @@
       onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
       openOptionsPage() { location.href = "settings.html"; },
       sendMessage(message) {
-        if (message?.type === "STOP") stopRequested = true;
+        if (message?.type === "STOP") {
+          stopRequested = true;
+          setPaused(false);
+        }
+        if (message?.type === "PAUSE" && !stopRequested) {
+          setPaused(true);
+          emit({ type: "PAUSED" });
+        }
+        if (message?.type === "RESUME" && !stopRequested) {
+          setPaused(false);
+          emit({ type: "RESUMED" });
+        }
         if (message?.type === "LOG_FAILURES") (message.failures || []).forEach((failure) => recordFailure(failure.job, failure.index, failure.stage || "queue validation", failure.reason || "Invalid queue item"));
         if (message?.type === "START") {
           if (!token()) {

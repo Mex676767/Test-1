@@ -156,43 +156,50 @@ function openSettingsPanel() {
   overlay.innerHTML = `
     <div class="settings-panel">
       <div class="settings-head">
-        <span>⚙ Settings</span>
+        <div class="settings-title-block">
+          <span>Settings</span>
+          <small>Agent and Blast preferences</small>
+        </div>
         ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
-      <div class="settings-section-title">Agent</div>
-      <p class="settings-hint">Select your name before handling any case. This will be logged as the Agent Name for every record you submit.</p>
-      ${agentOptions.length
-        ? `<select class="input settings-select" id="agentSelect">
-             <option value="">— choose your name —</option>
-             ${agentOptions.map((a) => `<option value="${a}" ${a === selectedAgent ? "selected" : ""}>${a}</option>`).join("")}
-           </select>`
-        : `<input type="text" class="input settings-text" id="agentSelect" placeholder="Type your name (e.g. 96 Edwin)" value="${selectedAgent}" />`
-      }
-      <div class="settings-divider"></div>
-      <div class="settings-section-title">Blast message templates</div>
-      <p class="settings-hint settings-hint-compact">Sent in order when a queued chat has no custom message. Add up to 6 messages.</p>
-      <div class="settings-message-list" id="settingsMessageList"></div>
-      <button class="settings-add-message" id="settingsAddMessage" type="button">+ Add message</button>
-
-      <details class="settings-failures">
-        <summary>Skipped / failed Blast chats <span>${failureLog.length}</span></summary>
-        <div class="settings-failure-list">
-          ${failureLog.length ? failureLog.slice(0, 20).map((entry) => `
-            <div class="settings-failure-item">
-              <strong>${escapeHtml(entry.stage || "Failed")}</strong>
-              <span>${escapeHtml(entry.reason || "Unknown error")}</span>
-            </div>
-          `).join("") : `<div class="diag-empty">No skipped or failed chats recorded.</div>`}
-        </div>
-        ${failureLog.length ? `<button class="settings-clear-failures" id="settingsClearFailures" type="button">Clear failed-chat log</button>` : ""}
-      </details>
-
-      <button class="submit-btn" id="settingsSave" style="margin-top:16px">Save &amp; Continue</button>
-
-      <div class="settings-diagnostics">
-        <div class="settings-diagnostics-head">Diagnostics</div>
-        <div class="settings-diagnostics-list">${renderDiagnosticsLog()}</div>
+      <div class="settings-card">
+        <div class="settings-section-title"><span class="settings-section-icon">A</span><span>Agent</span></div>
+        <p class="settings-hint">Choose the name recorded on every submitted case.</p>
+        ${agentOptions.length
+          ? `<select class="input settings-select" id="agentSelect">
+               <option value="">Choose your name</option>
+               ${agentOptions.map((a) => `<option value="${a}" ${a === selectedAgent ? "selected" : ""}>${a}</option>`).join("")}
+             </select>`
+          : `<input type="text" class="input settings-text" id="agentSelect" placeholder="Type your name (e.g. 96 Edwin)" value="${selectedAgent}" />`
+        }
       </div>
+
+      <div class="settings-card">
+        <div class="settings-section-title"><span class="settings-section-icon">✉</span><span>Blast messages</span></div>
+        <p class="settings-hint settings-hint-compact">Used in order when a queued chat has no custom message.</p>
+        <div class="settings-message-list" id="settingsMessageList"></div>
+        <button class="settings-add-message" id="settingsAddMessage" type="button">+ Add message</button>
+
+        <details class="settings-failures">
+          <summary>Skipped or failed chats <span>${failureLog.length}</span></summary>
+          <div class="settings-failure-list">
+            ${failureLog.length ? failureLog.slice(0, 20).map((entry) => `
+              <div class="settings-failure-item">
+                <strong>${escapeHtml(entry.stage || "Failed")}</strong>
+                <span>${escapeHtml(entry.reason || "Unknown error")}</span>
+              </div>
+            `).join("") : `<div class="diag-empty">No skipped or failed chats recorded.</div>`}
+          </div>
+          ${failureLog.length ? `<button class="settings-clear-failures" id="settingsClearFailures" type="button">Clear failed-chat log</button>` : ""}
+        </details>
+      </div>
+
+      <button class="submit-btn settings-save" id="settingsSave">Save changes</button>
+
+      <details class="settings-diagnostics">
+        <summary>Diagnostics</summary>
+        <div class="settings-diagnostics-list">${renderDiagnosticsLog()}</div>
+      </details>
     </div>
   `;
   document.body.appendChild(overlay);

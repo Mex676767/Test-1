@@ -103,6 +103,12 @@
     .btn-go:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none;}
     .btn-stop{background:var(--rd);color:var(--red);border:1px solid rgba(248,113,113,.3);}
     .btn-stop:hover{background:rgba(248,113,113,.22);}
+    .run-controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .run-controls .btn-go{grid-column:1/-1}
+    .run-controls.is-running .btn-go{display:none}
+    .btn-pause{background:var(--s2);color:var(--warn);border:1px solid var(--bd)}
+    .btn-pause:hover{border-color:var(--warn);background:rgba(227,179,65,.08)}
+    .btn-resume{background:var(--accent);color:#fff;border:1px solid var(--accent)}
 
     /* ── Bulk Import ── */
     .bulk-body{padding:14px;display:flex;flex-direction:column;gap:12px;}
@@ -269,9 +275,6 @@
     <div class="logo-dot"></div>
     <div class="logo-txt">Customer <span>Blast</span><span class="logo-sub">Prepare, review and send outreach from one place.</span></div>
   </div>
-  <div class="hdr-right">
-    <button class="icon-btn" id="openSettings" title="Default messages">⚙</button>
-  </div>
 </div>
 
 <!-- Tabs -->
@@ -362,7 +365,11 @@
         <span class="prog" id="prog"></span>
       </div>
       <div class="log" id="log"></div>
-      <button class="btn btn-go" id="startBtn">Start automation</button>
+      <div class="run-controls" id="runControls">
+        <button class="btn btn-go" id="startBtn">Start automation</button>
+        <button class="btn btn-pause" id="pauseBtn" hidden>Pause</button>
+        <button class="btn btn-stop" id="stopBtn" hidden>Stop</button>
+      </div>
     </aside>
 
   </div>

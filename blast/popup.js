@@ -2,6 +2,7 @@
 let chatEntries = [];
 let defaultMessages = [];
 let running = false;
+let paused = false;
 
 const chatList    = document.getElementById('chatList');
 const addChatBtn  = document.getElementById('addChatBtn');
@@ -15,6 +16,9 @@ const concurrencyTrigger = document.getElementById('concurrencyTrigger');
 const concurrencyLabel = document.getElementById('concurrencyLabel');
 const concurrencyMenu = document.getElementById('concurrencyMenu');
 const startBtn    = document.getElementById('startBtn');
+const pauseBtn    = document.getElementById('pauseBtn');
+const stopBtn     = document.getElementById('stopBtn');
+const runControls = document.getElementById('runControls');
 const status      = document.getElementById('status');
 const statusText  = document.getElementById('statusText');
 const prog        = document.getElementById('prog');
@@ -66,16 +70,14 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'concurrency', 'concurrencyV
   // Restore running state if popup was closed mid-automation
   if (d.isRunning) {
     running = true;
+    paused = Boolean(d.isPaused);
     status.classList.add('on');
-    startBtn.className = 'btn btn-stop';
-    startBtn.textContent = '■ Stop';
-    statusText.textContent = 'Running…';
+    statusText.textContent = paused ? 'Paused — press Resume to continue' : 'Running…';
+    updateRunControls();
   }
 });
 
-if (window.parent !== window) {
-  openSettings.hidden = true;
-} else {
+if (openSettings && window.parent === window) {
   openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
 }
 
@@ -298,6 +300,17 @@ function addLog(msg, type = '') {
   log.scrollTop = log.scrollHeight;
 }
 
+function updateRunControls() {
+  pauseBtn.disabled = false;
+  stopBtn.disabled = false;
+  runControls.classList.toggle('is-running', running);
+  startBtn.hidden = running;
+  pauseBtn.hidden = !running;
+  stopBtn.hidden = !running;
+  pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  pauseBtn.className = paused ? 'btn btn-resume' : 'btn btn-pause';
+}
+
 // ── Background messages ───────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'PROGRESS') {
@@ -307,32 +320,34 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
   if (msg.type === 'DONE') {
     running = false;
-    chrome.storage.sync.set({ isRunning: false });
-    statusText.innerHTML = '✓ All chats completed';
+    paused = false;
+    chrome.storage.sync.set({ isRunning: false, isPaused: false });
+    statusText.innerHTML = msg.stopped ? 'Stopped' : '✓ All chats completed';
     prog.textContent = '';
-    startBtn.className = 'btn btn-go';
-    startBtn.textContent = 'Start automation';
-    startBtn.disabled = false;
-    addLog('✓ Automation finished', 'ok');
+    updateRunControls();
+    addLog(msg.stopped ? '■ Automation stopped' : '✓ Automation finished', msg.stopped ? 'info' : 'ok');
+  }
+  if (msg.type === 'PAUSED') {
+    paused = true;
+    chrome.storage.sync.set({ isPaused: true });
+    statusText.textContent = 'Pausing — active chats will finish safely';
+    updateRunControls();
+    addLog('Ⅱ Paused before starting any more chats', 'info');
+  }
+  if (msg.type === 'RESUMED') {
+    paused = false;
+    chrome.storage.sync.set({ isPaused: false });
+    statusText.textContent = 'Running…';
+    updateRunControls();
+    addLog('▶ Automation resumed', 'ok');
   }
   if (msg.type === 'ERROR') {
     addLog('✗ ' + msg.text, 'err');
   }
 });
 
-// ── Start / Stop ──────────────────────────────────────────────────────────────
+// ── Start / Pause / Resume / Stop ─────────────────────────────────────────────
 startBtn.addEventListener('click', () => {
-  if (running) {
-    chrome.runtime.sendMessage({ type: 'STOP' });
-    running = false;
-    chrome.storage.sync.set({ isRunning: false });
-    startBtn.className = 'btn btn-go';
-    startBtn.textContent = 'Start automation';
-    statusText.textContent = 'Stopped';
-    return;
-  }
-
-
   const jobs = [];
   const preflightFailures = [];
   chatEntries.forEach((e, queueIndex) => {
@@ -364,11 +379,12 @@ startBtn.addEventListener('click', () => {
   if (!jobs.length) { addLog('⚠ No valid chats with messages found', 'err'); return; }
 
   running = true;
-  chrome.storage.sync.set({ isRunning: true });
+  paused = false;
+  chrome.storage.sync.set({ isRunning: true, isPaused: false });
   log.innerHTML = '';
   status.classList.add('on');
-  startBtn.className = 'btn btn-stop';
-  startBtn.textContent = '■ Stop';
+  statusText.textContent = 'Starting…';
+  updateRunControls();
 
   chrome.runtime.sendMessage({
     type: 'START',
@@ -376,6 +392,19 @@ startBtn.addEventListener('click', () => {
     delay: parseFloat(delaySlider.value) * 1000,
     concurrency: Number(concurrencySelect.value)
   });
+});
+
+pauseBtn.addEventListener('click', () => {
+  if (!running) return;
+  chrome.runtime.sendMessage({ type: paused ? 'RESUME' : 'PAUSE' });
+});
+
+stopBtn.addEventListener('click', () => {
+  if (!running) return;
+  chrome.runtime.sendMessage({ type: 'STOP' });
+  statusText.textContent = 'Stopping…';
+  pauseBtn.disabled = true;
+  stopBtn.disabled = true;
 });
 
 // ── Bulk Import ───────────────────────────────────────────────────────────────
