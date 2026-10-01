@@ -92,7 +92,21 @@
 
   async function resolveChat(url) {
     const ids = extractIds(url);
-    if (ids.chatId) return { ...ids, isActive: null };
+    if (ids.chatId) {
+      const response = await fetch("/livechat-chat-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: ids.threadId || ids.chatId, realChatId: ids.chatId }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok || data.notFound || !data.chatId) {
+        throw new Error(data.error || "This LiveChat chat could not be found.");
+      }
+      if (data.accountKey && data.accountKey !== selectedAccount()) {
+        throw new Error("This chat belongs to the other LiveChat workspace. Open the app there and reconnect before sending.");
+      }
+      return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive };
+    }
     if (!ids.threadId) throw new Error("The LiveChat archive link is invalid.");
     const response = await fetch("/livechat-chat-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: ids.threadId }) });
     const data = await response.json();
@@ -151,14 +165,26 @@
     await action("send_event", { chat_id: chatId, event: { type: "file", url: uploaded.url, visibility: "all", alternative_text: file.name } });
   }
 
-  async function runJob(job, index, total, delay) {
+  async function runJob(job, index, total, delay, claimedChatIds) {
     let resumed = false;
     let chatId = "";
     try {
       emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
       const chat = await resolveChat(job.url);
       chatId = chat.chatId;
-      if (chat.isActive !== true) { await action("resume_chat", { chat: { id: chat.chatId } }); resumed = true; }
+      if (claimedChatIds.has(chat.chatId)) {
+        emit({ type: "PROGRESS", text: `Skipped duplicate chat ${index + 1}`, progress: `${index + 1}/${total}`, log: `↷ Chat ${index + 1} points to a customer chat already processed in this run`, logType: "info" });
+        return;
+      }
+      claimedChatIds.add(chat.chatId);
+      if (chat.isActive !== true) {
+        try {
+          await action("resume_chat", { chat: { id: chat.chatId } });
+          resumed = true;
+        } catch (error) {
+          if (!/already.+active|active.+already/i.test(error.message)) throw error;
+        }
+      }
       for (let i = 0; i < job.messages.length; i += 1) {
         if (stopRequested) throw new Error("Stopped by user");
         await action("send_event", { chat_id: chat.chatId, event: { type: "message", text: job.messages[i], visibility: "all" } });
@@ -192,13 +218,14 @@
     stopRequested = false;
     setPaused(false);
     let cursor = 0;
+    const claimedChatIds = new Set();
     const worker = async () => {
       while (!stopRequested) {
         await waitWhilePaused();
         if (stopRequested) return;
         const index = cursor++;
         if (index >= jobs.length) return;
-        await runJob(jobs[index], index, jobs.length, delay);
+        await runJob(jobs[index], index, jobs.length, delay, claimedChatIds);
       }
     };
     await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));

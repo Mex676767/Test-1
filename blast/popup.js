@@ -350,6 +350,8 @@ chrome.runtime.onMessage.addListener((msg) => {
 startBtn.addEventListener('click', () => {
   const jobs = [];
   const preflightFailures = [];
+  const duplicateNotices = [];
+  const seenChatIds = new Map();
   chatEntries.forEach((e, queueIndex) => {
     if (!e.url) return;
     const job = {
@@ -367,6 +369,17 @@ startBtn.addEventListener('click', () => {
     } else if (!job.messages.length) {
       preflightFailures.push({ index: queueIndex, job, stage: 'queue validation', reason: 'No messages were configured for this chat' });
     } else {
+      let directChatId = '';
+      try {
+        const parts = new URL(e.url).pathname.split('/').filter(Boolean);
+        const chatIndex = parts.indexOf('chats');
+        if (chatIndex >= 0) directChatId = parts[chatIndex + 1] || '';
+      } catch (_) {}
+      if (directChatId && seenChatIds.has(directChatId)) {
+        duplicateNotices.push(`Skipped row ${queueIndex + 1}: same customer chat as row ${seenChatIds.get(directChatId) + 1}`);
+        return;
+      }
+      if (directChatId) seenChatIds.set(directChatId, queueIndex);
       jobs.push(job);
     }
   });
@@ -382,6 +395,7 @@ startBtn.addEventListener('click', () => {
   paused = false;
   chrome.storage.sync.set({ isRunning: true, isPaused: false });
   log.innerHTML = '';
+  duplicateNotices.forEach((notice) => addLog(`↷ ${notice}`, 'info'));
   status.classList.add('on');
   statusText.textContent = 'Starting…';
   updateRunControls();
