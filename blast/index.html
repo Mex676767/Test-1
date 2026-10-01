@@ -191,7 +191,7 @@
        full-width bars. All existing IDs stay unchanged for popup.js. */
     body{min-height:100vh;background:
       radial-gradient(circle at 50% -180px,rgba(79,140,240,.12),transparent 430px),var(--bg)}
-    .blast-shell{width:min(1180px,calc(100% - 32px));margin:0 auto;padding:24px 0 34px}
+    .blast-shell{width:min(1180px,calc(100% - 32px));margin:0 auto;padding:12px 0 34px}
     .hdr{padding:0 0 18px;background:transparent;border:0}
     .logo{align-items:flex-start}.logo-dot{margin-top:7px}
     .logo-txt{font-size:20px;font-weight:700;letter-spacing:-.02em}
@@ -257,7 +257,7 @@
     .bulk-actions{margin-top:14px}.bulk-status{margin-top:12px}
 
     @media(max-width:900px){
-      .blast-shell{width:min(100% - 20px,760px);padding-top:16px}.manual-layout{grid-template-columns:1fr}.side-stack{position:static}
+      .blast-shell{width:min(100% - 20px,760px);padding-top:10px}.manual-layout{grid-template-columns:1fr}.side-stack{position:static}
       .bulk-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bulk-col:last-child{grid-column:1/-1}
     }
     @media(max-width:620px){
@@ -270,13 +270,6 @@
 <body>
 
 <main class="blast-shell">
-<div class="hdr">
-  <div class="logo">
-    <div class="logo-dot"></div>
-    <div class="logo-txt">Customer <span>Blast</span><span class="logo-sub">Prepare, review and send outreach from one place.</span></div>
-  </div>
-</div>
-
 <!-- Tabs -->
 <div class="workspace-nav">
   <div class="tabs">
