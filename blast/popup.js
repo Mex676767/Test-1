@@ -24,6 +24,14 @@ const statusText  = document.getElementById('statusText');
 const prog        = document.getElementById('prog');
 const log         = document.getElementById('log');
 const openSettings= document.getElementById('openSettings');
+const bulkRuntimeDock = document.getElementById('bulkRuntimeDock');
+
+// Bulk is now the only visible workflow. Reuse the existing delivery and run
+// controls in its dock so the automation logic and event handlers stay intact.
+if (bulkRuntimeDock) {
+  const deliveryCard = document.querySelector('.delivery-card');
+  [deliveryCard, status, log, runControls].filter(Boolean).forEach(el => bulkRuntimeDock.appendChild(el));
+}
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -473,6 +481,25 @@ const bulkMsg3  = document.getElementById('bulkMsg3');
 const bulkStatus  = document.getElementById('bulkStatus');
 const bulkLoadBtn = document.getElementById('bulkLoadBtn');
 const bulkClearBtn = document.getElementById('bulkClearBtn');
+const bulkWorkspace = document.querySelector('.bulk-workspace');
+const bulkMessageModeInputs = [...document.querySelectorAll('input[name="bulkMessageMode"]')];
+
+function bulkMessageMode() {
+  return bulkMessageModeInputs.find(input => input.checked)?.value || 'same';
+}
+
+function syncBulkMessageMode() {
+  const same = bulkMessageMode() === 'same';
+  if (bulkWorkspace) bulkWorkspace.dataset.messageMode = same ? 'same' : 'rows';
+  [bulkMsg1, bulkMsg2, bulkMsg3].forEach((textarea, index) => {
+    const label = document.getElementById(`bulkMsgLabel${index + 1}`);
+    if (label) label.textContent = `Message ${index + 1}${same ? ' · everyone' : ' · per row'}`;
+    textarea.placeholder = same
+      ? `${index ? 'Optional m' : 'M'}essage ${index + 1} sent to every chat…`
+      : `Message ${index + 1} for each chat…\n(one per line${index ? ', optional' : ''})`;
+    updateCounter(textarea, `cntMsg${index + 1}`);
+  });
+}
 
 function getLines(ta) {
   return ta.value.split('\n').map(l => l.trim());
@@ -484,6 +511,12 @@ function countNonEmpty(ta) {
 
 function updateCounter(ta, counterId) {
   const el = document.getElementById(counterId);
+  if (ta !== bulkLinks && bulkMessageMode() === 'same') {
+    const n = ta.value.trim().length;
+    el.textContent = n ? `${n} characters` : 'Empty';
+    el.className = 'bulk-counter';
+    return;
+  }
   const n = countNonEmpty(ta);
   el.textContent = `${n} / ${MAX_ROWS}`;
   el.className = 'bulk-counter' + (n > MAX_ROWS ? ' over' : '');
@@ -511,8 +544,14 @@ function updateCounter(ta, counterId) {
   });
 });
 
+bulkMessageModeInputs.forEach(input => input.addEventListener('change', syncBulkMessageMode));
+syncBulkMessageMode();
+
 // Parse tab-separated paste (copied from Excel/Sheets with all 4 columns)
 function parseTabbedPaste(raw) {
+  const rowsMode = bulkMessageModeInputs.find(input => input.value === 'rows');
+  if (rowsMode) rowsMode.checked = true;
+  syncBulkMessageMode();
   const rows = raw.split('\n').map(r => r.split('\t').map(c => c.trim())).filter(r => r.some(c => c));
 
   // Check if first row is a header (LINKS / MESSAGE 1 etc.) — skip it
@@ -561,6 +600,10 @@ bulkLoadBtn.addEventListener('click', () => {
   const msgs1  = getLines(bulkMsg1);
   const msgs2  = getLines(bulkMsg2);
   const msgs3  = getLines(bulkMsg3);
+  const sameForEveryone = bulkMessageMode() === 'same';
+  const sharedMessages = sameForEveryone
+    ? [bulkMsg1.value.trim(), bulkMsg2.value.trim(), bulkMsg3.value.trim()].filter(Boolean)
+    : [];
 
   if (!links.length) {
     showBulkStatus('⚠ No links found. Add at least one URL in the Links column.', 'err');
@@ -578,13 +621,13 @@ bulkLoadBtn.addEventListener('click', () => {
   const m2nonEmpty = msgs2.filter(m => m.length > 0);
   const m3nonEmpty = msgs3.filter(m => m.length > 0);
 
-  if (m1nonEmpty.length > MAX_ROWS || m2nonEmpty.length > MAX_ROWS || m3nonEmpty.length > MAX_ROWS) {
+  if (!sameForEveryone && (m1nonEmpty.length > MAX_ROWS || m2nonEmpty.length > MAX_ROWS || m3nonEmpty.length > MAX_ROWS)) {
     showBulkStatus(`⚠ One or more message columns exceed ${MAX_ROWS} rows.`, 'err');
     return;
   }
 
   // Check at least one message column has data
-  if (!m1nonEmpty.length && !m2nonEmpty.length && !m3nonEmpty.length) {
+  if (sameForEveryone ? !sharedMessages.length : (!m1nonEmpty.length && !m2nonEmpty.length && !m3nonEmpty.length)) {
     showBulkStatus('⚠ No messages found. Fill in at least Message 1.', 'err');
     return;
   }
@@ -596,7 +639,7 @@ bulkLoadBtn.addEventListener('click', () => {
     : [];
 
   const newEntries = links.map((url, i) => {
-    const rowMsgs = [
+    const rowMsgs = sameForEveryone ? sharedMessages : [
       msgs1[i] || '',
       msgs2[i] || '',
       msgs3[i] || '',
@@ -618,12 +661,7 @@ bulkLoadBtn.addEventListener('click', () => {
   save();
   renderAll();
 
-  showBulkStatus(`✓ Loaded ${newEntries.length} chat${newEntries.length !== 1 ? 's' : ''} into the queue.`, 'ok');
-
-  // Switch to manual tab so user can review + run
-  setTimeout(() => {
-    document.querySelector('[data-tab="manual"]').click();
-  }, 800);
+  showBulkStatus(`✓ ${newEntries.length} chat${newEntries.length !== 1 ? 's' : ''} ready${sameForEveryone ? ' with the shared message set' : ''}. Review delivery settings, then start.`, 'ok');
 });
 
 // ── Image Column (Bulk) ───────────────────────────────────────────────────────

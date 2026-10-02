@@ -148,8 +148,6 @@ function saveAgent(name) {
 // until an agent is chosen.
 function openSettingsPanel() {
   document.getElementById("settingsOverlay")?.remove();
-  let blastMessages = readBlastStorage(BLAST_SYNC_STORAGE_KEY).cannedMessages;
-  blastMessages = Array.isArray(blastMessages) && blastMessages.length ? blastMessages.slice(0, 6) : ["", "", ""];
   const blastFailures = readBlastStorage(BLAST_LOCAL_STORAGE_KEY).failureLog;
   const failureLog = Array.isArray(blastFailures) ? blastFailures : [];
   const overlay = document.createElement("div");
@@ -160,7 +158,7 @@ function openSettingsPanel() {
       <div class="settings-head">
         <div class="settings-title-block">
           <span>Settings</span>
-          <small>Agent and Blast preferences</small>
+          <small>Agent preferences and diagnostics</small>
         </div>
         ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
@@ -177,11 +175,7 @@ function openSettingsPanel() {
       </div>
 
       <div class="settings-card">
-        <div class="settings-section-title"><span class="settings-section-icon">✉</span><span>Blast messages</span></div>
-        <p class="settings-hint settings-hint-compact">Used in order when a queued chat has no custom message.</p>
-        <div class="settings-message-list" id="settingsMessageList"></div>
-        <button class="settings-add-message" id="settingsAddMessage" type="button">+ Add message</button>
-
+        <div class="settings-section-title"><span class="settings-section-icon">↗</span><span>Blast history</span></div>
         <details class="settings-failures">
           <summary>Skipped or failed chats <span>${failureLog.length}</span></summary>
           <div class="settings-failure-list">
@@ -206,37 +200,6 @@ function openSettingsPanel() {
   `;
   document.body.appendChild(overlay);
 
-  const renderBlastMessages = () => {
-    const list = document.getElementById("settingsMessageList");
-    list.innerHTML = blastMessages.map((message, index) => `
-      <div class="settings-message-row">
-        <span>${index + 1}</span>
-        <textarea class="settings-message-input" data-index="${index}" rows="2" placeholder="Message ${index + 1}">${escapeHtml(message)}</textarea>
-        <button type="button" class="settings-remove-message" data-index="${index}" title="Remove message">×</button>
-      </div>
-    `).join("");
-    list.querySelectorAll(".settings-message-input").forEach((input) => {
-      input.addEventListener("input", () => { blastMessages[Number(input.dataset.index)] = input.value; });
-    });
-    list.querySelectorAll(".settings-remove-message").forEach((button) => {
-      button.addEventListener("click", () => {
-        blastMessages.splice(Number(button.dataset.index), 1);
-        if (!blastMessages.length) blastMessages.push("");
-        renderBlastMessages();
-      });
-    });
-    document.getElementById("settingsAddMessage").hidden = blastMessages.length >= 6;
-  };
-  renderBlastMessages();
-
-  document.getElementById("settingsAddMessage").addEventListener("click", () => {
-    if (blastMessages.length >= 6) return;
-    blastMessages.push("");
-    renderBlastMessages();
-    const inputs = document.querySelectorAll(".settings-message-input");
-    inputs[inputs.length - 1]?.focus();
-  });
-
   document.getElementById("settingsClearFailures")?.addEventListener("click", () => {
     const current = readBlastStorage(BLAST_LOCAL_STORAGE_KEY);
     delete current.failureLog;
@@ -248,7 +211,6 @@ function openSettingsPanel() {
     const val = document.getElementById("agentSelect").value.trim();
     if (!val) { setStatus("Choose your name before continuing.", "error"); return; }
     saveAgent(val);
-    saveBlastMessages(blastMessages);
     overlay.remove();
     updateAgentBadge();
     staleRecords = [];
@@ -2333,47 +2295,37 @@ function renderExpandedCard(chat) {
       </div>
     </div>
 
-    <label class="field-label">Username</label>
-    <div class="username-row">
-      <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
-      <button class="lookup-btn ${s.notVipResult ? "force" : ""}" data-action="lookup" data-chat="${chat.chatId}" ${(s.isUnknown && !s.notVipResult) || s.lookupInFlight ? "disabled" : ""} ${s.notVipResult ? 'title="Not on the VIP list — look up again anyway and keep them as a VIP"' : ""}>${s.lookupInFlight ? "…" : (s.notVipResult ? "Force lookup" : "Look up")}</button>
-    </div>
-    <label class="unknown-toggle">
-      <input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} />
-      <span>Unknown player</span>
-    </label>
-
-    <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
-    <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
-    <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
-
-    <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
-    <div class="inquiry-select">
-      <div class="inquiry-box">
-        <div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div>
-        <input type="text" class="inquiry-search" placeholder="${s.inquiry.length ? "" : "Search inquiry…"}" autocomplete="off" />
-        <span class="inquiry-caret">▾</span>
+    <section class="ca-section ca-customer-section">
+      <div class="ca-section-head"><div><span class="ca-step">01</span><strong>Customer</strong></div><small>Look up before handling this case</small></div>
+      <label class="field-label">Username or user ID</label>
+      <div class="username-row">
+        <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
+        <button class="lookup-btn ${s.notVipResult ? "force" : ""}" data-action="lookup" data-chat="${chat.chatId}" ${(s.isUnknown && !s.notVipResult) || s.lookupInFlight ? "disabled" : ""} ${s.notVipResult ? 'title="Not on the VIP list — look up again anyway and keep them as a VIP"' : ""}>${s.lookupInFlight ? "…" : (s.notVipResult ? "Force lookup" : "Look up")}</button>
       </div>
-      <div class="inquiry-dropdown ${s.inquiryDropdownOpen ? "" : "hidden"}">${renderInquiryDropdown(chat.chatId, "")}</div>
-    </div>
+      <label class="unknown-toggle"><input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} /><span>Unknown player</span></label>
+      <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
+    </section>
 
-    <label class="field-label">Status</label>
-    <div class="status-picker">
-      <div class="status-box">
-        <div class="status-chip-slot">${renderStatusChip(chat.chatId)}</div>
-        <input type="text" class="status-search" placeholder="${s.status ? "" : "Select status…"}" autocomplete="off" />
-        <span class="inquiry-caret">▾</span>
+    <section class="ca-section ca-bonus-section">
+      <div class="ca-section-head"><div><span class="ca-step">02</span><strong>Available bonuses</strong></div><small>One bonus can be claimed per case</small></div>
+      <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
+    </section>
+
+    <section class="ca-section ca-case-section">
+      <div class="ca-section-head"><div><span class="ca-step">03</span><strong>Case details</strong></div><small>Automatic fields remain editable</small></div>
+      <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
+      <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
+      <div class="inquiry-select">
+        <div class="inquiry-box"><div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div><input type="text" class="inquiry-search" placeholder="${s.inquiry.length ? "" : "Search inquiry…"}" autocomplete="off" /><span class="inquiry-caret">▾</span></div>
+        <div class="inquiry-dropdown ${s.inquiryDropdownOpen ? "" : "hidden"}">${renderInquiryDropdown(chat.chatId, "")}</div>
       </div>
-      <div class="status-dropdown ${s.statusDropdownOpen ? "" : "hidden"}">${renderStatusDropdown(chat.chatId, "")}</div>
-    </div>
-
-    <div class="toggle-row">
-      <label class="field-label">Telegram chat <span class="auto-tag">auto</span></label>
-      <label class="switch">
-        <input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} />
-        <span class="slider"></span>
-      </label>
-    </div>
+      <label class="field-label">Status</label>
+      <div class="status-picker">
+        <div class="status-box"><div class="status-chip-slot">${renderStatusChip(chat.chatId)}</div><input type="text" class="status-search" placeholder="${s.status ? "" : "Select status…"}" autocomplete="off" /><span class="inquiry-caret">▾</span></div>
+        <div class="status-dropdown ${s.statusDropdownOpen ? "" : "hidden"}">${renderStatusDropdown(chat.chatId, "")}</div>
+      </div>
+      <div class="toggle-row"><label class="field-label">Telegram chat <span class="auto-tag">auto</span></label><label class="switch"><input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} /><span class="slider"></span></label></div>
+    </section>
 
     ${s.autoRecordError && !previewMode ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
@@ -2694,6 +2646,7 @@ function ticketFieldDisplay(value) {
 function renderTicketSearchResults(chatId) {
   const result = ticketSearchResultsByChat.get(chatId);
   if (!result) return "";
+  if (result.mode === "all") return "";
   if (result.loading) return `<div class="ticket-results-empty">Loading tickets…</div>`;
   if (result.error) return `<div class="record-error-banner">⚠︎ ${escapeHtml(result.error)}</div>`;
   if (!result.tickets?.length) return `<div class="ticket-results-empty">No tickets found.</div>`;
@@ -2709,6 +2662,47 @@ function renderTicketSearchResults(chatId) {
     }).join("")}
     ${result.total > result.tickets.length ? `<div class="ticket-results-empty">Showing ${result.tickets.length} of ${result.total} tickets. Refine the search to narrow it down.</div>` : ""}
   </div>`;
+}
+
+function ticketPeople(ticket) {
+  return [ticket.raisedBy, ...(Array.isArray(ticket.assignees) ? ticket.assignees : [])]
+    .map((person) => person?.name || person?.email).filter(Boolean);
+}
+
+function renderTicketExplorer(chatId) {
+  const s = state[chatId];
+  const result = ticketSearchResultsByChat.get(chatId);
+  const tickets = result?.mode === "all" ? (result.tickets || []) : [];
+  const unique = (values) => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const agents = unique(tickets.flatMap(ticketPeople));
+  const statuses = unique(tickets.map((ticket) => ticket.fields?.status));
+  const departments = unique(tickets.map((ticket) => ticket.currentDepartment?.name || ticket.currentDepartment?.code));
+  const markets = unique(tickets.map((ticket) => ticket.market?.label || ticket.market?.code));
+  const matches = (value, filter) => !filter || filter === "all" || String(value || "") === filter;
+  const filtered = tickets.filter((ticket) =>
+    (!s.ticketExplorerAgent || s.ticketExplorerAgent === "all" || ticketPeople(ticket).includes(s.ticketExplorerAgent))
+    && matches(ticket.fields?.status, s.ticketExplorerStatus)
+    && matches(ticket.currentDepartment?.name || ticket.currentDepartment?.code, s.ticketExplorerDepartment)
+    && matches(ticket.market?.label || ticket.market?.code, s.ticketExplorerMarket));
+  const options = (values, selected) => values.map((value) => `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
+  return `<section class="ticket-explorer">
+    <div class="ticket-explorer-head">
+      <div><span class="ticket-explorer-kicker">Ticket explorer</span><strong>Team tickets</strong><small>Pull recent tickets and narrow them by agent or ticket details.</small></div>
+      <button type="button" class="secondary-btn" data-action="loadAllTickets" data-chat="${escapeHtml(chatId)}">${result?.mode === "all" ? "Refresh" : "Load tickets"}</button>
+    </div>
+    ${result?.mode === "all" ? `<div class="ticket-explorer-filters">
+      <label><span>Agent</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerAgent"><option value="all">All agents</option>${options(agents, s.ticketExplorerAgent)}</select></label>
+      <label><span>Status</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerStatus"><option value="all">All statuses</option>${options(statuses, s.ticketExplorerStatus)}</select></label>
+      <label><span>Department</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerDepartment"><option value="all">All departments</option>${options(departments, s.ticketExplorerDepartment)}</select></label>
+      <label><span>Market</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerMarket"><option value="all">All markets</option>${options(markets, s.ticketExplorerMarket)}</select></label>
+    </div>
+    <div class="ticket-explorer-summary"><span>${filtered.length} of ${tickets.length} tickets</span><span>Latest updated first</span></div>
+    <div class="ticket-explorer-list">${filtered.length ? filtered.map((ticket) => `<button type="button" class="ticket-explorer-row" data-action="openTicketResult" data-chat="${escapeHtml(chatId)}" data-ref="${escapeHtml(ticket.ref)}">
+      <span><strong>${escapeHtml(ticket.ref)}</strong><small>${escapeHtml(ticketPeople(ticket).join(", ") || "Unassigned")}</small></span>
+      <span><b>${escapeHtml(ticket.fields?.status || "No status")}</b><small>${escapeHtml(ticket.currentDepartment?.name || ticket.currentDepartment?.code || "No department")}</small></span>
+    </button>`).join("") : `<div class="ticket-results-empty">No tickets match these filters.</div>`}</div>`
+    : `<div class="ticket-explorer-empty">Load up to 100 recently updated tickets. Filters will appear here.</div>`}
+  </section>`;
 }
 
 function renderTicketStatus(chatId) {
@@ -2730,6 +2724,17 @@ function renderTicketStatus(chatId) {
   const attachmentSummary = attachments.length
     ? `<div class="ticket-attachment-summary"><strong>Attachments:</strong> ${attachments.map((item) => escapeHtml(item?.name || "Attached file")).join(", ")}</div>`
     : "";
+  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  const commentThread = comments.length
+    ? `<div class="ticket-comments">${comments.map((comment, index) => `<article class="ticket-comment">
+        <span class="ticket-comment-avatar">${escapeHtml(String(comment.author || "?").trim().charAt(0).toUpperCase())}</span>
+        <div><div class="ticket-comment-meta"><strong>${escapeHtml(comment.author || "Unknown")}</strong><span>${escapeHtml(comment.role || "")}</span><time>${escapeHtml(comment.time || "")}</time></div><p>${escapeHtml(comment.body || "")}</p></div>
+      </article>`).join("")}</div>
+      <div class="ticket-comment-composer">
+        <textarea rows="2" placeholder="Write a reply…" aria-label="Future ticket reply preview"></textarea>
+        <div><span>Future ticket comments preview</span><button type="button" disabled>Send reply</button></div>
+      </div>`
+    : `<p>The current ticket API returns the comment count but not the comment thread or history. Reading and posting replies here will switch on once the ticket API adds comment endpoints.</p>`;
   const fieldRows = Object.entries(ticket.fields || {})
     .filter(([key]) => key !== "attachment")
     .map(([key, value]) => `<div class="ticket-detail-row"><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(ticketFieldDisplay(value))}</strong></div>`)
@@ -2746,7 +2751,7 @@ function renderTicketStatus(chatId) {
     ${attachmentSummary}
     <div class="ticket-conversation-panel">
       <div class="ticket-conversation-head"><strong>Conversation</strong><span>${Number(ticket.commentCount || 0)} comments</span></div>
-      <p>The current ticket API returns the comment count but not the comment thread or history. Reading and posting replies here will switch on once the ticket API adds comment endpoints.</p>
+      ${commentThread}
     </div>
     <a class="ticket-open-link" href="https://tickets.96ghq.com/tickets?q=${encodeURIComponent(ticket.ref)}" target="_blank" rel="noopener">Open in ticket system ↗</a>
   </div>`;
@@ -2767,12 +2772,12 @@ async function loadTicketStatus(chatId, ref, { silent = false } = {}) {
   return data.ticket;
 }
 
-async function searchTickets(chatId, query) {
-  ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [] });
+async function searchTickets(chatId, query, mode = "search") {
+  ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [], mode });
   const res = await fetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}`);
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Ticket search failed");
-  ticketSearchResultsByChat.set(chatId, { loading: false, tickets: data.tickets || [], total: data.total || 0 });
+  ticketSearchResultsByChat.set(chatId, { loading: false, tickets: data.tickets || [], total: data.total || 0, mode });
   return data;
 }
 
@@ -2796,24 +2801,20 @@ setInterval(pollTicketUpdates, 30000);
 // ticket system itself.
 function renderEscalationSection(chatId) {
   const s = state[chatId];
-  const ref = s.ticketLookupRef || s.ticketRef || "";
   const departmentId = String(s.escalation.departmentId || "");
   const marketId = String(s.escalation.marketId || "");
   return `
     <div class="ticket-section-head">
       <label class="field-label">Ticket System</label>
-      <span class="hint">Browse, create and check status</span>
+      <span class="hint">Search, browse and create tickets</span>
     </div>
     <div class="ticket-search-row">
-      <input type="search" class="input ticket-search-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(s.ticketSearchQuery || "")}" placeholder="Search ticket ref, member ID, or ticket fields" />
-      <button type="button" class="secondary-btn" data-action="searchTickets" data-chat="${escapeHtml(chatId)}">Search tickets</button>
+      <input type="search" class="input ticket-search-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(s.ticketSearchQuery || "")}" placeholder="Ticket ref, member ID, agent, or ticket fields" />
+      <button type="button" class="secondary-btn" data-action="searchTickets" data-chat="${escapeHtml(chatId)}">Search</button>
     </div>
     ${renderTicketSearchResults(chatId)}
-    <div class="ticket-lookup-row">
-      <input type="text" class="input mono ticket-ref-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(ref)}" placeholder="Ticket ref, e.g. TK2609210007" />
-      <button type="button" class="secondary-btn" data-action="lookupTicket" data-chat="${escapeHtml(chatId)}">Check status</button>
-    </div>
     ${renderTicketStatus(chatId)}
+    ${renderTicketExplorer(chatId)}
     ${ticketConfigError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(ticketConfigError)}</div>` : ""}
     ${!ticketFields.length || s.escalationSubmitted ? "" : `
       <div class="ticket-form-title">Raise a new ticket</div>
@@ -2840,8 +2841,61 @@ function renderEscalationSection(chatId) {
 // so applyProfile() (live SDK mode) can ensure a new chat's state exists
 // with every required field before forcing it expanded, rather than
 // renderChats()'s own init pass silently skipping a partially-built object.
+function applyPreviewSampleState(chat) {
+  if (!previewMode || chat.chatId !== "preview-test") return;
+  const sample = state[chat.chatId];
+  if (!sample.username) sample.username = "860944";
+  if (!sample.usernameDraft) sample.usernameDraft = sample.username;
+  if (!sample.brand) sample.brand = "VS";
+  if (!sample.matchedRow) {
+    sample.matchedRow = {
+      tier: "Tier 3",
+      customerName: "Abang SofHin",
+      riskPlayer: "Eligible · 30%",
+      riskExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
+      vs96Feedback: "Eligible",
+    };
+  }
+  if (!sample.riskReloadAmount) sample.riskReloadAmount = "600";
+  if (!sample.ticketRecord) {
+    sample.ticketLookupRef = "TK2609290238";
+    sample.ticketRef = "TK2609290238";
+    sample.ticketRecord = {
+      ref: "TK2609290238",
+      status: "PYM_SOLVED",
+      createdAt: "2026-09-29T12:29:19.000Z",
+      updatedAt: "2026-09-29T13:03:24.000Z",
+      raisedBy: { name: "Developer" },
+      assignees: [{ name: "Derin" }],
+      currentDepartment: { name: "PAYMENT MYR/PHP/PKR" },
+      market: { label: "Malaysia" },
+      commentCount: 3,
+      attachmentCount: 1,
+      fields: {
+        status: "PYM_SOLVED",
+        member_id: "64612",
+        brand: "HOT321",
+        query_type: "Withdrawal delay",
+        amount: "220",
+        transaction_id: "149251",
+        payment_gateway: "SuperPay",
+        remarks: "Customer confirmed the payment was received.",
+        attachment: [{ name: "payment-receipt.png" }],
+      },
+      comments: [
+        { author: "R. Maxine", role: "CS agent", time: "29 Sep · 8:31 PM", body: "Customer reported that withdrawal 149251 was still pending after the expected processing time." },
+        { author: "Derin", role: "Payment team", time: "29 Sep · 8:47 PM", body: "Checked with the provider. The transaction was released and should appear in the customer account shortly." },
+        { author: "R. Maxine", role: "CS agent", time: "29 Sep · 9:03 PM", body: "Customer confirmed receipt. Marking this case as solved." },
+      ],
+    };
+  }
+}
+
 function ensureChatState(chat) {
-  if (state[chat.chatId]) return;
+  if (state[chat.chatId]) {
+    applyPreviewSampleState(chat);
+    return;
+  }
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     liveChatAccount: currentLiveChatAccount,
@@ -2870,6 +2924,7 @@ function ensureChatState(chat) {
     },
     escalationSubmitted: false, escalationError: "", ticketAttachmentError: "",
     ticketRef: "", ticketLookupRef: "", ticketRecord: null, ticketSearchQuery: "",
+    ticketExplorerAgent: "all", ticketExplorerStatus: "all", ticketExplorerDepartment: "all", ticketExplorerMarket: "all",
     // "Last username recorded" — see checkLastUsername. Runs once per chat,
     // as soon as both Brand and the resolved chat link are ready.
     // lastUsernameStarted guards against calling twice; lastUsernameLoading
@@ -2929,6 +2984,11 @@ function ensureChatState(chat) {
     // the card template below.
     dobCalendarOpen: false,
   };
+  // Standalone preview opens with a complete, read-only demonstration so
+  // reviewers can assess the special bonus workflows without configuring a
+  // brand and performing a live lookup first. Embedded LiveChat never uses
+  // this sample state.
+  applyPreviewSampleState(chat);
 }
 
 function resetPreviewCard(chatId) {
@@ -3140,10 +3200,10 @@ chatListEl.addEventListener("keydown", (event) => {
   const card = target.closest?.(".chat-card");
 
   // The primary text lookups should submit like a normal search field.
-  if (event.key === "Enter" && target.matches?.(".username-input, .ticket-search-input, .ticket-ref-input")) {
+  if (event.key === "Enter" && target.matches?.(".username-input, .ticket-search-input")) {
     const action = target.matches(".username-input")
       ? "lookup"
-      : target.matches(".ticket-search-input") ? "searchTickets" : "lookupTicket";
+      : "searchTickets";
     const button = card?.querySelector(`button[data-action="${action}"]`);
     if (button && !button.disabled) {
       event.preventDefault();
@@ -3296,10 +3356,30 @@ chatListEl.addEventListener("click", async (e) => {
     btn.disabled = true;
     btn.textContent = "Searching…";
     try {
-      await searchTickets(chatId, s.ticketSearchQuery || "");
+      const query = String(s.ticketSearchQuery || "").trim();
+      if (/^TK[A-Z0-9]+$/i.test(query)) {
+        await loadTicketStatus(chatId, query, { silent: true });
+        ticketSearchResultsByChat.delete(chatId);
+      } else {
+        await searchTickets(chatId, query, "search");
+      }
       s.escalationError = "";
     } catch (err) {
-      ticketSearchResultsByChat.set(chatId, { loading: false, tickets: [], error: err.message });
+      ticketSearchResultsByChat.set(chatId, { loading: false, tickets: [], error: err.message, mode: "search" });
+    }
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "loadAllTickets") {
+    btn.disabled = true;
+    btn.textContent = "Loading…";
+    try {
+      await searchTickets(chatId, "", "all");
+      s.escalationError = "";
+    } catch (err) {
+      ticketSearchResultsByChat.set(chatId, { loading: false, tickets: [], error: err.message, mode: "all" });
+      s.escalationError = "Ticket list failed: " + err.message;
     }
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
@@ -4118,6 +4198,15 @@ chatListEl.addEventListener("input", (e) => {
 // selectBrand action handler above, since it's a custom dropdown, not a
 // native <select>, anymore.)
 chatListEl.addEventListener("change", (e) => {
+  const explorerFilter = e.target.closest(".ticket-explorer-filter");
+  if (explorerFilter) {
+    const s = state[explorerFilter.dataset.chat];
+    const allowed = new Set(["ticketExplorerAgent", "ticketExplorerStatus", "ticketExplorerDepartment", "ticketExplorerMarket"]);
+    if (s && allowed.has(explorerFilter.dataset.filter)) s[explorerFilter.dataset.filter] = explorerFilter.value;
+    explorerFilter.closest(".escalation-slot").innerHTML = renderEscalationSection(explorerFilter.dataset.chat);
+    saveState();
+    return;
+  }
   const attachmentInput = e.target.closest(".ticket-attachment-input");
   if (attachmentInput) {
     const chatId = attachmentInput.dataset.chat;

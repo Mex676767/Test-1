@@ -266,25 +266,67 @@
       .connection-card{align-items:flex-start;flex-wrap:wrap}.connection-controls{width:100%}.connection-select{flex:1}.connection-note{white-space:normal}
       .bulk-grid{grid-template-columns:1fr}.bulk-col:last-child{grid-column:auto}.workspace-panel,.bulk-workspace{padding:12px}
     }
+
+    /* Cards redesign — matches the parent Console preview. */
+    :root{
+      --bg:#0e1014;--s1:#14171c;--s2:#1a1e25;--bd:#2b303a;
+      --accent:#6879e9;--ad:rgba(104,121,233,.14);--ag:rgba(104,121,233,.25);
+      --txt:#f2f4f7;--dim:#929aa8;--success:#3dc49d;--warn:#d9aa55;
+    }
+    body{background:var(--bg)}
+    .blast-shell{width:min(1180px,calc(100% - 24px));padding-top:12px}
+    .tabs{border-radius:11px}.tab-btn{border-radius:7px}
+    .bridge-banner,.workspace-panel,.bulk-workspace{border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.14)}
+    .workspace-panel,.bulk-workspace{background:var(--s1)}
+    .chat-row,.default-item,.speed-trigger,.bulk-textarea,.img-url-area,.img-file-wrap{background:var(--s2)}
+    .btn-go,.bulk-load-btn{background:var(--accent);box-shadow:0 9px 24px rgba(104,121,233,.22)}
+    .btn-go:hover,.bulk-load-btn:hover{background:#7888ef}
+    .connection-card.is-connected .connection-dot{background:var(--success)}
+    /* Operational deck — queue on the canvas, controls grouped as one dock. */
+    .workspace-nav{margin-bottom:10px}.tabs{width:100%;min-width:0}
+    .bridge-banner{border-left:3px solid var(--success)!important;border-radius:8px!important;background:transparent!important}
+    .queue-panel{padding:2px 0 0;border:0;background:transparent;box-shadow:none}
+    .queue-panel .manual-top{padding:0 2px 12px;border-bottom:1px solid var(--bd)}
+    .queue-panel .chat-list{margin-top:10px}
+    .queue-panel .chat-row{border-left:3px solid var(--accent);border-radius:9px;box-shadow:0 7px 18px rgba(0,0,0,.1)}
+    .queue-panel .row-num{width:34px;background:transparent;color:var(--accent);font-weight:800}
+    .queue-panel .add-chat-btn{border-style:dashed;background:transparent}
+    .side-stack{gap:0;padding:6px;border:1px solid var(--bd);border-radius:13px;background:var(--s1);box-shadow:0 14px 32px rgba(0,0,0,.14)}
+    .side-stack>.workspace-panel{padding:12px 10px;border:0;border-radius:0;background:transparent;box-shadow:none}
+    .side-stack>.delivery-card{border-top:1px solid var(--bd)}
+    .side-stack>.status{margin:4px 6px 0;border-radius:8px}
+    .side-stack>.log{margin:0 6px}
+    .side-stack>.run-controls{padding:8px 6px 4px}
+    .side-stack .btn-go{min-height:43px}
+    .bulk-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--bd)}
+    .bulk-heading>div:first-child{min-width:0}.bulk-heading>div:first-child>span{display:block;color:var(--accent);font-size:9px;font-weight:800;letter-spacing:.09em;text-transform:uppercase}
+    .bulk-heading>div:first-child>strong{display:block;margin-top:3px;color:var(--txt);font-size:18px;letter-spacing:-.02em}.bulk-heading>div:first-child>small{display:block;margin-top:4px;color:var(--dim);font-size:10px}
+    .bulk-message-mode{display:flex;flex:0 0 auto;gap:3px;padding:3px;border:1px solid var(--bd);border-radius:9px;background:var(--bg)}
+    .bulk-message-mode input{position:absolute;opacity:0;pointer-events:none}.bulk-message-mode span{display:block;padding:7px 9px;border-radius:6px;color:var(--dim);font-size:9px;font-weight:700;cursor:pointer}
+    .bulk-message-mode input:checked+span{background:var(--s2);color:var(--txt);box-shadow:0 1px 3px rgba(0,0,0,.2)}
+    .bulk-workspace[data-message-mode="same"] .bulk-grid{grid-template-columns:1.25fr repeat(3,1fr)}
+    .bulk-workspace[data-message-mode="same"] #bulkMsg1,.bulk-workspace[data-message-mode="same"] #bulkMsg2,.bulk-workspace[data-message-mode="same"] #bulkMsg3{height:130px}
+    .bulk-runtime-dock{display:grid;grid-template-columns:minmax(0,1fr);gap:0;margin-top:14px;padding:7px;border:1px solid var(--bd);border-radius:13px;background:var(--s1)}
+    .bulk-runtime-dock>.delivery-card{padding:12px;border:0;border-radius:0;background:transparent;box-shadow:none}
+    .bulk-runtime-dock>.status{margin:2px 6px 0;border-radius:8px}.bulk-runtime-dock>.log{margin:0 6px}.bulk-runtime-dock>.run-controls{padding:8px 6px 4px}
+    .bulk-runtime-dock .btn-go{min-height:44px}
+    @media(max-width:620px){
+      .blast-shell{width:calc(100% - 16px)}.queue-panel{min-height:0}.side-stack{margin-top:12px}
+      .bulk-heading{align-items:stretch;flex-direction:column}.bulk-message-mode{width:100%}.bulk-message-mode label{flex:1}.bulk-message-mode span{text-align:center}
+      .bulk-workspace[data-message-mode="same"] .bulk-grid{grid-template-columns:1fr}
+      .bulk-workspace[data-message-mode="same"] #bulkMsg1,.bulk-workspace[data-message-mode="same"] #bulkMsg2,.bulk-workspace[data-message-mode="same"] #bulkMsg3{height:110px}
+    }
   </style>
 </head>
 <body>
 
 <main class="blast-shell">
-<!-- Tabs -->
-<div class="workspace-nav">
-  <div class="tabs">
-    <button class="tab-btn active" data-tab="manual">Manual queue</button>
-    <button class="tab-btn" data-tab="bulk">Bulk import</button>
-  </div>
-</div>
-
 <div class="bridge-banner" id="bridgeBanner">
   <strong>LiveChat connection</strong>
 </div>
 
 <!-- MANUAL TAB -->
-<div class="tab-pane active" id="tab-manual">
+<div class="tab-pane" id="tab-manual">
   <div class="body manual-layout">
 
     <!-- Chat rows -->
@@ -370,12 +412,20 @@
 </div>
 
 <!-- BULK IMPORT TAB -->
-<div class="tab-pane" id="tab-bulk">
+<div class="tab-pane active" id="tab-bulk">
   <div class="bulk-body">
     <div class="bulk-workspace">
 
+    <div class="bulk-heading">
+      <div><span>Bulk outreach</span><strong>Build one queue, then send</strong><small>Paste up to 1,000 LiveChat links and choose how messages map to them.</small></div>
+      <div class="bulk-message-mode" role="radiogroup" aria-label="Message mapping">
+        <label><input type="radio" name="bulkMessageMode" value="same" checked><span>Same for everyone</span></label>
+        <label><input type="radio" name="bulkMessageMode" value="rows"><span>Different per row</span></label>
+      </div>
+    </div>
+
     <div class="bulk-hint">
-      <strong>How to use:</strong> Copy columns from your spreadsheet (up to 1000 rows each) and paste into each column below, or paste a full tab-separated block into the <code>LINKS</code> column and click <strong>Auto-parse</strong>. Then click <strong>Load into Queue</strong> — each row becomes one chat job.
+      Paste the LiveChat links first. In <strong>Same for everyone</strong>, each message box is sent to every link. Switch to <strong>Different per row</strong> when each spreadsheet row has its own message.
     </div>
 
     <div class="bulk-grid">
@@ -385,18 +435,18 @@
         <div class="bulk-counter" id="cntLinks">0 / 1000</div>
       </div>
       <div class="bulk-col">
-        <div class="bulk-col-label msg">Message 1</div>
-        <textarea class="bulk-textarea" id="bulkMsg1" placeholder="First message for each chat…&#10;(one per line)"></textarea>
+        <div class="bulk-col-label msg" id="bulkMsgLabel1">Message 1 · everyone</div>
+        <textarea class="bulk-textarea" id="bulkMsg1" placeholder="Write the first message sent to every chat…"></textarea>
         <div class="bulk-counter" id="cntMsg1">0 / 1000</div>
       </div>
       <div class="bulk-col">
-        <div class="bulk-col-label msg">Message 2</div>
-        <textarea class="bulk-textarea" id="bulkMsg2" placeholder="Second message…&#10;(optional)"></textarea>
+        <div class="bulk-col-label msg" id="bulkMsgLabel2">Message 2 · everyone</div>
+        <textarea class="bulk-textarea" id="bulkMsg2" placeholder="Optional second message for every chat…"></textarea>
         <div class="bulk-counter" id="cntMsg2">0 / 1000</div>
       </div>
       <div class="bulk-col">
-        <div class="bulk-col-label msg">Message 3</div>
-        <textarea class="bulk-textarea" id="bulkMsg3" placeholder="Third message…&#10;(optional)"></textarea>
+        <div class="bulk-col-label msg" id="bulkMsgLabel3">Message 3 · everyone</div>
+        <textarea class="bulk-textarea" id="bulkMsg3" placeholder="Optional third message for every chat…"></textarea>
         <div class="bulk-counter" id="cntMsg3">0 / 1000</div>
       </div>
       <div class="bulk-col">
@@ -431,8 +481,10 @@
 
     <div class="bulk-actions">
       <button class="bulk-paste-btn" id="bulkClearBtn">Clear fields</button>
-      <button class="bulk-load-btn" id="bulkLoadBtn">Load into queue</button>
+      <button class="bulk-load-btn" id="bulkLoadBtn">Prepare blast</button>
     </div>
+
+    <div class="bulk-runtime-dock" id="bulkRuntimeDock"></div>
 
     </div>
   </div>
