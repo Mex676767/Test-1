@@ -3134,6 +3134,94 @@ chatListEl.addEventListener("input", (e) => {
   if (id && state[id]) state[id].usernameDraft = input.value;
 });
 
+chatListEl.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+  const target = event.target;
+  const card = target.closest?.(".chat-card");
+
+  // The primary text lookups should submit like a normal search field.
+  if (event.key === "Enter" && target.matches?.(".username-input, .ticket-search-input, .ticket-ref-input")) {
+    const action = target.matches(".username-input")
+      ? "lookup"
+      : target.matches(".ticket-search-input") ? "searchTickets" : "lookupTicket";
+    const button = card?.querySelector(`button[data-action="${action}"]`);
+    if (button && !button.disabled) {
+      event.preventDefault();
+      button.click();
+    }
+    return;
+  }
+
+  const inputConfig = [
+    [".inquiry-search", ".inquiry-dropdown", ".inquiry-option"],
+    [".status-search", ".status-dropdown", ".inquiry-option"],
+    [".brand-search", ".brand-dropdown", ".inquiry-option"],
+    [".dob-cal-month-search", ".dob-cal-month-dropdown", ".dob-cal-jump-option"],
+    [".dob-cal-year-search", ".dob-cal-year-dropdown", ".dob-cal-jump-option"],
+    [".ticket-choice-search", ".ticket-choice-menu", ".ticket-choice-option"],
+  ].find(([inputSelector]) => target.matches?.(inputSelector));
+
+  if (inputConfig) {
+    const [, containerSelector, optionSelector] = inputConfig;
+    const container = target.closest(containerSelector) || card?.querySelector(containerSelector);
+    const options = keyboardDropdownOptions(container, optionSelector);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      focusKeyboardOption(options, null, event.key === "ArrowDown" ? 1 : -1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      options[0]?.click();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeKeyboardDropdown(target);
+    }
+    return;
+  }
+
+  const option = target.closest?.(".inquiry-option, .dob-cal-jump-option, .ticket-choice-option");
+  if (option) {
+    const container = option.closest(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-cal-jump-dropdown, .ticket-choice-menu");
+    const optionSelector = option.classList.contains("dob-cal-jump-option")
+      ? ".dob-cal-jump-option"
+      : option.classList.contains("ticket-choice-option") ? ".ticket-choice-option" : ".inquiry-option";
+    const options = keyboardDropdownOptions(container, optionSelector);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      focusKeyboardOption(options, option, event.key === "ArrowDown" ? 1 : -1);
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      const next = event.key === "Home" ? options[0] : options[options.length - 1];
+      next?.focus();
+      next?.scrollIntoView({ block: "nearest" });
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeKeyboardDropdown(option);
+    }
+    // Enter and Space already activate these native buttons.
+    return;
+  }
+
+  const dropdownTrigger = target.closest?.(
+    ".brand-display, .ticket-choice-trigger, [data-action=\"toggleDobMonthDropdown\"], [data-action=\"toggleDobYearDropdown\"]"
+  );
+  if (dropdownTrigger && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+    event.preventDefault();
+    const wasOpen = dropdownTrigger.getAttribute("aria-expanded") === "true"
+      || !dropdownTrigger.closest(".brand-picker, .dob-cal-jump-picker, .ticket-choice")
+        ?.querySelector(".brand-dropdown, .dob-cal-jump-dropdown, .ticket-choice-menu")?.classList.contains("hidden");
+    if (!wasOpen) dropdownTrigger.click();
+    setTimeout(() => {
+      const wrapper = dropdownTrigger.closest(".brand-picker, .dob-cal-jump-picker, .ticket-choice");
+      const container = wrapper?.querySelector(".brand-dropdown, .dob-cal-jump-dropdown, .ticket-choice-menu");
+      const selector = container?.classList.contains("brand-dropdown")
+        ? ".inquiry-option"
+        : container?.classList.contains("ticket-choice-menu") ? ".ticket-choice-option" : ".dob-cal-jump-option";
+      const options = keyboardDropdownOptions(container, selector);
+      focusKeyboardOption(options, null, event.key === "ArrowDown" ? 1 : -1);
+    }, 0);
+  }
+});
+
 chatListEl.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-action]");
   if (!btn) return;
@@ -4238,6 +4326,62 @@ function clearRecordRetry(chatId) {
   if (timer) clearTimeout(timer);
   recordRetryTimers.delete(chatId);
   recordRetryAttempts.delete(chatId);
+}
+
+// Custom dropdowns need the keyboard behavior browsers provide for a native
+// <select>: arrows move through the visible choices, Enter chooses one, and
+// Escape closes the list. Keep this shared so Inquiry, Status, Brand, D.O.B.
+// and ticket fields all behave the same way.
+function keyboardDropdownOptions(container, selector) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll(selector)).filter((option) => (
+    !option.disabled
+    && !option.classList.contains("disabled")
+    && !option.classList.contains("hidden")
+  ));
+}
+
+function focusKeyboardOption(options, current, direction) {
+  if (!options.length) return;
+  const currentIndex = options.indexOf(current);
+  const nextIndex = currentIndex < 0
+    ? (direction > 0 ? 0 : options.length - 1)
+    : (currentIndex + direction + options.length) % options.length;
+  options[nextIndex].focus();
+  options[nextIndex].scrollIntoView({ block: "nearest" });
+}
+
+function closeKeyboardDropdown(target, { restoreFocus = true } = {}) {
+  const ticketMenu = target.closest(".ticket-choice-menu");
+  if (ticketMenu) {
+    ticketMenu.classList.add("hidden");
+    const trigger = ticketMenu.closest(".ticket-choice")?.querySelector(".ticket-choice-trigger");
+    trigger?.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger?.focus();
+    return;
+  }
+
+  const dropdown = target.closest(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-cal-jump-dropdown");
+  if (!dropdown) return;
+  dropdown.classList.add("hidden");
+  const card = dropdown.closest(".chat-card");
+  const s = card && state[card.dataset.chatId];
+  if (s) {
+    if (dropdown.classList.contains("inquiry-dropdown")) s.inquiryDropdownOpen = false;
+    if (dropdown.classList.contains("status-dropdown")) s.statusDropdownOpen = false;
+    if (dropdown.classList.contains("brand-dropdown")) s.brandDropdownOpen = false;
+  }
+  if (!restoreFocus) return;
+  const trigger = dropdown.classList.contains("inquiry-dropdown")
+    ? card?.querySelector(".inquiry-search")
+    : dropdown.classList.contains("status-dropdown")
+      ? card?.querySelector(".status-search")
+      : dropdown.classList.contains("brand-dropdown")
+        ? card?.querySelector(".brand-display")
+        : dropdown.classList.contains("dob-cal-month-dropdown")
+          ? card?.querySelector('[data-action="toggleDobMonthDropdown"]')
+          : card?.querySelector('[data-action="toggleDobYearDropdown"]');
+  trigger?.focus();
 }
 
 // Same-record updates are idempotent, so retrying a dropped request is safe:

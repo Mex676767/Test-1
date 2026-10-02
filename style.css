@@ -330,6 +330,7 @@ body {
   padding: 8px 10px; border-radius: 6px; cursor: pointer; font-family: inherit;
 }
 .inquiry-option:hover:not(.disabled) { background: var(--surface-2); color: var(--text); }
+.inquiry-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--surface-2); color: var(--text); }
 .inquiry-option.active { color: var(--blue); font-weight: 600; }
 .inquiry-option.disabled { opacity: 0.35; cursor: not-allowed; }
 .inquiry-option-check { width: 13px; color: var(--blue); flex-shrink: 0; }
@@ -459,6 +460,7 @@ body {
   font-size: 12.5px; font-family: inherit; padding: 8px 10px; border-radius: 6px; cursor: pointer;
 }
 .dob-cal-jump-option:hover { background: var(--surface-2); color: var(--text); }
+.dob-cal-jump-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--surface-2); color: var(--text); }
 .dob-cal-jump-option.active { background: var(--blue); color: #fff; font-weight: 600; }
 .dob-cal-nav {
   flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--text-muted);
@@ -869,6 +871,7 @@ body {
 .ticket-choice-options { display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow-y: auto; scrollbar-width: thin; }
 .ticket-choice-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 11px; line-height: 1.35; text-align: left; cursor: pointer; }
 .ticket-choice-option:hover, .ticket-choice-option.selected { background: color-mix(in srgb, var(--blue) 15%, var(--surface-2)); color: var(--blue); }
+.ticket-choice-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; background: color-mix(in srgb, var(--blue) 15%, var(--surface-2)); color: var(--blue); }
 .ticket-choice-option span { color: var(--teal); font-weight: 700; }
 .ticket-choice-empty { padding: 12px 8px; color: var(--text-faint); font-size: 10.5px; text-align: center; }
 .escalation-submit-btn { margin-top: 14px; }

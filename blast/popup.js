@@ -264,11 +264,47 @@ concurrencyTrigger.addEventListener('click', () => {
   concurrencyTrigger.setAttribute('aria-expanded', String(opening));
 });
 
+function concurrencyOptions() {
+  return Array.from(concurrencyMenu.querySelectorAll('.speed-option'));
+}
+
+function focusConcurrencyOption(current, direction) {
+  const options = concurrencyOptions();
+  if (!options.length) return;
+  const index = options.indexOf(current);
+  const nextIndex = index < 0
+    ? (direction > 0 ? Math.max(0, options.findIndex((option) => option.classList.contains('selected'))) : options.length - 1)
+    : (index + direction + options.length) % options.length;
+  options[nextIndex].focus();
+}
+
+concurrencyTrigger.addEventListener('keydown', (event) => {
+  if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+  event.preventDefault();
+  if (!concurrencyPicker.classList.contains('open')) concurrencyTrigger.click();
+  focusConcurrencyOption(null, event.key === 'ArrowDown' ? 1 : -1);
+});
+
 concurrencyMenu.querySelectorAll('.speed-option').forEach((option) => {
   option.addEventListener('click', () => {
     concurrencySelect.value = option.dataset.value;
     concurrencySelect.dispatchEvent(new Event('change', { bubbles: true }));
     closeConcurrencyPicker();
+  });
+  option.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusConcurrencyOption(option, event.key === 'ArrowDown' ? 1 : -1);
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      const options = concurrencyOptions();
+      (event.key === 'Home' ? options[0] : options[options.length - 1])?.focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeConcurrencyPicker();
+      concurrencyTrigger.focus();
+    }
+    // Enter and Space use the button's native click behavior.
   });
 });
 
@@ -277,7 +313,10 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') closeConcurrencyPicker();
+  if (event.key === 'Escape' && concurrencyPicker.classList.contains('open')) {
+    closeConcurrencyPicker();
+    concurrencyTrigger.focus();
+  }
 });
 
 concurrencySelect.addEventListener('change', () => {
