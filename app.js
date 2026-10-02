@@ -163,7 +163,7 @@ function openSettingsPanel() {
         ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
       <div class="settings-card">
-        <div class="settings-section-title"><span class="settings-section-icon">A</span><span>Agent</span></div>
+        <div class="settings-section-title"><span>Agent</span></div>
         <p class="settings-hint">Choose the name recorded on every submitted case.</p>
         ${agentOptions.length
           ? `<select class="input settings-select" id="agentSelect">
@@ -2296,7 +2296,7 @@ function renderExpandedCard(chat) {
     </div>
 
     <section class="ca-section ca-customer-section">
-      <div class="ca-section-head"><div><span class="ca-step">01</span><strong>Customer</strong></div><small>Look up before handling this case</small></div>
+      <div class="ca-section-head"><div><strong>Customer</strong></div><small>Look up before handling this case</small></div>
       <label class="field-label">Username or user ID</label>
       <div class="username-row">
         <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
@@ -2307,12 +2307,12 @@ function renderExpandedCard(chat) {
     </section>
 
     <section class="ca-section ca-bonus-section">
-      <div class="ca-section-head"><div><span class="ca-step">02</span><strong>Available bonuses</strong></div><small>One bonus can be claimed per case</small></div>
+      <div class="ca-section-head"><div><strong>Available bonuses</strong></div><small>One bonus can be claimed per case</small></div>
       <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
     </section>
 
     <section class="ca-section ca-case-section">
-      <div class="ca-section-head"><div><span class="ca-step">03</span><strong>Case details</strong></div><small>Automatic fields remain editable</small></div>
+      <div class="ca-section-head"><div><strong>Case details</strong></div><small>Automatic fields remain editable</small></div>
       <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
       <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
       <div class="inquiry-select">

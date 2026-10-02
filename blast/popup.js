@@ -30,7 +30,8 @@ const bulkRuntimeDock = document.getElementById('bulkRuntimeDock');
 // controls in its dock so the automation logic and event handlers stay intact.
 if (bulkRuntimeDock) {
   const deliveryCard = document.querySelector('.delivery-card');
-  [deliveryCard, status, log, runControls].filter(Boolean).forEach(el => bulkRuntimeDock.appendChild(el));
+  [deliveryCard, status, log].filter(Boolean).forEach(el => bulkRuntimeDock.appendChild(el));
+  document.querySelector('.bulk-actions')?.appendChild(runControls);
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -44,11 +45,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // ── Load ──────────────────────────────────────────────────────────────────────
-chrome.storage.sync.get(['cannedMessages', 'delay', 'concurrency', 'concurrencyVersion', 'chatEntries', 'isRunning'], (d) => {
+chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency', 'concurrencyVersion', 'chatEntries', 'isRunning'], (d) => {
   defaultMessages = d.cannedMessages || [];
-  const delay = d.delay || 3;
+  const savedDelay = Number(d.delay);
+  const delay = d.delayVersion === 2 && savedDelay >= 1 && savedDelay <= 10 ? savedDelay : 1;
   delaySlider.value = delay;
   delayVal.textContent = delay + 's';
+  if (d.delayVersion !== 2) chrome.storage.sync.set({ delay: 1, delayVersion: 2 });
   const savedConcurrency = Number(d.concurrency);
   const concurrency = d.concurrencyVersion === 2 && [1, 3, 5, 8, 10].includes(savedConcurrency)
     ? savedConcurrency
@@ -248,7 +251,7 @@ function renderDefaultPreview() {
 delaySlider.addEventListener('input', () => {
   const v = parseFloat(delaySlider.value);
   delayVal.textContent = v + 's';
-  chrome.storage.sync.set({ delay: v });
+  chrome.storage.sync.set({ delay: v, delayVersion: 2 });
 });
 
 function updateConcurrencyPicker() {
@@ -354,6 +357,8 @@ function updateRunControls() {
   startBtn.hidden = running;
   pauseBtn.hidden = !running;
   stopBtn.hidden = !running;
+  const clearButton = document.getElementById('bulkClearBtn');
+  if (clearButton) clearButton.hidden = running;
   pauseBtn.textContent = paused ? 'Resume' : 'Pause';
   pauseBtn.className = paused ? 'btn btn-resume' : 'btn btn-pause';
   if (window.parent !== window) {
@@ -398,6 +403,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 // ── Start / Pause / Resume / Stop ─────────────────────────────────────────────
 startBtn.addEventListener('click', () => {
+  if (!prepareBulkQueue()) return;
   const jobs = [];
   const preflightFailures = [];
   const duplicateNotices = [];
@@ -479,7 +485,6 @@ const bulkMsg1  = document.getElementById('bulkMsg1');
 const bulkMsg2  = document.getElementById('bulkMsg2');
 const bulkMsg3  = document.getElementById('bulkMsg3');
 const bulkStatus  = document.getElementById('bulkStatus');
-const bulkLoadBtn = document.getElementById('bulkLoadBtn');
 const bulkClearBtn = document.getElementById('bulkClearBtn');
 const bulkWorkspace = document.querySelector('.bulk-workspace');
 const bulkMessageModeInputs = [...document.querySelectorAll('input[name="bulkMessageMode"]')];
@@ -595,7 +600,7 @@ bulkClearBtn.addEventListener('click', () => {
   bulkStatus.className = 'bulk-status';
 });
 
-bulkLoadBtn.addEventListener('click', () => {
+function prepareBulkQueue() {
   const links = getLines(bulkLinks).filter(l => l.length > 0);
   const msgs1  = getLines(bulkMsg1);
   const msgs2  = getLines(bulkMsg2);
@@ -607,13 +612,13 @@ bulkLoadBtn.addEventListener('click', () => {
 
   if (!links.length) {
     showBulkStatus('⚠ No links found. Add at least one URL in the Links column.', 'err');
-    return;
+    return false;
   }
 
   // Validate links count
   if (links.length > MAX_ROWS) {
     showBulkStatus(`⚠ Too many links (${links.length}). Maximum is ${MAX_ROWS}.`, 'err');
-    return;
+    return false;
   }
 
   // Validate each message column individually
@@ -623,13 +628,13 @@ bulkLoadBtn.addEventListener('click', () => {
 
   if (!sameForEveryone && (m1nonEmpty.length > MAX_ROWS || m2nonEmpty.length > MAX_ROWS || m3nonEmpty.length > MAX_ROWS)) {
     showBulkStatus(`⚠ One or more message columns exceed ${MAX_ROWS} rows.`, 'err');
-    return;
+    return false;
   }
 
   // Check at least one message column has data
   if (sameForEveryone ? !sharedMessages.length : (!m1nonEmpty.length && !m2nonEmpty.length && !m3nonEmpty.length)) {
     showBulkStatus('⚠ No messages found. Fill in at least Message 1.', 'err');
-    return;
+    return false;
   }
 
 
@@ -661,8 +666,9 @@ bulkLoadBtn.addEventListener('click', () => {
   save();
   renderAll();
 
-  showBulkStatus(`✓ ${newEntries.length} chat${newEntries.length !== 1 ? 's' : ''} ready${sameForEveryone ? ' with the shared message set' : ''}. Review delivery settings, then start.`, 'ok');
-});
+  showBulkStatus(`✓ Starting ${newEntries.length} chat${newEntries.length !== 1 ? 's' : ''}${sameForEveryone ? ' with the shared message set' : ''}.`, 'ok');
+  return true;
+}
 
 // ── Image Column (Bulk) ───────────────────────────────────────────────────────
 let bulkImgMode = 'url'; // 'url' or 'file'
