@@ -111,6 +111,8 @@ body {
 .topbar .logging-pause-toggle { margin-top: 6px; }
 .logging-pause-toggle input { accent-color: var(--danger); width: 13px; height: 13px; cursor: pointer; }
 .logging-pause-toggle.active { color: var(--danger); font-weight: 600; }
+.logging-pause-toggle.blast-locked { color: var(--gold); }
+.logging-pause-toggle.blast-locked input { opacity: 1; cursor: not-allowed; }
 
 .icon-btn, .theme-toggle {
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);

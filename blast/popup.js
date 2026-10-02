@@ -73,8 +73,8 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'concurrency', 'concurrencyV
     paused = Boolean(d.isPaused);
     status.classList.add('on');
     statusText.textContent = paused ? 'Paused — press Resume to continue' : 'Running…';
-    updateRunControls();
   }
+  updateRunControls();
 });
 
 if (openSettings && window.parent === window) {
@@ -309,6 +309,9 @@ function updateRunControls() {
   stopBtn.hidden = !running;
   pauseBtn.textContent = paused ? 'Resume' : 'Pause';
   pauseBtn.className = paused ? 'btn btn-resume' : 'btn btn-pause';
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: 'blast-run-state', running }, window.location.origin);
+  }
 }
 
 // ── Background messages ───────────────────────────────────────────────────────

@@ -63,7 +63,9 @@ function saveBlastMessages(messages) {
 // once it's unticked again — see submitRecord). Persisted so it survives
 // this widget's iframe reloading (same reason chat state itself does).
 const LOGGING_PAUSED_KEY = "rc-logging-paused";
+const BLAST_LOGGING_PREVIOUS_KEY = "rc-blast-logging-previous";
 let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
+let blastLoggingLock = false;
 
 async function fetchAgentOptions() {
   try {
@@ -4558,14 +4560,58 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
 });
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
 
+const loggingPauseCheck = document.getElementById("loggingPauseCheck");
+function setBlastLoggingLock(running) {
+  const toggle = document.getElementById("loggingPauseToggle");
+  if (running) {
+    if (!blastLoggingLock) {
+      if (localStorage.getItem(BLAST_LOGGING_PREVIOUS_KEY) === null) {
+        localStorage.setItem(BLAST_LOGGING_PREVIOUS_KEY, String(loggingPaused));
+      }
+      logDiagnostic("Chat logging paused automatically while Blast is running.", "warn");
+    }
+    if (!toggle.dataset.defaultTitle) toggle.dataset.defaultTitle = toggle.title;
+    blastLoggingLock = true;
+    loggingPaused = true;
+    loggingPauseCheck.checked = true;
+    loggingPauseCheck.disabled = true;
+    toggle.classList.add("active", "blast-locked");
+    toggle.title = "Chat logging is paused automatically while Blast is running.";
+    localStorage.setItem(LOGGING_PAUSED_KEY, "true");
+    renderChats(activeChats);
+    return;
+  }
+  if (!blastLoggingLock && localStorage.getItem(BLAST_LOGGING_PREVIOUS_KEY) === null) return;
+  const previous = localStorage.getItem(BLAST_LOGGING_PREVIOUS_KEY) === "true";
+  localStorage.removeItem(BLAST_LOGGING_PREVIOUS_KEY);
+  blastLoggingLock = false;
+  loggingPaused = previous;
+  loggingPauseCheck.checked = previous;
+  loggingPauseCheck.disabled = false;
+  toggle.classList.toggle("active", previous);
+  toggle.classList.remove("blast-locked");
+  toggle.title = toggle.dataset.defaultTitle || "When ticked, no chat gets recorded to Lark Base.";
+  localStorage.setItem(LOGGING_PAUSED_KEY, String(previous));
+  logDiagnostic(previous ? "Blast finished; chat logging remains paused by the agent." : "Blast finished; chat logging restored.", "success");
+  renderChats(activeChats);
+}
+
 window.addEventListener("message", async (event) => {
-  if (event.origin !== window.location.origin || event.data?.type !== "bonus-config-changed") return;
+  if (event.origin !== window.location.origin) return;
+  if (event.data?.type === "blast-run-state") {
+    setBlastLoggingLock(Boolean(event.data.running));
+    return;
+  }
+  if (event.data?.type !== "bonus-config-changed") return;
   await fetchConfiguredBonusPrograms();
   renderChats(activeChats);
 });
 
-const loggingPauseCheck = document.getElementById("loggingPauseCheck");
 loggingPauseCheck.addEventListener("change", () => {
+  if (blastLoggingLock) {
+    loggingPauseCheck.checked = true;
+    return;
+  }
   loggingPaused = loggingPauseCheck.checked;
   localStorage.setItem(LOGGING_PAUSED_KEY, String(loggingPaused));
   document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
