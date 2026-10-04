@@ -4,7 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Console</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <link rel="stylesheet" href="style.css?v=20261004-1" />
 </head>
 <body>
   <header class="topbar">
@@ -55,7 +58,7 @@
 
   <main id="chatList" class="chat-list"></main>
   <section id="blastView" class="blast-view" hidden>
-    <iframe data-src="/blast/index.html" loading="lazy" title="LiveChat Engagement"></iframe>
+    <iframe data-src="/blast/index.html?v=20261004-1" loading="lazy" title="LiveChat Engagement"></iframe>
   </section>
   <section id="knowledgeView" class="knowledge-view" hidden>
     <iframe data-src="/knowledge/index.html" loading="lazy" title="CS Learning Assistant"></iframe>
@@ -67,7 +70,7 @@
        time app.js checks for it; harmless (just unused) when previewed
        standalone outside LiveChat, or if this CDN fails to load. -->
   <script src="vendor/livechat-agentapp-1.16.0.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20261004-1"></script>
 </body>
 </html>
 

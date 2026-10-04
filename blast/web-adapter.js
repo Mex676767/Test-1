@@ -3,6 +3,11 @@
 (() => {
   if (globalThis.chrome?.storage?.local && globalThis.chrome?.runtime?.sendMessage) return;
 
+  // Lets popup.js distinguish this embedded web runtime from the browser
+  // extension. A web run cannot survive an iframe/page reload, so persisted
+  // running flags must never restore a run that no longer exists.
+  globalThis.__blastWebAdapter = true;
+
   const storageListeners = [];
   const runtimeListeners = [];
   const prefix = "ca-livechat-engagement:";
@@ -16,6 +21,8 @@
   let stopRequested = false;
   let pauseRequested = false;
   let pauseWaiters = [];
+  let runSequence = 0;
+  let activeRunId = 0;
 
   const setPaused = (next) => {
     pauseRequested = next;
@@ -204,7 +211,9 @@
     await action("send_event", { chat_id: chatId, event: { type: "file", url: uploaded.url, visibility: "all", alternative_text: file.name } });
   }
 
-  async function runJob(job, index, total, delay, claimedChatIds) {
+  const runWasStopped = (runId) => stopRequested || runId !== activeRunId;
+
+  async function runJob(job, index, total, delay, claimedChatIds, runId) {
     let resumed = false;
     let temporarilyAddedAgent = false;
     let agentAccountId = "";
@@ -212,6 +221,7 @@
     try {
       emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
       const chat = await resolveChat(job.url);
+      if (runWasStopped(runId)) throw new Error("Stopped by user");
       chatId = chat.chatId;
       if (claimedChatIds.has(chat.chatId)) {
         emit({ type: "PROGRESS", text: `Skipped duplicate chat ${index + 1}`, progress: `${index + 1}/${total}`, log: `↷ Chat ${index + 1} points to a customer chat already processed in this run`, logType: "info" });
@@ -240,10 +250,11 @@
         }
       }
       for (let i = 0; i < job.messages.length; i += 1) {
-        if (stopRequested) throw new Error("Stopped by user");
+        if (runWasStopped(runId)) throw new Error("Stopped by user");
         await action("send_event", { chat_id: chat.chatId, event: { type: "message", text: job.messages[i], visibility: "all" } });
         if (i < job.messages.length - 1) await sleep(delay);
       }
+      if (runWasStopped(runId)) throw new Error("Stopped by user");
       await sendImage(chat.chatId, job);
       if (resumed) {
         await action("deactivate_chat", { id: chat.chatId, ignore_requester_presence: true });
@@ -251,7 +262,7 @@
       }
       emit({ type: "PROGRESS", text: `Completed chat ${index + 1} of ${total}`, progress: `${index + 1}/${total}`, log: `✓ Chat ${index + 1} sent as the connected agent`, logType: "ok" });
     } catch (error) {
-      const stopped = stopRequested && error.message === "Stopped by user";
+      const stopped = runWasStopped(runId) || error.message === "Stopped by user";
       if (!stopped) recordFailure(job, index, "LiveChat API", error.message);
       emit({
         type: "PROGRESS",
@@ -277,22 +288,20 @@
     }
   }
 
-  async function runJobs(jobs, delay, concurrency) {
-    stopRequested = false;
-    setPaused(false);
+  async function runJobs(jobs, delay, concurrency, runId) {
     let cursor = 0;
     const claimedChatIds = new Set();
     const worker = async () => {
-      while (!stopRequested) {
+      while (!runWasStopped(runId)) {
         await waitWhilePaused();
-        if (stopRequested) return;
+        if (runWasStopped(runId)) return;
         const index = cursor++;
         if (index >= jobs.length) return;
-        await runJob(jobs[index], index, jobs.length, delay, claimedChatIds);
+        await runJob(jobs[index], index, jobs.length, delay, claimedChatIds, runId);
       }
     };
     await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));
-    emit({ type: "DONE", stopped: stopRequested });
+    if (runId === activeRunId) emit({ type: "DONE", stopped: stopRequested });
   }
 
   function connectAgent(client) {
@@ -397,6 +406,7 @@
       sendMessage(message) {
         if (message?.type === "STOP") {
           stopRequested = true;
+          activeRunId = ++runSequence;
           setPaused(false);
         }
         if (message?.type === "PAUSE" && !stopRequested) {
@@ -412,7 +422,13 @@
           if (!token()) {
             setTimeout(() => emit({ type: "PROGRESS", text: "Connect the CS agent before sending.", progress: "Not sent", log: "No customer message was sent.", logType: "err" }), 0);
             setTimeout(() => emit({ type: "DONE" }), 50);
-          } else runJobs(message.jobs || [], Number(message.delay) || 0, Number(message.concurrency) || 1);
+          } else {
+            stopRequested = false;
+            setPaused(false);
+            const runId = ++runSequence;
+            activeRunId = runId;
+            runJobs(message.jobs || [], Number(message.delay) || 0, Number(message.concurrency) || 1, runId);
+          }
         }
         return Promise.resolve();
       },

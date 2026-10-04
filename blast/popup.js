@@ -78,8 +78,11 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency
     renderDefaultPreview();
   });
 
-  // Restore running state if popup was closed mid-automation
-  if (d.isRunning) {
+  // Extension background runs may survive a popup close. Embedded web runs
+  // cannot survive an iframe reload, so clear any orphaned persisted state.
+  if (globalThis.__blastWebAdapter && d.isRunning) {
+    chrome.storage.sync.set({ isRunning: false, isPaused: false });
+  } else if (d.isRunning) {
     running = true;
     paused = Boolean(d.isPaused);
     status.classList.add('on');
@@ -472,12 +475,13 @@ pauseBtn.addEventListener('click', () => {
 stopBtn.addEventListener('click', () => {
   if (!running) return;
   chrome.runtime.sendMessage({ type: 'STOP' });
-  statusText.textContent = 'Stopping…';
-  pauseBtn.disabled = true;
-  stopBtn.disabled = true;
-  if (window.parent !== window) {
-    window.parent.postMessage({ type: 'blast-run-state', running: true, paused: false, active: false, stopping: true }, window.location.origin);
-  }
+  running = false;
+  paused = false;
+  chrome.storage.sync.set({ isRunning: false, isPaused: false });
+  statusText.textContent = 'Stopped';
+  prog.textContent = '';
+  updateRunControls();
+  addLog('■ Automation stopped', 'info');
 });
 
 // ── Bulk Import ───────────────────────────────────────────────────────────────
