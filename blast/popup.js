@@ -45,7 +45,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // ── Load ──────────────────────────────────────────────────────────────────────
-chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency', 'concurrencyVersion', 'chatEntries', 'isRunning'], (d) => {
+chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency', 'concurrencyVersion', 'chatEntries', 'isRunning', 'isPaused'], (d) => {
   defaultMessages = d.cannedMessages || [];
   const savedDelay = Number(d.delay);
   const delay = d.delayVersion === 2 && savedDelay >= 1 && savedDelay <= 10 ? savedDelay : 1;
@@ -362,7 +362,7 @@ function updateRunControls() {
   pauseBtn.textContent = paused ? 'Resume' : 'Pause';
   pauseBtn.className = paused ? 'btn btn-resume' : 'btn btn-pause';
   if (window.parent !== window) {
-    window.parent.postMessage({ type: 'blast-run-state', running }, window.location.origin);
+    window.parent.postMessage({ type: 'blast-run-state', running, paused, active: running && !paused }, window.location.origin);
   }
 }
 
@@ -475,6 +475,9 @@ stopBtn.addEventListener('click', () => {
   statusText.textContent = 'Stopping…';
   pauseBtn.disabled = true;
   stopBtn.disabled = true;
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: 'blast-run-state', running: true, paused: false, active: false, stopping: true }, window.location.origin);
+  }
 });
 
 // ── Bulk Import ───────────────────────────────────────────────────────────────
@@ -601,7 +604,8 @@ bulkClearBtn.addEventListener('click', () => {
 });
 
 function prepareBulkQueue() {
-  const links = getLines(bulkLinks).filter(l => l.length > 0);
+  const linkRows = getLines(bulkLinks);
+  const links = linkRows.map((url, rowIndex) => ({ url, rowIndex })).filter((row) => row.url.length > 0);
   const msgs1  = getLines(bulkMsg1);
   const msgs2  = getLines(bulkMsg2);
   const msgs3  = getLines(bulkMsg3);
@@ -637,23 +641,33 @@ function prepareBulkQueue() {
     return false;
   }
 
+  if (!sameForEveryone) {
+    const missingRows = links.filter(({ rowIndex }) => ![msgs1[rowIndex], msgs2[rowIndex], msgs3[rowIndex]].some((message) => String(message || '').trim()));
+    if (missingRows.length) {
+      const labels = missingRows.slice(0, 8).map(({ rowIndex }) => rowIndex + 1).join(', ');
+      const more = missingRows.length > 8 ? ` and ${missingRows.length - 8} more` : '';
+      showBulkStatus(`⚠ No message on row${missingRows.length === 1 ? '' : 's'} ${labels}${more}. Fill the row or use Same for everyone.`, 'err');
+      return false;
+    }
+  }
+
 
   // Build entries — with image support
   const imgUrls = bulkImgMode === 'url' 
     ? (bulkImgUrl ? bulkImgUrl.value.split('\n').map(l => l.trim()) : [])
     : [];
 
-  const newEntries = links.map((url, i) => {
+  const newEntries = links.map(({ url, rowIndex }) => {
     const rowMsgs = sameForEveryone ? sharedMessages : [
-      msgs1[i] || '',
-      msgs2[i] || '',
-      msgs3[i] || '',
+      msgs1[rowIndex] || '',
+      msgs2[rowIndex] || '',
+      msgs3[rowIndex] || '',
     ].filter(m => m.trim().length > 0);
 
     return {
       url,
       messages: rowMsgs.length > 0 ? rowMsgs : null,
-      imageUrl: bulkImgMode === 'url' ? (imgUrls[i] || '') : '',
+      imageUrl: bulkImgMode === 'url' ? (imgUrls[rowIndex] || '') : '',
       imageDataUrl: bulkImgMode === 'file' ? bulkImgDataUrl : null,
       imageFileName: bulkImgMode === 'file' ? bulkImgFileName : null,
       expanded: false,

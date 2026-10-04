@@ -4832,7 +4832,7 @@ function setBlastLoggingLock(running) {
 window.addEventListener("message", async (event) => {
   if (event.origin !== window.location.origin) return;
   if (event.data?.type === "blast-run-state") {
-    setBlastLoggingLock(Boolean(event.data.running));
+    setBlastLoggingLock(Boolean(event.data.active));
     return;
   }
   if (event.data?.type !== "bonus-config-changed") return;
