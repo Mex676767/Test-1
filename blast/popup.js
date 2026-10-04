@@ -402,15 +402,34 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'ERROR') {
     addLog('✗ ' + msg.text, 'err');
   }
+  if (msg.type === 'AUTH_REQUIRED') {
+    running = false;
+    paused = false;
+    chrome.storage.sync.set({ isRunning: false, isPaused: false });
+    status.classList.add('on');
+    statusText.textContent = 'Connect LiveChat Account before starting';
+    prog.textContent = 'Not sent';
+    updateRunControls();
+    showBulkStatus('Connect LiveChat Account above before starting the blast.', 'err');
+    addLog('✗ No messages sent — LiveChat Account is not connected in this browser.', 'err');
+    document.getElementById('bridgeBanner')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 });
 
 // ── Start / Pause / Resume / Stop ─────────────────────────────────────────────
 startBtn.addEventListener('click', () => {
+  if (globalThis.__blastWebAdapter && !globalThis.__blastAgentConnected?.()) {
+    status.classList.add('on');
+    statusText.textContent = 'Connect LiveChat Account before starting';
+    prog.textContent = 'Not sent';
+    showBulkStatus('Connect LiveChat Account above before starting the blast.', 'err');
+    addLog('✗ No messages sent — LiveChat Account is not connected in this browser.', 'err');
+    document.getElementById('bridgeBanner')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
   if (!prepareBulkQueue()) return;
   const jobs = [];
   const preflightFailures = [];
-  const duplicateNotices = [];
-  const seenChatIds = new Map();
   chatEntries.forEach((e, queueIndex) => {
     if (!e.url) return;
     const job = {
@@ -427,20 +446,7 @@ startBtn.addEventListener('click', () => {
       preflightFailures.push({ index: queueIndex, job, stage: 'queue validation', reason: 'URL is not a recognized LiveChat link' });
     } else if (!job.messages.length) {
       preflightFailures.push({ index: queueIndex, job, stage: 'queue validation', reason: 'No messages were configured for this chat' });
-    } else {
-      let directChatId = '';
-      try {
-        const parts = new URL(e.url).pathname.split('/').filter(Boolean);
-        const chatIndex = parts.indexOf('chats');
-        if (chatIndex >= 0) directChatId = parts[chatIndex + 1] || '';
-      } catch (_) {}
-      if (directChatId && seenChatIds.has(directChatId)) {
-        duplicateNotices.push(`Skipped row ${queueIndex + 1}: same customer chat as row ${seenChatIds.get(directChatId) + 1}`);
-        return;
-      }
-      if (directChatId) seenChatIds.set(directChatId, queueIndex);
-      jobs.push(job);
-    }
+    } else jobs.push(job);
   });
 
   if (preflightFailures.length) {
@@ -454,7 +460,6 @@ startBtn.addEventListener('click', () => {
   paused = false;
   chrome.storage.sync.set({ isRunning: true, isPaused: false });
   log.innerHTML = '';
-  duplicateNotices.forEach((notice) => addLog(`↷ ${notice}`, 'info'));
   status.classList.add('on');
   statusText.textContent = 'Starting…';
   updateRunControls();

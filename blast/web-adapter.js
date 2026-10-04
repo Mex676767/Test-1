@@ -69,6 +69,7 @@
   const token = (accountKey = selectedAccount()) => accountKey && Number(sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, accountKey)) || 0) > Date.now()
     ? sessionStorage.getItem(accountStorageKey(TOKEN_KEY, accountKey)) || ""
     : "";
+  globalThis.__blastAgentConnected = () => Boolean(token());
   let nextActionAt = 0;
   let actionThrottle = Promise.resolve();
 
@@ -213,7 +214,7 @@
 
   const runWasStopped = (runId) => stopRequested || runId !== activeRunId;
 
-  async function runJob(job, index, total, delay, claimedChatIds, runId) {
+  async function runJob(job, index, total, delay, runId) {
     let resumed = false;
     let temporarilyAddedAgent = false;
     let agentAccountId = "";
@@ -223,11 +224,6 @@
       const chat = await resolveChat(job.url);
       if (runWasStopped(runId)) throw new Error("Stopped by user");
       chatId = chat.chatId;
-      if (claimedChatIds.has(chat.chatId)) {
-        emit({ type: "PROGRESS", text: `Skipped duplicate chat ${index + 1}`, progress: `${index + 1}/${total}`, log: `↷ Chat ${index + 1} points to a customer chat already processed in this run`, logType: "info" });
-        return;
-      }
-      claimedChatIds.add(chat.chatId);
       if (chat.isActive !== true) {
         try {
           await action("resume_chat", { chat: { id: chat.chatId } });
@@ -290,14 +286,29 @@
 
   async function runJobs(jobs, delay, concurrency, runId) {
     let cursor = 0;
-    const claimedChatIds = new Set();
+    const linkQueues = new Map();
+    const runInLinkOrder = async (job, index) => {
+      const key = String(job.url || '').trim().toLowerCase();
+      const previous = (linkQueues.get(key) || Promise.resolve()).catch(() => {});
+      const current = previous.then(async () => {
+        await waitWhilePaused();
+        if (runWasStopped(runId)) return;
+        await runJob(job, index, jobs.length, delay, runId);
+      });
+      linkQueues.set(key, current);
+      try {
+        await current;
+      } finally {
+        if (linkQueues.get(key) === current) linkQueues.delete(key);
+      }
+    };
     const worker = async () => {
       while (!runWasStopped(runId)) {
         await waitWhilePaused();
         if (runWasStopped(runId)) return;
         const index = cursor++;
         if (index >= jobs.length) return;
-        await runJob(jobs[index], index, jobs.length, delay, claimedChatIds, runId);
+        await runInLinkOrder(jobs[index], index);
       }
     };
     await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));
@@ -420,8 +431,7 @@
         if (message?.type === "LOG_FAILURES") (message.failures || []).forEach((failure) => recordFailure(failure.job, failure.index, failure.stage || "queue validation", failure.reason || "Invalid queue item"));
         if (message?.type === "START") {
           if (!token()) {
-            setTimeout(() => emit({ type: "PROGRESS", text: "Connect the CS agent before sending.", progress: "Not sent", log: "No customer message was sent.", logType: "err" }), 0);
-            setTimeout(() => emit({ type: "DONE" }), 50);
+            setTimeout(() => emit({ type: "AUTH_REQUIRED" }), 0);
           } else {
             stopRequested = false;
             setPaused(false);
