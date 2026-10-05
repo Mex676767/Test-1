@@ -70,6 +70,20 @@ test("timed-out queued Lark searches release slots and do not poison later looku
 });
 
 test("several concurrent preview lookups complete while capping Lark search fan-out", async () => {
+  const activePermits = new Set();
+  let maxActivePermits = 0;
+  let permitSequence = 0;
+  const queueStub = {
+    acquire: async () => {
+      if (activePermits.size >= 3) return { ticket: null, retryAfterMs: 1 };
+      const ticket = `permit-${++permitSequence}`;
+      activePermits.add(ticket);
+      maxActivePermits = Math.max(maxActivePermits, activePermits.size);
+      return { ticket, retryAfterMs: 0 };
+    },
+    release: async (ticket) => { activePermits.delete(ticket); },
+    penalize: async () => {},
+  };
   initEnv({
     LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
     LARK_TABLE_CUSTOMER_APPROACHING: "customer-table", LARK_TABLE_REDEEM_CODE: "redeem-table",
@@ -78,6 +92,7 @@ test("several concurrent preview lookups complete while capping Lark search fan-
     LARK_TABLE_RISK_PLAYER: "risk-table", LARK_TABLE_SPECIAL_RELOAD: "reload-table",
     LARK_TABLE_VIP_BOOSTER: "vip-table", LARK_TABLE_TELEGRAM28: "telegram-table",
     LARK_TABLE_MOONCAKE: "mooncake-table", LARK_TABLE_VS96_FEEDBACK: "vs96-table",
+    LARK_SEARCH_QUEUE: { idFromName: () => "global", get: () => queueStub },
   });
   const originalFetch = globalThis.fetch;
   let activeSearches = 0;
@@ -109,7 +124,47 @@ test("several concurrent preview lookups complete while capping Lark search fan-
     assert.ok(lookups.every((result) => result.statusCode === 200));
     assert.ok(lookups.every((result) => JSON.parse(result.body).ok));
     assert.ok(maxActiveSearches <= 3, `observed ${maxActiveSearches} simultaneous Lark searches`);
+    assert.ok(maxActivePermits <= 3, `observed ${maxActivePermits} simultaneous global permits`);
+    assert.equal(activePermits.size, 0);
     assert.equal(activeSearches, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a slow queue RPC falls back quickly and releases any late permit", async () => {
+  initEnv({ LARK_APP_ID: "rpc-app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
+  const originalFetch = globalThis.fetch;
+  const releasedTickets = [];
+  const stub = {
+    acquire: () => new Promise((resolve) => setTimeout(() => resolve({ ticket: "late-ticket", retryAfterMs: 0 }), 320)),
+    release: (ticket) => { releasedTickets.push(ticket); return Promise.resolve(); },
+    penalize: () => Promise.resolve(),
+  };
+  initEnv({
+    LARK_APP_ID: "rpc-app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
+    LARK_SEARCH_QUEUE: { idFromName: () => "queue-id", get: () => stub },
+  });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("tenant_access_token")) {
+      return response({ code: 0, tenant_access_token: "rpc-token", expire: 3600 });
+    }
+    return response({ code: 0, data: { items: [] } });
+  };
+
+  try {
+    const startedAt = Date.now();
+    const result = await searchRecords(
+      "slow-queue-table",
+      [{ field_name: "Username", operator: "is", value: ["test-user"] }],
+      undefined,
+      { timeoutMs: 1_000 },
+    );
+    const elapsedMs = Date.now() - startedAt;
+    assert.deepEqual(result, []);
+    assert.ok(elapsedMs < 800, `lookup took ${elapsedMs}ms while coordinator was slow`);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    assert.ok(releasedTickets.includes("late-ticket"), "a permit granted after fallback must be returned");
   } finally {
     globalThis.fetch = originalFetch;
   }
