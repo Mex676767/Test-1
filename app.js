@@ -1735,7 +1735,11 @@ function renderPlayerInfo(chatId) {
     if (s.matchedRow.customerName) {
       parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName)}</span><button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button></span>`);
     }
-    parts.push(`<span><span class="pi-label">Tier</span> ${s.matchedRow.tier || "—"}</span>`);
+    const tier = String(s.matchedRow.tier || "—").trim();
+    const tierDisplay = tier.match(/^Tier\s*(\d+)$/i)?.[1]
+      ? `${tier.match(/^Tier\s*(\d+)$/i)[1]}/V`
+      : tier.replace(/^Tier\s*/i, "");
+    parts.push(`<span><span class="pi-label">Tier</span> ${escapeHtml(tierDisplay || "—")}</span>`);
     if (s.forcedVipFor && !s.matchedRow.tier) {
       parts.push(`<span><span class="pi-label">Note</span> Not on the VIP list yet — force looked up</span>`);
     }
@@ -2303,7 +2307,7 @@ function renderExpandedCard(chat) {
     </div>` : ""}
 
     <section class="ca-section ca-customer-section">
-      <div class="ca-section-head"><div><strong>Customer</strong></div><small>Look up before handling this case</small></div>
+      <div class="ca-section-head"><div><strong>Customer</strong></div></div>
       <label class="field-label">Username or user ID</label>
       <div class="username-row">
         <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
@@ -2314,12 +2318,12 @@ function renderExpandedCard(chat) {
     </section>
 
     <section class="ca-section ca-bonus-section">
-      <div class="ca-section-head"><div><strong>Available bonuses</strong></div><small>One bonus can be claimed per case</small></div>
+      <div class="ca-section-head"><div><strong>Available bonuses</strong></div></div>
       <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
     </section>
 
     <section class="ca-section ca-case-section">
-      <div class="ca-section-head"><div><strong>Case details</strong></div><small>Automatic fields remain editable</small></div>
+      <div class="ca-section-head"><div><strong>Case details</strong></div></div>
       <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
       <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
       <div class="inquiry-select">
