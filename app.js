@@ -2138,6 +2138,7 @@ const DATE_PATTERN = new RegExp([
 // the number an agent actually cares about jumps out regardless of which
 // source table's own wording it came from.
 const AMOUNT_PATTERN = /\bRM\s?-?\d+(?:\.\d+)?\b|\bBonus\s+-?\d+(?:\.\d+)?\b/gi;
+const PASS_VALUE_PATTERN = /\bPass\s+\d+(?:\.\d+)?\b/gi;
 
 function highlightDates(text) {
   return escapeHtml(text).replace(DATE_PATTERN, (m) => `<span class="ticket-date">${m}</span>`);
@@ -2153,6 +2154,7 @@ function formatTicketMeta(text) {
   let html = escapeHtml(text);
   html = html.replace(DATE_PATTERN, (m) => `📅 <span class="ticket-date">${m}</span>`);
   html = html.replace(AMOUNT_PATTERN, (m) => `🎁 <span class="amount">${m}</span>`);
+  html = html.replace(PASS_VALUE_PATTERN, (m) => `<span class="pass-value">${m}</span>`);
   return html;
 }
 

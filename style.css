@@ -1100,6 +1100,12 @@ body { font-size: 13px; }
 .ticket.ticket-vs96 { background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
 .ticket.ticket-risk-player { background: color-mix(in srgb, var(--gold) 7%, var(--surface)); }
 .ticket.ticket-special { background: color-mix(in srgb, var(--danger) 7%, var(--surface)); }
+.ca-bonus-section .ticket-name { font-size: 14px; line-height: 1.3; font-weight: 700; }
+.ca-bonus-section .ticket-meta { margin-top: 3px; color: var(--text-muted); font-size: 14px; font-weight: 600; line-height: 1.35; }
+.ca-bonus-section .ticket-meta .amount { color: var(--gold); font-size: 16px; font-weight: 800; }
+.ca-bonus-section .ticket-meta .pass-value { color: var(--gold); font-size: 18px; font-weight: 800; line-height: 1.2; }
+.ca-bonus-section .risk-claim-preview strong { font-size: 17px; font-weight: 800; }
+.ca-bonus-section .risk-claim-preview small { font-size: 10px; }
 .vs96-feedback-input, .risk-reload-input, .risk-claim-preview { border-radius: 8px; background: var(--surface-2); }
 .risk-amount-fields label > span, .risk-claim-preview > span { font-size: 9px; }
 .ticket.empty { margin-top: 0; min-height: 54px; border-color: var(--border); background: var(--surface); }
