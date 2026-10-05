@@ -124,6 +124,11 @@ export async function handler(event) {
     const uname = username.trim().toLowerCase();
     const brandVal = brand.trim();
     const agentVal = (picName || "").trim();
+    const lookupWarnings = [];
+    const optionalLookup = (label, promise, fallback = null) => promise.catch(() => {
+      lookupWarnings.push(label);
+      return fallback;
+    });
 
     // User-defined regular bonuses are stored as metadata in Lark. Start
     // their reads immediately so they run alongside the built-in lookups.
@@ -146,7 +151,10 @@ export async function handler(event) {
         return [config.key, row ? toDisplay(row.fields[config.displayField]) : ""];
       }));
       return Object.fromEntries(pairs);
-    }).catch(() => ({}));
+    }).catch(() => {
+      lookupWarnings.push("Custom bonuses");
+      return {};
+    });
 
     const chatLink = String(link || "").trim();
     // Start case-row work alongside the independent bonus-table reads below.
@@ -215,7 +223,10 @@ export async function handler(event) {
             .map((r) => toDisplay(r.fields[F.brand]))
             .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
         )];
-      })().catch(() => []),
+      })().catch(() => {
+        lookupWarnings.push("Other-brand check");
+        return [];
+      }),
 
       // Tier comes straight from the P&L "master file" table (Username +
       // Brand match) — not from Customer Approaching's Tier Lookup. P&L is
@@ -235,7 +246,10 @@ export async function handler(event) {
           customerName: toDisplay(pnlMatches[0].fields[F.titleName]),
           notVip: false,
         };
-      })().catch(() => ({ tier: "", customerName: "", notVip: false })), // non-fatal — tier/customerName just show blank, notVip stays false
+      })().catch(() => {
+        lookupWarnings.push("P&L tier");
+        return { tier: "", customerName: "", notVip: false };
+      }), // non-fatal — tier/customerName just show blank, notVip stays false
 
       // Top 10 P&L(Night): "Claimed Copy" checkbox is the claim flag
       // (unticked = still claimable); displayed value is "SW Check". This
@@ -243,7 +257,7 @@ export async function handler(event) {
       // what it said — a "Failed" row (customer didn't qualify) slipped
       // through as a claimable ticket. Now hidden() (Claimed/Expired/Failed)
       // gates the actual text too, same as every other bonus table.
-      findOldestClaimableRow(
+      optionalLookup("Top 10 P&L", findOldestClaimableRow(
         TABLE_TOP_PNL_NIGHT, uname, brandVal,
         (fields) => {
           const display = toDisplay(fields[F.swCheck]).trim();
@@ -251,12 +265,12 @@ export async function handler(event) {
         },
         undefined,
         { fieldNames: [F.swCheck, F.claimedCopy, "Time of Inspection"] }
-      ),
+      )),
 
       // LTV(Day): read the live "SW Checker" field. Only values beginning
       // with Pass are eligible, and recurring rows are consumed FIFO by
       // Time of Inspection, matching Top 10 P&L.
-      findOldestClaimableRow(
+      optionalLookup("LTV", findOldestClaimableRow(
         TABLE_LTV_DAY, uname, brandVal,
         (fields) => {
           const display = toDisplay(fields[F.swChecker]).trim();
@@ -264,7 +278,7 @@ export async function handler(event) {
         },
         undefined,
         { fieldNames: [F.swChecker, "Time of Inspection"] }
-      ),
+      )),
 
       // Grace Period(Day): "SW Check" is both the claim flag (hide only
       // Claimed/Expired) and the displayed value. "SW Check" is a Formula
@@ -284,7 +298,7 @@ export async function handler(event) {
       // when a current, still-valid one existed -- confirmed live: a
       // genuinely not-yet-expired Grace Period bonus wasn't showing
       // Reactivate at all.
-      findOldestClaimableRow(
+      optionalLookup("Grace Period", findOldestClaimableRow(
         TABLE_GRACE_PERIOD, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.swCheck])),
         undefined,
@@ -293,7 +307,7 @@ export async function handler(event) {
         // absent, and the caller intentionally treats bonus-table errors as
         // an empty result.
         { newest: true }
-      ).catch(() => null),
+      )),
 
       // Risk Player(Day): one field ("Status") encodes both which day-tier
       // applies (e.g. "7D 20% Reload") and whether there's anything to claim
@@ -309,7 +323,7 @@ export async function handler(event) {
       // call site here catches that as "nothing claimable", indistinguishable
       // from a real no-match without checking the table's own columns
       // directly like this did.
-      findOldestClaimableRow(
+      optionalLookup("Risk Player", findOldestClaimableRow(
         TABLE_RISK_PLAYER, uname, brandVal,
         (fields) => {
           const status = String(toDisplay(fields[F.status]) || "").trim();
@@ -317,25 +331,25 @@ export async function handler(event) {
         },
         undefined,
         { usernameField: "Username", dateField: "Date", fieldNames: [F.status, F.riskExpiry, "Date"] }
-      ).catch(() => null),
+      )),
 
       // 12hour VIP Deposit Booster: only "Eligible" (exact) counts.
-      findOldestClaimableRow(
+      optionalLookup("12h VIP Booster", findOldestClaimableRow(
         TABLE_VIP_BOOSTER, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
         undefined,
         { fieldNames: [F.status] }
-      ).catch(() => null),
+      )),
 
       // Special Reload Event: only "Eligible Angpao" counts — the Free Spin
       // variant that used to live in this table is retired (kept for old
       // record history only), so it's intentionally not checked for here.
-      findOldestClaimableRow(
+      optionalLookup("Special Reload", findOldestClaimableRow(
         TABLE_SPECIAL_RELOAD, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao",
         undefined,
         { fieldNames: [F.status] }
-      ).catch(() => null),
+      )),
 
       // Telegram RM28 (2026-09-09) — repurposes the retired Ang Pao ticket's
       // plumbing, lives on the main base like every other bonus table above.
@@ -344,12 +358,12 @@ export async function handler(event) {
       // "Eligible — RM18" — and so the existing "grab the number after RM"
       // extraction (already fixed for the Top 10 P&L bug) picks up the right
       // amount for Released Amount with no new extraction logic needed.
-      findOldestClaimableRow(
+      optionalLookup("Telegram RM28", findOldestClaimableRow(
         TABLE_TELEGRAM28, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
         undefined,
         { fieldNames: [F.status, F.bonusAmount] }
-      ).catch(() => null),
+      )),
 
       (async () => {
         const redeemMatches = (await searchRecords(TABLE_REDEEM_CODE, [
@@ -357,7 +371,10 @@ export async function handler(event) {
           { field_name: F.brand, operator: "is", value: [brandVal] },
         ], undefined, { fieldNames: [F.status] })).filter((r) => !hidden(toDisplay(r.fields[F.status])));
         return redeemMatches[redeemMatches.length - 1] || null;
-      })().catch(() => null),
+      })().catch(() => {
+        lookupWarnings.push("Redeem Code");
+        return null;
+      }),
 
       // Mooncake bonus: "Status" hides Claimed/Expired same as every other
       // table (only "Pass" is a real value here today, but this follows the
@@ -366,17 +383,17 @@ export async function handler(event) {
       // ever adds another non-Claimed status). No monetary amount column,
       // so it's not in AMOUNT_ELIGIBLE_PROGRAMS on the frontend. Username
       // column is plain "UID" here, not "Username/UID".
-      findOldestClaimableRow(
+      optionalLookup("Mooncake", findOldestClaimableRow(
         TABLE_MOONCAKE, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.status])) && !!toDisplay(fields[F.status]),
         undefined,
         { usernameField: F.uid, fieldNames: [F.status, "Time of Inspection"] }
-      ).catch(() => null),
+      )),
 
       // VS96 Feedback Bonus: any non-empty Status is eligible except the
       // shared terminal states. Pick the oldest eligible inspection so a
       // player with several campaign rows is handled FIFO and deterministically.
-      findOldestClaimableRow(
+      optionalLookup("VS96 Feedback", findOldestClaimableRow(
         TABLE_VS96_FEEDBACK, uname, brandVal,
         (fields) => {
           const status = toDisplay(fields[F.status]).trim();
@@ -384,7 +401,7 @@ export async function handler(event) {
         },
         undefined,
         { fieldNames: [F.status, "Time of Inspection"] }
-      ),
+      )),
       caseRecordP,
     ]);
     const configuredBonuses = await configuredBonusRowsP;
@@ -403,6 +420,7 @@ export async function handler(event) {
       body: JSON.stringify({
         ok: true,
         otherBrands,
+        lookupWarnings: [...new Set(lookupWarnings)],
         justCreated: !preview,
         notVip,
         caRecordId,

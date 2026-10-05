@@ -166,3 +166,30 @@ test("lookup returns eligible results for every configured bonus source", async 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("bonus lookup stops immediately on Lark throttling instead of retrying against Retry-After", async () => {
+  initEnv({ LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
+  const originalFetch = globalThis.fetch;
+  let searchCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("tenant_access_token")) {
+      return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, tenant_access_token: "token", expire: 3600 }) };
+    }
+    searchCalls++;
+    return {
+      status: 429,
+      headers: { get: (name) => name === "Retry-After" ? "60" : null },
+      json: async () => ({ code: 99991400, msg: "TooManyRequest" }),
+    };
+  };
+
+  try {
+    await assert.rejects(
+      findOldestClaimableRow("grace-table", "67845", "RM", () => true, undefined, { fieldNames: ["Status"] }),
+      /rate-limiting/
+    );
+    assert.equal(searchCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

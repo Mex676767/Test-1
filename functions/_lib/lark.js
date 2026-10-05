@@ -102,6 +102,7 @@ export async function getTenantToken() {
       const res = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(6_000),
         body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET }),
       });
       const data = await res.json();
@@ -141,27 +142,25 @@ export function searchRecords(tableId, conditions, baseToken, opts = {}) {
 }
 
 async function performSearchRecords(tableId, conditions, baseToken, opts) {
-  // Retry transient Lark/network failures with exponential backoff and jitter.
-  // lark-search.js runs many of these in parallel per Look Up. Most optional
-  // bonuses remain non-fatal, while the three core programs are allowed to
-  // fail the lookup visibly instead of masquerading as "no bonus". A transient
-  // blip (network hiccup,
-  // momentary 5xx, Lark rate-limiting under 9x the concurrent load since
-  // parallelizing those calls) silently dropped that one bonus from the
-  // response with zero indication anything went wrong. Confirmed live: the
-  // same player's Telegram RM28 ticket intermittently not showing up on a
-  // re-lookup with no underlying data change in between.
+  // Each lookup fans out across many Lark tables. Repeating a slow/throttled
+  // request several times made one unavailable bonus hold the whole panel
+  // open; bound each request and return that source as unavailable instead.
   let lastErr;
-  let wasRateLimited = false;
-  const maxAttempts = 5;
+  // No per-table retry by default: the other source lookups are already
+  // running, and another burst during a tenant-wide 429 makes it worse.
+  const maxAttempts = opts.maxAttempts || 1;
+  const timeoutMs = opts.timeoutMs || 5_000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await acquireLarkSearchSlot();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const token = await getTenantToken();
       const res = await fetch(
         `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`
           + (opts.pageSize ? `?page_size=${opts.pageSize}` : ""),
         { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          signal: controller.signal,
           body: JSON.stringify({
             filter: { conjunction: "and", conditions },
             ...(opts.automaticFields ? { automatic_fields: true } : {}),
@@ -176,32 +175,40 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
           : `Lark search failed on table ${tableId}: ${data.msg}`);
         err.rateLimited = limited;
         // Lark may return schema/permission errors in an HTTP 200 response.
-        // Retrying those cannot help and needlessly delays a fallback query.
-        err.retryable = limited || res.status === 408 || res.status >= 500
-          || /internal|temporar|timeout|server error|system busy/i.test(String(data.msg || ""));
+        // A 429 is surfaced immediately instead of retrying every bonus table
+        // in the same request and worsening app-wide contention.
+        err.retryable = !limited && (
+          res.status === 408 || res.status >= 500
+          || /internal|temporar|timeout|server error|system busy/i.test(String(data.msg || ""))
+        );
         err.retryAfterMs = Number(res.headers.get("Retry-After")) * 1000 || 0;
         throw err;
       }
       return data.data.items || [];
     } catch (err) {
-      lastErr = err;
-      if (err.retryable === false) throw err;
-      if (err.rateLimited) {
-        wasRateLimited = true;
-        const retryMs = err.retryAfterMs || Math.min(12_000, 1_000 * (2 ** attempt));
+      if (controller.signal.aborted) {
+        lastErr = new Error(`Lark search timed out after ${Math.round(timeoutMs / 1000)} seconds (table ${tableId}).`);
+        lastErr.retryable = true;
+      } else {
+        lastErr = err;
+      }
+      if (lastErr.rateLimited) {
+        // Retry-After can be tens of seconds. Honor it as a short shared
+        // backoff only; each request reports the throttle so the UI can show
+        // a partial result and agents can retry manually after the load eases.
+        const retryMs = Math.min(1_000, lastErr.retryAfterMs || 1_000);
         larkSearchCooldownUntil = Math.max(larkSearchCooldownUntil, Date.now() + retryMs);
       }
+      if (lastErr.retryable === false) throw lastErr;
     } finally {
+      clearTimeout(timeoutId);
       releaseLarkSearchSlot();
     }
     if (attempt < maxAttempts - 1) {
-      const baseDelay = wasRateLimited ? Math.min(12_000, 1_000 * (2 ** attempt)) : 300 * (2 ** attempt);
+      const baseDelay = 250 * (2 ** attempt);
       const jitter = Math.floor(Math.random() * Math.min(700, baseDelay * 0.25));
       await new Promise((resolve) => setTimeout(resolve, Math.max(baseDelay, larkSearchCooldownUntil - Date.now()) + jitter));
     }
-  }
-  if (wasRateLimited) {
-    throw new Error("Lark is temporarily rate-limiting searches. Wait a few seconds, then try Lookup again.");
   }
   throw lastErr;
 }
@@ -368,7 +375,7 @@ export async function findOldestClaimableRow(tableId, username, brand, isClaimab
       // A field projection is only an optimization. If this table's schema
       // doesn't contain one of the requested columns, retry without it so an
       // otherwise valid bonus row isn't lost because of projection.
-      if (fieldNames?.length && err.retryable === false) {
+      if (fieldNames?.length && err.retryable === false && !err.rateLimited) {
         try {
           matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true });
           break;

@@ -647,7 +647,14 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
     }
 
     if (data?.ok) {
-      return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated, notVip: data.notVip };
+      return {
+        row: data.row,
+        otherBrands: data.otherBrands || [],
+        lookupWarnings: data.lookupWarnings || [],
+        caRecordId: data.caRecordId,
+        justCreated: data.justCreated,
+        notVip: data.notVip,
+      };
     }
 
     const transientResponse = !data && (res.ok || res.status === 408 || res.status === 429 || res.status >= 500);
@@ -3609,7 +3616,7 @@ chatListEl.addEventListener("click", async (e) => {
       // record hasn't been logged (submitted) yet — a completed case is
       // never deleted by a stray re-lookup.
       const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
-      const { row, otherBrands, caRecordId, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId, controller.signal);
+      const { row, otherBrands, lookupWarnings, caRecordId, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId, controller.signal);
       s.caLinkSaved = !!(s.chatUrl || chatDef?.link);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
@@ -3646,6 +3653,9 @@ chatListEl.addEventListener("click", async (e) => {
         s.notVipResult = false;
         s.forcedVipFor = "";
         setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
+      }
+      if (lookupWarnings.length) {
+        setStatus(`Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error");
       }
     } catch (err) {
       if (forcing) s.isUnknown = true; // failed force lookup -- back to how it was
