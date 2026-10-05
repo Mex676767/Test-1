@@ -127,6 +127,7 @@ export function searchRecords(tableId, conditions, baseToken, opts = {}) {
     conditions,
     pageSize: opts.pageSize || null,
     automaticFields: !!opts.automaticFields,
+    fieldNames: opts.fieldNames || null,
   });
   const existing = inFlightLarkSearches.get(cacheKey);
   if (existing) return existing;
@@ -164,6 +165,7 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
           body: JSON.stringify({
             filter: { conjunction: "and", conditions },
             ...(opts.automaticFields ? { automatic_fields: true } : {}),
+            ...(opts.fieldNames?.length ? { field_names: opts.fieldNames } : {}),
           }) }
       );
       const data = await res.json();
@@ -342,12 +344,12 @@ function findTimeOfInspection(fields, dateFieldName) {
   return key ? fields[key] : 0;
 }
 
-export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest } = {}) {
+export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest, fieldNames } = {}) {
   if (!tableId) return null;
   const matches = await searchRecords(tableId, [
     { field_name: usernameField || "Username/UID", operator: "is", value: [username] },
     { field_name: brandField || "Brand", operator: "is", value: [brand] },
-  ], baseToken, { pageSize: 500, automaticFields: true });
+  ], baseToken, { pageSize: 500, automaticFields: true, fieldNames });
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
   claimable.sort((a, b) => {

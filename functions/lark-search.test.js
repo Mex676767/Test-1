@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { handler } from "./lark-search.js";
-import { initEnv } from "./_lib/lark.js";
+import { findOldestClaimableRow, initEnv } from "./_lib/lark.js";
 
 test("preview lookup reads bonus tables without creating a Customer Approaching record", async () => {
   initEnv({
@@ -42,6 +42,34 @@ test("preview lookup reads bonus tables without creating a Customer Approaching 
     assert.equal(body.caRecordId, null);
     assert.equal(body.justCreated, false);
     assert.equal(createCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bonus-table searches request only the fields needed for eligibility and display", async () => {
+  initEnv({
+    LARK_APP_ID: "app-id",
+    LARK_APP_SECRET: "app-secret",
+    LARK_BASE_APP_TOKEN: "base-token",
+  });
+
+  const originalFetch = globalThis.fetch;
+  let requestBody;
+  globalThis.fetch = async (_url, options = {}) => {
+    if (String(_url).includes("tenant_access_token")) {
+      return { json: async () => ({ code: 0, tenant_access_token: "token", expire: 3600 }) };
+    }
+    requestBody = JSON.parse(options.body);
+    return { json: async () => ({ code: 0, data: { items: [] } }) };
+  };
+
+  try {
+    await findOldestClaimableRow(
+      "top-pnl-table", "test-user", "PP", () => true, undefined,
+      { fieldNames: ["SW Check", "Claimed Copy", "Time of Inspection"] }
+    );
+    assert.deepEqual(requestBody.field_names, ["SW Check", "Claimed Copy", "Time of Inspection"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

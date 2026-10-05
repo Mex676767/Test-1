@@ -140,6 +140,7 @@ export async function handler(event) {
             brandField: config.brandField,
             dateField: config.dateField,
             newest: config.selection === "newest",
+            fieldNames: [config.displayField, config.dateField || "Time of Inspection"],
           }
         );
         return [config.key, row ? toDisplay(row.fields[config.displayField]) : ""];
@@ -208,7 +209,7 @@ export async function handler(event) {
       (async () => {
         const caUsernameOnly = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
           { field_name: F.username, operator: "is", value: [uname] },
-        ]);
+        ], undefined, { fieldNames: [F.brand] });
         return [...new Set(
           caUsernameOnly
             .map((r) => toDisplay(r.fields[F.brand]))
@@ -226,7 +227,7 @@ export async function handler(event) {
         const pnlMatches = await searchRecords(TABLE_PNL, [
           { field_name: F.username, operator: "is", value: [uname] },
           { field_name: F.brand, operator: "is", value: [brandVal] },
-        ]);
+        ], undefined, { fieldNames: [F.tier, F.titleName] });
         if (!pnlMatches.length) return { tier: "", customerName: "", notVip: true };
         const tierMap = await getFieldOptionMap(TABLE_PNL, F.tier);
         return {
@@ -247,7 +248,9 @@ export async function handler(event) {
         (fields) => {
           const display = toDisplay(fields[F.swCheck]).trim();
           return fields[F.claimedCopy] !== true && !!display && !hidden(display);
-        }
+        },
+        undefined,
+        { fieldNames: [F.swCheck, F.claimedCopy, "Time of Inspection"] }
       ),
 
       // LTV(Day): read the live "SW Checker" field. Only values beginning
@@ -258,7 +261,9 @@ export async function handler(event) {
         (fields) => {
           const display = toDisplay(fields[F.swChecker]).trim();
           return /^pass\b/i.test(display) && !hidden(display);
-        }
+        },
+        undefined,
+        { fieldNames: [F.swChecker, "Time of Inspection"] }
       ),
 
       // Grace Period(Day): "SW Check" is both the claim flag (hide only
@@ -283,7 +288,7 @@ export async function handler(event) {
         TABLE_GRACE_PERIOD, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.swCheck])),
         undefined,
-        { newest: true }
+        { newest: true, fieldNames: [F.swCheck, F.graceExpiry, "Time of Inspection"] }
       ).catch(() => null),
 
       // Risk Player(Day): one field ("Status") encodes both which day-tier
@@ -307,13 +312,15 @@ export async function handler(event) {
           return !!status && !/no bonus/i.test(status) && !hidden(status);
         },
         undefined,
-        { usernameField: "Username", dateField: "Date" }
+        { usernameField: "Username", dateField: "Date", fieldNames: [F.status, F.riskExpiry, "Date"] }
       ).catch(() => null),
 
       // 12hour VIP Deposit Booster: only "Eligible" (exact) counts.
       findOldestClaimableRow(
         TABLE_VIP_BOOSTER, uname, brandVal,
-        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible"
+        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
+        undefined,
+        { fieldNames: [F.status] }
       ).catch(() => null),
 
       // Special Reload Event: only "Eligible Angpao" counts — the Free Spin
@@ -321,7 +328,9 @@ export async function handler(event) {
       // record history only), so it's intentionally not checked for here.
       findOldestClaimableRow(
         TABLE_SPECIAL_RELOAD, uname, brandVal,
-        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao"
+        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao",
+        undefined,
+        { fieldNames: [F.status] }
       ).catch(() => null),
 
       // Telegram RM28 (2026-09-09) — repurposes the retired Ang Pao ticket's
@@ -333,14 +342,16 @@ export async function handler(event) {
       // amount for Released Amount with no new extraction logic needed.
       findOldestClaimableRow(
         TABLE_TELEGRAM28, uname, brandVal,
-        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible"
+        (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
+        undefined,
+        { fieldNames: [F.status, F.bonusAmount] }
       ).catch(() => null),
 
       (async () => {
         const redeemMatches = (await searchRecords(TABLE_REDEEM_CODE, [
           { field_name: F.usernameUid, operator: "is", value: [uname] },
           { field_name: F.brand, operator: "is", value: [brandVal] },
-        ])).filter((r) => !hidden(toDisplay(r.fields[F.status])));
+        ], undefined, { fieldNames: [F.status] })).filter((r) => !hidden(toDisplay(r.fields[F.status])));
         return redeemMatches[redeemMatches.length - 1] || null;
       })().catch(() => null),
 
@@ -355,7 +366,7 @@ export async function handler(event) {
         TABLE_MOONCAKE, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.status])) && !!toDisplay(fields[F.status]),
         undefined,
-        { usernameField: F.uid }
+        { usernameField: F.uid, fieldNames: [F.status, "Time of Inspection"] }
       ).catch(() => null),
 
       // VS96 Feedback Bonus: any non-empty Status is eligible except the
@@ -366,7 +377,9 @@ export async function handler(event) {
         (fields) => {
           const status = toDisplay(fields[F.status]).trim();
           return !!status && !hidden(status);
-        }
+        },
+        undefined,
+        { fieldNames: [F.status, "Time of Inspection"] }
       ),
       caseRecordP,
     ]);
