@@ -2293,14 +2293,14 @@ function renderCollapsedCard(chat) {
 function renderExpandedCard(chat) {
   const s = state[chat.chatId];
   return `
-    <div class="chat-card-head">
+    ${previewMode ? `<div class="chat-card-head">
       <span class="chat-name">${chat.customerName}</span>
       <div class="chat-card-head-actions">
         ${previewMode ? `<span class="preview-mode-badge">TEST MODE · READ ONLY</span><button type="button" class="preview-reset-btn" data-action="resetPreview" data-chat="${chat.chatId}">Reset test</button>` : ""}
         ${chat.link ? `<a class="chat-link" href="${chat.link}" target="_blank">Open ↗</a>` : ""}
         <button class="expand-btn expanded" data-action="toggleExpand" data-chat="${chat.chatId}" title="Collapse">▴</button>
       </div>
-    </div>
+    </div>` : ""}
 
     <section class="ca-section ca-customer-section">
       <div class="ca-section-head"><div><strong>Customer</strong></div><small>Look up before handling this case</small></div>
@@ -3124,6 +3124,7 @@ function renderChatsInner(chats) {
 
   for (const chat of chats) {
     const s = state[chat.chatId];
+    const expanded = previewMode ? s.expanded : true;
 
     const card = document.createElement("div");
     // Whole-card red highlight when a chat closed incomplete — meant to be
@@ -3131,9 +3132,9 @@ function renderChatsInner(chats) {
     // just a small line of text at the bottom.
     card.className = "chat-card"
       + (s.autoRecordError ? " needs-attention" : "")
-      + (s.expanded ? "" : " collapsed");
+      + (expanded ? "" : " collapsed");
     card.dataset.chatId = chat.chatId;
-    card.innerHTML = s.expanded ? renderExpandedCard(chat) : renderCollapsedCard(chat);
+    card.innerHTML = expanded ? renderExpandedCard(chat) : renderCollapsedCard(chat);
 
     chatListEl.appendChild(card);
   }
