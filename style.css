@@ -1048,7 +1048,7 @@ body { font-size: 13px; }
 .customer-tools { min-height: 34px; padding: 5px 13px 10px; border-top: 0; background: var(--bg); font-size: 11px; }
 .logging-pause-toggle { font-size: 11px; }
 
-.chat-list { padding: 12px; gap: 12px; }
+.chat-list { padding: 9px 10px; gap: 8px; }
 .chat-card {
   padding: 0; border: 0; border-radius: 0; box-shadow: none;
   background: transparent; overflow: visible;
@@ -1062,11 +1062,11 @@ body { font-size: 13px; }
 .expand-btn { width: 27px; height: 27px; border-radius: 8px; }
 
 .ca-section {
-  position: relative; margin-top: 10px; padding: 13px 12px 14px; border: 1px solid var(--border);
+  position: relative; margin-top: 7px; padding: 10px 11px 11px; border: 1px solid var(--border);
   border-radius: 12px; background: var(--surface); box-shadow: 0 8px 22px rgba(0,0,0,.1); overflow: visible;
 }
 .ca-case-section:has(.inquiry-dropdown:not(.hidden), .status-dropdown:not(.hidden)) { z-index: 30; }
-.ca-section-head { display: block; margin-bottom: 12px; }
+.ca-section-head { display: block; margin-bottom: 8px; }
 .ca-section-head > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .ca-section-head strong { font-size: 12.5px; font-weight: 700; }
 .ca-section-head small { display: block; max-width: none; margin-top: 3px; color: var(--text-faint); font-size: 9.5px; line-height: 1.35; text-align: left; }
@@ -1076,26 +1076,26 @@ body { font-size: 13px; }
   color: color-mix(in srgb, var(--blue) 75%, white); font-size: 9px; font-weight: 800;
 }
 .ca-section .field-label:first-of-type { margin-top: 0; }
-.field-label { margin: 12px 0 6px; font-size: 9.5px; font-weight: 700; letter-spacing: .055em; }
+.field-label { margin: 9px 0 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .055em; }
 .hint { font-size: 9.5px; font-weight: 400; }
 .input, select, .inquiry-box, .status-box { border-radius: 9px; }
-.input { min-height: 38px; }
+.input { min-height: 36px; }
 .username-row { gap: 7px; }
-.lookup-btn { min-height: 38px; padding: 0 13px; border-radius: 9px; background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 700; }
+.lookup-btn { min-height: 36px; padding: 0 13px; border-radius: 9px; background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 700; }
 .lookup-btn:hover { color: #fff; filter: brightness(1.08); }
-.unknown-toggle { margin-top: 9px; font-size: 11px; }
-.player-info { padding-top: 9px; border-top: 1px solid var(--border); margin-top: 10px; font-size: 11px; }
+.unknown-toggle { margin-top: 6px; font-size: 11px; }
+.player-info { padding-top: 7px; border-top: 1px solid var(--border); margin-top: 7px; font-size: 10.5px; }
 
-.ticket-stack { gap: 8px; margin-top: 0; }
+.ticket-stack { gap: 6px; margin-top: 0; }
 .ticket {
-  padding: 12px; gap: 9px; border-style: solid; border-radius: 11px;
+  padding: 10px; gap: 8px; border-style: solid; border-radius: 11px;
   background: color-mix(in srgb, var(--gold) 8%, var(--surface));
 }
 .ticket::before, .ticket::after { display: none; }
 .ticket-main { align-items: flex-start; }
 .ticket-icon { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px; background: color-mix(in srgb, var(--gold) 16%, transparent); font-size: 10px; }
 .ticket-name { font-size: 12px; }
-.ticket-meta { font-size: 11px; line-height: 1.4; }
+.ticket-meta { font-size: 10.5px; line-height: 1.35; }
 .claim-btn { min-height: 31px; padding: 5px 10px; border-radius: 8px; font-size: 10.5px; }
 .ticket.ticket-vs96 { background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
 .ticket.ticket-risk-player { background: color-mix(in srgb, var(--gold) 7%, var(--surface)); }
@@ -1104,20 +1104,20 @@ body { font-size: 13px; }
 .risk-amount-fields label > span, .risk-claim-preview > span { font-size: 9px; }
 .ticket.empty { margin-top: 0; min-height: 54px; border-color: var(--border); background: var(--surface); }
 
-.auto-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 0; }
-.auto-field { min-width: 0; padding: 10px; border-radius: 10px; background: var(--surface); }
+.auto-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; margin-top: 0; }
+.auto-field { min-width: 0; padding: 8px; border-radius: 10px; background: var(--surface); }
 .auto-tag { padding: 3px 6px; font-size: 8.5px; }
-.auto-field .field-label { font-size: 9px; }
+.auto-field .field-label { margin: 6px 0 4px; font-size: 9px; }
 .auto-field .input { min-height: 34px; background: var(--surface-2); }
-.inquiry-box, .status-box { min-height: 39px; background: var(--surface); }
-.toggle-row { margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.inquiry-box, .status-box { min-height: 36px; background: var(--surface); }
+.toggle-row { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .switch { width: 34px; height: 20px; }
 .slider::before { width: 14px; height: 14px; }
 .switch input:checked + .slider::before { transform: translateX(14px); }
 
-.submit-btn { min-height: 43px; margin-top: 12px; border-radius: 10px; background: var(--blue); font-size: 12px; }
-.record-pending-hint, .logged-badge, .record-error-banner, .preview-readonly-note { margin-top: 12px; border-radius: 10px; }
-.cases-bar { margin-top: 12px; }
+.submit-btn { min-height: 40px; margin-top: 10px; border-radius: 10px; background: var(--blue); font-size: 12px; }
+.record-pending-hint, .logged-badge, .record-error-banner, .preview-readonly-note { margin-top: 9px; border-radius: 10px; }
+.cases-bar { margin-top: 9px; }
 .case-row { border-radius: 9px; }
 .settings-panel { background: var(--bg); }
 .settings-card { border-radius: 12px; background: var(--surface); }
