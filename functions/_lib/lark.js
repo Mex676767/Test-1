@@ -52,13 +52,24 @@ export function initEnv(env) {
 
 const larkQueueResponses = new WeakMap();
 const LARK_QUEUE_RPC_TIMEOUT_MS = 250;
+const LARK_QUEUE_RELEASE_WAIT_MS = 250;
 
 function bestEffortQueueCall(stub, method, ...args) {
   try {
-    void Promise.resolve(stub[method](...args)).catch(() => {});
+    return Promise.resolve(stub[method](...args)).catch(() => {});
   } catch {
     // A broken coordinator must not break the request it was meant to guard.
+    return Promise.resolve();
   }
+}
+
+async function releaseQueuePermit(stub, ticket, rateLimited = false, retryAfterMs = 0) {
+  let timer;
+  await Promise.race([
+    bestEffortQueueCall(stub, "release", ticket, rateLimited, retryAfterMs),
+    new Promise((resolve) => { timer = setTimeout(resolve, LARK_QUEUE_RELEASE_WAIT_MS); }),
+  ]);
+  clearTimeout(timer);
 }
 
 function callQueueAcquire(stub, signal) {
@@ -143,14 +154,15 @@ async function larkFetch(url, init = {}) {
     const response = await fetch(url, init);
     if (permit) {
       larkQueueResponses.set(response, permit.stub);
-      // Releases are best-effort. The lease expires automatically if the RPC
-      // fails, while waiting here could outlive the Lark response itself.
-      bestEffortQueueCall(permit.stub, "release", permit.ticket, response.status === 429,
+      // Wait briefly for the global permit to be released. Fire-and-forget
+      // releases were canceled when the request completed, leaving the DO
+      // lease occupied for eight seconds and stalling other agents.
+      await releaseQueuePermit(permit.stub, permit.ticket, response.status === 429,
         Number(response.headers.get("Retry-After")) * 1000 || 0);
     }
     return response;
   } catch (error) {
-    if (permit) bestEffortQueueCall(permit.stub, "release", permit.ticket, false, 0);
+    if (permit) await releaseQueuePermit(permit.stub, permit.ticket, false, 0);
     throw error;
   }
 }

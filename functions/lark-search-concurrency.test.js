@@ -132,6 +132,33 @@ test("several concurrent preview lookups complete while capping Lark search fan-
   }
 });
 
+test("a search returns only after its shared permit is released", async () => {
+  let activePermits = 0;
+  const queueStub = {
+    acquire: async () => { activePermits++; return { ticket: "permit", retryAfterMs: 0 }; },
+    release: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      activePermits--;
+    },
+    penalize: async () => {},
+  };
+  initEnv({
+    LARK_APP_ID: "release-app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
+    LARK_SEARCH_QUEUE: { idFromName: () => "global", get: () => queueStub },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => String(url).includes("tenant_access_token")
+    ? response({ code: 0, tenant_access_token: "release-token", expire: 3600 })
+    : response({ code: 0, data: { items: [] } });
+
+  try {
+    await searchRecords("release-table", [{ field_name: "Username", operator: "is", value: ["test-user"] }]);
+    assert.equal(activePermits, 0, "the permit is freed before a successful search returns");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a slow queue RPC falls back quickly and releases any late permit", async () => {
   initEnv({ LARK_APP_ID: "rpc-app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
   const originalFetch = globalThis.fetch;
