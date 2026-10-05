@@ -159,6 +159,59 @@ test("a search returns only after its shared permit is released", async () => {
   }
 });
 
+test("upstream deadline starts after the shared queue grants a permit", async () => {
+  const queueStub = {
+    acquire: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return { ticket: "delayed-permit", retryAfterMs: 0 };
+    },
+    release: async () => {},
+    penalize: async () => {},
+  };
+  initEnv({
+    LARK_APP_ID: "queue-deadline-app", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
+    LARK_SEARCH_QUEUE: { idFromName: () => "global", get: () => queueStub },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => String(url).includes("tenant_access_token")
+    ? response({ code: 0, tenant_access_token: "queue-deadline-token", expire: 3600 })
+    : response({ code: 0, data: { items: [] } });
+
+  try {
+    const rows = await searchRecords("delayed-queue-table", [], undefined, {
+      timeoutMs: 500,
+      upstreamTimeoutMs: 15,
+    });
+    assert.deepEqual(rows, [], "queue waiting longer than the upstream budget should not expire the search");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a stalled Lark fetch is still stopped by its upstream deadline", async () => {
+  initEnv({ LARK_APP_ID: "upstream-deadline-app", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) {
+      return response({ code: 0, tenant_access_token: "upstream-deadline-token", expire: 3600 });
+    }
+    return new Promise((resolve, reject) => {
+      options.signal?.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+      if (options.signal?.aborted) reject(options.signal.reason);
+    });
+  };
+
+  try {
+    await assert.rejects(searchRecords("stalled-upstream-table", [], undefined, {
+      timeoutMs: 500,
+      upstreamTimeoutMs: 20,
+      maxAttempts: 1,
+    }), /Lark upstream request timed out/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a slow queue RPC falls back quickly and releases any late permit", async () => {
   initEnv({ LARK_APP_ID: "rpc-app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
   const originalFetch = globalThis.fetch;

@@ -53,6 +53,8 @@ export function initEnv(env) {
 const larkQueueResponses = new WeakMap();
 const LARK_QUEUE_RPC_TIMEOUT_MS = 250;
 const LARK_QUEUE_RELEASE_WAIT_MS = 250;
+const LARK_UPSTREAM_TIMEOUT_MS = 6_000;
+const LARK_SEARCH_QUEUE_TIMEOUT_MS = 60_000;
 
 function bestEffortQueueCall(stub, method, ...args) {
   try {
@@ -149,9 +151,24 @@ async function acquireSharedLarkPermit(signal) {
 }
 
 async function larkFetch(url, init = {}) {
-  const permit = await acquireSharedLarkPermit(init.signal);
+  // A shared-queue delay is not an upstream Lark timeout. Keep the caller's
+  // signal for cancelling a queued acquisition, but start the short upstream
+  // deadline only after we have a permit and are actually making the request.
+  const { queueSignal, upstreamTimeoutMs, ...fetchInit } = init;
+  const permit = await acquireSharedLarkPermit(queueSignal || fetchInit.signal);
+  let upstreamTimer;
+  let upstreamController;
+  if (upstreamTimeoutMs > 0) {
+    upstreamController = new AbortController();
+    upstreamTimer = setTimeout(() => {
+      upstreamController.abort(Object.assign(new Error(`Lark upstream request timed out after ${Math.round(upstreamTimeoutMs / 1000)} seconds.`), { retryable: true }));
+    }, upstreamTimeoutMs);
+    fetchInit.signal = fetchInit.signal
+      ? AbortSignal.any([fetchInit.signal, upstreamController.signal])
+      : upstreamController.signal;
+  }
   try {
-    const response = await fetch(url, init);
+    const response = await fetch(url, fetchInit);
     if (permit) {
       larkQueueResponses.set(response, permit.stub);
       // Wait briefly for the global permit to be released. Fire-and-forget
@@ -163,7 +180,12 @@ async function larkFetch(url, init = {}) {
     return response;
   } catch (error) {
     if (permit) await releaseQueuePermit(permit.stub, permit.ticket, false, 0);
+    if (upstreamController?.signal.aborted && fetchInit.signal?.reason?.retryable) {
+      throw fetchInit.signal.reason;
+    }
     throw error;
+  } finally {
+    clearTimeout(upstreamTimer);
   }
 }
 
@@ -283,7 +305,9 @@ export async function getTenantToken() {
       const res = await larkFetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(6_000),
+        signal: AbortSignal.timeout(LARK_SEARCH_QUEUE_TIMEOUT_MS),
+        queueSignal: AbortSignal.timeout(LARK_SEARCH_QUEUE_TIMEOUT_MS),
+        upstreamTimeoutMs: LARK_UPSTREAM_TIMEOUT_MS,
         body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET }),
       });
       const data = await res.json();
@@ -336,7 +360,11 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
   // was too short when a single Lark throttle placed several agents behind
   // the shared cooldown, causing whole groups of otherwise healthy table
   // lookups to expire together before they ever reached Lark.
-  const timeoutMs = opts.timeoutMs || 12_000;
+  // Under a busy shared queue, a 12s wall deadline could expire before this
+  // table ever reached Lark. The upstream itself still has a short 6s limit;
+  // this longer deadline is for permit acquisition and Lark's cooldown only.
+  const timeoutMs = opts.timeoutMs || LARK_SEARCH_QUEUE_TIMEOUT_MS;
+  const upstreamTimeoutMs = opts.upstreamTimeoutMs ?? LARK_UPSTREAM_TIMEOUT_MS;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -353,6 +381,8 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
           + (opts.pageSize ? `?page_size=${opts.pageSize}` : ""),
         { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           signal: controller.signal,
+          queueSignal: controller.signal,
+          upstreamTimeoutMs,
           body: JSON.stringify({
             filter: { conjunction: "and", conditions },
             ...(opts.automaticFields ? { automatic_fields: true } : {}),
