@@ -602,12 +602,11 @@ function isClaimableValue(v) {
 // BOTH Username AND Brand, never username alone. This now also LOGS the
 // case (creates the Customer Approaching row) if one doesn't exist yet —
 // that's what makes Lark's bonus lookup columns actually populate.
-async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId, signal) {
+async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId) {
   const res = await fetch("/lark-search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, brand, link, telegram, picName, previousRecordId, preview: previewMode }),
-    signal,
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Lookup failed");
@@ -1387,7 +1386,6 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
 });
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
-const lookupControllers = new Map(); // per-chat requests, kept out of persisted UI state
 let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card on first load
 
 // The same app origin is installed in both LiveChat accounts. Incognito
@@ -2351,9 +2349,7 @@ function renderExpandedCard(chat) {
       <label class="field-label">Username or user ID</label>
       <div class="username-row">
         <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
-        ${s.lookupInFlight
-          ? `<button class="lookup-btn lookup-cancel-btn" data-action="cancelLookup" data-chat="${chat.chatId}" title="Cancel this lookup">Cancel</button>`
-          : `<button class="lookup-btn ${s.notVipResult ? "force" : ""}" data-action="lookup" data-chat="${chat.chatId}" ${(s.isUnknown && !s.notVipResult) ? "disabled" : ""} ${s.notVipResult ? 'title="Not on the VIP list — look up again anyway and keep them as a VIP"' : ""}>${s.notVipResult ? "Force lookup" : "Look up"}</button>`}
+        <button class="lookup-btn ${s.notVipResult ? "force" : ""}" data-action="lookup" data-chat="${chat.chatId}" ${(s.isUnknown && !s.notVipResult) || s.lookupInFlight ? "disabled" : ""} ${s.notVipResult ? 'title="Not on the VIP list — look up again anyway and keep them as a VIP"' : ""}>${s.lookupInFlight ? "…" : (s.notVipResult ? "Force lookup" : "Look up")}</button>
       </div>
       <label class="unknown-toggle"><input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} /><span>Unknown player</span></label>
       <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
@@ -3494,16 +3490,6 @@ chatListEl.addEventListener("click", async (e) => {
     return;
   }
 
-  if (btn.dataset.action === "cancelLookup") {
-    const controller = lookupControllers.get(chatId);
-    if (s?.lookupInFlight && controller) {
-      btn.disabled = true;
-      btn.textContent = "Stopping…";
-      controller.abort();
-    }
-    return;
-  }
-
   if (btn.dataset.action === "lookup") {
     if (!selectedAgent && !previewMode) { openSettingsPanel(); return; }
     // State-level guard, not just btn.disabled -- a background re-render
@@ -3535,19 +3521,10 @@ chatListEl.addEventListener("click", async (e) => {
     // yet), so un-mark Unknown up front and don't auto-mark it again below.
     const forcing = !!s.notVipResult;
     if (forcing) s.isUnknown = false;
-    const controller = new AbortController();
-    let timedOut = false;
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, 45000);
-    lookupControllers.set(chatId, controller);
+    let needFullRender = forcing;
     s.lookupInFlight = true;
-    btn.dataset.action = "cancelLookup";
-    btn.classList.add("lookup-cancel-btn");
-    btn.title = "Cancel this lookup";
-    btn.disabled = false;
-    btn.textContent = "Cancel";
+    btn.disabled = true;
+    btn.textContent = "…";
     try {
       // lark-search.js resolves every bonus's own source table directly now
       // (no more Customer Approaching Lookup-column delay) — this response
@@ -3559,7 +3536,7 @@ chatListEl.addEventListener("click", async (e) => {
       // record hasn't been logged (submitted) yet — a completed case is
       // never deleted by a stray re-lookup.
       const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
-      const { row, otherBrands, caRecordId, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId, controller.signal);
+      const { row, otherBrands, caRecordId, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId);
       s.caLinkSaved = !!(s.chatUrl || chatDef?.link);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
@@ -3586,6 +3563,7 @@ chatListEl.addEventListener("click", async (e) => {
         s.notVipResult = true;
         s.forcedVipFor = "";
         setUnknown(chatId, true, { silent: true });
+        needFullRender = true;
         setStatus('Not VVIP — marked Unknown player. Use "Force lookup" if they are VIP but not on the list yet.', "error");
       } else if (notVip) {
         s.notVipResult = false;
@@ -3598,17 +3576,15 @@ chatListEl.addEventListener("click", async (e) => {
       }
     } catch (err) {
       if (forcing) s.isUnknown = true; // failed force lookup -- back to how it was
-      if (controller.signal.aborted) {
-        setStatus(timedOut ? "Lookup timed out after 45 seconds. Try again." : "Lookup canceled.", timedOut ? "error" : "info");
-      } else {
-        setStatus("Lookup failed: " + err.message, "error");
-      }
-    } finally {
-      clearTimeout(timeoutId);
-      if (lookupControllers.get(chatId) === controller) lookupControllers.delete(chatId);
-      s.lookupInFlight = false;
-      renderChats(activeChats);
+      setStatus("Lookup failed: " + err.message, "error");
     }
+    s.lookupInFlight = false;
+    btn.disabled = false;
+    btn.textContent = s.notVipResult ? "Force lookup" : "Look up";
+    if (needFullRender) renderChats(activeChats);
+    card.querySelector(".player-info-slot").innerHTML = renderPlayerInfo(chatId);
+    card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+    card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
   }
 
   if (btn.dataset.action === "claim") {

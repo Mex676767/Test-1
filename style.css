@@ -513,8 +513,6 @@ body {
 }
 .lookup-btn:hover { border-color: var(--blue); color: var(--blue); }
 .lookup-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.lookup-btn.lookup-cancel-btn { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--surface-2)); }
-.lookup-btn.lookup-cancel-btn:hover:not(:disabled) { color: #fff; background: var(--danger); }
 
 /* Ticked when the customer never gave a username — see app.js's isUnknown
    handling. Sits right under the username row so it reads as "beside" it
