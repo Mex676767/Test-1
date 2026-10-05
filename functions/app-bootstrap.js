@@ -17,18 +17,19 @@ function publicBonus(config) {
   };
 }
 
-export async function handler() {
+export async function handler(event = {}) {
   try {
     // Agent, Brand, Inquiry and Status are fields in the same table. Reading
     // its field catalog once avoids four identical Lark API calls on every
     // browser startup and periodic refresh.
+    const fresh = event.queryStringParameters?.fresh === "1";
     const [fields, bonuses] = await Promise.all([
       listFields(TABLE_CUSTOMER_APPROACHING),
-      listBonusConfigs(),
+      listBonusConfigs({ fresh }),
     ]);
     return {
       statusCode: 200,
-      headers: { "Cache-Control": "private, max-age=60" },
+      headers: { "Cache-Control": fresh ? "no-store" : "private, max-age=60" },
       body: JSON.stringify({
         ok: true,
         agents: optionNames(fields, "Agent Name", { sort: true }),

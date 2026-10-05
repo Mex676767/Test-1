@@ -9,8 +9,8 @@ const RESERVED_KEYS = new Set([
   "telegram28", "redeemcode", "specialreload",
 ]);
 
-function response(statusCode, body) {
-  return { statusCode, body: JSON.stringify(body) };
+function response(statusCode, body, headers = {}) {
+  return { statusCode, headers, body: JSON.stringify(body) };
 }
 
 function publicConfig(config) {
@@ -30,12 +30,13 @@ export async function handler(event) {
 
     if (event.httpMethod === "GET") {
       const wantsAll = event.queryStringParameters?.all === "1";
-      const configs = await listBonusConfigs({ includeInactive: wantsAll, fresh: wantsAll });
+      const fresh = wantsAll || event.queryStringParameters?.fresh === "1";
+      const configs = await listBonusConfigs({ includeInactive: wantsAll, fresh });
       return response(200, {
         ok: true,
         configured: true,
         configs: wantsAll ? configs : configs.map(publicConfig),
-      });
+      }, fresh ? { "Cache-Control": "no-store" } : {});
     }
 
     if (event.httpMethod !== "POST") return response(405, { ok: false, error: "Method not allowed" });

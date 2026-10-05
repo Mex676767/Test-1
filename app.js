@@ -70,9 +70,9 @@ const BLAST_LOGGING_PREVIOUS_KEY = "rc-blast-logging-previous";
 let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
 let blastLoggingLock = false;
 
-async function fetchAgentOptions() {
+async function fetchAgentOptions({ fresh = false } = {}) {
   try {
-    const res = await fetch("/lark-pic-list");
+    const res = await fetch("/lark-pic-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok) agentOptions = data.pics || [];
   } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
@@ -82,9 +82,9 @@ async function fetchAgentOptions() {
 // own field, not free text (see renderAutoFields). Fetched once at boot,
 // same as agentOptions.
 let brandOptions = [];
-async function fetchBrandOptions() {
+async function fetchBrandOptions({ fresh = false } = {}) {
   try {
-    const res = await fetch("/lark-brand-list");
+    const res = await fetch("/lark-brand-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok) brandOptions = data.brands || [];
   } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
@@ -116,10 +116,10 @@ function mergeTicketChoices(live, fallback) {
     return true;
   });
 }
-async function fetchTicketConfig() {
+async function fetchTicketConfig({ fresh = false } = {}) {
   if (!ESCALATION_TICKET_ENABLED) return;
   try {
-    const res = await fetch("/ticket-config");
+    const res = await fetch(fresh ? "/ticket-config?fresh=1" : "/ticket-config", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Ticket integration is unavailable");
     ticketFields = data.fields || [];
@@ -297,9 +297,9 @@ function bonusCardTone(key) {
 }
 let configuredBonusPrograms = [];
 function allBonusPrograms() { return [...BONUS_PROGRAMS, ...configuredBonusPrograms]; }
-async function fetchConfiguredBonusPrograms() {
+async function fetchConfiguredBonusPrograms({ fresh = false } = {}) {
   try {
-    const res = await fetch("/bonus-config");
+    const res = await fetch(fresh ? "/bonus-config?fresh=1" : "/bonus-config", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     configuredBonusPrograms = data.ok && Array.isArray(data.configs) ? data.configs : [];
   } catch (_) {
@@ -492,9 +492,9 @@ async function requirePreviewLiveChatLogin() {
 // Agent, Brand, Inquiry and Status all come from the same Lark table. The
 // combined endpoint reads that table once, instead of making four duplicate
 // field requests plus a separate bonus-config request during startup.
-async function fetchBootstrapOptions() {
+async function fetchBootstrapOptions({ fresh = false } = {}) {
   try {
-    const res = await fetch("/app-bootstrap");
+    const res = await fetch(fresh ? "/app-bootstrap?fresh=1" : "/app-bootstrap", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (!res.ok || !data.ok) return false;
     if (Array.isArray(data.agents)) agentOptions = data.agents;
@@ -1318,9 +1318,9 @@ let inquiryOptions = [
   "Goal321", "TO NOT UPDATED", "Rescue Bonus", "TOP Deposit",
   "Maintenance", "Telegram Transition Message", "Unclear Inquiries",
 ];
-async function fetchInquiryOptions() {
+async function fetchInquiryOptions({ fresh = false } = {}) {
   try {
-    const res = await fetch("/lark-inquiry-list");
+    const res = await fetch("/lark-inquiry-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok && data.options && data.options.length) inquiryOptions = data.options;
   } catch (_) { /* non-fatal — keeps whatever list it already had */ }
@@ -1366,9 +1366,9 @@ function programHasAmount(key) {
 // Fetched live from Lark's own Status field, same as inquiryOptions above —
 // this fallback is only shown until that first fetch resolves.
 let statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
-async function fetchStatusOptions() {
+async function fetchStatusOptions({ fresh = false } = {}) {
   try {
-    const res = await fetch("/lark-status-list");
+    const res = await fetch("/lark-status-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok && data.options && data.options.length) statusOptions = data.options;
   } catch (_) { /* non-fatal — keeps whatever list it already had */ }
@@ -4910,19 +4910,22 @@ function setStatus(text, kind) {
 // day would otherwise only ever see whatever was live when it first
 // loaded. Doesn't touch anything already picked on an open card.
 const OPTIONS_REFRESH_MS = 3 * 60_000;
-async function refreshDropdownOptions() {
-  const loaded = await fetchBootstrapOptions();
+async function refreshDropdownOptions({ fresh = false } = {}) {
+  const loaded = await fetchBootstrapOptions({ fresh });
   if (!loaded) {
-    await Promise.allSettled([fetchAgentOptions(), fetchBrandOptions(), fetchInquiryOptions(), fetchStatusOptions(), fetchConfiguredBonusPrograms()]);
+    await Promise.allSettled([
+      fetchAgentOptions({ fresh }), fetchBrandOptions({ fresh }), fetchInquiryOptions({ fresh }),
+      fetchStatusOptions({ fresh }), fetchConfiguredBonusPrograms({ fresh }),
+    ]);
   }
-  if (!IS_EMBEDDED_APP || DEPARTMENT_TABS_LIVE) await fetchTicketConfig();
+  if (!IS_EMBEDDED_APP || DEPARTMENT_TABS_LIVE) await fetchTicketConfig({ fresh });
 }
 setInterval(() => {
   if (!document.hidden) refreshDropdownOptions();
 }, OPTIONS_REFRESH_MS);
 
 document.getElementById("refreshBtn").addEventListener("click", () => {
-  refreshDropdownOptions();
+  refreshDropdownOptions({ fresh: true });
   if (liveWidget) {
     // Live mode — re-sync against the SDK on demand rather than just
     // re-rendering whatever we already had (which could be stale if a
