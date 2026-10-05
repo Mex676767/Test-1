@@ -20,10 +20,8 @@ let TABLE_TELEGRAM28;
 let TABLE_MOONCAKE;
 let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
-let LARK_SEARCH_QUEUE;
 
 export function initEnv(env) {
-  LARK_SEARCH_QUEUE = env.LARK_SEARCH_QUEUE;
   APP_ID = env.LARK_APP_ID;
   APP_SECRET = env.LARK_APP_SECRET;
   BASE_APP_TOKEN = env.LARK_BASE_APP_TOKEN;
@@ -48,63 +46,6 @@ export function initEnv(env) {
 
   TABLE_VS96_FEEDBACK = env.LARK_TABLE_VS96_FEEDBACK;
   TABLE_BONUS_CONFIG = env.LARK_TABLE_BONUS_CONFIG;
-}
-
-const larkQueueResponses = new WeakMap();
-
-function waitForLarkPermit(ms, signal) {
-  if (signal?.aborted) return Promise.reject(signal.reason || new Error("Lark request cancelled"));
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(done, Math.max(25, ms));
-    function done() {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }
-    function abort() {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      reject(signal.reason || new Error("Lark request cancelled"));
-    }
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
-
-async function acquireSharedLarkPermit(signal) {
-  if (!LARK_SEARCH_QUEUE) return null;
-  const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
-  while (!signal?.aborted) {
-    try {
-      const permit = await stub.acquire();
-      if (permit?.ticket) return { stub, ticket: permit.ticket };
-      await waitForLarkPermit(Math.min(250, Math.max(50, Number(permit?.retryAfterMs) || 100)), signal);
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      // If the shared coordinator is briefly unavailable, preserve lookup
-      // availability and let the existing per-isolate limiter do its job.
-      return null;
-    }
-  }
-  throw signal.reason || new Error("Lark request cancelled");
-}
-
-async function larkFetch(url, init = {}) {
-  const permit = await acquireSharedLarkPermit(init.signal);
-  try {
-    const response = await fetch(url, init);
-    if (permit) {
-      larkQueueResponses.set(response, permit.stub);
-      await permit.stub.release(permit.ticket, response.status === 429, Number(response.headers.get("Retry-After")) * 1000 || 0).catch(() => {});
-    }
-    return response;
-  } catch (error) {
-    if (permit) await permit.stub.release(permit.ticket, false, 0).catch(() => {});
-    throw error;
-  }
-}
-
-export async function reportSharedLarkRateLimit(response, retryAfterMs = 0) {
-  const stub = larkQueueResponses.get(response);
-  if (stub) await stub.penalize(Number(retryAfterMs) || 0).catch(() => {});
 }
 
 let cachedToken = null;
@@ -158,7 +99,7 @@ export async function getTenantToken() {
   if (!APP_ID || !APP_SECRET) throw new Error("LARK_APP_ID / LARK_APP_SECRET not set.");
   inFlightTokenRequest = (async () => {
     try {
-      const res = await larkFetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
+      const res = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: AbortSignal.timeout(6_000),
@@ -213,10 +154,9 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
     await acquireLarkSearchSlot();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    let responseForError = null;
     try {
       const token = await getTenantToken();
-      const res = responseForError = await larkFetch(
+      const res = await fetch(
         `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`
           + (opts.pageSize ? `?page_size=${opts.pageSize}` : ""),
         { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -253,7 +193,6 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         lastErr = err;
       }
       if (lastErr.rateLimited) {
-        await reportSharedLarkRateLimit(responseForError, lastErr.retryAfterMs);
         // Retry-After can be tens of seconds. Honor it as a short shared
         // backoff only; each request reports the throttle so the UI can show
         // a partial result and agents can retry manually after the load eases.
@@ -282,7 +221,7 @@ export async function searchAllRecords(tableId, conditions, { maxPages = 5, auto
   const all = [];
   let pageToken = "";
   for (let page = 0; page < maxPages; page++) {
-    const res = await larkFetch(
+    const res = await fetch(
       `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/search?page_size=500`
         + (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""),
       { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -302,7 +241,7 @@ export async function searchAllRecords(tableId, conditions, { maxPages = 5, auto
 
 export async function getRecord(tableId, recordId) {
   const token = await getTenantToken();
-  const res = await larkFetch(
+  const res = await fetch(
     `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
@@ -313,7 +252,7 @@ export async function getRecord(tableId, recordId) {
 
 export async function updateRecord(tableId, recordId, fields, baseToken) {
   const token = await getTenantToken();
-  const res = await larkFetch(
+  const res = await fetch(
     `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
     { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ fields }) }
@@ -325,7 +264,7 @@ export async function updateRecord(tableId, recordId, fields, baseToken) {
 
 export async function createRecord(tableId, fields, baseToken) {
   const token = await getTenantToken();
-  const res = await larkFetch(
+  const res = await fetch(
     `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records`,
     { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ fields }) }
@@ -337,7 +276,7 @@ export async function createRecord(tableId, fields, baseToken) {
 
 export async function deleteRecord(tableId, recordId, baseToken) {
   const token = await getTenantToken();
-  const res = await larkFetch(
+  const res = await fetch(
     `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
     { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
   );
@@ -348,7 +287,7 @@ export async function deleteRecord(tableId, recordId, baseToken) {
 
 export async function listRecords(tableId, pageSize = 500) {
   const token = await getTenantToken();
-  const res = await larkFetch(
+  const res = await fetch(
     `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records?page_size=${pageSize}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
@@ -377,7 +316,7 @@ function resolveOption(text, optionMap) {
 
 export async function listFields(tableId, baseToken) {
   const token = await getTenantToken();
-  const res = await larkFetch(
+  const res = await fetch(
     `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
