@@ -602,16 +602,63 @@ function isClaimableValue(v) {
 // BOTH Username AND Brand, never username alone. This now also LOGS the
 // case (creates the Customer Approaching row) if one doesn't exist yet —
 // that's what makes Lark's bonus lookup columns actually populate.
-async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId, signal) {
-  const res = await fetch("/lark-search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, brand, link, telegram, picName, previousRecordId, preview: previewMode }),
-    signal,
+function waitBeforeLookupRetry(signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason || new DOMException("Lookup canceled", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, 650);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason || new DOMException("Lookup canceled", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "Lookup failed");
-  return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated, notVip: data.notVip };
+}
+
+async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId, signal) {
+  const body = JSON.stringify({ username, brand, link, telegram, picName, previousRecordId, preview: previewMode });
+  // Pages occasionally returns an HTML edge-error page instead of the JSON
+  // from the Function. Retry one transient response automatically; when a
+  // chat link is available the endpoint can reuse its blank case row. Preview
+  // mode is read-only.
+  const canSafelyRetry = previewMode || !!String(link || "").trim();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let res;
+    let data;
+    try {
+      res = await fetch("/lark-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal,
+        cache: "no-store",
+      });
+      const responseText = await res.text();
+      try { data = JSON.parse(responseText); } catch (_) { data = null; }
+    } catch (err) {
+      if (signal?.aborted || !canSafelyRetry || attempt > 0) throw err;
+      await waitBeforeLookupRetry(signal);
+      continue;
+    }
+
+    if (data?.ok) {
+      return { row: data.row, otherBrands: data.otherBrands || [], caRecordId: data.caRecordId, justCreated: data.justCreated, notVip: data.notVip };
+    }
+
+    const transientResponse = !data && (res.ok || res.status === 408 || res.status === 429 || res.status >= 500);
+    if (transientResponse && canSafelyRetry && attempt === 0 && !signal?.aborted) {
+      await waitBeforeLookupRetry(signal);
+      continue;
+    }
+    if (!data) throw new Error(`Lookup service returned an invalid response (HTTP ${res.status}).${canSafelyRetry ? " Please try again." : " The chat link is unavailable, so it was not retried automatically."}`);
+    throw new Error(data.error || `Lookup failed (HTTP ${res.status})`);
+  }
+  throw new Error("Lookup failed. Please try again.");
 }
 
 // 2026-08-29: lark-search.js now queries every bonus's own source table
