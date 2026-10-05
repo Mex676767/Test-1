@@ -264,6 +264,37 @@ const BONUS_PROGRAMS = [
   { key: "mooncake", label: "Mooncake Bonus" },
   { key: "vs96Feedback", label: "VS96 Feedback" },
 ];
+const BONUS_CARD_TONES = {
+  riskPlayer: "amber",
+  topPnl: "blue",
+  gracePeriod: "teal",
+  ltvTest: "violet",
+  vipBooster: "cyan",
+  mooncake: "pink",
+  vs96Feedback: "rose",
+  telegram28: "green",
+  redeemCode: "indigo",
+  specialReload: "orange",
+};
+const BONUS_CARD_MARKS = {
+  riskPlayer: "!",
+  topPnl: "↗",
+  gracePeriod: "◷",
+  ltvTest: "L",
+  vipBooster: "12",
+  mooncake: "☾",
+  vs96Feedback: "✎",
+  telegram28: "T",
+  redeemCode: "#",
+  specialReload: "✦",
+};
+const BONUS_CARD_TONE_NAMES = ["amber", "blue", "teal", "violet", "cyan", "pink", "rose", "green", "indigo", "orange"];
+function bonusCardTone(key) {
+  if (BONUS_CARD_TONES[key]) return BONUS_CARD_TONES[key];
+  let hash = 0;
+  for (const character of String(key || "")) hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  return BONUS_CARD_TONE_NAMES[Math.abs(hash) % BONUS_CARD_TONE_NAMES.length];
+}
 let configuredBonusPrograms = [];
 function allBonusPrograms() { return [...BONUS_PROGRAMS, ...configuredBonusPrograms]; }
 async function fetchConfiguredBonusPrograms() {
@@ -608,6 +639,8 @@ let activeChats = IS_EMBEDDED_APP ? [] : SAMPLE_CHATS;
 // bonus tables, but every write path is disabled until the LiveChat SDK
 // successfully connects and replaces the sample cards with a real chat.
 let previewMode = !IS_EMBEDDED_APP;
+const BONUS_SHOWCASE_PREVIEW = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("bonusPreview") === "all";
+let showPreviewClosedChat = false;
 let activeMainTab = "customer";
 
 // Department access is intentionally session-only. Each incognito LiveChat
@@ -2079,10 +2112,11 @@ function renderTickets(chatId) {
     const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete);
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
+    const cardMark = BONUS_CARD_MARKS[d.key] || escapeHtml(String(d.label || "•").trim().slice(0, 1).toUpperCase());
     return `
-    <div class="ticket ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
+    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
-        <div class="ticket-icon">◆</div>
+        <div class="ticket-icon" aria-hidden="true">${cardMark}</div>
         <div class="ticket-body">
           <div class="ticket-name">${d.label}</div>
           <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.isCode ? escapeHtml(d.display) : formatTicketMeta(d.display)}</div>
@@ -2138,7 +2172,8 @@ const DATE_PATTERN = new RegExp([
 // the number an agent actually cares about jumps out regardless of which
 // source table's own wording it came from.
 const AMOUNT_PATTERN = /\bRM\s?-?\d+(?:\.\d+)?\b|\bBonus\s+-?\d+(?:\.\d+)?\b/gi;
-const PASS_VALUE_PATTERN = /\bPass\s+\d+(?:\.\d+)?\b/gi;
+const PASS_VALUE_PATTERN = /\bPass\b(?:\s+\d+(?:\.\d+)?)?/gi;
+const ELIGIBLE_PATTERN = /\bEligible\b/gi;
 
 function highlightDates(text) {
   return escapeHtml(text).replace(DATE_PATTERN, (m) => `<span class="ticket-date">${m}</span>`);
@@ -2152,9 +2187,10 @@ function highlightDates(text) {
 // HTML-escaped entity.
 function formatTicketMeta(text) {
   let html = escapeHtml(text);
+  html = html.replace(ELIGIBLE_PATTERN, (m) => `<span class="eligible-value">${m}</span>`);
+  html = html.replace(PASS_VALUE_PATTERN, (m) => `<span class="pass-value">${m}</span>`);
   html = html.replace(DATE_PATTERN, (m) => `📅 <span class="ticket-date">${m}</span>`);
   html = html.replace(AMOUNT_PATTERN, (m) => `🎁 <span class="amount">${m}</span>`);
-  html = html.replace(PASS_VALUE_PATTERN, (m) => `<span class="pass-value">${m}</span>`);
   return html;
 }
 
@@ -2308,6 +2344,8 @@ function renderExpandedCard(chat) {
       </div>
     </div>` : ""}
 
+    ${previewMode ? `<div class="preview-example-control"><button type="button" class="preview-reset-btn" data-action="toggleAttentionPreview" data-chat="${chat.chatId}">${showPreviewClosedChat ? "Hide closed-chat example" : "Preview closed, unrecorded chat"}</button></div>` : ""}
+
     <section class="ca-section ca-customer-section">
       <div class="ca-section-head"><div><strong>Customer</strong></div></div>
       <label class="field-label">Username or user ID</label>
@@ -2344,7 +2382,7 @@ function renderExpandedCard(chat) {
 
     ${
       previewMode
-        ? `<div class="preview-readonly-note">Test mode reads live bonus data. Claims and form changes stay on this preview card and never create or update a Lark record.</div>`
+        ? `<div class="preview-readonly-note">${showPreviewClosedChat ? "Closed-chat example: the chat ended without Inquiry or Status, so it was not recorded." : BONUS_SHOWCASE_PREVIEW ? "Bonus showcase uses sample eligibility and amounts." : "Test mode reads live bonus data."} Claims and form changes stay on this preview card and never create or update a Lark record.</div>`
         : loggingPaused && !s.logged
         ? `<div class="logged-badge unknown">Logging paused — not recorded</div>`
         : s.isUnknown
@@ -2869,6 +2907,24 @@ function applyPreviewSampleState(chat) {
       vs96Feedback: "Eligible",
     };
   }
+  if (BONUS_SHOWCASE_PREVIEW) {
+    Object.assign(sample.matchedRow, {
+      topPnl: "Batch 09-09-2026 Pass RM58",
+      gracePeriod: "Pass 58",
+      graceExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
+      ltvTest: "Pass RM18",
+      vipBooster: "Eligible",
+      mooncake: "Eligible · RM28",
+      telegram28: { status: "Eligible · RM28" },
+      redeemCode: { status: "SUNNY-88" },
+      specialReload: { status: "Eligible Angpao" },
+    });
+    configuredBonusPrograms.forEach((program, index) => {
+      if (sample.matchedRow[program.key] === undefined) {
+        sample.matchedRow[program.key] = program.amountEligible ? `Eligible · RM${32 + index}` : "Eligible";
+      }
+    });
+  }
   if (!sample.riskReloadAmount) sample.riskReloadAmount = "600";
   if (!sample.ticketRecord) {
     sample.ticketLookupRef = "TK2609290238";
@@ -3008,12 +3064,14 @@ function resetPreviewCard(chatId) {
   if (!previewMode) return;
   const chat = SAMPLE_CHATS.find((item) => item.chatId === chatId);
   if (!chat) return;
+  showPreviewClosedChat = false;
   delete state[chatId];
   ticketAttachmentsByChat.delete(chatId);
   lastSyncedJson.delete(chatId);
   ensureChatState(chat);
   state[chatId].expanded = true;
   renderChats(activeChats);
+  renderNeedsAttentionPanel();
   setStatus("Preview test reset. No Lark record was changed.", "success");
 }
 
@@ -3311,6 +3369,30 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "resetPreview") {
     resetPreviewCard(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "toggleAttentionPreview") {
+    if (!previewMode) return;
+    showPreviewClosedChat = !showPreviewClosedChat;
+    s.previewClosedUnrecorded = showPreviewClosedChat;
+    if (showPreviewClosedChat) {
+      s.autoRecordError = "Chat ended without Inquiry or Status — not recorded";
+      s.chatOpen = false;
+      s.logged = false;
+      s.inquiry = [];
+      s.status = "";
+    } else {
+      delete s.autoRecordError;
+      delete s.previewClosedUnrecorded;
+      s.chatOpen = true;
+    }
+    renderChats(activeChats);
+    renderNeedsAttentionPanel();
+    if (showPreviewClosedChat) {
+      document.getElementById("needsAttentionList")?.classList.remove("hidden");
+      document.getElementById("needsAttentionToggle")?.classList.add("open");
+    }
     return;
   }
 
@@ -4922,6 +5004,7 @@ function runWhenIdle(task, timeout = 1500) {
   }
 
   optionsReady.finally(() => {
+    if (BONUS_SHOWCASE_PREVIEW) renderChats(activeChats);
     if (activeMainTab === "tickets") renderChats(activeChats);
     // Brand detection may have started before the Lark option list arrived.
     // Retry it once with the populated list rather than leaving Brand blank.
@@ -5394,7 +5477,8 @@ function renderNeedsAttentionPanel() {
 
   const incomplete = getIncompleteChats();
   const stale = getStaleLarkRecords();
-  const total = incomplete.length + stale.length;
+  const previewCount = previewMode && showPreviewClosedChat ? 1 : 0;
+  const total = incomplete.length + stale.length + previewCount;
   if (!total) {
     panel.classList.add("hidden");
     return;
@@ -5404,7 +5488,13 @@ function renderNeedsAttentionPanel() {
     ? "⚠ 1 chat needs attention"
     : `⚠ ${total} chats need attention`;
   const now = Date.now();
-  listEl.innerHTML = incomplete.map((c) => `
+  listEl.innerHTML = (previewCount ? `
+    <div class="na-item">
+      <div class="na-item-username">Preview player · alex3344</div>
+      <div class="na-item-reason">Chat ended without Inquiry or Status — not recorded. Preview only.</div>
+      <div class="na-item-actions"><span class="preview-mode-badge">LOCAL EXAMPLE</span></div>
+    </div>
+  ` : "") + incomplete.map((c) => `
     <div class="na-item">
       <div class="na-item-username">${c.username}</div>
       <div class="na-item-reason">${c.reason}</div>

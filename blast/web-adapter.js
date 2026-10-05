@@ -363,18 +363,25 @@
     const clients = Array.isArray(config.clients) && config.clients.length
       ? config.clients
       : (config.clientId ? [{ key: "lc1", label: "LiveChat Account 1", clientId: config.clientId }] : []);
+    const workspaceAccount = detectedAccount();
     const accountKey = selectedAccount();
     const client = clients.find((item) => item.key === accountKey);
     const connected = Boolean(token(accountKey));
+    const missingWorkspaceClient = workspaceAccount && !clients.some((item) => item.key === workspaceAccount);
+    const accountLabel = workspaceAccount === "lc2" ? "LiveChat Account 2 (LC2)" : "LiveChat Account 1 (LC1)";
     const connectionNote = connected
       ? ""
-      : config.configured
-        ? "Detected automatically from this workspace or the first chat link."
-        : "LiveChat OAuth has not been configured yet.";
-    banner.innerHTML = `<div class="connection-card${connected ? " is-connected" : ""}"><div class="connection-state"><span class="connection-dot"></span><div class="connection-copy"><div class="connection-title">LiveChat Account</div>${connectionNote ? `<div class="connection-note">${connectionNote}</div>` : ""}</div></div><div class="connection-controls"><button id="agentConnectBtn" class="connection-button">${connected ? "Reconnect" : "Connect"}</button></div></div>`;
+      : missingWorkspaceClient
+        ? `${accountLabel} OAuth is not configured. Add ${workspaceAccount === "lc2" ? "LIVECHAT_CLIENT_ID_2" : "LIVECHAT_CLIENT_ID"} in Cloudflare Pages.`
+        : !clients.length
+          ? "LiveChat OAuth has not been configured yet."
+          : workspaceAccount
+            ? `Ready to connect to ${accountLabel}.`
+            : "Detected automatically from this workspace or the first chat link.";
+    banner.innerHTML = `<div class="connection-card${connected ? " is-connected" : ""}"><div class="connection-state"><span class="connection-dot"></span><div class="connection-copy"><div class="connection-title">${workspaceAccount ? accountLabel : "LiveChat Account"}</div>${connectionNote ? `<div class="connection-note">${connectionNote}</div>` : ""}</div></div><div class="connection-controls"><button id="agentConnectBtn" class="connection-button">${connected ? "Reconnect" : "Connect"}</button></div></div>`;
     const button = document.getElementById("agentConnectBtn");
-    button.disabled = !clients.length;
-    button.style.opacity = clients.length ? "1" : ".45";
+    button.disabled = !clients.length || Boolean(missingWorkspaceClient);
+    button.style.opacity = button.disabled ? ".45" : "1";
     button.addEventListener("click", async () => {
       // Open synchronously from the user gesture. Waiting for account
       // detection before window.open causes Chrome/Safari to block OAuth.
@@ -392,10 +399,14 @@
         if (!detectedClient) {
           authWindow.close();
           const note = banner.querySelector(".connection-note");
-          if (note) note.textContent = "Paste one customer link below, then press Connect again so this LiveChat Account can be detected.";
+          if (note) note.textContent = workspaceAccount
+            ? `${workspaceAccount === "lc2" ? "LiveChat Account 2 (LC2)" : "LiveChat Account 1 (LC1)"} OAuth is not configured. Add ${workspaceAccount === "lc2" ? "LIVECHAT_CLIENT_ID_2" : "LIVECHAT_CLIENT_ID"} in Cloudflare Pages.`
+            : "Paste one customer link below, then press Connect again so this LiveChat Account can be detected.";
           const linksInput = document.getElementById("bulkLinks");
-          linksInput?.scrollIntoView({ behavior: "smooth", block: "center" });
-          linksInput?.focus();
+          if (!workspaceAccount) {
+            linksInput?.scrollIntoView({ behavior: "smooth", block: "center" });
+            linksInput?.focus();
+          }
           button.textContent = "Connect";
           button.disabled = false;
           return;

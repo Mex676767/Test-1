@@ -64,6 +64,34 @@ let cachedExpiry = 0;
 // same in-flight request instead of starting a new one.
 let inFlightTokenRequest = null;
 
+// Keep one lookup (which fans out across many tables) from sending a burst
+// of concurrent search requests through a warm Worker isolate. This is a
+// per-isolate guard; Lark still enforces app-wide limits across isolates.
+const MAX_CONCURRENT_LARK_SEARCHES = 3;
+let activeLarkSearches = 0;
+let larkSearchQueue = [];
+let larkSearchCooldownUntil = 0;
+const inFlightLarkSearches = new Map();
+
+async function acquireLarkSearchSlot() {
+  if (activeLarkSearches >= MAX_CONCURRENT_LARK_SEARCHES) {
+    await new Promise((resolve) => larkSearchQueue.push(resolve));
+  } else {
+    activeLarkSearches++;
+  }
+  const waitMs = larkSearchCooldownUntil - Date.now();
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+}
+
+function releaseLarkSearchSlot() {
+  const next = larkSearchQueue.shift();
+  if (next) {
+    next(); // Transfer this slot directly to the next queued search.
+    return;
+  }
+  activeLarkSearches = Math.max(0, activeLarkSearches - 1);
+}
+
 export async function getTenantToken() {
   const now = Date.now();
   if (cachedToken && now < cachedExpiry - 60_000) return cachedToken;
@@ -91,9 +119,28 @@ export async function getTenantToken() {
 // opts.pageSize: Lark's search defaults to only 20 rows per page -- fine for
 // the per-username lookups everywhere else, too few for a table-wide sweep
 // (see lark-stale-records.js). opts.automaticFields adds created_time etc.
-export async function searchRecords(tableId, conditions, baseToken, opts = {}) {
+export function searchRecords(tableId, conditions, baseToken, opts = {}) {
   if (!tableId) throw new Error("Missing table ID — check env vars.");
-  // Retry transient Lark/network failures with short exponential backoff.
+  const cacheKey = JSON.stringify({
+    baseToken: baseToken || BASE_APP_TOKEN,
+    tableId,
+    conditions,
+    pageSize: opts.pageSize || null,
+    automaticFields: !!opts.automaticFields,
+  });
+  const existing = inFlightLarkSearches.get(cacheKey);
+  if (existing) return existing;
+  const request = performSearchRecords(tableId, conditions, baseToken, opts);
+  inFlightLarkSearches.set(cacheKey, request);
+  request.then(
+    () => { if (inFlightLarkSearches.get(cacheKey) === request) inFlightLarkSearches.delete(cacheKey); },
+    () => { if (inFlightLarkSearches.get(cacheKey) === request) inFlightLarkSearches.delete(cacheKey); },
+  );
+  return request;
+}
+
+async function performSearchRecords(tableId, conditions, baseToken, opts) {
+  // Retry transient Lark/network failures with exponential backoff and jitter.
   // lark-search.js runs many of these in parallel per Look Up. Most optional
   // bonuses remain non-fatal, while the three core programs are allowed to
   // fail the lookup visibly instead of masquerading as "no bonus". A transient
@@ -104,8 +151,10 @@ export async function searchRecords(tableId, conditions, baseToken, opts = {}) {
   // same player's Telegram RM28 ticket intermittently not showing up on a
   // re-lookup with no underlying data change in between.
   let lastErr;
-  const maxAttempts = 4;
+  let wasRateLimited = false;
+  const maxAttempts = 5;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await acquireLarkSearchSlot();
     try {
       const token = await getTenantToken();
       const res = await fetch(
@@ -118,14 +167,34 @@ export async function searchRecords(tableId, conditions, baseToken, opts = {}) {
           }) }
       );
       const data = await res.json();
-      if (data.code !== 0) throw new Error(`Lark search failed on table ${tableId}: ${data.msg}`);
+      if (data.code !== 0) {
+        const limited = res.status === 429 || Number(data.code) === 99991400 || /too many requests|rate.?limit/i.test(String(data.msg || ""));
+        const err = new Error(limited
+          ? `Lark is rate-limiting searches (table ${tableId}): ${data.msg || "Too many requests"}`
+          : `Lark search failed on table ${tableId}: ${data.msg}`);
+        err.rateLimited = limited;
+        err.retryAfterMs = Number(res.headers.get("Retry-After")) * 1000 || 0;
+        throw err;
+      }
       return data.data.items || [];
     } catch (err) {
       lastErr = err;
-      if (attempt < maxAttempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+      if (err.rateLimited) {
+        wasRateLimited = true;
+        const retryMs = err.retryAfterMs || Math.min(12_000, 1_000 * (2 ** attempt));
+        larkSearchCooldownUntil = Math.max(larkSearchCooldownUntil, Date.now() + retryMs);
       }
+    } finally {
+      releaseLarkSearchSlot();
     }
+    if (attempt < maxAttempts - 1) {
+      const baseDelay = wasRateLimited ? Math.min(12_000, 1_000 * (2 ** attempt)) : 300 * (2 ** attempt);
+      const jitter = Math.floor(Math.random() * Math.min(700, baseDelay * 0.25));
+      await new Promise((resolve) => setTimeout(resolve, Math.max(baseDelay, larkSearchCooldownUntil - Date.now()) + jitter));
+    }
+  }
+  if (wasRateLimited) {
+    throw new Error("Lark is temporarily rate-limiting searches. Wait a few seconds, then try Lookup again.");
   }
   throw lastErr;
 }
