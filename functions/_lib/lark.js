@@ -175,12 +175,17 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
           ? `Lark is rate-limiting searches (table ${tableId}): ${data.msg || "Too many requests"}`
           : `Lark search failed on table ${tableId}: ${data.msg}`);
         err.rateLimited = limited;
+        // Lark may return schema/permission errors in an HTTP 200 response.
+        // Retrying those cannot help and needlessly delays a fallback query.
+        err.retryable = limited || res.status === 408 || res.status >= 500
+          || /internal|temporar|timeout|server error|system busy/i.test(String(data.msg || ""));
         err.retryAfterMs = Number(res.headers.get("Retry-After")) * 1000 || 0;
         throw err;
       }
       return data.data.items || [];
     } catch (err) {
       lastErr = err;
+      if (err.retryable === false) throw err;
       if (err.rateLimited) {
         wasRateLimited = true;
         const retryMs = err.retryAfterMs || Math.min(12_000, 1_000 * (2 ** attempt));
@@ -346,10 +351,41 @@ function findTimeOfInspection(fields, dateFieldName) {
 
 export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest, fieldNames } = {}) {
   if (!tableId) return null;
-  const matches = await searchRecords(tableId, [
-    { field_name: usernameField || "Username/UID", operator: "is", value: [username] },
-    { field_name: brandField || "Brand", operator: "is", value: [brand] },
-  ], baseToken, { pageSize: 500, automaticFields: true, fieldNames });
+  const defaultUsernameField = !usernameField;
+  const usernameFields = usernameField ? [usernameField] : ["Username/UID", "Username"];
+  let matches;
+  let lastErr;
+  for (const candidateUsernameField of usernameFields) {
+    const conditions = [
+      { field_name: candidateUsernameField, operator: "is", value: [username] },
+      { field_name: brandField || "Brand", operator: "is", value: [brand] },
+    ];
+    try {
+      matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true, fieldNames });
+      break;
+    } catch (err) {
+      lastErr = err;
+      // A field projection is only an optimization. If this table's schema
+      // doesn't contain one of the requested columns, retry without it so an
+      // otherwise valid bonus row isn't lost because of projection.
+      if (fieldNames?.length && err.retryable === false) {
+        try {
+          matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true });
+          break;
+        } catch (fallbackErr) {
+          lastErr = fallbackErr;
+          err = fallbackErr;
+        }
+      }
+      // Older bonus tables use "Username" while most use "Username/UID".
+      // Only try the alternate when Lark explicitly rejects the filter field;
+      // a legitimate empty result should stay one request.
+      const schemaFieldError = /field|column/i.test(String(err.message || ""))
+        && /not found|invalid|unknown|does not exist|unsupported/i.test(String(err.message || ""));
+      if (!(defaultUsernameField && candidateUsernameField === "Username/UID" && schemaFieldError)) throw lastErr;
+    }
+  }
+  if (!matches) throw lastErr;
   const claimable = matches.filter((r) => isClaimable(r.fields));
   if (!claimable.length) return null;
   claimable.sort((a, b) => {
