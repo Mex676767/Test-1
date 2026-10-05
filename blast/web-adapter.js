@@ -315,7 +315,7 @@
     if (runId === activeRunId) emit({ type: "DONE", stopped: stopRequested });
   }
 
-  function connectAgent(client) {
+  function connectAgent(client, authWindow = null) {
     const state = crypto.randomUUID();
     sessionStorage.setItem(STATE_KEY, state);
     sessionStorage.setItem(PENDING_ACCOUNT_KEY, client.key);
@@ -326,14 +326,20 @@
     const redirectUri = oauthConfig.redirectUri || `${location.origin}/blast/oauth.html`;
     const url = new URL("https://accounts.livechat.com/");
     url.search = new URLSearchParams({ response_type: "token", client_id: client.clientId, redirect_uri: redirectUri, state, prompt: "consent" }).toString();
-    window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
+    if (authWindow && !authWindow.closed) authWindow.location.href = url.toString();
+    else return window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
+    return authWindow;
   }
 
   async function accountForConnection(clients) {
     const workspaceAccount = detectedAccount();
     if (clients.some((client) => client.key === workspaceAccount)) return workspaceAccount;
 
-    const firstUrl = (readArea("local").chatEntries || []).find((entry) => String(entry?.url || "").trim())?.url;
+    const typedFirstUrl = String(document.getElementById("bulkLinks")?.value || "")
+      .split("\n")
+      .map((value) => value.trim())
+      .find(Boolean);
+    const firstUrl = typedFirstUrl || (readArea("local").chatEntries || []).find((entry) => String(entry?.url || "").trim())?.url;
     if (firstUrl) {
       const detected = await detectAccountFromUrl(firstUrl);
       if (detected) {
@@ -368,23 +374,36 @@
     button.disabled = !clients.length;
     button.style.opacity = clients.length ? "1" : ".45";
     button.addEventListener("click", async () => {
+      // Open synchronously from the user gesture. Waiting for account
+      // detection before window.open causes Chrome/Safari to block OAuth.
+      const authWindow = window.open("about:blank", "livechat-agent-oauth", "popup=yes,width=560,height=720");
+      if (!authWindow) {
+        const note = banner.querySelector(".connection-note");
+        if (note) note.textContent = "The sign-in window was blocked. Allow pop-ups for this app, then try Connect again.";
+        return;
+      }
       button.disabled = true;
       button.textContent = "Detecting…";
       try {
         const detectedKey = await accountForConnection(clients);
         const detectedClient = clients.find((item) => item.key === detectedKey);
         if (!detectedClient) {
+          authWindow.close();
           const note = banner.querySelector(".connection-note");
-          if (note) note.textContent = "Open a customer chat or paste one archive link so the LiveChat Account can be detected.";
+          if (note) note.textContent = "Paste one customer link below, then press Connect again so this LiveChat Account can be detected.";
+          const linksInput = document.getElementById("bulkLinks");
+          linksInput?.scrollIntoView({ behavior: "smooth", block: "center" });
+          linksInput?.focus();
           button.textContent = "Connect";
           button.disabled = false;
           return;
         }
         sessionStorage.setItem(SELECTED_ACCOUNT_KEY, detectedKey);
-        connectAgent(detectedClient);
+        connectAgent(detectedClient, authWindow);
       } catch (_) {
+        authWindow.close();
         const note = banner.querySelector(".connection-note");
-        if (note) note.textContent = "Could not detect this LiveChat Account. Open a customer chat and try again.";
+        if (note) note.textContent = "Could not detect this LiveChat Account. Paste a valid customer link and try again.";
         button.textContent = "Connect";
         button.disabled = false;
       }
