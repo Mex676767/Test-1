@@ -1137,6 +1137,8 @@ function updateLastUsernameUi(chatId) {
 // path proved reliable.
 let chatStatusPollTimer = null;
 const CHAT_STATUS_POLL_MS = 2_000; // worst-case detection latency = this value; avg = half of it
+const CLOSE_STATUS_CONFIRMATIONS = 2;
+const closeStatusEvidenceByChat = new Map();
 const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payload every tick
 const firstCheckLoggedFor = new Set(); // one confirmation per chat that get_chat succeeded at all
 const errorLoggedFor = new Set(); // avoid spamming the same persistent error every 20s
@@ -1271,7 +1273,25 @@ async function checkChatStatus(chatId) {
       logDiagnostic("Chat status fields not recognized — raw: " + JSON.stringify(data.raw ?? null).slice(0, 500), "warn");
     }
 
+    if (data.isActive !== false) closeStatusEvidenceByChat.delete(chatId);
+
     if (data.isActive === false && s.chatOpen) {
+      // list_chats can briefly return an old inactive thread summary just as
+      // a chat is reopened. Never close from that broad snapshot; first get
+      // the resolved chat id, then require two spaced confirmations from the
+      // direct get_chat path before auto-recording anything.
+      if (!realChatId) return;
+      const now = Date.now();
+      const previousEvidence = closeStatusEvidenceByChat.get(chatId);
+      let confirmations = 1;
+      if (previousEvidence) {
+        if (now - previousEvidence.at < CHAT_STATUS_POLL_MS * 0.75) return;
+        confirmations = previousEvidence.count + 1;
+      }
+      closeStatusEvidenceByChat.set(chatId, { count: confirmations, at: now });
+      if (confirmations < CLOSE_STATUS_CONFIRMATIONS) return;
+
+      closeStatusEvidenceByChat.delete(chatId);
       logDiagnostic(`Auto-detected chat closed — auto-recording.${linkSuffix}`, "success");
       // Only stop chatStatusPollTimer if it's actually this chat's own —
       // checkChatStatus is also called for other chats by sweepPendingChats
