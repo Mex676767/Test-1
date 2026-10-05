@@ -24,11 +24,14 @@ test("preview lookup reads bonus tables without creating a Customer Approaching 
 
   const originalFetch = globalThis.fetch;
   let createCalls = 0;
+  const searchBodiesByTable = new Map();
   globalThis.fetch = async (url, options = {}) => {
     if (String(url).includes("tenant_access_token")) {
       return { json: async () => ({ code: 0, tenant_access_token: "token", expire: 3600 }) };
     }
     if (options.method === "POST" && /\/records$/.test(String(url))) createCalls++;
+    const tableMatch = String(url).match(/\/tables\/([^/]+)\/records\/search/);
+    if (tableMatch) searchBodiesByTable.set(tableMatch[1], JSON.parse(options.body));
     return { json: async () => ({ code: 0, data: { items: [] } }) };
   };
 
@@ -42,6 +45,7 @@ test("preview lookup reads bonus tables without creating a Customer Approaching 
     assert.equal(body.caRecordId, null);
     assert.equal(body.justCreated, false);
     assert.equal(createCalls, 0);
+    assert.equal(searchBodiesByTable.get("grace-table").field_names, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -288,7 +288,11 @@ export async function handler(event) {
         TABLE_GRACE_PERIOD, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.swCheck])),
         undefined,
-        { newest: true, fieldNames: [F.swCheck, F.graceExpiry, "Time of Inspection"] }
+        // Keep the full Grace row until its live column names are confirmed;
+        // Lark rejects the whole search when any projected field name is
+        // absent, and the caller intentionally treats bonus-table errors as
+        // an empty result.
+        { newest: true }
       ).catch(() => null),
 
       // Risk Player(Day): one field ("Status") encodes both which day-tier
