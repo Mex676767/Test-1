@@ -320,7 +320,11 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
   // wave so concurrent failures cannot each immediately fan out again.
   const requestedAttempts = Number(opts.maxAttempts ?? 1);
   const maxAttempts = Math.max(1, Math.min(2, Number.isFinite(requestedAttempts) ? requestedAttempts : 1));
-  const timeoutMs = opts.timeoutMs || 5_000;
+  // This deadline includes the shared cross-agent permit queue. Five seconds
+  // was too short when a single Lark throttle placed several agents behind
+  // the shared cooldown, causing whole groups of otherwise healthy table
+  // lookups to expire together before they ever reached Lark.
+  const timeoutMs = opts.timeoutMs || 12_000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
