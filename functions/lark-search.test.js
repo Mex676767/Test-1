@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { handler } from "./lark-search.js";
-import { findOldestClaimableRow, initEnv } from "./_lib/lark.js";
+import { findOldestClaimableRow, initEnv, searchRecords } from "./_lib/lark.js";
 
 test("preview lookup reads bonus tables without creating a Customer Approaching record", async () => {
   initEnv({
@@ -40,7 +40,7 @@ test("preview lookup reads bonus tables without creating a Customer Approaching 
       body: JSON.stringify({ username: "test-user", brand: "VS", picName: "Tester", preview: true }),
     });
     const body = JSON.parse(result.body);
-    assert.equal(result.statusCode, 200);
+    assert.equal(result.statusCode, 200, result.body);
     assert.equal(body.ok, true);
     assert.equal(body.caRecordId, null);
     assert.equal(body.justCreated, false);
@@ -187,11 +187,65 @@ test("bonus lookup retries Lark throttling once instead of asking the agent to r
   };
 
   try {
-    const row = await findOldestClaimableRow(
-      "grace-table", "67845", "RM", () => true, undefined, { fieldNames: ["Status"] }
+    const rows = await searchRecords(
+      "grace-table", [{ field_name: "Username/UID", operator: "is", value: ["67845"] }], undefined,
+      { fieldNames: ["Status"], maxAttempts: 2 }
     );
-    assert.equal(row, null, "the retry completed successfully with an empty result");
+    assert.deepEqual(rows, [], "the retry completed successfully with an empty result");
     assert.equal(searchCalls, 2, "a throttle gets one automatic retry, never an unbounded Retry-After wait");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("lookup completes the first pass for every bonus table, then retries only failed sources once", async () => {
+  const tableEnv = {
+    LARK_APP_ID: "app-id",
+    LARK_APP_SECRET: "app-secret",
+    LARK_BASE_APP_TOKEN: "base-token",
+    LARK_TABLE_CUSTOMER_APPROACHING: "customer-table",
+    LARK_TABLE_REDEEM_CODE: "redeem-table",
+    LARK_TABLE_PNL: "pnl-table",
+    LARK_TABLE_GRACE_PERIOD: "grace-table",
+    LARK_TABLE_TOP_PNL_NIGHT: "top-pnl-table",
+    LARK_TABLE_LTV_DAY: "ltv-table",
+    LARK_TABLE_RISK_PLAYER: "risk-table",
+    LARK_TABLE_SPECIAL_RELOAD: "reload-table",
+    LARK_TABLE_VIP_BOOSTER: "vip-table",
+    LARK_TABLE_TELEGRAM28: "telegram-table",
+    LARK_TABLE_MOONCAKE: "mooncake-table",
+    LARK_TABLE_VS96_FEEDBACK: "vs96-table",
+  };
+  initEnv(tableEnv);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  let throttled = false;
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) {
+      return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, tenant_access_token: "token", expire: 3600 }) };
+    }
+    const tableId = String(url).match(/\/tables\/([^/]+)\/records\/search/)?.[1];
+    if (!tableId) return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, data: { items: [] } }) };
+    calls.push(tableId);
+    if (tableId === "grace-table" && !throttled) {
+      throttled = true;
+      return { status: 429, headers: { get: (name) => name === "Retry-After" ? "0" : null }, json: async () => ({ code: 99991400, msg: "TooManyRequest" }) };
+    }
+    return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, data: { items: [] } }) };
+  };
+
+  try {
+    const result = await handler({ body: JSON.stringify({ username: "test-user", brand: "PP", preview: true }) });
+    const body = JSON.parse(result.body);
+    assert.equal(result.statusCode, 200, result.body);
+    assert.deepEqual(body.lookupWarnings, []);
+    const expected = Object.values(tableEnv).filter((value) => value.startsWith("*") === false);
+    const tableIds = expected.filter((value) => value.endsWith("table"));
+    assert.ok(tableIds.every((tableId) => calls.includes(tableId)), `first pass missed a table: ${calls.join(", ")}`);
+    assert.equal(calls.filter((tableId) => tableId === "grace-table").length, 2, "only the throttled source is retried once");
+    assert.ok(tableIds.filter((tableId) => tableId !== "grace-table").every((tableId) => calls.filter((id) => id === tableId).length === 1));
+    const retryIndex = calls.lastIndexOf("grace-table");
+    assert.ok(tableIds.every((tableId) => calls.indexOf(tableId) < retryIndex), "retry starts only after the complete first pass");
   } finally {
     globalThis.fetch = originalFetch;
   }

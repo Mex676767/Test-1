@@ -315,11 +315,11 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
   // request several times made one unavailable bonus hold the whole panel
   // open; bound each request and return that source as unavailable instead.
   let lastErr;
-  // Retry one time for transient errors and throttles. The shared queue and
-  // bounded cooldown spread that retry across isolates instead of making the
-  // agent repeat the entire lookup manually.
-  const requestedAttempts = Number(opts.maxAttempts ?? 2);
-  const maxAttempts = Math.max(1, Math.min(2, Number.isFinite(requestedAttempts) ? requestedAttempts : 2));
+  // Keep individual table calls to one attempt by default. The full lookup
+  // first settles every table, then retries only failed sources as a second
+  // wave so concurrent failures cannot each immediately fan out again.
+  const requestedAttempts = Number(opts.maxAttempts ?? 1);
+  const maxAttempts = Math.max(1, Math.min(2, Number.isFinite(requestedAttempts) ? requestedAttempts : 1));
   const timeoutMs = opts.timeoutMs || 5_000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController();
@@ -370,9 +370,9 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         lastErr = err;
       }
       if (lastErr.rateLimited) {
-        // Retry-After can be tens of seconds. Honor it as a short shared
-        // backoff only; each request reports the throttle so the UI can show
-        // a partial result and agents can retry manually after the load eases.
+        // Retry-After can be tens of seconds. The shared queue receives the
+        // full signal; this isolate uses a short bounded cooldown so the
+        // automatic second pass does not wait on an unbounded server delay.
         const retryMs = Math.min(5_000, lastErr.retryAfterMs || 1_000);
         larkSearchCooldownUntil = Math.max(larkSearchCooldownUntil, Date.now() + retryMs);
       }
