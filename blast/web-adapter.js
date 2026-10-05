@@ -3,10 +3,16 @@
 (() => {
   if (globalThis.chrome?.storage?.local && globalThis.chrome?.runtime?.sendMessage) return;
 
-  // Lets popup.js distinguish this embedded web runtime from the browser
-  // extension. A web run cannot survive an iframe/page reload, so persisted
-  // running flags must never restore a run that no longer exists.
+  // Delivery runs in its own window; the embedded widget is a monitor and
+  // can reconnect after LiveChat replaces/reloads its frame.
   globalThis.__blastWebAdapter = true;
+  const isRunner = location.pathname.endsWith('/blast/runner.html');
+  const RUN_KEY = 'ca-livechat-blast-run:';
+  let runnerState = null;
+  let pendingLaunch = null;
+  let runnerWindow = null;
+  const subscribers = new Set(isRunner && window.opener ? [window.opener] : []);
+  let lastRunEvent = '';
 
   const storageListeners = [];
   const runtimeListeners = [];
@@ -56,7 +62,25 @@
     remove(keys, callback) { const old = readArea(name); const next = { ...old }; (Array.isArray(keys) ? keys : [keys]).forEach((key) => delete next[key]); writeArea(name, next, old); callback?.(); return Promise.resolve(); },
     clear(callback) { const old = readArea(name); writeArea(name, {}, old); callback?.(); return Promise.resolve(); },
   });
-  const emit = (message) => runtimeListeners.forEach((fn) => fn(message, {}, () => {}));
+  const emit = (message) => {
+    if (isRunner && runnerState) {
+      if (message.type === 'DONE') Object.assign(runnerState, { running: false, paused: false });
+      if (message.type === 'PAUSED') runnerState.paused = true;
+      if (message.type === 'RESUMED') runnerState.paused = false;
+      if (message.text) runnerState.text = message.text;
+      if (message.progress) runnerState.progress = message.progress;
+      runnerState.lastEvent = message;
+      runnerState.updatedAt = Date.now();
+      runnerState.sequence = (runnerState.sequence || 0) + 1;
+      localStorage.setItem(RUN_KEY + selectedAccount(), JSON.stringify(runnerState));
+      // Third-party iframe storage may be partitioned from its popup's
+      // storage. postMessage is the primary bridge across those partitions.
+      for (const subscriber of subscribers) {
+        try { subscriber.postMessage({ type: 'BLAST_RUNNER_EVENT', state: runnerState }, location.origin); } catch (_) {}
+      }
+    }
+    runtimeListeners.forEach((fn) => fn(message, {}, () => {}));
+  };
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const validAccountKey = (value) => /^lc[12]$/.test(String(value || "")) ? String(value) : "";
   const detectedAccount = () => {
@@ -72,6 +96,112 @@
     ? sessionStorage.getItem(accountStorageKey(TOKEN_KEY, accountKey)) || ""
     : "";
   globalThis.__blastAgentConnected = () => Boolean(token());
+  const readRun = () => {
+    try { return JSON.parse(localStorage.getItem(RUN_KEY + selectedAccount()) || 'null'); }
+    catch (_) { return null; }
+  };
+  globalThis.__blastRunState = readRun;
+  function notifyRun(saved) {
+    const key = `${saved?.runId}:${saved?.sequence}`;
+    if (!saved?.lastEvent || key === lastRunEvent) return;
+    lastRunEvent = key;
+    emit(saved.lastEvent);
+  }
+  globalThis.__blastFocusRunner = () => {
+    const saved = readRun();
+    if (!saved?.windowName) return;
+    const target = window.open('', saved.windowName, 'popup=yes,width=580,height=680');
+    if (target) {
+      // A closed/crashed runner leaves no live queue to resume. Opening its
+      // status page reports that interruption rather than replaying messages.
+      if (target.location.href === 'about:blank') target.location.href = `/blast/runner.html?account=${selectedAccount()}`;
+      runnerWindow = target;
+      target.postMessage({ type: 'BLAST_RUNNER_ATTACH', runId: saved.runId }, location.origin);
+      target.focus();
+    }
+  };
+
+  function launchRunner(message) {
+    if (readRun()?.running) {
+      globalThis.__blastFocusRunner();
+      emit({ type: 'PROGRESS', text: 'Blast is already running in its window.' });
+      return;
+    }
+    const runId = crypto.randomUUID();
+    const accountKey = selectedAccount();
+    const windowName = `ca-blast-${accountKey}-${runId}`;
+    // Called synchronously from Start's click, before any awaits, so the
+    // browser can open a window that survives LiveChat's widget reloads.
+    const target = window.open(`/blast/runner.html?account=${accountKey}`, windowName, 'popup=yes,width=580,height=680');
+    if (!target) {
+      emit({ type: 'ERROR', text: 'Allow pop-ups for this app, then press Start. No chats were opened or sent.' });
+      emit({ type: 'DONE', stopped: true });
+      return;
+    }
+    const state = { runId, windowName, running: true, paused: false, total: message.jobs.length, text: 'Starting in Blast window…', progress: `0/${message.jobs.length}`, updatedAt: Date.now() };
+    localStorage.setItem(RUN_KEY + accountKey, JSON.stringify(state));
+    pendingLaunch = { target, message, state, accountKey };
+    runnerWindow = target;
+    pendingLaunch.timer = setTimeout(() => {
+      if (pendingLaunch?.state.runId !== runId) return;
+      pendingLaunch = null;
+      localStorage.setItem(RUN_KEY + accountKey, JSON.stringify({ ...state, running: false }));
+      emit({ type: 'ERROR', text: 'The Blast window did not load. No messages were sent.' });
+      emit({ type: 'DONE', stopped: true });
+    }, 15000);
+    target.focus();
+  }
+
+  window.addEventListener('message', (event) => {
+    if (event.origin !== location.origin) return;
+    if (!isRunner && event.data?.type === 'BLAST_RUNNER_EVENT') {
+      const saved = readRun();
+      const incoming = event.data.state;
+      if (!saved || incoming?.runId !== saved.runId || (saved.sequence || 0) > (incoming.sequence || 0)) return;
+      localStorage.setItem(RUN_KEY + selectedAccount(), JSON.stringify(incoming));
+      notifyRun(incoming);
+    }
+    if (isRunner && event.data?.runId === runnerState?.runId && runnerState) {
+      if (event.data.type === 'BLAST_RUNNER_ATTACH') {
+        subscribers.add(event.source);
+        event.source.postMessage({ type: 'BLAST_RUNNER_EVENT', state: runnerState }, location.origin);
+      }
+      if (runnerState.running && event.data.type === 'BLAST_RUNNER_COMMAND' && ['STOP', 'PAUSE', 'RESUME'].includes(event.data.command)) {
+        subscribers.add(event.source);
+        globalThis.chrome.runtime.sendMessage({ type: event.data.command });
+      }
+    }
+    if (event.data?.type === 'BLAST_RUNNER_READY' && pendingLaunch?.target === event.source) {
+      const launch = pendingLaunch;
+      clearTimeout(launch.timer);
+      pendingLaunch = null;
+      event.source.postMessage({ type: 'BLAST_RUNNER_START', state: launch.state, message: launch.message,
+        accountKey: launch.accountKey, accessToken: token(launch.accountKey),
+        expiresAt: sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, launch.accountKey)) }, location.origin);
+    }
+    if (isRunner && event.source === window.opener && event.data?.type === 'BLAST_RUNNER_START' && !runnerState?.running) {
+      const data = event.data;
+      if (data.accountKey !== selectedAccount() || !data.accessToken) return;
+      sessionStorage.setItem(accountStorageKey(TOKEN_KEY), data.accessToken);
+      sessionStorage.setItem(accountStorageKey(TOKEN_EXPIRY_KEY), data.expiresAt);
+      runnerState = data.state;
+      subscribers.add(event.source);
+      globalThis.chrome.runtime.sendMessage(data.message);
+    }
+  });
+  window.addEventListener('storage', (event) => {
+    if (!isRunner && event.key === RUN_KEY + selectedAccount() && event.newValue) {
+      try { notifyRun(JSON.parse(event.newValue)); } catch (_) {}
+    }
+  });
+  if (isRunner) {
+    window.addEventListener('beforeunload', (event) => {
+      if (runnerState?.running) { event.preventDefault(); event.returnValue = ''; }
+    });
+    window.addEventListener('pagehide', () => {
+      if (runnerState?.running) emit({ type: 'DONE', stopped: true, interrupted: true });
+    });
+  }
   let nextActionAt = 0;
   let actionThrottle = Promise.resolve();
 
@@ -94,6 +224,7 @@
     if (!accessToken) throw new Error("Your agent authorization expired. Connect LiveChat again.");
     const response = await fetch("https://accounts.livechat.com/v2/info", {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(20000),
     });
     const data = await response.json();
     if (!response.ok || !data.account_id) throw new Error("Could not identify the connected LiveChat agent. Reconnect and try again.");
@@ -123,6 +254,7 @@
     const response = await fetch("/livechat-chat-status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(20000),
       body: JSON.stringify({ chatId: ids.threadId, ...(ids.chatId ? { realChatId: ids.chatId } : {}) }),
     });
     const data = await response.json();
@@ -135,6 +267,7 @@
       const response = await fetch("/livechat-chat-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({ chatId: ids.threadId || ids.chatId, realChatId: ids.chatId }),
       });
       const data = await response.json();
@@ -147,7 +280,7 @@
       return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive, users: data.raw?.users || [] };
     }
     if (!ids.threadId) throw new Error("The LiveChat archive link is invalid.");
-    const response = await fetch("/livechat-chat-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: ids.threadId }) });
+    const response = await fetch("/livechat-chat-status", { method: "POST", signal: AbortSignal.timeout(20000), headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: ids.threadId }) });
     const data = await response.json();
     if (!response.ok || !data.ok || !data.chatId) throw new Error(data.error || "This archive is outside the recent lookup window.");
     if (data.accountKey && data.accountKey !== selectedAccount()) {
@@ -166,6 +299,7 @@
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}`, ...(formData ? {} : { "Content-Type": "application/json" }) },
         body: formData || JSON.stringify(body || {}),
+        signal: AbortSignal.timeout(20000),
       });
       const text = await response.text();
       let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (_) {}
@@ -202,7 +336,7 @@
     let file;
     if (job.imageDataUrl) file = dataUrlFile(job.imageDataUrl, job.imageFileName);
     else if (job.imageUrl) {
-      const response = await fetch(job.imageUrl);
+      const response = await fetch(job.imageUrl, { signal: AbortSignal.timeout(30000) });
       if (!response.ok) throw new Error(`Image download failed (${response.status}).`);
       const blob = await response.blob();
       file = new File([blob], job.imageFileName || job.imageUrl.split("/").pop() || "image", { type: blob.type });
@@ -221,12 +355,14 @@
     let temporarilyAddedAgent = false;
     let agentAccountId = "";
     let chatId = "";
+    let stage = 'Find chat';
     try {
       emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
       const chat = await resolveChat(job.url);
       if (runWasStopped(runId)) throw new Error("Stopped by user");
       chatId = chat.chatId;
       if (chat.isActive !== true) {
+        stage = 'Reopen chat';
         try {
           await action("resume_chat", { chat: { id: chat.chatId } });
           resumed = true;
@@ -234,6 +370,7 @@
           if (!/already.+active|active.+already/i.test(error.message)) throw error;
         }
       } else {
+        stage = 'Join chat';
         agentAccountId = await currentAgentAccountId();
         const alreadyPresent = (chat.users || []).some((user) => String(user?.id || "") === agentAccountId);
         if (!alreadyPresent) {
@@ -249,26 +386,31 @@
       }
       for (let i = 0; i < job.messages.length; i += 1) {
         if (runWasStopped(runId)) throw new Error("Stopped by user");
+        stage = `Send message ${i + 1}`;
         await action("send_event", { chat_id: chat.chatId, event: { type: "message", text: job.messages[i], visibility: "all" } });
         if (i < job.messages.length - 1) await sleep(delay);
       }
       if (runWasStopped(runId)) throw new Error("Stopped by user");
+      stage = 'Send image';
       await sendImage(chat.chatId, job);
       if (resumed) {
+        stage = 'Close reopened chat';
         await action("deactivate_chat", { id: chat.chatId, ignore_requester_presence: true });
         resumed = false;
       }
       emit({ type: "PROGRESS", text: `Completed chat ${index + 1} of ${total}`, progress: `${index + 1}/${total}`, log: `✓ Chat ${index + 1} sent as the connected agent`, logType: "ok" });
+      return 'sent';
     } catch (error) {
       const stopped = runWasStopped(runId) || error.message === "Stopped by user";
-      if (!stopped) recordFailure(job, index, "LiveChat API", error.message);
+      if (!stopped) recordFailure(job, index, stage, error.message);
       emit({
         type: "PROGRESS",
         text: stopped ? "Stopping…" : `Chat ${index + 1} failed`,
         progress: `${index + 1}/${total}`,
-        log: stopped ? `■ Chat ${index + 1} stopped before completion` : `✗ Chat ${index + 1}: ${error.message}`,
+        log: stopped ? `■ Chat ${index + 1} stopped before completion` : `✗ Chat ${index + 1} · ${stage}: ${error.message}`,
         logType: stopped ? "info" : "err",
       });
+      return stopped ? 'stopped' : 'failed';
     } finally {
       if (temporarilyAddedAgent && chatId && agentAccountId) {
         try {
@@ -288,6 +430,9 @@
 
   async function runJobs(jobs, delay, concurrency, runId) {
     let cursor = 0;
+    let sent = 0;
+    let failed = 0;
+    let completed = 0;
     const linkQueues = new Map();
     const runInLinkOrder = async (job, index) => {
       const key = String(job.url || '').trim().toLowerCase();
@@ -295,11 +440,11 @@
       const current = previous.then(async () => {
         await waitWhilePaused();
         if (runWasStopped(runId)) return;
-        await runJob(job, index, jobs.length, delay, runId);
+        return runJob(job, index, jobs.length, delay, runId);
       });
       linkQueues.set(key, current);
       try {
-        await current;
+        return await current;
       } finally {
         if (linkQueues.get(key) === current) linkQueues.delete(key);
       }
@@ -310,11 +455,15 @@
         if (runWasStopped(runId)) return;
         const index = cursor++;
         if (index >= jobs.length) return;
-        await runInLinkOrder(jobs[index], index);
+        const result = await runInLinkOrder(jobs[index], index);
+        if (result === 'sent') sent++;
+        if (result === 'failed') failed++;
+        if (result) completed++;
+        emit({ type: 'PROGRESS', text: `${sent} sent · ${failed} failed`, progress: `${completed}/${jobs.length}` });
       }
     };
     await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));
-    if (runId === activeRunId) emit({ type: "DONE", stopped: stopRequested });
+    if (runId === activeRunId) emit({ type: "DONE", stopped: stopRequested, sent, failed, total: jobs.length });
   }
 
   function connectAgent(client, authWindow = null) {
@@ -447,9 +596,26 @@
       onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
       openOptionsPage() { location.href = "settings.html"; },
       sendMessage(message) {
+        if (!isRunner && message?.type === 'START') {
+          if (!token()) setTimeout(() => emit({ type: 'AUTH_REQUIRED' }), 0);
+          else launchRunner(message);
+          return Promise.resolve();
+        }
+        if (!isRunner && ['STOP', 'PAUSE', 'RESUME'].includes(message?.type)) {
+          const saved = readRun();
+          if (saved?.running) {
+            runnerWindow = runnerWindow && !runnerWindow.closed ? runnerWindow : window.open('', saved.windowName, 'popup=yes,width=580,height=680');
+            if (runnerWindow?.location.href === 'about:blank') {
+              const event = { type: 'DONE', stopped: true, interrupted: true };
+              localStorage.setItem(RUN_KEY + selectedAccount(), JSON.stringify({ ...saved, running: false, paused: false, lastEvent: event }));
+              runnerWindow.close();
+              emit(event);
+            } else runnerWindow?.postMessage({ type: 'BLAST_RUNNER_COMMAND', runId: saved.runId, command: message.type }, location.origin);
+          }
+          return Promise.resolve();
+        }
         if (message?.type === "STOP") {
           stopRequested = true;
-          activeRunId = ++runSequence;
           setPaused(false);
         }
         if (message?.type === "PAUSE" && !stopRequested) {
@@ -469,11 +635,26 @@
             setPaused(false);
             const runId = ++runSequence;
             activeRunId = runId;
-            runJobs(message.jobs || [], Number(message.delay) || 0, Number(message.concurrency) || 1, runId);
+            runJobs(message.jobs || [], Number(message.delay) || 0, Number(message.concurrency) || 1, runId).catch((error) => {
+              emit({ type: 'ERROR', text: `Blast interrupted: ${error.message}` });
+              emit({ type: 'DONE', stopped: true, interrupted: true });
+            });
           }
         }
         return Promise.resolve();
       },
     },
   };
+  if (isRunner) {
+    // runner.html has no app auto-updater and is a separate top-level window.
+    // Reloading the LiveChat widget cannot destroy this execution context.
+    setTimeout(() => {
+      if (runnerState) return;
+      const saved = readRun();
+      if (saved?.running) {
+        runnerState = saved;
+        emit({ type: 'DONE', stopped: true, interrupted: true });
+      }
+    }, 15000);
+  }
 })();

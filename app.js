@@ -5065,13 +5065,28 @@ function setBlastLoggingLock(running) {
 window.addEventListener("message", async (event) => {
   if (event.origin !== window.location.origin) return;
   if (event.data?.type === "blast-run-state") {
-    setBlastLoggingLock(Boolean(event.data.active));
+    setBlastLoggingLock(Boolean(event.data.running) || activeBlastRun());
     return;
   }
   if (event.data?.type !== "bonus-config-changed") return;
   await fetchConfiguredBonusPrograms();
   renderChats(activeChats);
 });
+
+function activeBlastRun() {
+  const accounts = currentLiveChatAccount ? [currentLiveChatAccount] : ['lc1', 'lc2'];
+  return accounts.some((account) => {
+    try { return !!JSON.parse(localStorage.getItem('ca-livechat-blast-run:' + account) || 'null')?.running; }
+    catch (_) { return false; }
+  });
+}
+window.addEventListener('storage', (event) => {
+  if (event.key?.startsWith('ca-livechat-blast-run:')) {
+    const active = activeBlastRun();
+    if (active !== blastLoggingLock) setBlastLoggingLock(active);
+  }
+});
+if (activeBlastRun()) setBlastLoggingLock(true);
 
 loggingPauseCheck.addEventListener("change", () => {
   if (blastLoggingLock) {
@@ -5734,7 +5749,7 @@ function isSafeToAutoReload() {
   const typing = !!a && (a.tagName === "TEXTAREA" || a.tagName === "SELECT" ||
     (a.tagName === "INPUT" && !["checkbox", "radio", "button"].includes(a.type)));
   const busy = Object.values(state).some((s) => s && (s.lookupInFlight || s.unclaimInFlight));
-  return !typing && !busy;
+  return !typing && !busy && !activeBlastRun();
 }
 
 function reloadWhenSafe() {
