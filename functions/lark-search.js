@@ -144,6 +144,7 @@ export async function handler(event) {
           error = retryError;
         }
       }
+      console.warn("Lark lookup source unavailable", task.label, String(error?.message || error).slice(0, 180));
       lookupWarnings.push(task.label);
       return task.fallback;
     };
@@ -158,7 +159,12 @@ export async function handler(event) {
         if (task.error.retryable !== false) {
           try {
             return await task.read();
-          } catch (_) { /* return a partial result after the single retry */ }
+          } catch (error) {
+            console.warn("Lark lookup source unavailable", task.label, String(error?.message || error).slice(0, 180));
+          }
+        }
+        if (task.error.retryable === false) {
+          console.warn("Lark lookup source unavailable", task.label, String(task.error.message || task.error).slice(0, 180));
         }
         lookupWarnings.push(task.label);
         return task.fallback;
