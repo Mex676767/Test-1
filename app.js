@@ -39,6 +39,9 @@ themeToggle.addEventListener("click", () => {
 const AGENT_KEY = "rc-agent-name";
 const BLAST_SYNC_STORAGE_KEY = "ca-livechat-engagement:sync";
 const BLAST_LOCAL_STORAGE_KEY = "ca-livechat-engagement:local";
+const CONFIGURED_LIVECHAT_ACCOUNT = /^lc[12]$/.test(new URLSearchParams(location.search).get("account") || "")
+  ? new URLSearchParams(location.search).get("account")
+  : "";
 let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
 let agentOptions = [];
 
@@ -678,7 +681,11 @@ function syncMainTabs() {
   if (blastView) blastView.hidden = activeMainTab !== "blast";
   if (blastAvailable && activeMainTab === "blast") {
     const frame = blastView?.querySelector("iframe[data-src]");
-    if (frame && !frame.src) frame.src = frame.dataset.src;
+    if (frame && !frame.src) {
+      const source = new URL(frame.dataset.src, location.origin);
+      if (CONFIGURED_LIVECHAT_ACCOUNT) source.searchParams.set("account", CONFIGURED_LIVECHAT_ACCOUNT);
+      frame.src = source.toString();
+    }
   }
   const knowledgeView = document.getElementById("knowledgeView");
   if (knowledgeView) knowledgeView.hidden = activeMainTab !== "knowledge";
@@ -1355,7 +1362,7 @@ let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card 
 const LIVECHAT_ACCOUNT_SESSION_KEY = "rc-livechat-account";
 let currentLiveChatAccount = "";
 try {
-  const savedAccount = sessionStorage.getItem(LIVECHAT_ACCOUNT_SESSION_KEY) || "";
+  const savedAccount = CONFIGURED_LIVECHAT_ACCOUNT || sessionStorage.getItem(LIVECHAT_ACCOUNT_SESSION_KEY) || "";
   if (/^lc[12]$/.test(savedAccount)) currentLiveChatAccount = savedAccount;
 } catch (_) { /* storage can be unavailable in hardened browser modes */ }
 

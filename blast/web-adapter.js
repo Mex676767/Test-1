@@ -60,6 +60,8 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const validAccountKey = (value) => /^lc[12]$/.test(String(value || "")) ? String(value) : "";
   const detectedAccount = () => {
+    const configured = validAccountKey(new URLSearchParams(location.search).get("account"));
+    if (configured) return configured;
     const own = validAccountKey(sessionStorage.getItem(DETECTED_ACCOUNT_KEY));
     if (own) return own;
     try { return validAccountKey(window.parent?.sessionStorage?.getItem(DETECTED_ACCOUNT_KEY)); } catch (_) { return ""; }
