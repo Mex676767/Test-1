@@ -148,49 +148,35 @@ export async function handler(event) {
     }).catch(() => ({}));
 
     const chatLink = String(link || "").trim();
-    let caRecordId = !preview && chatLink
-      ? await reusableBlankCase(agentVal, uname, brandVal, chatLink).catch(() => null)
-      : null;
+    // Start case-row work alongside the independent bonus-table reads below.
+    // Previously its search and create calls both completed before those reads
+    // even began, adding two network waits to every new chat lookup.
+    const caseRecordP = (async () => {
+      let recordId = !preview && chatLink
+        ? await reusableBlankCase(agentVal, uname, brandVal, chatLink).catch(() => null)
+        : null;
 
-    // One Customer Approaching row per chat, not one per Look Up click. If
-    // the old record is for a different username/brand it is replaced; an
-    // exact matching blank record found above is retained and reused.
-    //
-    // Only this agent's own still-blank row is ever removed: after a chat
-    // transfer (PC crash / lost connection) the previous agent's row stays
-    // theirs, and the new agent gets a separate row of their own.
-    if (!preview && previousRecordId) {
-      try {
-        const { owner, blank } = await readOwnership(previousRecordId);
-        if (blank && ownedBy(owner, agentVal) && previousRecordId !== caRecordId) {
-          await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId);
-        }
-      } catch (_) { /* non-fatal */ }
-    }
+      if (!preview && previousRecordId) {
+        try {
+          const { owner, blank } = await readOwnership(previousRecordId);
+          if (blank && ownedBy(owner, agentVal) && previousRecordId !== recordId) {
+            await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId);
+          }
+        } catch (_) { /* non-fatal */ }
+      }
 
-    // Reuse this chat's existing blank record when Look Up is repeated. A
-    // deliberate "+ Log another case" only runs after the current row has
-    // been completed, so it still creates a fresh row below. This row
-    // is only a target for the final Record submit now (Agent Name, Brand,
-    // Inquiry, Status, Player D.O.B, etc.) — none of the actual bonus data
-    // below comes from its Lookup columns anymore (see the 2026-08-29
-    // rearchitecture note in lib/lark.js), so there's no Lookup-resolution
-    // delay to wait out.
-    // The chat link goes on the row right away (not just on final submit)
-    // so an unfinished row can still be traced back to its chat -- see
-    // lark-stale-records.js. "link" is a Lark Link field, hence {link, text}.
-    // If the link write is ever rejected, retry without it rather than
-    // failing the whole Look Up.
-    if (!preview) {
-      const baseFields = { [F.username]: uname, [F.brand]: brandVal, [F.agentName]: agentVal };
-      if (!caRecordId) {
-        const created = chatLink
+      let created = false;
+      if (!preview && !recordId) {
+        const baseFields = { [F.username]: uname, [F.brand]: brandVal, [F.agentName]: agentVal };
+        const result = chatLink
           ? await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } })
               .catch(() => createRecord(TABLE_CUSTOMER_APPROACHING, baseFields))
           : await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
-        caRecordId = created.record_id;
+        recordId = result.record_id;
+        created = true;
       }
-    }
+      return { recordId, created };
+    })();
 
     // Every lookup below is fully independent of the others (and of
     // caRecordId) -- previously each was its own separate `await`, one
@@ -216,6 +202,7 @@ export async function handler(event) {
       redeemRow,
       mooncakeRow,
       vs96Row,
+      caseRecordState,
     ] = await Promise.all([
       // Warn CS if username exists under other brands
       (async () => {
@@ -381,14 +368,16 @@ export async function handler(event) {
           return !!status && !hidden(status);
         }
       ),
+      caseRecordP,
     ]);
     const configuredBonuses = await configuredBonusRowsP;
+    let caRecordId = caseRecordState.recordId;
 
     // A second request can begin at the same moment and pass the pre-create
     // check above before either row exists. Re-run the same deterministic
     // coalescing after the slower bonus reads; both requests then return the
     // same surviving record instead of leaving a blank twin behind.
-    if (!preview && link) {
+    if (!preview && link && caseRecordState.created) {
       caRecordId = await reusableBlankCase(agentVal, uname, brandVal, link).catch(() => caRecordId);
     }
 
