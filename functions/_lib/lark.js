@@ -315,9 +315,11 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
   // request several times made one unavailable bonus hold the whole panel
   // open; bound each request and return that source as unavailable instead.
   let lastErr;
-  // No per-table retry by default: the other source lookups are already
-  // running, and another burst during a tenant-wide 429 makes it worse.
-  const maxAttempts = opts.maxAttempts || 1;
+  // Retry one time for transient errors and throttles. The shared queue and
+  // bounded cooldown spread that retry across isolates instead of making the
+  // agent repeat the entire lookup manually.
+  const requestedAttempts = Number(opts.maxAttempts ?? 2);
+  const maxAttempts = Math.max(1, Math.min(2, Number.isFinite(requestedAttempts) ? requestedAttempts : 2));
   const timeoutMs = opts.timeoutMs || 5_000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController();
@@ -351,7 +353,7 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         // Lark may return schema/permission errors in an HTTP 200 response.
         // A 429 is surfaced immediately instead of retrying every bonus table
         // in the same request and worsening app-wide contention.
-        err.retryable = !limited && (
+        err.retryable = limited || (
           res.status === 408 || res.status >= 500
           || /internal|temporar|timeout|server error|system busy/i.test(String(data.msg || ""))
         );
@@ -371,7 +373,7 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         // Retry-After can be tens of seconds. Honor it as a short shared
         // backoff only; each request reports the throttle so the UI can show
         // a partial result and agents can retry manually after the load eases.
-        const retryMs = Math.min(1_000, lastErr.retryAfterMs || 1_000);
+        const retryMs = Math.min(5_000, lastErr.retryAfterMs || 1_000);
         larkSearchCooldownUntil = Math.max(larkSearchCooldownUntil, Date.now() + retryMs);
       }
       if (lastErr.retryable === false) throw lastErr;

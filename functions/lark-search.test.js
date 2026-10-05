@@ -167,7 +167,7 @@ test("lookup returns eligible results for every configured bonus source", async 
   }
 });
 
-test("bonus lookup stops immediately on Lark throttling instead of retrying against Retry-After", async () => {
+test("bonus lookup retries Lark throttling once instead of asking the agent to retry", async () => {
   initEnv({ LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
   const originalFetch = globalThis.fetch;
   let searchCalls = 0;
@@ -176,6 +176,9 @@ test("bonus lookup stops immediately on Lark throttling instead of retrying agai
       return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, tenant_access_token: "token", expire: 3600 }) };
     }
     searchCalls++;
+    if (searchCalls > 1) {
+      return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, data: { items: [] } }) };
+    }
     return {
       status: 429,
       headers: { get: (name) => name === "Retry-After" ? "60" : null },
@@ -184,11 +187,11 @@ test("bonus lookup stops immediately on Lark throttling instead of retrying agai
   };
 
   try {
-    await assert.rejects(
-      findOldestClaimableRow("grace-table", "67845", "RM", () => true, undefined, { fieldNames: ["Status"] }),
-      /rate-limiting/
+    const row = await findOldestClaimableRow(
+      "grace-table", "67845", "RM", () => true, undefined, { fieldNames: ["Status"] }
     );
-    assert.equal(searchCalls, 1);
+    assert.equal(row, null, "the retry completed successfully with an empty result");
+    assert.equal(searchCalls, 2, "a throttle gets one automatic retry, never an unbounded Retry-After wait");
   } finally {
     globalThis.fetch = originalFetch;
   }

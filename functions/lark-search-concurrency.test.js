@@ -46,7 +46,7 @@ test("timed-out queued Lark searches release slots and do not poison later looku
       `table-${index}`,
       [{ field_name: "Username", operator: "is", value: ["test-user"] }],
       undefined,
-      { timeoutMs: index === 3 ? 40 : 140 },
+      { timeoutMs: index === 3 ? 40 : 140, maxAttempts: 1 },
     ));
     const stalledResults = await Promise.allSettled(stalledLookups);
 
