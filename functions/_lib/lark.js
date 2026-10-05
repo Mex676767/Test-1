@@ -73,23 +73,80 @@ let larkSearchQueue = [];
 let larkSearchCooldownUntil = 0;
 const inFlightLarkSearches = new Map();
 
-async function acquireLarkSearchSlot() {
-  if (activeLarkSearches >= MAX_CONCURRENT_LARK_SEARCHES) {
-    await new Promise((resolve) => larkSearchQueue.push(resolve));
-  } else {
+function abortError(signal) {
+  return signal?.reason instanceof Error ? signal.reason : new Error("Lark request cancelled.");
+}
+
+function acquireLarkSearchSlot(signal) {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  if (activeLarkSearches < MAX_CONCURRENT_LARK_SEARCHES && larkSearchQueue.length === 0) {
     activeLarkSearches++;
+    return Promise.resolve();
   }
-  const waitMs = larkSearchCooldownUntil - Date.now();
-  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+  return new Promise((resolve, reject) => {
+    const waiter = { resolve, reject, signal, onAbort: null };
+    waiter.onAbort = () => {
+      const index = larkSearchQueue.indexOf(waiter);
+      if (index >= 0) larkSearchQueue.splice(index, 1);
+      signal.removeEventListener("abort", waiter.onAbort);
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", waiter.onAbort, { once: true });
+    // Recheck after listener registration so an abort cannot leave a dead
+    // waiter occupying the queue indefinitely.
+    if (signal.aborted) waiter.onAbort();
+    else larkSearchQueue.push(waiter);
+  });
 }
 
 function releaseLarkSearchSlot() {
-  const next = larkSearchQueue.shift();
-  if (next) {
-    next(); // Transfer this slot directly to the next queued search.
+  while (larkSearchQueue.length) {
+    const next = larkSearchQueue.shift();
+    next.signal.removeEventListener("abort", next.onAbort);
+    if (next.signal.aborted) {
+      next.reject(abortError(next.signal));
+      continue;
+    }
+    next.resolve(); // Transfer this slot directly to the next live waiter.
     return;
   }
   activeLarkSearches = Math.max(0, activeLarkSearches - 1);
+}
+
+function awaitWithSignal(promise, signal) {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
+}
+
+async function waitForLarkSearchCooldown(signal) {
+  const waitMs = larkSearchCooldownUntil - Date.now();
+  if (waitMs <= 0) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(done, waitMs);
+    function done() {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }
+    function onAbort() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError(signal));
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
 }
 
 export async function getTenantToken() {
@@ -151,11 +208,16 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
   const maxAttempts = opts.maxAttempts || 1;
   const timeoutMs = opts.timeoutMs || 5_000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    await acquireLarkSearchSlot();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    let hasSlot = false;
     try {
-      const token = await getTenantToken();
+      // The timeout includes time waiting for a local slot and the shared
+      // token request; previously it only started after the slot was granted.
+      await acquireLarkSearchSlot(controller.signal);
+      hasSlot = true;
+      await waitForLarkSearchCooldown(controller.signal);
+      const token = await awaitWithSignal(getTenantToken(), controller.signal);
       const res = await fetch(
         `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`
           + (opts.pageSize ? `?page_size=${opts.pageSize}` : ""),
@@ -202,7 +264,7 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
       if (lastErr.retryable === false) throw lastErr;
     } finally {
       clearTimeout(timeoutId);
-      releaseLarkSearchSlot();
+      if (hasSlot) releaseLarkSearchSlot();
     }
     if (attempt < maxAttempts - 1) {
       const baseDelay = 250 * (2 ** attempt);

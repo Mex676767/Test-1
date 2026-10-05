@@ -1,0 +1,116 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { handler } from "./lark-search.js";
+import { initEnv, searchRecords } from "./_lib/lark.js";
+
+const response = (data) => ({
+  status: 200,
+  headers: { get: () => null },
+  json: async () => data,
+});
+
+test("timed-out queued Lark searches release slots and do not poison later lookups", async () => {
+  initEnv({ LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
+  const originalFetch = globalThis.fetch;
+  let slowSearches = true;
+  let activeSearches = 0;
+  let maxActiveSearches = 0;
+  let searchCalls = 0;
+
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) {
+      return response({ code: 0, tenant_access_token: "token", expire: 3600 });
+    }
+    searchCalls++;
+    activeSearches++;
+    maxActiveSearches = Math.max(maxActiveSearches, activeSearches);
+    return new Promise((resolve, reject) => {
+      const finish = () => {
+        activeSearches--;
+        options.signal?.removeEventListener("abort", onAbort);
+        resolve(response({ code: 0, data: { items: [] } }));
+      };
+      const onAbort = () => {
+        clearTimeout(timer);
+        activeSearches--;
+        reject(options.signal.reason || new Error("aborted"));
+      };
+      const timer = setTimeout(finish, slowSearches ? 250 : 1);
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      if (options.signal?.aborted) onAbort();
+    });
+  };
+
+  try {
+    const stalledLookups = Array.from({ length: 4 }, (_, index) => searchRecords(
+      `table-${index}`,
+      [{ field_name: "Username", operator: "is", value: ["test-user"] }],
+      undefined,
+      { timeoutMs: index === 3 ? 40 : 140 },
+    ));
+    const stalledResults = await Promise.allSettled(stalledLookups);
+
+    assert.ok(stalledResults.every((result) => result.status === "rejected"));
+    assert.equal(searchCalls, 3, "the queued fourth request should time out without reaching Lark");
+    assert.equal(activeSearches, 0, "aborted in-flight requests should release their slots");
+    assert.ok(maxActiveSearches <= 3, "local fan-out should respect the concurrency cap");
+
+    slowSearches = false;
+    const laterResult = await searchRecords(
+      "fresh-table",
+      [{ field_name: "Username", operator: "is", value: ["test-user"] }],
+      undefined,
+      { timeoutMs: 300 },
+    );
+    assert.deepEqual(laterResult, []);
+    assert.equal(activeSearches, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("several concurrent preview lookups complete while capping Lark search fan-out", async () => {
+  initEnv({
+    LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
+    LARK_TABLE_CUSTOMER_APPROACHING: "customer-table", LARK_TABLE_REDEEM_CODE: "redeem-table",
+    LARK_TABLE_PNL: "pnl-table", LARK_TABLE_GRACE_PERIOD: "grace-table",
+    LARK_TABLE_TOP_PNL_NIGHT: "top-pnl-table", LARK_TABLE_LTV_DAY: "ltv-table",
+    LARK_TABLE_RISK_PLAYER: "risk-table", LARK_TABLE_SPECIAL_RELOAD: "reload-table",
+    LARK_TABLE_VIP_BOOSTER: "vip-table", LARK_TABLE_TELEGRAM28: "telegram-table",
+    LARK_TABLE_MOONCAKE: "mooncake-table", LARK_TABLE_VS96_FEEDBACK: "vs96-table",
+  });
+  const originalFetch = globalThis.fetch;
+  let activeSearches = 0;
+  let maxActiveSearches = 0;
+  const response = (data) => ({ status: 200, headers: { get: () => null }, json: async () => data });
+  globalThis.fetch = async (url, options = {}) => {
+    const urlText = String(url);
+    if (urlText.includes("tenant_access_token")) {
+      return response({ code: 0, tenant_access_token: "token", expire: 3600 });
+    }
+    if (urlText.includes("/records/search")) {
+      activeSearches++;
+      maxActiveSearches = Math.max(maxActiveSearches, activeSearches);
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 12);
+        options.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(options.signal.reason || new Error("aborted"));
+        }, { once: true });
+      }).finally(() => { activeSearches--; });
+    }
+    return response({ code: 0, data: { items: [] } });
+  };
+
+  try {
+    const lookups = await Promise.all(Array.from({ length: 3 }, (_, index) => handler({
+      body: JSON.stringify({ username: `parallel-user-${index}`, brand: "PP", preview: true }),
+    })));
+    assert.ok(lookups.every((result) => result.statusCode === 200));
+    assert.ok(lookups.every((result) => JSON.parse(result.body).ok));
+    assert.ok(maxActiveSearches <= 3, `observed ${maxActiveSearches} simultaneous Lark searches`);
+    assert.equal(activeSearches, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
