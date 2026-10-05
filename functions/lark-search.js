@@ -148,25 +148,21 @@ export async function handler(event) {
       return task.fallback;
     };
     const resolveLookups = async (tasks) => {
-      const values = tasks.map((task) => task.value);
-      // The complete first pass has settled before reaching this point. Retry
-      // transient failures one at a time so a Lark throttle cannot trigger a
-      // second burst across every table at once.
-      for (let index = 0; index < tasks.length; index++) {
-        const task = tasks[index];
-        if (!task.error) continue;
+      // The complete first pass has settled before reaching this point. Only
+      // failed transient sources enter the second wave; searchRecords' local
+      // semaphore and the shared Durable Object queue cap concurrent retries.
+      // Running this bounded wave together avoids multiplying a 5s timeout by
+      // the number of tables when Lark is slow.
+      return Promise.all(tasks.map(async (task) => {
+        if (!task.error) return task.value;
         if (task.error.retryable !== false) {
           try {
-            values[index] = await task.read();
-            continue;
-          } catch (retryError) {
-            task.error = retryError;
-          }
+            return await task.read();
+          } catch (_) { /* return a partial result after the single retry */ }
         }
         lookupWarnings.push(task.label);
-        values[index] = task.fallback;
-      }
-      return values;
+        return task.fallback;
+      }));
     };
 
     // User-defined regular bonuses are stored as metadata in Lark. Start

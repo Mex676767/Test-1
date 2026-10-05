@@ -219,7 +219,8 @@ test("lookup completes the first pass for every bonus table, then retries only f
   initEnv(tableEnv);
   const originalFetch = globalThis.fetch;
   const calls = [];
-  let throttled = false;
+  const attempts = new Map();
+  const throttledTables = new Set(["grace-table", "risk-table", "top-pnl-table"]);
   globalThis.fetch = async (url, options = {}) => {
     if (String(url).includes("tenant_access_token")) {
       return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, tenant_access_token: "token", expire: 3600 }) };
@@ -227,8 +228,9 @@ test("lookup completes the first pass for every bonus table, then retries only f
     const tableId = String(url).match(/\/tables\/([^/]+)\/records\/search/)?.[1];
     if (!tableId) return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, data: { items: [] } }) };
     calls.push(tableId);
-    if (tableId === "grace-table" && !throttled) {
-      throttled = true;
+    const tableAttempt = (attempts.get(tableId) || 0) + 1;
+    attempts.set(tableId, tableAttempt);
+    if (throttledTables.has(tableId) && tableAttempt === 1) {
       return { status: 429, headers: { get: (name) => name === "Retry-After" ? "0" : null }, json: async () => ({ code: 99991400, msg: "TooManyRequest" }) };
     }
     return { status: 200, headers: { get: () => null }, json: async () => ({ code: 0, data: { items: [] } }) };
@@ -239,13 +241,12 @@ test("lookup completes the first pass for every bonus table, then retries only f
     const body = JSON.parse(result.body);
     assert.equal(result.statusCode, 200, result.body);
     assert.deepEqual(body.lookupWarnings, []);
-    const expected = Object.values(tableEnv).filter((value) => value.startsWith("*") === false);
-    const tableIds = expected.filter((value) => value.endsWith("table"));
+    const tableIds = ["customer-table", "redeem-table", "pnl-table", "grace-table", "top-pnl-table", "ltv-table", "risk-table", "reload-table", "vip-table", "telegram-table", "mooncake-table", "vs96-table"];
     assert.ok(tableIds.every((tableId) => calls.includes(tableId)), `first pass missed a table: ${calls.join(", ")}`);
-    assert.equal(calls.filter((tableId) => tableId === "grace-table").length, 2, "only the throttled source is retried once");
-    assert.ok(tableIds.filter((tableId) => tableId !== "grace-table").every((tableId) => calls.filter((id) => id === tableId).length === 1));
-    const retryIndex = calls.lastIndexOf("grace-table");
-    assert.ok(tableIds.every((tableId) => calls.indexOf(tableId) < retryIndex), "retry starts only after the complete first pass");
+    assert.ok([...throttledTables].every((tableId) => calls.filter((id) => id === tableId).length === 2), "each throttled source is retried once");
+    assert.ok(tableIds.filter((tableId) => !throttledTables.has(tableId)).every((tableId) => calls.filter((id) => id === tableId).length === 1));
+    const firstRetryIndex = calls.findIndex((tableId, index) => calls.indexOf(tableId) < index);
+    assert.ok(tableIds.every((tableId) => calls.indexOf(tableId) < firstRetryIndex), "retry starts only after the complete first pass");
   } finally {
     globalThis.fetch = originalFetch;
   }
