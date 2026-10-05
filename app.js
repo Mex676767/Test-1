@@ -1769,10 +1769,8 @@ function renderPlayerInfo(chatId) {
       parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName)}</span><button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button></span>`);
     }
     const tier = String(s.matchedRow.tier || "—").trim();
-    const tierDisplay = tier.match(/^Tier\s*(\d+)$/i)?.[1]
-      ? `${tier.match(/^Tier\s*(\d+)$/i)[1]}/V`
-      : tier.replace(/^Tier\s*/i, "");
-    parts.push(`<span><span class="pi-label">Tier</span> ${escapeHtml(tierDisplay || "—")}</span>`);
+    const tierDisplay = tier === "—" || /^tier\b/i.test(tier) ? tier : `Tier ${tier}`;
+    parts.push(`<span>${escapeHtml(tierDisplay)}</span>`);
     if (s.forcedVipFor && !s.matchedRow.tier) {
       parts.push(`<span><span class="pi-label">Note</span> Not on the VIP list yet — force looked up</span>`);
     }
@@ -2365,7 +2363,7 @@ function renderExpandedCard(chat) {
     <section class="ca-section ca-case-section">
       <div class="ca-section-head"><div><strong>Case details</strong></div></div>
       <div class="auto-fields-slot">${renderAutoFields(chat.chatId)}</div>
-      <label class="field-label">Inquiry <span class="hint">(select up to 2 — search to filter)</span></label>
+      <label class="field-label">Inquiry</label>
       <div class="inquiry-select">
         <div class="inquiry-box"><div class="inquiry-chips">${renderInquiryChips(chat.chatId)}</div><input type="text" class="inquiry-search" placeholder="${s.inquiry.length ? "" : "Search inquiry…"}" autocomplete="off" /><span class="inquiry-caret">▾</span></div>
         <div class="inquiry-dropdown ${s.inquiryDropdownOpen ? "" : "hidden"}">${renderInquiryDropdown(chat.chatId, "")}</div>
