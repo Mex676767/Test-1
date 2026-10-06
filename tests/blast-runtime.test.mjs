@@ -53,3 +53,36 @@ test('deployment auto-refresh waits for running and paused Blast queues', () => 
   context.blastRunInProgress=false;
   assert.equal(vm.runInContext('isSafeToAutoReload()',context),true);
 });
+
+test('SDK connection preserves selected Blast and queue pins its existing iframe', async () => {
+  const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
+  const fn=name=>app.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0];
+  const frame={src:'https://widget.test/blast/index?account=lc2'};
+  const view={hidden:false,querySelector:()=>frame};
+  const buttons=['customer','blast'].map(tab=>({dataset:{mainTab:tab},classList:{toggle(){}}}));
+  let connect;
+  const context=vm.createContext({
+    activeMainTab:'blast',blastRunInProgress:false,previewMode:true,
+    DEPARTMENT_TABS_LIVE:false,BLAST_LIVE:true,CONFIGURED_LIVECHAT_ACCOUNT:'lc2',
+    mainTabAvailability:()=>({customer:true,blast:true,tickets:false,knowledge:false}),
+    document:{getElementById:id=>id==='blastView'?view:null,querySelector:()=>null,querySelectorAll:()=>buttons},
+    LiveChat:{createDetailsWidget:()=>new Promise(resolve=>{connect=resolve;})},
+    logDiagnostic(){},renderChats(){},applyProfile(){},
+  });
+  vm.runInContext(fn('syncMainTabs')+'\n'+fn('initLiveChatSdk'),context);
+  vm.runInContext('initLiveChatSdk()',context);
+  connect({getCustomerProfile:()=>null,on(){}});
+  await Promise.resolve();
+  assert.equal(context.activeMainTab,'blast');
+  assert.equal(view.hidden,false);
+  context.blastRunInProgress=true;
+  context.activeMainTab='customer'; // Late department update or tab switch.
+  vm.runInContext('syncMainTabs()',context);
+  assert.equal(context.activeMainTab,'blast');
+  assert.equal(view.hidden,false);
+  assert.equal(frame.src,'https://widget.test/blast/index?account=lc2');
+  context.blastRunInProgress=false;
+  context.activeMainTab='customer';
+  vm.runInContext('syncMainTabs()',context);
+  assert.equal(view.hidden,true);
+});

@@ -742,6 +742,9 @@ function mainTabAvailability() {
 function syncMainTabs() {
   const available = mainTabAvailability();
   const { tickets: ticketsAvailable, blast: blastAvailable, knowledge: knowledgeAvailable } = available;
+  // Chat/department updates can arrive after an agent starts Blast.
+  // Keep its existing iframe visible for the lifetime of the queue.
+  if (blastRunInProgress && blastAvailable) activeMainTab = "blast";
   if (!available[activeMainTab]) {
     activeMainTab = ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
   }
@@ -1316,7 +1319,6 @@ function initLiveChatSdk() {
     logDiagnostic("Connected to LiveChat Agent App SDK — showing the real active chat.", "success");
     liveWidget = widget;
     previewMode = false;
-    if (!DEPARTMENT_TABS_LIVE) activeMainTab = "customer";
     syncMainTabs();
     // We're definitely embedded in real LiveChat now (this promise only
     // resolves inside an actual Agent App) — stop showing demo data
@@ -5068,6 +5070,7 @@ window.addEventListener("message", async (event) => {
   if (event.data?.type === "blast-run-state") {
     if (event.source !== document.querySelector('#blastView iframe')?.contentWindow) return;
     blastRunInProgress = Boolean(event.data.running);
+    syncMainTabs();
     setBlastLoggingLock(Boolean(event.data.active));
     return;
   }
