@@ -265,3 +265,50 @@ test('the 60 s safety net still reads storage even if no storage event arrived',
 test('the storage listener marks storage dirty before saving', () => {
   assert.match(app, /if \(e\.key !== STATE_STORAGE_KEY\) return;\s*storageDirty = true;[^\n]*\s*saveState\(\);/);
 });
+
+// ---- update reload is only allowed when the widget is genuinely idle ------------------------------------
+function refreshGuard(over = {}) {
+  const NL = String.fromCharCode(10);
+  const start = app.indexOf('window.canRefreshForDeployment = () => {');
+  const block = app.slice(start, app.indexOf(NL + '};', start) + 3);
+  const keys = over.sessionKeys || [];
+  const context = vm.createContext({
+    window: {}, blastRunInProgress: false, state: {}, recordSubmitInFlight: new Map(), linkSaveInFlight: new Set(),
+    sessionStorage: { length: keys.length, key: (i) => keys[i] }, document: { activeElement: null },
+    Object, String, ...over.context,
+  });
+  vm.runInContext(block, context);
+  return { ok: () => context.window.canRefreshForDeployment(), context };
+}
+
+test('automatic update reload: allowed only when nothing is in flight, queued, unsent, or being typed', () => {
+  assert.equal(refreshGuard().ok(), true, 'idle widget');
+  assert.equal(refreshGuard({ context: { blastRunInProgress: true } }).ok(), false, 'Blast running');
+  assert.equal(refreshGuard({ context: { state: { c1: { lookupInFlight: true } } } }).ok(), false, 'lookup in flight');
+  assert.equal(refreshGuard({ context: { state: { c1: { unclaimInFlight: true } } } }).ok(), false, 'unclaim in flight');
+  assert.equal(refreshGuard({ sessionKeys: ['ca-livechat-engagement:queue:lc1'] }).ok(), false, 'Blast queue saved for recovery');
+  assert.equal(refreshGuard({ sessionKeys: ['ca-livechat-engagement:queue-images:lc1', 'other'] }).ok(), true, 'an image store alone is not a queue');
+  assert.equal(refreshGuard({ context: { document: { activeElement: { tagName: 'INPUT' } } } }).ok(), false, 'cursor in a field');
+  assert.equal(refreshGuard({ context: { document: { activeElement: { tagName: 'BUTTON' } } } }).ok(), true, 'a focused button is fine');
+});
+
+test('automatic update reload waits for Lark writes still in progress and for an unsent typed username', () => {
+  assert.equal(refreshGuard({ context: { recordSubmitInFlight: new Map([['c1', Promise.resolve()]]) } }).ok(), false, 'recording a chat');
+  assert.equal(refreshGuard({ context: { linkSaveInFlight: new Set(['c1']) } }).ok(), false, 'saving a chat link');
+  assert.equal(refreshGuard({ context: { state: { c1: { logged: false, usernameDraft: 'player99' } } } }).ok(), false, 'typed, not yet looked up');
+  assert.equal(refreshGuard({ context: { state: { c1: { logged: true, usernameDraft: 'old' } } } }).ok(), true, 'a recorded chat does not block');
+  assert.equal(refreshGuard({ context: { state: { c1: { logged: false, usernameDraft: '   ' } } } }).ok(), true, 'blank draft');
+});
+
+test('the app saves its state right before an update reload', () => {
+  const NL = String.fromCharCode(10);
+  const start = app.indexOf('window.prepareForDeploymentRefresh = () => {');
+  const block = app.slice(start, app.indexOf(NL, start));
+  let saved = 0;
+  const context = vm.createContext({ window: {}, saveState: () => { saved += 1; } });
+  vm.runInContext(block, context);
+  context.window.prepareForDeploymentRefresh();
+  assert.equal(saved, 1);
+  context.saveState = () => { throw new Error('storage blocked'); };
+  assert.doesNotThrow(() => context.window.prepareForDeploymentRefresh(), 'a save hiccup never blocks the reload');
+});

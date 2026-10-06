@@ -5833,8 +5833,14 @@ document.getElementById("needsAttentionToggle").addEventListener("click", () => 
 // Updates load on the next manual refresh or when LiveChat recreates the widget.
 
 // A new release may refresh only after all queue work, including cleanup, ends.
+// Called right before an automatic update reload: persist this tab's cards so nothing typed or looked up is lost.
+window.prepareForDeploymentRefresh = () => { try { saveState(); } catch (_) { /* the 10 s autosave already covers it */ } };
+
 window.canRefreshForDeployment = () => {
   if (blastRunInProgress || Object.values(state).some(s => s?.lookupInFlight || s?.unclaimInFlight)) return false;
+  // A Lark write that is still going (recording a chat, saving its link) must finish; an unsent typed username counts as work in progress.
+  if (recordSubmitInFlight.size || linkSaveInFlight.size) return false;
+  if (Object.values(state).some((s) => s && !s.logged && String(s.usernameDraft || "").trim())) return false;
   for (let i = 0; i < sessionStorage.length; i++) {
     if (sessionStorage.key(i)?.startsWith('ca-livechat-engagement:queue:')) return false;
   }
