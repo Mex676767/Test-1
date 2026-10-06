@@ -148,3 +148,120 @@ test('fetchBonusRow passes caseRowError through, so the widget shows results plu
   // and the lookup handler surfaces it as a status line instead of throwing
   assert.match(app, /if \(caseRowError\) \{\s*setStatus\(/);
 });
+
+// ---- saveLinkToRecord (called from the 2 s chat-status tick) backs off ----------------------------
+function linkSaveHarness({ fail }) {
+  const clock = { now: 20_000_000 };
+  const s = { caRecordId: 'rec1', chatUrl: 'https://my.livechatinc.com/chats/A/B', caLinkSaved: false, logged: false };
+  const calls = [], logs = [];
+  const context = vm.createContext({
+    PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date: { now: () => clock.now }, JSON, Math, Set,
+    state: { c1: s }, linkSaveInFlight: new Set(), selectedAgent: 'Agent A', ownsCaseRecord: () => true,
+    logDiagnostic: (m) => logs.push(m),
+    fetch: async () => { calls.push(clock.now); return { json: async () => (fail() ? { ok: false, error: 'throttled' } : { ok: true }) }; },
+  });
+  vm.runInContext([fn('nextSweepDelay'), fn('saveLinkToRecord')].join('\n'), context);
+  return { clock, s, calls, logs, tick: () => vm.runInContext("saveLinkToRecord('c1')", context) };
+}
+
+test('a failing link save is retried with exponential backoff, not on every 2 s tick', async () => {
+  const h = linkSaveHarness({ fail: () => true });
+  for (let t = 0; t < 150; t++) { await h.tick(); h.clock.now += 2000; }   // 5 minutes of 2 s ticks
+  assert.ok(h.calls.length >= 5 && h.calls.length <= 9, `expected ~7 attempts in 5 min, saw ${h.calls.length}`);
+  assert.equal(h.logs.length, h.calls.length, 'one diagnostic per attempt, not one per tick');
+  const gaps = h.calls.slice(1).map((c, i) => c - h.calls[i]);
+  assert.ok(gaps.every((g, i) => i === 0 || g >= gaps[i - 1]), `gaps never shrink: ${gaps}`);
+});
+
+test('a successful link save clears the backoff and stops calling', async () => {
+  let failing = true;
+  const h = linkSaveHarness({ fail: () => failing });
+  await h.tick(); h.clock.now += 8000; failing = false;
+  await h.tick();
+  assert.equal(h.s.caLinkSaved, true);
+  assert.equal(h.s.linkSaveRetry, undefined);
+  const calls = h.calls.length;
+  await h.tick(); await h.tick();
+  assert.equal(h.calls.length, calls, 'saved: no further calls');
+});
+
+test('a different record or link retries immediately despite a pending backoff', async () => {
+  const h = linkSaveHarness({ fail: () => true });
+  await h.tick();                                   // fails, backs off
+  await h.tick();
+  assert.equal(h.calls.length, 1, 'still backing off for the same record+link');
+  h.s.chatUrl = 'https://my.livechatinc.com/chats/A/NEWTHREAD';
+  await h.tick();
+  assert.equal(h.calls.length, 2, 'new link: tried right away');
+  h.s.caRecordId = 'rec2';
+  await h.tick();
+  assert.equal(h.calls.length, 3, 'new record: tried right away');
+});
+
+// ---- saveState early exit --------------------------------------------------------------------------
+function saveHarness() {
+  const clock = { now: 30_000_000 };
+  const store = new Map();
+  const counts = { get: 0, set: 0 };
+  const localStorage = {
+    getItem: (k) => { counts.get++; return store.has(k) ? store.get(k) : null; },
+    setItem: (k, v) => { counts.set++; store.set(k, String(v)); },
+  };
+  const state = { c1: { username: 'a', brand: 'PP', inquiry: [], logged: false }, c2: { username: 'b', brand: 'MY', inquiry: [], logged: false } };
+  const context = vm.createContext({
+    state, localStorage, JSON, Date: { now: () => clock.now }, Object, STATE_STORAGE_KEY: 'rc-chat-state', STATE_MAX_AGE_MS: 7 * 86400000,
+    lastSyncedJson: new Map(), knownBrandFor: new Map(), renderNeedsAttentionPanel() {},
+  });
+  vm.runInContext([fn('stateSnapshot'), fn('markStateSynced'), fn('keepBrand'), fn('hasLocalStateChanges'), fn('saveState')].join('\n')
+    .replace(/^/, 'let storageDirty = true; let lastFullStateSyncAt = 0; const FULL_STATE_SYNC_MS = 60000;\n'), context);
+  return { clock, store, counts, state, context, save: () => vm.runInContext('saveState()', context) };
+}
+
+test('saveState touches localStorage only when something changed, another tab wrote, or a minute passed', () => {
+  const h = saveHarness();
+  h.save();                                            // first call: full sync, writes both chats
+  assert.equal(h.counts.set, 1);
+  const stored = JSON.parse(h.store.get('rc-chat-state'));
+  assert.deepEqual(Object.keys(stored).sort(), ['c1', 'c2']);
+
+  const getsAfterSync = h.counts.get, setsAfterSync = h.counts.set;
+  for (let i = 0; i < 20; i++) { h.clock.now += 3000; h.save(); }          // 1 minute of idle 3 s calls... minus the safety net
+  const idleReads = h.counts.get - getsAfterSync;
+  assert.ok(idleReads <= 2, `idle calls must not read storage every time (read ${idleReads}x in 60 s)`);
+  assert.equal(h.counts.set, setsAfterSync, 'nothing changed: nothing written');
+
+  h.state.c1.username = 'edited';                      // a real local change is saved straight away
+  const before = h.counts.set;
+  h.save();
+  assert.equal(h.counts.set, before + 1);
+  assert.equal(JSON.parse(h.store.get('rc-chat-state')).c1.username, 'edited');
+});
+
+test('a storage event from another tab forces the next save to read and adopt its newer copy', () => {
+  const h = saveHarness();
+  h.save();
+  const raw = JSON.parse(h.store.get('rc-chat-state'));
+  raw.c2 = { ...raw.c2, username: 'changed-by-other-tab', _savedAt: h.clock.now + 1 };
+  h.store.set('rc-chat-state', JSON.stringify(raw));   // another tab wrote
+  h.clock.now += 3000;
+  h.save();
+  assert.equal(h.state.c2.username, 'b', 'without the storage event the idle tab does not read (cheap path)');
+  vm.runInContext('storageDirty = true', h.context);   // what the window "storage" listener now sets
+  h.save();
+  assert.equal(h.state.c2.username, 'changed-by-other-tab', 'adopted once the event says another tab wrote');
+});
+
+test('the 60 s safety net still reads storage even if no storage event arrived', () => {
+  const h = saveHarness();
+  h.save();
+  const raw = JSON.parse(h.store.get('rc-chat-state'));
+  raw.c2 = { ...raw.c2, username: 'missed-event', _savedAt: h.clock.now + 1 };
+  h.store.set('rc-chat-state', JSON.stringify(raw));
+  h.clock.now += 61_000;
+  h.save();
+  assert.equal(h.state.c2.username, 'missed-event');
+});
+
+test('the storage listener marks storage dirty before saving', () => {
+  assert.match(app, /if \(e\.key !== STATE_STORAGE_KEY\) return;\s*storageDirty = true;[^\n]*\s*saveState\(\);/);
+});

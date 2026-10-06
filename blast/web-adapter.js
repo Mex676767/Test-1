@@ -71,6 +71,11 @@
   };
   const selectedAccount = () => detectedAccount() || validAccountKey(sessionStorage.getItem(SELECTED_ACCOUNT_KEY));
   const journalKey = () => `${prefix}queue:${selectedAccount()}`;
+  // Images are saved once, under their own key, when a run starts; the journal (re-written at every checkpoint)
+  // only references them.
+  const imagesKey = () => `${prefix}queue-images:${selectedAccount()}`;
+  let queueImages = {};
+  const readQueueImages = () => { try { return JSON.parse(sessionStorage.getItem(imagesKey()) || "{}") || {}; } catch (_) { return {}; } };
   const savedQueue = () => { try { return JSON.parse(sessionStorage.getItem(journalKey()) || "null"); } catch (_) { return null; } };
   const checkpoint = () => {
     if (unloading) throw new Error("Widget reloading");
@@ -211,20 +216,65 @@
     return new File([bytes], fileName || "image.png", { type: mime });
   };
 
-  async function sendImage(chatId, job, send = action) {
+  // OPT-IN (off by default): upload the image once per run and reuse the returned URL for every chat,
+  // instead of downloading/decoding/uploading it for each one (an upload per chat is an extra throttled
+  // action per chat). Not verified that LiveChat accepts one upload_file URL in several chats, so it only
+  // turns on with localStorage "ca-blast-reuse-upload" = "1" -- try it on a small run in a TEST account first.
+  const reuseUploadedFile = () => { try { return localStorage.getItem("ca-blast-reuse-upload") === "1"; } catch (_) { return false; } };
+  const uploadedFiles = new Map(); // content key -> Promise<{ uploaded, fileName }>; cleared at the start of every run
+  const fnv = (text) => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i += 1) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
+  const uploadKey = (job) => { const dataUrl = jobImageDataUrl(job); return dataUrl ? `data:${dataUrl.length}:${fnv(dataUrl)}:${job.imageFileName || ""}` : `url:${job.imageUrl}:${job.imageFileName || ""}`; };
+
+  // Images are stored ONCE per queue, not once per chat. Every job used to carry its own copy of the full
+  // base64 image, and the whole queue is saved to sessionStorage for crash recovery, so a realistic image
+  // x a realistic number of chats blew the ~5 MB quota ("Cannot save recoverable queue") and NOTHING was sent.
+  const imageIdFor = (dataUrl) => `img-${dataUrl.length}-${fnv(dataUrl)}`;
+  function dedupeJobImages(jobs) {
+    const images = {};
+    const slim = jobs.map((job) => {
+      if (!job || !job.imageDataUrl) return job;
+      const id = imageIdFor(job.imageDataUrl);
+      images[id] = job.imageDataUrl;
+      const { imageDataUrl, ...rest } = job;
+      return { ...rest, imageId: id };
+    });
+    return { jobs: slim, images };
+  }
+  const jobImageDataUrl = (job) => job.imageDataUrl || (job.imageId && queueImages[job.imageId]) || null;
+
+  async function uploadImage(job) {
     let file;
-    if (job.imageDataUrl) file = dataUrlFile(job.imageDataUrl, job.imageFileName);
+    const dataUrl = jobImageDataUrl(job);
+    if (dataUrl) file = dataUrlFile(dataUrl, job.imageFileName);
     else if (job.imageUrl) {
       const response = await fetch(job.imageUrl);
       if (!response.ok) throw new Error(`Image download failed (${response.status}).`);
       const blob = await response.blob();
       file = new File([blob], job.imageFileName || job.imageUrl.split("/").pop() || "image", { type: blob.type });
     }
-    if (!file) return;
+    if (!file) return null;
     const form = new FormData();
     form.append("file", file);
-    const uploaded = await action("upload_file", null, form);
-    await send("send_event", { chat_id: chatId, event: { type: "file", url: uploaded.url, visibility: "all", alternative_text: file.name } });
+    return { uploaded: await action("upload_file", null, form), fileName: file.name };
+  }
+
+  async function sendImage(chatId, job, send = action) {
+    if (job.imageId && !jobImageDataUrl(job)) throw new Error("The image for this queue is missing (it was not saved). Start the run again.");
+    if (!jobImageDataUrl(job) && !job.imageUrl) return;
+    let upload;
+    if (reuseUploadedFile()) {
+      const key = uploadKey(job);
+      if (!uploadedFiles.has(key)) {
+        const pending = uploadImage(job);
+        uploadedFiles.set(key, pending);
+        pending.catch(() => { if (uploadedFiles.get(key) === pending) uploadedFiles.delete(key); }); // a failed upload is retried by the next chat
+      }
+      upload = await uploadedFiles.get(key);   // concurrent chats share one in-flight upload
+    } else {
+      upload = await uploadImage(job);
+    }
+    if (!upload) return;
+    await send("send_event", { chat_id: chatId, event: { type: "file", url: upload.uploaded.url, visibility: "all", alternative_text: upload.fileName } });
   }
 
   const runWasStopped = (runId) => unloading || stopRequested || runId !== activeRunId;
@@ -259,6 +309,8 @@
     let agentAccountId = progress.agentAccountId || "";
     let chatId = progress.chatId || "";
     try {
+      // Fail BEFORE anything is sent if this job's image reference cannot be resolved (never send the text and then drop the image).
+      if (job.imageId && !jobImageDataUrl(job)) throw new Error("The image for this queue is missing (it was not saved). Start the run again.");
       emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
       const chat = await resolveChat(job.url);
       if (runWasStopped(runId)) throw new Error("Stopped by user");
@@ -403,6 +455,8 @@
         return;
       }
       sessionStorage.removeItem(journalKey());
+      sessionStorage.removeItem(imagesKey());
+      queueImages = {};
       journal = null;
       emit({ type: "DONE", stopped: stopRequested });
     }
@@ -411,10 +465,12 @@
   function launchQueue(saved) {
     recoveryIdle = false;
     journal = saved;
+    queueImages = readQueueImages();
     stopRequested = false;
     setPaused(Boolean(saved.paused));
     const runId = ++runSequence;
     activeRunId = runId;
+    uploadedFiles.clear(); // a new run never reuses a previous run's upload
     const run = async () => {
       if (runWasStopped(runId)) return;
       // Another iframe may have finished the same saved run while this one
@@ -573,6 +629,8 @@
       sendMessage(message) {
         if (message?.type === "STOP") {
           sessionStorage.removeItem(journalKey());
+          sessionStorage.removeItem(imagesKey());
+          queueImages = {};
           journal = null;
           stopRequested = true;
           activeRunId = ++runSequence;
@@ -595,8 +653,10 @@
             setTimeout(() => emit({ type: "AUTH_REQUIRED" }), 0);
           } else {
             if (journal) return Promise.resolve();
-            const saved = { id: crypto.randomUUID(), jobs: message.jobs || [], delay: Number(message.delay) || 0, concurrency: Number(message.concurrency) || 1, progress: {}, paused: false };
+            const packed = dedupeJobImages(message.jobs || []);
+            const saved = { id: crypto.randomUUID(), jobs: packed.jobs, delay: Number(message.delay) || 0, concurrency: Number(message.concurrency) || 1, progress: {}, paused: false };
             try {
+              sessionStorage.setItem(imagesKey(), JSON.stringify(packed.images));
               sessionStorage.setItem(journalKey(), JSON.stringify(saved));
               launchQueue(saved);
             } catch (error) {

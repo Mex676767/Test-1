@@ -1,6 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { searchRecords, searchAllRecords, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
-import { CA, summarizeRow } from "./_lib/ca-row.js";
+import { CA, CA_SUMMARY_FIELDS, summarizeRow } from "./_lib/ca-row.js";
 
 // Finds every Customer Approaching row THIS agent logged for one chat, so
 // the widget can rebuild the card when the browser has no saved copy of it
@@ -30,10 +30,10 @@ export async function handler(event) {
       items = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
         byAgent,
         { field_name: CA.link, operator: "contains", value: [thread] },
-      ], undefined, { pageSize: 500, automaticFields: true });
+      ], undefined, { pageSize: 500, automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
     } catch (_) {
       // If Lark won't filter on the Link field, scan this agent's rows instead.
-      items = await searchAllRecords(TABLE_CUSTOMER_APPROACHING, [byAgent], { maxPages: 6, automaticFields: true });
+      items = await searchAllRecords(TABLE_CUSTOMER_APPROACHING, [byAgent], { maxPages: 6, automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
     }
 
     const records = items

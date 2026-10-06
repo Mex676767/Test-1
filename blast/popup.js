@@ -62,17 +62,18 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency
 
   // Large queues exceed chrome.storage.sync's per-item quota, so keep them local.
   // Fall back to the old sync value once to migrate existing installations.
-  chrome.storage.local.get(['chatEntries'], (localData) => {
+  chrome.storage.local.get(['chatEntries', 'chatImages'], (localData) => {
+    const savedImages = localData.chatImages || {};
     const storedEntries = localData.chatEntries ?? d.chatEntries ?? [{ url: '', messages: null }];
     chatEntries = storedEntries.map(entry => ({
       url: entry.url || '',
       messages: entry.messages ?? null,
       expanded: Boolean(entry.expanded),
       imageUrl: entry.imageUrl || '',
-      imageDataUrl: entry.imageDataUrl || null,
+      imageDataUrl: entry.imageDataUrl || savedImages[entry.imageId] || null,
       imageFileName: entry.imageFileName || null,
     }));
-    chrome.storage.local.set({ chatEntries });
+    save();
     if (d.chatEntries !== undefined) chrome.storage.sync.remove('chatEntries');
     renderAll();
     renderDefaultPreview();
@@ -345,8 +346,25 @@ concurrencySelect.addEventListener('change', () => {
 });
 
 // ── Save ──────────────────────────────────────────────────────────────────────
+// The bulk image used to be copied into EVERY chat entry, so a normal image x a normal number of chats overran
+// the ~5 MB browser-storage quota. Persist each distinct image once and keep only a reference per entry.
+function fnvHash(text) { let h = 0x811c9dc5; for (let i = 0; i < text.length; i += 1) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); }
+function entryImageId(dataUrl) { return 'img-' + dataUrl.length + '-' + fnvHash(dataUrl); }
 function save() {
-  chrome.storage.local.set({ chatEntries });
+  const chatImages = {};
+  const slim = chatEntries.map((entry) => {
+    if (!entry.imageDataUrl) return entry;
+    const id = entryImageId(entry.imageDataUrl);
+    chatImages[id] = entry.imageDataUrl;
+    const { imageDataUrl, ...rest } = entry;
+    return { ...rest, imageId: id };
+  });
+  try {
+    chrome.storage.local.set({ chatEntries: slim, chatImages });
+  } catch (error) {
+    // Never let a storage error abort the click that triggered the save (it used to stop a run before it started).
+    addLog('⚠ Could not save the queue between sessions (' + (error && error.name === 'QuotaExceededError' ? 'image too large for browser storage' : error.message) + '). The run itself is not affected.', 'err');
+  }
 }
 
 // ── Log ───────────────────────────────────────────────────────────────────────
@@ -739,6 +757,13 @@ imgPickBtn.addEventListener('click', function(e) {
 imgFileInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
+  const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // base64 grows it by a third; the queue is saved in ~5 MB of browser storage
+  if (file.size > MAX_IMAGE_BYTES) {
+    imgFileInput.value = '';
+    addLog('⚠ ' + file.name + ' is ' + (file.size / 1048576).toFixed(1) + ' MB. Use an image under 3 MB.', 'err');
+    showBulkStatus('Image is too large (' + (file.size / 1048576).toFixed(1) + ' MB). Use one under 3 MB.', 'err');
+    return;
+  }
   const reader = new FileReader();
   reader.onload = (ev) => {
     bulkImgDataUrl = ev.target.result;

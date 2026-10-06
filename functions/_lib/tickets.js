@@ -20,19 +20,39 @@ export function ticketSettings(env = {}) {
   };
 }
 
+// A hung ticket service must not hang the function. JSON calls get 15 s; multipart (attachment uploads) 30 s.
+// A caller-provided signal is still honoured alongside the deadline.
+const TICKET_TIMEOUT_MS = 15_000;
+const TICKET_UPLOAD_TIMEOUT_MS = 30_000;
+
 export async function ticketRequest(env, path, options = {}) {
   const { apiKey, baseUrl } = config(env);
   if (!apiKey) throw new Error("Ticket API key is not configured");
   const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+  const { timeoutMs, signal: callerSignal, ...fetchOptions } = options;
+  const limit = Number(timeoutMs) > 0 ? Number(timeoutMs) : (isMultipart ? TICKET_UPLOAD_TIMEOUT_MS : TICKET_TIMEOUT_MS);
+  const deadline = AbortSignal.timeout(limit);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      ...(options.body && !isMultipart ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...fetchOptions,
+      signal,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        ...(options.body && !isMultipart ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (deadline.aborted && !callerSignal?.aborted) {
+      const timedOut = new Error(`Ticket service did not answer within ${Math.round(limit / 1000)} seconds`);
+      timedOut.statusCode = 504;
+      throw timedOut;
+    }
+    throw error;
+  }
 
   let data;
   try {
