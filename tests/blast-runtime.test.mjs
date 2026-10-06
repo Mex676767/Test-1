@@ -42,18 +42,10 @@ test('embedded Blast sends all 151 chats without opening a delivery window', asy
   assert.equal(calls.filter(c=>c.action==='deactivate_chat').length,151);
 });
 
-test('deployment auto-refresh waits for running and paused Blast queues', () => {
+test('widget does not automatically reload for deployments', () => {
   const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
-  const fn=app.match(/function isSafeToAutoReload\(\) \{[\s\S]*?\n\}/)[0];
-  const context=vm.createContext({document:{activeElement:null},state:{},blastRunInProgress:true});
-  vm.runInContext(fn,context);
-  assert.equal(vm.runInContext('isSafeToAutoReload()',context),false);
-  // Pause keeps running=true in the existing blast-run-state message.
-  assert.match(app,/blastRunInProgress = Boolean\(event.data.running\)/);
-  context.blastRunInProgress=false;
-  assert.equal(vm.runInContext('isSafeToAutoReload()',context),true);
+  assert.doesNotMatch(app,/location\.reload\s*\(|checkForUpdate|reloadWhenSafe/);
 });
-
 test('SDK connection preserves selected Blast and queue pins its existing iframe', async () => {
   const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
   const fn=name=>app.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0];
