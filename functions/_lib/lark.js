@@ -662,6 +662,22 @@ export async function getRecord(tableId, recordId) {
   return data.data.record;
 }
 
+// The shared queue remembers rows it created for a couple of minutes so that an identical create (same chat, same
+// player) is answered with that row instead of making a twin. Once a row is changed or deleted that memory must not hand
+// it out any more, so the queue is told. Best-effort and bounded: an older queue without the method, or any failure, is
+// ignored -- the memory then simply expires on its own.
+async function forgetCreatedRow(tableId, recordId) {
+  if (!(LARK_BATCH_CREATE && LARK_SEARCH_QUEUE) || tableId !== TABLE_CUSTOMER_APPROACHING) return;
+  try {
+    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    let timer;
+    await Promise.race([
+      Promise.resolve(stub.forgetCreated(String(recordId))),
+      new Promise((resolve) => { timer = setTimeout(resolve, 500); }),
+    ]).finally(() => clearTimeout(timer));
+  } catch (_) { /* best effort */ }
+}
+
 export async function updateRecord(tableId, recordId, fields, baseToken) {
   const token = await getTenantToken();
   const res = await larkFetch(
@@ -671,6 +687,7 @@ export async function updateRecord(tableId, recordId, fields, baseToken) {
   );
   const data = await res.json();
   if (data.code !== 0) throw larkApiError(`Lark update failed on table ${tableId}: ${data.msg}`, res, data);
+  await forgetCreatedRow(tableId, recordId);
   return data.data.record;
 }
 
@@ -713,6 +730,7 @@ export async function deleteRecord(tableId, recordId, baseToken) {
   );
   const data = await res.json();
   if (data.code !== 0) throw larkApiError(`Lark delete failed on table ${tableId}: ${data.msg}`, res, data);
+  await forgetCreatedRow(tableId, recordId);
   return true;
 }
 

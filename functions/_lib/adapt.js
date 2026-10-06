@@ -32,6 +32,8 @@ export function adapt(handler) {
       queryStringParameters: Object.fromEntries(url.searchParams),
       headers: Object.fromEntries(context.request.headers),
       env: context.env,
+      // Work that must not delay the response (e.g. cleaning up a twin row) but should still finish after it.
+      waitUntil: (promise) => { try { context.waitUntil?.(promise); } catch (_) { /* no execution context: the work is simply best effort */ } },
     };
 
     const result = await handler(event);

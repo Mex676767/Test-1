@@ -15,6 +15,7 @@ const N = Number(args.n || 100), DO_V = args.do || "v1", PAGES = args.pages || "
 const ARRIVAL = args.arrival || "burst", LIVE = args.live === "1", MEDIAN = Number(args.median || 200);
 const QUOTA = Number(args.quota || 20), RPC_MS = Number(args.rpc || 8), USERS = Number(args.users || 600);
 const ROWS_MAX = Number(args.rows || 4);
+const DUPES = Number(args.dupes || 0);                 // this many of the first agents look the SAME chat up twice at the same moment
 const CA_HIST = Number(args.cahist || 12), BG_MS = Number(args.bg || 0), CFG = Number(args.cfg || 0);
 const PER_COND = Number(args.percond || 0), LIMIT_STATUS = Number(args.limitstatus || 429);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -123,6 +124,7 @@ const { initEnv } = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js
 const realFetch = globalThis.fetch;
 const agents = Array.from({ length: N }, (_, i) => ({ username: `u${String(i).padStart(4, "0")}`, brand: i % 2 ? "MY" : "PP",
   link: `https://my.livechatinc.com/chats/SIMCHAT${i}/SIMTHREAD${i}` }));
+for (let i = 0; i < DUPES && i < N; i++) agents.push({ ...agents[i], dupeOf: i });
 const call = (a) => handler({ body: JSON.stringify({ username: a.username, brand: a.brand, picName: `agent${a.username}`, link: LIVE ? a.link : "", preview: !LIVE }) });
 
 // Oracle: the same handler, unbatched, unlimited quota, zero latency, sequential.
@@ -141,7 +143,7 @@ const rpc = (fn) => async (...a) => { await new Promise((r) => setTimeout(r, RPC
 if (DO_V !== "none") {
   const DO = await loadDO(DO_V);
   doInstance = new DO(fakeCtx(), { GATE_START_GAP_MS: args.gap ? Number(args.gap) : undefined, GATE_CONCURRENCY: args.conc ? Number(args.conc) : undefined, GATE_LONGPOLL_MS: args.longpoll ? Number(args.longpoll) : undefined });
-  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
+  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "forgetCreated"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
   queue = { idFromName: () => "g", get: () => stub };
 }
 initEnv({ ...tableEnv, LARK_SEARCH_QUEUE: queue, ...(PAGES === "v2" ? { LARK_QUEUE_PROTOCOL: "v2" } : {}), ...(args.batchcreate === "1" ? { LARK_BATCH_CREATE: "1" } : {}) });
@@ -177,12 +179,13 @@ for (const r of complete) if (JSON.stringify({ row: r.body.row, otherBrands: r.b
 let caChecked = 0, caWrongOwner = 0, caDuplicateIds = 0, caRowsCreated = 0;
 if (LIVE) {
   const byId = new Map(tables[T.ca].rows.map((r) => [r.record_id, r]));
-  const seenIds = new Set();
+  const seenIds = new Map();
   for (const r of results.filter((x) => x.ok)) {
     caChecked++;
     const id = r.body.caRecordId;
-    if (seenIds.has(id)) caDuplicateIds++;
-    seenIds.add(id);
+    // the same id for two DIFFERENT players would be a bug; the same chat looked up twice must share one id
+    if (seenIds.has(id) && seenIds.get(id) !== r.a.username) caDuplicateIds++;
+    seenIds.set(id, r.a.username);
     const row = byId.get(id);
     if (!row || fieldText(row.fields.Username) !== r.a.username || fieldText(row.fields.Brand) !== r.a.brand) caWrongOwner++;
   }
@@ -193,7 +196,8 @@ console.log(JSON.stringify({
   batchCreate: args.batchcreate === "1", background: BG_MS ? { intervalMs: BG_MS, polls: bgCount, failed: bgFail } : undefined,
   config: { do: DO_V, cfgBonuses: CFG, caHistoryPerUserBrand: CA_HIST, perCondMs: PER_COND, limitStatus: LIMIT_STATUS, gap: args.gap, conc: args.conc, pages: PAGES, n: N, arrival: ARRIVAL, live: LIVE, upstreamMedianMs: MEDIAN, quotaPerSec: QUOTA, rpcMs: RPC_MS },
   latencyMs: { p50: q(0.5), p95: q(0.95), max: sorted.at(-1), wallToLastResult: wall },
-  caRows: LIVE ? { checked: caChecked, wrongOwner: caWrongOwner, duplicateIds: caDuplicateIds, rowsCreated: caRowsCreated } : undefined,
+  caRows: LIVE ? { checked: caChecked, wrongOwner: caWrongOwner, duplicateIds: caDuplicateIds, rowsCreated: caRowsCreated, expectedRows: N, dupePairs: DUPES,
+    dupePairsSameId: DUPES ? agents.filter((a) => a.dupeOf !== undefined).filter((a) => { const first = results[a.dupeOf]; const second = results[agents.indexOf(a)]; return first.ok && second.ok && first.body.caRecordId === second.body.caRecordId; }).length : undefined } : undefined,
   results: { complete: complete.length, errorsOrWarnings: results.length - complete.length, wrongVsOracle: wrong,
     warningSources: [...new Set(results.flatMap((r) => r.warnings))] },
   upstream: { total: lark.stats.calls, search: lark.stats.search, create: lark.stats.create, fields: lark.stats.fields, token: lark.stats.token,

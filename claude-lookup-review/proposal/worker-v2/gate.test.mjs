@@ -29,10 +29,10 @@ const mkTable = (n, rowsPer = 2) => {
     rows.push({ record_id: `r-${u}-${r}-${brand}`, created_time: 1, fields: { "Username/UID": [{ text: `u${u}`, type: "text" }], Brand: brand, Status: `s${u}-${r}` } });
   return { rows, schema: new Set(["Username/UID", "Brand", "Status", "Agent Name", "Inquiry"]) };
 };
-async function setup({ tables, quota = 1000, median = 20, gap = 20, conc = 4, longpoll, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0 }) {
-  const lark = createFakeLark({ tables, medianMs: median, sigma: 0, quota, limitStatus, shuffleBatch, dropFromBatch });
+async function setup({ tables, quota = 1000, median = 20, gap = 20, conc = 4, longpoll, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0, env = {} }) {
+  const lark = createFakeLark({ tables, medianMs: median, sigma: 0, quota, limitStatus, shuffleBatch, dropFromBatch, hangAfterWrite });
   const real = globalThis.fetch; globalThis.fetch = lark.fetch;
-  const d = new MyDurableObject({}, { GATE_START_GAP_MS: gap, GATE_CONCURRENCY: conc, ...(longpoll ? { GATE_LONGPOLL_MS: longpoll } : {}) });
+  const d = new MyDurableObject({}, { GATE_START_GAP_MS: gap, GATE_CONCURRENCY: conc, ...(longpoll ? { GATE_LONGPOLL_MS: longpoll } : {}), ...env });
   return { lark, d, done: () => { globalThis.fetch = real; } };
 }
 const rowsFor = (res) => JSON.parse(res.body).data.items;
@@ -336,10 +336,11 @@ test("if batch_create returns fewer rows than callers, everyone gets an error in
   } finally { done(); }
 });
 
-test("two identical creates (same agent, player, chat) each get one of the two identical rows", async () => {
+test("two identical creates WITHOUT a chat link (could be two chats) still get two separate rows", async () => {
   const { d, done } = await setup({ tables: { ca: caTable() }, shuffleBatch: true });
   try {
-    const out = await Promise.all([d.createBatch(createReq("ca", caFields(5))), d.createBatch(createReq("ca", caFields(5)))]);
+    const { link, ...noLink } = caFields(5);
+    const out = await Promise.all([d.createBatch(createReq("ca", noLink)), d.createBatch(createReq("ca", noLink))]);
     assert.ok(out.every((r) => r.status === 200));
     assert.notEqual(recordOf(out[0]).record_id, recordOf(out[1]).record_id);
   } finally { done(); }
@@ -421,7 +422,7 @@ test("a create retried after a 429 keeps WRITE priority (not demoted to the read
     const realFetch = globalThis.fetch;
     let creates = 0;
     globalThis.fetch = async (url, init = {}) => {
-      if (String(url).endsWith("/records") && init.method === "POST" && ++creates === 1) {
+      if (new URL(String(url)).pathname.endsWith("/records") && init.method === "POST" && ++creates === 1) {
         return new Response(JSON.stringify({ code: 1254290, msg: "TooManyRequest" }), { status: 429 });
       }
       return realFetch(url, init);
@@ -432,5 +433,261 @@ test("a create retried after a 429 keeps WRITE priority (not demoted to the read
     assert.equal(stats.startsByClass.write, 2, "first attempt and the 429 retry were both write-class starts");
     assert.equal(stats.startsByClass.read, 0);
     assert.equal(stats.retries429, 1);
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Step 0: diagnostics -- permit wait/hold per class and Lark latency per call type
+// ======================================================================================
+test("getStats reports permit wait and hold per class, and Lark latency per call type", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(3), ca: caTable() }, conc: 1, gap: 5, median: 15 });
+  try {
+    const first = await d.acquire("write", "w1");
+    const second = d.acquire("write", "w2");                       // has to wait for the first to be released
+    await new Promise((r) => setTimeout(r, 80));
+    await d.release(first.ticket);                                  // first held the slot ~80 ms
+    const got = await second;
+    await new Promise((r) => setTimeout(r, 30));
+    await d.release(got.ticket);
+    await d.searchBatch(req("t1", "u1"));
+    await d.createBatch(createReq("ca", caFields(1)));
+    const { permits, lark } = d.getStats();
+    assert.equal(permits.write.wait.n >= 2, true);
+    assert.ok(permits.write.wait.max >= 70, `second writer waited for the first (saw ${permits.write.wait.max} ms)`);
+    assert.ok(permits.write.hold.max >= 70, `ticket hold covers the caller's whole call (saw ${permits.write.hold.max} ms)`);
+    assert.ok(permits.read.hold.n >= 1 && permits.read.wait.n >= 1, "the merged search is a read-class permit");
+    assert.equal(permits.token.wait.n, 0, "classes that were not used stay empty");
+    assert.ok(lark.search.n >= 1 && lark.search.p50 >= 10, "search latency recorded");
+    assert.ok(lark.create.n + lark.batchCreate.n >= 1, "create latency recorded");
+    assert.equal(d.getStats().active, 0);
+  } finally { done(); }
+});
+
+test("the new sample arrays are bounded", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) } });
+  try {
+    for (let i = 0; i < 2600; i++) { d.sample(d.m.waitMs.read, i); d.sample(d.m.holdMs.write, i); d.sample(d.m.larkMs.search, i); }
+    assert.ok(d.m.waitMs.read.length <= 2000 && d.m.holdMs.write.length <= 2000 && d.m.larkMs.search.length <= 2000);
+    assert.equal(d.getStats().permits.read.wait.n, 2000);
+  } finally { done(); }
+});
+
+test("a held slot is given back when the caller's deadline has already passed before the first page (it used to leak)", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, conc: 2 });
+  try {
+    const grant = await d.acquireSlot("read").promise;
+    assert.equal(d.getStats().active, 1);
+    let answer;
+    const waiter = { input: req("t1", "u0"), body: JSON.parse(req("t1", "u0").body), usernameField: "Username/UID", username: "u0",
+      expiresAt: Date.now() - 1, enqueuedAt: Date.now(), resolve: (r) => { answer = r; } };
+    await d.execute("k", [["u0", [waiter]]], Date.now(), 0, grant);
+    assert.equal(answer.status, 504);
+    assert.equal(d.getStats().active, 0, "slot released");
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Step 2: identical creates share ONE row
+// ======================================================================================
+test("two identical creates (same table + fields) at the same moment make ONE row and return the SAME record id", async () => {
+  const tables = { ca: caTable() };
+  const { lark, d, done } = await setup({ tables });
+  try {
+    const out = await Promise.all([d.createBatch(createReq("ca", caFields(7))), d.createBatch(createReq("ca", caFields(7)))]);
+    assert.ok(out.every((r) => r.status === 200));
+    assert.equal(recordOf(out[0]).record_id, recordOf(out[1]).record_id);
+    assert.equal(tables.ca.rows.length, 1, "one row in Lark");
+    assert.equal((lark.stats.create || 0) + (lark.stats.batchCreate || 0), 1, "one Lark call");
+    assert.equal(d.getStats().createSharedInflight, 1);
+  } finally { done(); }
+});
+
+test("a repeat of an identical create within the memory window is answered with NO Lark call", async () => {
+  const tables = { ca: caTable() };
+  const { lark, d, done } = await setup({ tables });
+  try {
+    const first = await d.createBatch(createReq("ca", caFields(3)));
+    const callsBefore = lark.stats.calls;
+    const again = await d.createBatch(createReq("ca", caFields(3)));
+    assert.equal(recordOf(again).record_id, recordOf(first).record_id);
+    assert.equal(lark.stats.calls, callsBefore, "no upstream call at all");
+    assert.equal(tables.ca.rows.length, 1);
+    assert.equal(d.getStats().createMemoryHits, 1);
+  } finally { done(); }
+});
+
+test("different fields (or a different chat link) are separate rows, even in the same batch", async () => {
+  const tables = { ca: caTable() };
+  const { d, done } = await setup({ tables });
+  try {
+    const out = await Promise.all([1, 2, 3].map((i) => d.createBatch(createReq("ca", caFields(i)))));
+    assert.equal(new Set(out.map((r) => recordOf(r).record_id)).size, 3);
+    const sameUserOtherChat = await d.createBatch(createReq("ca", { ...caFields(1), link: { link: "https://my.livechatinc.com/chats/OTHER/T9", text: "x" } }));
+    assert.notEqual(recordOf(sameUserOtherChat).record_id, recordOf(out[0]).record_id);
+    assert.equal(tables.ca.rows.length, 4);
+  } finally { done(); }
+});
+
+test("the memory expires (CREATE_MEMORY_MS), and 0 switches it off", async () => {
+  const short = await setup({ tables: { ca: caTable() }, env: { CREATE_MEMORY_MS: 60 } });
+  try {
+    const a = await short.d.createBatch(createReq("ca", caFields(4)));
+    await new Promise((r) => setTimeout(r, 120));
+    const b = await short.d.createBatch(createReq("ca", caFields(4)));
+    assert.notEqual(recordOf(a).record_id, recordOf(b).record_id, "after the window a repeat is a genuinely new create");
+  } finally { short.done(); }
+  const off = await setup({ tables: { ca: caTable() }, env: { CREATE_MEMORY_MS: 0 } });
+  try {
+    const out = await Promise.all([off.d.createBatch(createReq("ca", caFields(4))), off.d.createBatch(createReq("ca", caFields(4)))]);
+    assert.notEqual(recordOf(out[0]).record_id, recordOf(out[1]).record_id, "feature off = old behaviour");
+  } finally { off.done(); }
+});
+
+test("forgetCreated(recordId): a row that was deleted or completed is never handed out again", async () => {
+  const tables = { ca: caTable() };
+  const { d, done } = await setup({ tables });
+  try {
+    const first = await d.createBatch(createReq("ca", caFields(2)));
+    await d.forgetCreated(recordOf(first).record_id);
+    const next = await d.createBatch(createReq("ca", caFields(2)));
+    assert.notEqual(recordOf(next).record_id, recordOf(first).record_id);
+    await d.forgetCreated("not-a-known-id");                       // harmless
+  } finally { done(); }
+});
+
+test("a failed create is not remembered: the next identical create really tries again", async () => {
+  const tables = { ca: caTable() };
+  const { d, done } = await setup({ tables });
+  try {
+    const real = globalThis.fetch;
+    let fail = true;
+    globalThis.fetch = async (url, init = {}) => (fail && new URL(String(url)).pathname.endsWith("/records") && init.method === "POST"
+      ? new Response(JSON.stringify({ code: 1254045, msg: "field not found" }), { status: 200 }) : real(url, init));
+    const bad = await d.createBatch(createReq("ca", caFields(6)));
+    assert.equal(JSON.parse(bad.body).code, 1254045);
+    fail = false;
+    const good = await d.createBatch(createReq("ca", caFields(6)));
+    assert.equal(good.status, 200);
+    assert.ok(recordOf(good).record_id);
+    assert.equal(d.getStats().createMemoryHits, 0);
+  } finally { done(); }
+});
+
+test("many identical pairs inside one burst: 10 chats x 2 callers = 10 rows, each pair sharing an id", async () => {
+  const tables = { ca: caTable() };
+  const { d, done } = await setup({ tables, gap: 30, conc: 2 });
+  try {
+    const calls = [];
+    for (let i = 0; i < 10; i++) calls.push(d.createBatch(createReq("ca", caFields(i))), d.createBatch(createReq("ca", caFields(i))));
+    const out = await Promise.all(calls);
+    for (let i = 0; i < 10; i++) assert.equal(recordOf(out[2 * i]).record_id, recordOf(out[2 * i + 1]).record_id, `pair ${i}`);
+    assert.equal(new Set(out.map((r) => recordOf(r).record_id)).size, 10);
+    assert.equal(tables.ca.rows.length, 10);
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Step 3: client_token + one retry + 15 s write timeout
+// ======================================================================================
+const tokenOf = (url) => new URL(String(url)).searchParams.get("client_token");
+function spyOnWrites() {
+  const real = globalThis.fetch, writes = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const p = new URL(String(url)).pathname;
+    if (init.method === "POST" && /\/records(\/batch_create)?$/.test(p)) writes.push({ path: p, token: tokenOf(url) });
+    return real(url, init);
+  };
+  return writes;
+}
+
+test("every create (lone or batched) carries a client_token, and different batches get different tokens", async () => {
+  const { d, done } = await setup({ tables: { ca: caTable() }, gap: 10 });
+  try {
+    const writes = spyOnWrites();
+    await d.createBatch(createReq("ca", caFields(1)));                                          // lone
+    await Promise.all([2, 3, 4].map((i) => d.createBatch(createReq("ca", caFields(i)))));         // batched
+    assert.ok(writes.length >= 2);
+    for (const w of writes) assert.match(w.token || "", /^[0-9a-f-]{36}$/);
+    assert.equal(new Set(writes.map((w) => w.token)).size, writes.length);
+    assert.ok(writes.some((w) => w.path.endsWith("/batch_create")));
+  } finally { done(); }
+});
+
+test("a batch that is written but times out is retried ONCE with the SAME token: exactly one row per caller", async () => {
+  const tables = { ca: caTable() };
+  const { lark, d, done } = await setup({ tables, hangAfterWrite: 1, env: { GATE_WRITE_TIMEOUT_MS: 150 }, gap: 10 });
+  try {
+    const writes = spyOnWrites();
+    const out = await Promise.all([1, 2, 3].map((i) => d.createBatch(createReq("ca", caFields(i)))));
+    out.forEach((res, i) => { assert.equal(res.status, 200); assert.equal(recordOf(res).fields.Username, `player${i + 1}`); });
+    assert.equal(tables.ca.rows.length, 3, "exactly one row per caller, no duplicates");
+    assert.equal(lark.stats.hung, 1);
+    assert.equal(lark.stats.replays, 1, "the retry was recognised by its token");
+    assert.equal(writes.length, 2);
+    assert.equal(writes[0].token, writes[1].token, "same token on the retry");
+    assert.equal(d.getStats().writeRetries, 1);
+    assert.equal(d.getStats().active, 0, "no slot left held");
+  } finally { done(); }
+});
+
+test("a lone create that is written but times out is retried once with the same token too", async () => {
+  const tables = { ca: caTable() };
+  const { lark, d, done } = await setup({ tables, hangAfterWrite: 1, env: { GATE_WRITE_TIMEOUT_MS: 150 } });
+  try {
+    const writes = spyOnWrites();
+    const res = await d.createBatch(createReq("ca", caFields(9)));
+    assert.equal(res.status, 200);
+    assert.equal(tables.ca.rows.length, 1);
+    assert.equal(writes.length, 2);
+    assert.equal(writes[0].token, writes[1].token);
+    assert.equal(lark.stats.replays, 1);
+  } finally { done(); }
+});
+
+test("a 5xx is retried once with the same token; a second failure is returned, not retried forever", async () => {
+  const { d, done } = await setup({ tables: { ca: caTable() } });
+  try {
+    const real = globalThis.fetch, seen = [];
+    globalThis.fetch = async (url, init = {}) => {
+      if (init.method === "POST" && new URL(String(url)).pathname.endsWith("/records")) { seen.push(tokenOf(url)); return new Response("bad gateway", { status: 502 }); }
+      return real(url, init);
+    };
+    const res = await d.createBatch(createReq("ca", caFields(1)));
+    assert.equal(res.status, 502);
+    assert.equal(seen.length, 2, "one attempt + one retry");
+    assert.equal(seen[0], seen[1]);
+    assert.equal(d.getStats().writeRetries, 1);
+    assert.equal(d.getStats().active, 0);
+  } finally { done(); }
+});
+
+test("no retry for a normal Lark error answer, or when there is no time left", async () => {
+  const a = await setup({ tables: { ca: caTable() } });
+  try {
+    const real = globalThis.fetch; let n = 0;
+    globalThis.fetch = async (url, init = {}) => (init.method === "POST" && new URL(String(url)).pathname.endsWith("/records")
+      ? (n++, new Response(JSON.stringify({ code: 1254068, msg: "URLFieldConvFail" }), { status: 200 })) : real(url, init));
+    const res = await a.d.createBatch(createReq("ca", caFields(1)));
+    assert.equal(JSON.parse(res.body).code, 1254068);
+    assert.equal(n, 1, "an ordinary error answer is final");
+  } finally { a.done(); }
+  const b = await setup({ tables: { ca: caTable() }, hangAfterWrite: 5, env: { GATE_WRITE_TIMEOUT_MS: 100 } });
+  try {
+    const res = await b.d.createBatch({ ...createReq("ca", caFields(1)), expiresAt: Date.now() + 600 });
+    assert.equal(res.status, 504);
+    assert.ok(b.d.getStats().writeRetries <= 1);
+  } finally { b.done(); }
+});
+
+test("writes get a 15 s upstream timeout, searches keep 6 s (checked in the source), and the write timeout is really applied", async () => {
+  const source = fs.readFileSync(path.join(here, "index.ts"), "utf8");
+  assert.match(source, /const UPSTREAM_TIMEOUT_MS = 6_000;/);
+  assert.match(source, /const WRITE_TIMEOUT_MS = 15_000;/);
+  const { d, done } = await setup({ tables: { ca: caTable() }, hangAfterWrite: 1, env: { GATE_WRITE_TIMEOUT_MS: 120 } });
+  try {
+    const started = Date.now();
+    const res = await d.createBatch(createReq("ca", caFields(1)));
+    assert.equal(res.status, 200);
+    assert.ok(Date.now() - started >= 110 && Date.now() - started < 2_000, "gave up on the hung write at ~the configured write timeout, then retried");
   } finally { done(); }
 });

@@ -34,15 +34,23 @@ type Waiter = {
 type Bucket = { key: string; baseKey: string; waiters: Waiter[]; createdAt: number };
 type CreateWaiter = { input: SearchBatchInput; fields: Record<string, unknown>; expiresAt: number; enqueuedAt: number; resolve: (r: SearchBatchResult) => void };
 type CreateBucket = { key: string; waiters: CreateWaiter[]; createdAt: number };
-type SlotEntry = { grant: () => void; cancelled: boolean; order: number };
-type Poll = { slot: { promise: Promise<void>; cancel: () => void }; granted: Promise<void>; ticket: string | null; idle: ReturnType<typeof setTimeout> | null };
+type Grant = { klass: Klass; at: number };                       // a granted slot: which class, and when (for hold-time stats)
+type SlotEntry = { grant: (g: Grant) => void; cancelled: boolean; order: number; klass: Klass; requestedAt: number };
+type CallType = "search" | "batchCreate" | "create" | "other";
+type Slot = { promise: Promise<Grant>; cancel: () => void };
+type Poll = { slot: Slot; granted: Promise<void>; ticket: string | null; idle: ReturnType<typeof setTimeout> | null };
+type Ticket = { timer: ReturnType<typeof setTimeout>; grant: Grant };
 
 const MAX_USERNAMES = 50;          // Lark: filter.conditions length 0..50
 const PAGE_SIZE = 500;
 const MAX_PAGES = 20;              // 10,000 rows per merged query
 const MAX_BISECT_DEPTH = 6;
 const MIN_WINDOW_MS = 15;          // only matters when the gate is idle
-const UPSTREAM_TIMEOUT_MS = 6_000;
+const UPSTREAM_TIMEOUT_MS = 6_000;     // searches
+const WRITE_TIMEOUT_MS = 15_000;       // creates / other writes (Env GATE_WRITE_TIMEOUT_MS overrides, for tests)
+const CREATE_MEMORY_MS = 120_000;      // identical creates within this window share ONE row (Env CREATE_MEMORY_MS; 0 = off)
+const CREATE_MEMORY_MAX = 2_000;
+const WRITE_RETRIES = 1;               // one retry of a timed-out / 5xx create, with the SAME client_token
 const MAX_429_RETRIES = 2;
 const MAX_COOLDOWN_MS = 5_000;
 const PERMIT_LEASE_MS = 8_000;
@@ -61,6 +69,30 @@ const CLASS_OFFSET: Record<Klass, number> = { token: -1e9, read: 0, write: WRITE
 const failure = (status: number, msg: string): SearchBatchResult => ({
   status, statusText: "", headers: [["content-type", "application/json"]],
   body: JSON.stringify({ code: -1, msg }),
+});
+// Results that came from a timeout / transport error / HTTP 5xx on a real upstream call (not from our own queue
+// deadline): the only failures worth retrying, and only for idempotent (client_token) writes.
+const upstreamFailures = new WeakSet<SearchBatchResult>();
+const callType = (input: SearchBatchInput): CallType => {
+  let path = "";
+  try { path = new URL(input.url).pathname; } catch { /* unknown */ }
+  if (/\/records\/batch_create$/.test(path)) return "batchCreate";
+  if (/\/records\/search$/.test(path)) return "search";
+  if (/\/records$/.test(path) && (input.method || "POST").toUpperCase() === "POST") return "create";
+  return "other";
+};
+const summary = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  return { n: sorted.length, p50: sorted[Math.floor(sorted.length * 0.5)] ?? 0, p95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0, max: sorted.at(-1) ?? 0 };
+};
+const canonicalFields = (fields: Record<string, unknown>) => JSON.stringify(Object.entries(fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+const createdRecord = (result: SearchBatchResult): any | null => {
+  if (result.status < 200 || result.status >= 300) return null;
+  try { const parsed = JSON.parse(result.body); return parsed?.code === 0 && parsed.data?.record?.record_id ? parsed.data.record : null; } catch { return null; }
+};
+const okRecord = (record: any): SearchBatchResult => ({
+  status: 200, statusText: "OK", headers: [["content-type", "application/json"]],
+  body: JSON.stringify({ code: 0, data: { record } }),
 });
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const norm = (value: string) => value.trim().toLowerCase();
@@ -95,16 +127,28 @@ export class MyDurableObject extends DurableObject<Env> {
   private waitq: SlotEntry[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private buckets = new Map<string, Bucket>();
-  private tickets = new Map<string, ReturnType<typeof setTimeout>>();
+  private tickets = new Map<string, Ticket>();
   private polls = new Map<string, Poll>();
   private heavy = new Map<string, number>();
   private orphanStrikes = new Map<string, { n: number; first: number }>();
   private noBatchUntil = new Map<string, number>();
   private createBuckets = new Map<string, CreateBucket>();
+  private pendingCreates = new Map<string, Promise<SearchBatchResult>>();                   // identical creates in flight -> share the result
+  private recentCreates = new Map<string, { record: any; at: number }>();                   // identical creates already done -> same row
+  private recordIndex = new Map<string, string>();                                          // record_id -> recentCreates key (for forgetCreated)
+  private writeTimeoutMs: number;
+  private createMemoryMs: number;
+  // Diagnostics only (no behaviour depends on these): permit wait (acquire -> grant) and hold (grant -> release) per
+  // class, and the latency of each kind of upstream Lark call. Bounded like the other samples.
+  private m = {
+    waitMs: { token: [] as number[], read: [] as number[], write: [] as number[] } as Record<Klass, number[]>,
+    holdMs: { token: [] as number[], read: [] as number[], write: [] as number[] } as Record<Klass, number[]>,
+    larkMs: { search: [] as number[], batchCreate: [] as number[], create: [] as number[], other: [] as number[] } as Record<CallType, number[]>,
+  };
   private recentStarts: number[] = [];
   private pruneCounter = 0;
   private s = {
-    upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0,
+    upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0, createMemoryHits: 0, createSharedInflight: 0, writeRetries: 0,
     noBatchTrips: 0, peakQueue: 0, truncatedFails: 0, heavyUsers: 0, peakStartsPerSec: 0,
     startsByClass: { token: 0, read: 0, write: 0 } as Record<Klass, number>,
     batchSizes: [] as number[], queueWaitMs: [] as number[],
@@ -115,6 +159,8 @@ export class MyDurableObject extends DurableObject<Env> {
     this.concurrency = Number(env?.GATE_CONCURRENCY) || 3;
     this.longPollMs = Number(env?.GATE_LONGPOLL_MS) || LONGPOLL_MS;
     this.baseGapMs = this.gapMs = Number(env?.GATE_START_GAP_MS) || 250;   // ship at today's pace, then ramp down
+    this.writeTimeoutMs = Number(env?.GATE_WRITE_TIMEOUT_MS) || WRITE_TIMEOUT_MS;
+    this.createMemoryMs = env?.CREATE_MEMORY_MS !== undefined ? Number(env.CREATE_MEMORY_MS) : CREATE_MEMORY_MS;
   }
 
   getMapSizes() { return { heavy: this.heavy.size, noBatch: this.noBatchUntil.size, orphanStrikes: this.orphanStrikes.size }; }
@@ -123,14 +169,18 @@ export class MyDurableObject extends DurableObject<Env> {
     const sorted = [...queueWaitMs].sort((a, b) => a - b);
     return { ...rest, gapMs: this.gapMs, queued: this.waitq.length, active: this.active, buckets: this.buckets.size,
       meanBatch: batchSizes.length ? +(batchSizes.reduce((a, b) => a + b, 0) / batchSizes.length).toFixed(1) : 0,
-      queueWaitP50: sorted[Math.floor(sorted.length / 2)] ?? 0, queueWaitMax: sorted.at(-1) ?? 0 };
+      queueWaitP50: sorted[Math.floor(sorted.length / 2)] ?? 0, queueWaitMax: sorted.at(-1) ?? 0,
+      // ms. wait = permit requested -> granted; hold = granted -> released (for ticketed calls this is the caller's whole Lark call).
+      permits: Object.fromEntries((["token", "read", "write"] as Klass[]).map((k) => [k, { wait: summary(this.m.waitMs[k]), hold: summary(this.m.holdMs[k]) }])),
+      lark: Object.fromEntries((["search", "batchCreate", "create", "other"] as CallType[]).map((t) => [t, summary(this.m.larkMs[t])])) };
   }
   private sample(arr: number[], value: number) { arr.push(value); if (arr.length > STAT_SAMPLES) arr.splice(0, arr.length - STAT_SAMPLES); }
 
   // ---- gate -------------------------------------------------------------
-  private acquireSlot(klass: Klass, since = Date.now()): { promise: Promise<void>; cancel: () => void } {
+  private acquireSlot(klass: Klass, since = Date.now()): Slot {
     let entry!: SlotEntry;
-    const promise = new Promise<void>((grant) => { entry = { grant, cancelled: false, order: since + CLASS_OFFSET[klass] }; });
+    const requestedAt = Date.now();
+    const promise = new Promise<Grant>((grant) => { entry = { grant, cancelled: false, order: since + CLASS_OFFSET[klass], klass, requestedAt }; });
     let at = this.waitq.length;
     while (at > 0 && this.waitq[at - 1].order > entry.order) at--;       // stable insert by order
     this.waitq.splice(at, 0, entry);
@@ -154,11 +204,13 @@ export class MyDurableObject extends DurableObject<Env> {
       this.recentStarts.push(now);
       while (this.recentStarts.length && now - this.recentStarts[0] >= 1000) this.recentStarts.shift();
       this.s.peakStartsPerSec = Math.max(this.s.peakStartsPerSec, this.recentStarts.length);
-      head.grant();
+      this.sample(this.m.waitMs[head.klass], now - head.requestedAt);
+      head.grant({ klass: head.klass, at: now });
     }
   }
 
-  private releaseSlot(limited: boolean, retryAfterMs = 0): void {
+  private releaseSlot(limited: boolean, retryAfterMs = 0, grant: Grant | null = null): void {
+    if (grant) this.sample(this.m.holdMs[grant.klass], Date.now() - grant.at);
     this.active = Math.max(0, this.active - 1);
     if (limited) {
       this.s.limited++;
@@ -173,35 +225,45 @@ export class MyDurableObject extends DurableObject<Env> {
   }
 
   // Slot must already be held. Always releases it.
-  private async fetchOnce(input: SearchBatchInput): Promise<{ result: SearchBatchResult; limited: boolean }> {
+  private async fetchOnce(input: SearchBatchInput, grant: Grant | null, timeoutMs: number): Promise<{ result: SearchBatchResult; limited: boolean }> {
     this.s.upstream++;
+    const startedAt = Date.now();
+    const type = callType(input);
     try {
       const response = await fetch(input.url, {
         method: input.method || "POST", headers: input.headers, body: input.body,
-        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       const body = await response.text();
       let parsed: any = null;
       try { parsed = JSON.parse(body); } catch { /* HTTP status only */ }
       const limited = isRateLimited(response.status, parsed);
       if (limited) console.warn("Lark rate limit", JSON.stringify({ httpStatus: response.status, code: parsed?.code, retryAfter: response.headers.get("Retry-After"), gapMs: this.gapMs }));
-      this.releaseSlot(limited, Number(response.headers.get("Retry-After")) * 1000 || 0);
-      return { limited, result: { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()], body } };
+      this.sample(this.m.larkMs[type], Date.now() - startedAt);
+      this.releaseSlot(limited, Number(response.headers.get("Retry-After")) * 1000 || 0, grant);
+      const result: SearchBatchResult = { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()], body };
+      if (response.status >= 500) upstreamFailures.add(result);
+      return { limited, result };
     } catch (error) {
-      this.releaseSlot(false);
-      return { limited: false, result: failure(504, String((error as Error)?.message || error)) };
+      this.sample(this.m.larkMs[type], Date.now() - startedAt);
+      this.releaseSlot(false, 0, grant);
+      const result = failure(504, String((error as Error)?.message || error));
+      upstreamFailures.add(result);
+      return { limited: false, result };
     }
   }
 
-  private async fetchPage(input: SearchBatchInput, haveSlot: boolean, since: number, deadline: number, klass: Klass = "read"): Promise<SearchBatchResult> {
+  // `held` is a slot the caller already holds (used for the first attempt only); null = acquire one.
+  private async fetchPage(input: SearchBatchInput, held: Grant | null, since: number, deadline: number, klass: Klass = "read"): Promise<SearchBatchResult> {
     for (let attempt = 0; ; attempt++) {
-      if (!haveSlot) {
+      let grant = held;
+      held = null;
+      if (!grant) {
         if (Date.now() >= deadline) { this.s.expiredDropped++; return failure(504, "Lark search deadline exceeded in queue."); }
-        await this.acquireSlot(klass, since).promise;   // a retried write keeps WRITE priority
+        grant = await this.acquireSlot(klass, since).promise;   // a retried write keeps WRITE priority
       }
-      haveSlot = false;
-      if (Date.now() >= deadline) { this.s.expiredDropped++; this.releaseSlot(false); return failure(504, "Lark search deadline exceeded in queue."); }
-      const { result, limited } = await this.fetchOnce(input);
+      if (Date.now() >= deadline) { this.s.expiredDropped++; this.releaseSlot(false, 0, grant); return failure(504, "Lark search deadline exceeded in queue."); }
+      const { result, limited } = await this.fetchOnce(input, grant, klass === "write" ? this.writeTimeoutMs : UPSTREAM_TIMEOUT_MS);
       if (!limited || attempt >= MAX_429_RETRIES) return result;
       this.s.retries429++;
     }
@@ -219,10 +281,8 @@ export class MyDurableObject extends DurableObject<Env> {
     if (!poll) {
       const slot = this.acquireSlot(kind === "token" || kind === "read" ? kind : "write");
       const created: Poll = { slot, ticket: null, idle: null, granted: Promise.resolve() };
-      created.granted = slot.promise.then(() => {
-        created.ticket = crypto.randomUUID();
-        const ticket = created.ticket;
-        this.tickets.set(ticket, setTimeout(() => { if (this.tickets.delete(ticket)) this.releaseSlot(false); }, PERMIT_LEASE_MS));
+      created.granted = slot.promise.then((grant) => {
+        created.ticket = this.issueTicket(grant);
       });
       poll = created;
       if (waiterId) this.polls.set(waiterId, poll);
@@ -243,22 +303,25 @@ export class MyDurableObject extends DurableObject<Env> {
   }
   private async acquireLegacy(): Promise<PermitResult> {
     const slot = this.acquireSlot("write");
-    let granted = false;
-    void slot.promise.then(() => { granted = true; });
+    let granted: Grant | null = null;
+    void slot.promise.then((grant) => { granted = grant; });
     const timedOut = await Promise.race([slot.promise.then(() => false), sleep(LEGACY_WAIT_MS).then(() => true)]);
     if (timedOut && !granted) { slot.cancel(); return { ticket: null, retryAfterMs: 100 }; }
-    return { ticket: this.issueTicket(), retryAfterMs: 0 };
+    return { ticket: this.issueTicket(granted ?? await slot.promise), retryAfterMs: 0 };
   }
-  private issueTicket(): string {
+  private issueTicket(grant: Grant): string {
     const ticket = crypto.randomUUID();
-    this.tickets.set(ticket, setTimeout(() => { if (this.tickets.delete(ticket)) this.releaseSlot(false); }, PERMIT_LEASE_MS));
+    this.tickets.set(ticket, {
+      timer: setTimeout(() => { const t = this.tickets.get(ticket); if (t && this.tickets.delete(ticket)) this.releaseSlot(false, 0, t.grant); }, PERMIT_LEASE_MS),
+      grant,
+    });
     return ticket;
   }
   async release(ticket: string, rateLimited = false, retryAfterMs = 0): Promise<void> {
     const t = this.tickets.get(ticket);
     if (!t) return;
-    clearTimeout(t); this.tickets.delete(ticket);
-    this.releaseSlot(rateLimited, retryAfterMs);
+    clearTimeout(t.timer); this.tickets.delete(ticket);
+    this.releaseSlot(rateLimited, retryAfterMs, t.grant);
   }
   async penalize(retryAfterMs = 0): Promise<void> {
     this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs)));
@@ -328,19 +391,63 @@ export class MyDurableObject extends DurableObject<Env> {
     if (!supported) return this.singleWrite(input, expiresAt);
     const headers = Object.fromEntries(Object.entries(input.headers).map(([k, v]) => [k.toLowerCase(), v]));
     const key = JSON.stringify([url.origin, url.pathname, headers.authorization || ""]);
-    return new Promise<SearchBatchResult>((resolve) => {
+
+    // Identical creates (same table, same fields) get ONE Lark row and the SAME record id: a concurrent repeat shares the
+    // in-flight create, a near-simultaneous repeat (within CREATE_MEMORY_MS) is answered from memory with no Lark call.
+    // Only creates that carry a chat link are merged: the link is what identifies the chat, so two creates without one
+    // could be two different chats of the same player and must stay two rows.
+    const mergeKey = this.createMemoryMs > 0 && fieldText((parsed.fields as any).link)
+      ? JSON.stringify([url.origin, url.pathname, canonicalFields(parsed.fields)]) : "";
+    if (mergeKey) {
+      this.pruneCreates();
+      const remembered = this.recentCreates.get(mergeKey);
+      if (remembered && Date.now() - remembered.at <= this.createMemoryMs) { this.s.createMemoryHits++; return okRecord(remembered.record); }
+      const pending = this.pendingCreates.get(mergeKey);
+      if (pending) { this.s.createSharedInflight++; return pending; }
+    }
+    const run = new Promise<SearchBatchResult>((resolve) => {
       const waiter: CreateWaiter = { input, fields: parsed.fields, expiresAt, enqueuedAt: Date.now(), resolve };
       let bucket = this.createBuckets.get(key);
       if (!bucket) { bucket = { key, waiters: [], createdAt: Date.now() }; this.createBuckets.set(key, bucket); void this.runCreateBucket(bucket); }
       bucket.waiters.push(waiter);
     });
+    if (!mergeKey) return run;
+    const tracked = run.then((result) => {
+      this.pendingCreates.delete(mergeKey);
+      const record = createdRecord(result);
+      if (record) { this.recentCreates.set(mergeKey, { record, at: Date.now() }); this.recordIndex.set(String(record.record_id), mergeKey); }
+      return result;
+    });
+    this.pendingCreates.set(mergeKey, tracked);
+    return tracked;
+  }
+
+  // The Pages side calls this when it deletes or updates a row it created, so a later identical create can never be
+  // answered with a row that has since been removed or completed.
+  async forgetCreated(recordId: string): Promise<void> {
+    const key = this.recordIndex.get(String(recordId));
+    if (key === undefined) return;
+    this.recordIndex.delete(String(recordId));
+    this.recentCreates.delete(key);
+  }
+
+  private pruneCreates(): void {
+    const now = Date.now();
+    // Entries are inserted in time order, so the expired ones are at the front of the map.
+    for (const [key, entry] of this.recentCreates) { if (now - entry.at <= this.createMemoryMs) break; this.dropCreate(key); }
+    while (this.recentCreates.size > CREATE_MEMORY_MAX) this.dropCreate(this.recentCreates.keys().next().value as string);
+  }
+  private dropCreate(key: string): void {
+    const entry = this.recentCreates.get(key);
+    this.recentCreates.delete(key);
+    if (entry) this.recordIndex.delete(String(entry.record.record_id));
   }
 
   private async singleWrite(input: SearchBatchInput, expiresAt: number): Promise<SearchBatchResult> {
     const since = Date.now();
     if (since >= expiresAt) { this.s.expiredDropped++; return failure(504, "Lark write deadline exceeded in queue."); }
-    await this.acquireSlot("write", since).promise;
-    return this.fetchPage(input, true, since, expiresAt, "write");
+    const grant = await this.acquireSlot("write", since).promise;
+    return this.fetchPage(input, grant, since, expiresAt, "write");
   }
 
   private async runCreateBucket(bucket: CreateBucket): Promise<void> {
@@ -349,14 +456,14 @@ export class MyDurableObject extends DurableObject<Env> {
       if (wait > 0) await sleep(wait);
     }
     const since = Math.min(...bucket.waiters.map((w) => w.enqueuedAt), Date.now());
-    await this.acquireSlot("write", since).promise;      // stays open (batching) until the slot is granted
+    const grant = await this.acquireSlot("write", since).promise;      // stays open (batching) until the slot is granted
     if (this.createBuckets.get(bucket.key) === bucket) this.createBuckets.delete(bucket.key);
     const now = Date.now();
     const live: CreateWaiter[] = [];
     for (const w of bucket.waiters) {
       if (w.expiresAt <= now) { this.s.expiredDropped++; w.resolve(failure(504, "Lark write deadline exceeded in queue.")); } else live.push(w);
     }
-    if (!live.length) { this.releaseSlot(false); return; }
+    if (!live.length) { this.releaseSlot(false, 0, grant); return; }
     const batch = live.slice(0, MAX_CREATE_BATCH);
     const leftover = live.slice(MAX_CREATE_BATCH);
     if (leftover.length) {
@@ -364,23 +471,38 @@ export class MyDurableObject extends DurableObject<Env> {
       if (next) next.waiters.unshift(...leftover);
       else { next = { key: bucket.key, waiters: leftover, createdAt: 0 }; this.createBuckets.set(bucket.key, next); void this.runCreateBucket(next); }
     }
-    await this.executeCreates(batch, since);
+    await this.executeCreates(batch, since, grant);
   }
 
-  private async executeCreates(batch: CreateWaiter[], since: number): Promise<void> {
+  // A create (single or batch) carries a client_token so Lark treats a repeat as the same request. A timeout / transport
+  // error / 5xx is retried ONCE with the same token: if the first attempt did write, the retry returns that result
+  // instead of making a second row.
+  private async writeWithToken(input: SearchBatchInput, grant: Grant, since: number, deadline: number): Promise<SearchBatchResult> {
+    const url = new URL(input.url);
+    if (!url.searchParams.has("client_token")) url.searchParams.set("client_token", crypto.randomUUID());
+    const withToken: SearchBatchInput = { ...input, url: url.toString() };
+    let result = await this.fetchPage(withToken, grant, since, deadline, "write");
+    for (let retry = 0; retry < WRITE_RETRIES && upstreamFailures.has(result) && Date.now() < deadline - 1_000; retry++) {
+      this.s.writeRetries++;
+      result = await this.fetchPage(withToken, null, since, deadline, "write");
+    }
+    return result;
+  }
+
+  private async executeCreates(batch: CreateWaiter[], since: number, grant: Grant): Promise<void> {
     const deadline = Math.max(...batch.map((w) => w.expiresAt));
     for (const w of batch) this.sample(this.s.queueWaitMs, Date.now() - w.enqueuedAt);
     if (batch.length === 1) {                            // a lone create stays an ordinary create
-      batch[0].resolve(await this.fetchPage(batch[0].input, true, since, deadline, "write"));
+      batch[0].resolve(await this.writeWithToken(batch[0].input, grant, since, deadline));
       return;
     }
     this.s.createBatches++;
     const url = new URL(batch[0].input.url);
     url.pathname = url.pathname.replace(/\/records$/, "/records/batch_create");
-    const result = await this.fetchPage({
+    const result = await this.writeWithToken({
       ...batch[0].input, url: url.toString(), method: "POST",
       body: JSON.stringify({ records: batch.map((w) => ({ fields: w.fields })) }),
-    }, true, since, deadline, "write");
+    }, grant, since, deadline);
     let parsed: any = null;
     try { parsed = JSON.parse(result.body); } catch { /* handled below */ }
     if (result.status < 200 || result.status >= 300 || !parsed || parsed.code !== 0) {
@@ -411,7 +533,7 @@ export class MyDurableObject extends DurableObject<Env> {
   private async single(input: SearchBatchInput, expiresAt: number): Promise<SearchBatchResult> {
     const since = Date.now();
     if (since >= expiresAt) { this.s.expiredDropped++; return failure(504, "Lark search deadline exceeded in queue."); }
-    return this.fetchPage(input, false, since, expiresAt);
+    return this.fetchPage(input, null, since, expiresAt);
   }
 
   private async runBucket(bucket: Bucket): Promise<void> {
@@ -420,7 +542,7 @@ export class MyDurableObject extends DurableObject<Env> {
       if (wait > 0) await sleep(wait);
     }
     const since = Math.min(...bucket.waiters.map((w) => w.enqueuedAt), Date.now());
-    await this.acquireSlot("read", since).promise;       // bucket stays open (in this.buckets) until now
+    const grant = await this.acquireSlot("read", since).promise;       // bucket stays open (in this.buckets) until now
     if (this.buckets.get(bucket.key) === bucket) this.buckets.delete(bucket.key);   // close: later arrivals open a new bucket
 
     const now = Date.now();
@@ -428,7 +550,7 @@ export class MyDurableObject extends DurableObject<Env> {
     for (const w of bucket.waiters) {
       if (w.expiresAt <= now) { this.s.expiredDropped++; w.resolve(failure(504, "Lark search deadline exceeded in queue.")); } else live.push(w);
     }
-    if (!live.length) { this.releaseSlot(false); return; }
+    if (!live.length) { this.releaseSlot(false, 0, grant); return; }
 
     // Up to MAX_USERNAMES distinct usernames; usernames that normalise the same
     // (case/whitespace) are never co-batched; the rest re-queue keeping their age.
@@ -444,7 +566,7 @@ export class MyDurableObject extends DurableObject<Env> {
       byUser.set(w.username, [w]);
     }
     if (leftover.length) this.requeue(bucket, leftover);
-    await this.execute(bucket.baseKey, [...byUser.entries()], since, 0);
+    await this.execute(bucket.baseKey, [...byUser.entries()], since, 0, grant);
   }
 
   private requeue(from: Bucket, waiters: Waiter[]): void {
@@ -456,7 +578,7 @@ export class MyDurableObject extends DurableObject<Env> {
   }
 
   // The first page uses the slot runBucket (or executeAfterSlot) already holds.
-  private async execute(baseKey: string, chunk: Array<[string, Waiter[]]>, since: number, depth: number): Promise<void> {
+  private async execute(baseKey: string, chunk: Array<[string, Waiter[]]>, since: number, depth: number, grant: Grant | null): Promise<void> {
     const first = chunk[0][1][0];
     const usernameField = first.usernameField;
     const usernames = new Set(chunk.map(([u]) => u));
@@ -481,11 +603,15 @@ export class MyDurableObject extends DurableObject<Env> {
     let pageToken = "";
     let more = false;
     for (let page = 0; page < MAX_PAGES; page++) {
-      if (Date.now() >= deadline) { for (const w of allWaiters) w.resolve(failure(504, "Lark search deadline exceeded.")); this.s.expiredDropped += allWaiters.length; return; }
+      if (Date.now() >= deadline) {
+        for (const w of allWaiters) w.resolve(failure(504, "Lark search deadline exceeded.")); this.s.expiredDropped += allWaiters.length;
+        if (page === 0 && grant) this.releaseSlot(false, 0, grant);   // the caller's slot was never used: give it back (it used to leak)
+        return;
+      }
       const pageUrl = new URL(baseUrl);
       pageUrl.searchParams.delete("page_token");
       if (pageToken) pageUrl.searchParams.set("page_token", pageToken);
-      const result = await this.fetchPage({ ...first.input, url: pageUrl.toString(), body: merged }, page === 0, since, deadline);
+      const result = await this.fetchPage({ ...first.input, url: pageUrl.toString(), body: merged }, page === 0 ? grant : null, since, deadline);
       let parsed: any = null;
       try { parsed = JSON.parse(result.body); } catch { /* handled below */ }
       if (result.status < 200 || result.status >= 300 || !parsed || parsed.code !== 0) {
@@ -506,8 +632,8 @@ export class MyDurableObject extends DurableObject<Env> {
         this.s.bisected++;
         const mid = Math.ceil(chunk.length / 2);
         await Promise.all([chunk.slice(0, mid), chunk.slice(mid)].map(async (half) => {
-          await this.acquireSlot("read", since).promise;
-          return this.execute(baseKey, half, since, depth + 1);
+          const halfGrant = await this.acquireSlot("read", since).promise;
+          return this.execute(baseKey, half, since, depth + 1, halfGrant);
         }));
         return;
       }

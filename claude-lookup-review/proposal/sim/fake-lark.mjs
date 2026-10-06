@@ -21,10 +21,15 @@ export function fieldText(v) {
 
 // limitStatus: HTTP status that accompanies code 1254290 (undocumented; 429, 200 or 400).
 // perCondMs: extra latency per filter condition, to test whether OR-50 queries stay cheap.
-export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs = 0.05, perCondMs = 0, quota = 20, enforce = true, seed = 7, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0 }) {
+// hangAfterWrite: the next N create/batch_create calls WRITE their rows and then never answer (until the caller aborts),
+// like a Lark call that times out after committing. client_token: a repeat of a token replays the stored answer and
+// writes nothing (Lark's documented idempotency).
+export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs = 0.05, perCondMs = 0, quota = 20, enforce = true, seed = 7, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0 }) {
   const rnd = mulberry32(seed);
+  let hangs = hangAfterWrite;
+  const tokens = new Map();
   const stats = {
-    calls: 0, search: 0, create: 0, fields: 0, token: 0, other: 0, limited: 0,
+    calls: 0, search: 0, create: 0, fields: 0, token: 0, other: 0, limited: 0, replays: 0, hung: 0,
     peakPerSecond: 0, orQueries: 0, orSizes: [], pagesBeyondFirst: 0, rowsReturned: 0, inFlight: 0, peakInFlight: 0,
   };
   const starts = [];
@@ -80,6 +85,17 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
       const tableId = u.pathname.match(/tables\/([^/]+)\//)?.[1] || u.pathname.match(/tables\/([^/]+)$/)?.[1];
       const table = tables[tableId];
       if (!table) return json({ code: 1254004, msg: "table not found" });
+      const clientToken = (kind === "batchCreate" || kind === "create") ? u.searchParams.get("client_token") : null;
+      if (clientToken && tokens.has(clientToken)) {
+        stats.replays++;
+        await sleep(latency(0), init.signal);
+        return json(tokens.get(clientToken));
+      }
+      const finishWrite = async (payload) => {
+        if (clientToken) tokens.set(clientToken, payload);
+        if (hangs > 0) { hangs--; stats.hung++; await sleep(600_000, init.signal); }   // committed, but the answer never arrives
+        return json(payload);
+      };
       if (kind === "batchCreate") {
         await sleep(latency(0), init.signal);
         let created = (body.records || []).map((r) => {
@@ -89,7 +105,7 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
         });
         if (shuffleBatch) created = created.reverse();          // Lark does not document result order
         if (dropFromBatch) created = created.slice(0, created.length - dropFromBatch);
-        return json({ code: 0, data: { records: created } });
+        return finishWrite({ code: 0, data: { records: created } });
       }
       if (kind === "list") {
         await sleep(latency(0), init.signal);
@@ -99,7 +115,7 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
         await sleep(latency(0), init.signal);
         const rec = { record_id: `rec_new_${table.rows.length}`, created_time: Date.now(), fields: body.fields || {} };
         table.rows.push(rec);
-        return json({ code: 0, data: { record: rec } });
+        return finishWrite({ code: 0, data: { record: rec } });
       }
       if (kind === "search") {
         const conds = body.filter?.conditions || [];
