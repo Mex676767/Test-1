@@ -62,15 +62,17 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency
 
   // Large queues exceed chrome.storage.sync's per-item quota, so keep them local.
   // Fall back to the old sync value once to migrate existing installations.
-  chrome.storage.local.get(['chatEntries', 'chatImages'], (localData) => {
-    const savedImages = localData.chatImages || {};
+  chrome.storage.local.get(['chatEntries'], (localData) => {
+    // An earlier release saved the bulk image in localStorage (chatImages). It shares the ~5 MB origin quota with the
+    // widget's chat state, so remove it; images now live only in sessionStorage (the draft and the running queue).
+    try { chrome.storage.local.remove('chatImages'); } catch (_) { /* nothing to free */ }
     const storedEntries = localData.chatEntries ?? d.chatEntries ?? [{ url: '', messages: null }];
     chatEntries = storedEntries.map(entry => ({
       url: entry.url || '',
       messages: entry.messages ?? null,
       expanded: Boolean(entry.expanded),
       imageUrl: entry.imageUrl || '',
-      imageDataUrl: entry.imageDataUrl || savedImages[entry.imageId] || null,
+      imageDataUrl: entry.imageDataUrl || null,   // only present for entries saved by a much older release; save() strips it again
       imageFileName: entry.imageFileName || null,
     }));
     save();
@@ -346,25 +348,31 @@ concurrencySelect.addEventListener('change', () => {
 });
 
 // ── Save ──────────────────────────────────────────────────────────────────────
-// The bulk image used to be copied into EVERY chat entry, so a normal image x a normal number of chats overran
-// the ~5 MB browser-storage quota. Persist each distinct image once and keep only a reference per entry.
-function fnvHash(text) { let h = 0x811c9dc5; for (let i = 0; i < text.length; i += 1) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); }
-function entryImageId(dataUrl) { return 'img-' + dataUrl.length + '-' + fnvHash(dataUrl); }
+// Image bytes are NEVER written to chrome.storage.local: in the web widget that is localStorage, whose ~5 MB per-origin quota
+// is shared with the widget's chat state (rc-chat-state). A few MB of base64 here makes saveState() start failing silently
+// and chat persistence / cross-tab sync stop. The image lives only in memory, in the sessionStorage draft (survives an iframe
+// replacement) and, once a run starts, in the adapter's own sessionStorage store.
 function save() {
-  const chatImages = {};
-  const slim = chatEntries.map((entry) => {
-    if (!entry.imageDataUrl) return entry;
-    const id = entryImageId(entry.imageDataUrl);
-    chatImages[id] = entry.imageDataUrl;
-    const { imageDataUrl, ...rest } = entry;
-    return { ...rest, imageId: id };
-  });
+  const slim = chatEntries.map((entry) => { const { imageDataUrl, ...rest } = entry; return rest; });
   try {
-    chrome.storage.local.set({ chatEntries: slim, chatImages });
+    chrome.storage.local.set({ chatEntries: slim });
   } catch (error) {
     // Never let a storage error abort the click that triggered the save (it used to stop a run before it started).
-    addLog('⚠ Could not save the queue between sessions (' + (error && error.name === 'QuotaExceededError' ? 'image too large for browser storage' : error.message) + '). The run itself is not affected.', 'err');
+    addLog('⚠ Could not save the queue between sessions (' + (error && error.name === 'QuotaExceededError' ? 'browser storage is full' : error.message) + '). The run itself is not affected.', 'err');
   }
+}
+
+// Entries restored from storage have no image bytes. Before starting, re-attach the draft's image (the same single image
+// for the whole bulk), or refuse to start: sending the text and silently dropping a chosen image is the worse outcome.
+function ensureEntryImages() {
+  const missing = chatEntries.filter((e) => e.imageFileName && !e.imageDataUrl && !e.imageUrl);
+  if (!missing.length) return true;
+  if (bulkImgMode === 'file' && bulkImgDataUrl) {
+    missing.forEach((e) => { e.imageDataUrl = bulkImgDataUrl; });
+    return true;
+  }
+  addLog('⚠ The image you chose was not kept after the widget reloaded. Choose it again, then start.', 'err');
+  return false;
 }
 
 // ── Log ───────────────────────────────────────────────────────────────────────
@@ -453,6 +461,7 @@ startBtn.addEventListener('click', () => {
     return;
   }
   if (!prepareBulkQueue()) return;
+  if (!ensureEntryImages()) return;
   const jobs = [];
   const preflightFailures = [];
   chatEntries.forEach((e, queueIndex) => {
@@ -490,6 +499,7 @@ startBtn.addEventListener('click', () => {
   statusText.textContent = 'Starting…';
   updateRunControls();
 
+  saveBlastDraft(); // running is true now: this rewrites the draft WITHOUT the image so the adapter can store its own copy
   chrome.runtime.sendMessage({
     type: 'START',
     jobs,
@@ -807,7 +817,7 @@ function saveBlastDraft() {
   try {
     sessionStorage.setItem(blastDraftKey, JSON.stringify({
       values: draftFields.map(field => field?.value || ''), mode: bulkMessageMode(),
-      imageMode: bulkImgMode, imageDataUrl: bulkImgDataUrl, imageFileName: bulkImgFileName,
+      imageMode: bulkImgMode, imageDataUrl: running ? null : bulkImgDataUrl, imageFileName: bulkImgFileName,
     }));
   } catch (_) { showBulkStatus('Draft could not be saved in this browser. Keep this widget open.', 'err'); }
 }

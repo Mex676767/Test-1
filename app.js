@@ -2647,6 +2647,9 @@ const TICKET_FALLBACK_OPTIONS = {
 // memory for the current admin-preview tab; incognito clears them with the
 // session and a completed ticket clears them immediately.
 const ticketAttachmentsByChat = new Map();
+// Not persisted (module level): a ticket create / claim write that is running right now. Used by canRefreshForDeployment().
+const ticketCreateInFlight = new Set();
+const claimWriteInFlight = new Set();
 const ticketSearchResultsByChat = new Map();
 const watchedTicketSnapshots = new Map();
 let ticketNotifications = [];
@@ -3893,6 +3896,7 @@ chatListEl.addEventListener("click", async (e) => {
       const chatDef = activeChats.find((c) => c.chatId === chatId);
       btn.disabled = true;
       btn.textContent = "…";
+      claimWriteInFlight.add(chatId);
       try {
         const res = await fetch("/lark-claim", {
           method: "POST",
@@ -3906,6 +3910,8 @@ chatListEl.addEventListener("click", async (e) => {
         btn.disabled = false;
         btn.textContent = "Claim";
         return;
+      } finally {
+        claimWriteInFlight.delete(chatId);
       }
     }
 
@@ -4165,6 +4171,7 @@ chatListEl.addEventListener("click", async (e) => {
     }
     btn.disabled = true;
     btn.textContent = "Creating…";
+    ticketCreateInFlight.add(chatId);
     try {
       const files = ticketAttachmentsByChat.get(chatId) || [];
       let requestBody;
@@ -4193,6 +4200,8 @@ chatListEl.addEventListener("click", async (e) => {
       setStatus(`Ticket ${data.ref} created.`, "success");
     } catch (err) {
       s.escalationError = "Ticket creation failed: " + err.message;
+    } finally {
+      ticketCreateInFlight.delete(chatId);
     }
     saveState();
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
@@ -5106,7 +5115,22 @@ setInterval(() => {
   if (!document.hidden) refreshDropdownOptions();
 }, OPTIONS_REFRESH_MS);
 
-document.getElementById("refreshBtn").addEventListener("click", () => {
+// ⟳ Refresh. When a new version has been deployed (deployment-refresh.js shows the notice and sets
+// deploymentUpdatePending) this is also THE way to load it -- never automatic, because a reload would interrupt a ticket
+// being created, a claim in flight, unsent attachments, or typing in LiveChat's own chat box. With no update pending it
+// behaves exactly as before.
+function handleRefreshClick() {
+  if (window.deploymentUpdatePending?.()) {
+    if (!window.canRefreshForDeployment()) {
+      showChatToast("Finish or cancel your current lookup / claim / ticket / Blast first, then click ⟳ again.", "warn");
+      return;
+    }
+    window.prepareForDeploymentRefresh();
+    if (window.reloadForDeploymentUpdate() === "already-tried") {
+      showChatToast("This update was already tried in this tab. Give it a minute to finish publishing, then click ⟳ again.", "info");
+    }
+    return;
+  }
   refreshDropdownOptions({ fresh: true });
   if (liveWidget) {
     // Live mode — re-sync against the SDK on demand rather than just
@@ -5128,7 +5152,8 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
     setStatus("Preview mode — showing sample chats until connected to LiveChat.");
     renderChats(activeChats);
   }
-});
+}
+document.getElementById("refreshBtn").addEventListener("click", handleRefreshClick);
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
 
 const loggingPauseCheck = document.getElementById("loggingPauseCheck");
@@ -5847,6 +5872,12 @@ window.canRefreshForDeployment = () => {
   // A Lark write that is still going (recording a chat, saving its link) must finish; an unsent typed username counts as work in progress.
   if (recordSubmitInFlight.size || linkSaveInFlight.size) return false;
   if (Object.values(state).some((s) => s && !s.logged && String(s.usernameDraft || "").trim())) return false;
+  // A ticket being created, a bonus claim being written, ticket attachments chosen but not sent (they live in memory only
+  // and would be lost), or a ticket form with typed input that has not been raised.
+  if (ticketCreateInFlight.size || claimWriteInFlight.size) return false;
+  for (const files of ticketAttachmentsByChat.values()) if (files && files.length) return false;
+  if (Object.values(state).some((s) => s && s.escalation && !s.escalationSubmitted
+    && ["queries", "transactionId", "paymentGateway", "remarks"].some((key) => String(s.escalation[key] || "").trim()))) return false;
   for (let i = 0; i < sessionStorage.length; i++) {
     if (sessionStorage.key(i)?.startsWith('ca-livechat-engagement:queue:')) return false;
   }

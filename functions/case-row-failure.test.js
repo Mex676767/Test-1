@@ -128,3 +128,45 @@ test("a healthy case row still comes back with an id, no warning, and the post-c
     assert.equal(calls.caseSearches, 2, "pre-create check plus post-create dedupe");
   });
 });
+
+// ---- Lark's REAL rejection of a URL field is URLFieldConvFail (code 1254068), which names no "link" ----------
+test("URLFieldConvFail (1254068) on the link column falls back to ONE link-less create; the row is saved with no warning", async () => {
+  await withLark({
+    caseSearch: noBlankRow,
+    create: (body, n) => (body.fields && "link" in body.fields)
+      ? json({ code: 1254068, msg: "URLFieldConvFail" })      // Lark's actual answer: no mention of "link" in the message
+      : created(),
+  }, async (calls) => {
+    const body = JSON.parse((await lookup()).body);
+    assert.equal(calls.creates.length, 2, "exactly two creates");
+    assert.ok("link" in calls.creates[0]);
+    assert.ok(!("link" in calls.creates[1]), "the second create carries no link");
+    assert.equal(body.caRecordId, "rec-created");
+    assert.equal(body.caseRowError, undefined);
+  });
+});
+
+test("FieldConvFail by message alone (no code) also triggers the fallback", async () => {
+  await withLark({
+    caseSearch: noBlankRow,
+    create: (body) => ("link" in body.fields) ? json({ code: 1254999, msg: "SomethingFieldConvFail" }) : created(),
+  }, async (calls) => {
+    const body = JSON.parse((await lookup()).body);
+    assert.equal(calls.creates.length, 2);
+    assert.equal(body.caRecordId, "rec-created");
+  });
+});
+
+test("the same code on a link-LESS create is not retried again, and timeouts / 5xx / throttling still never fall back", async () => {
+  for (const [label, response] of [
+    ["URL conversion error even without a link", json({ code: 1254068, msg: "URLFieldConvFail" })],
+    ["HTTP 500", json({ code: 1255001, msg: "InternalError" }, 500)],
+    ["throttled on HTTP 200", json({ code: 1254290, msg: "TooManyRequest" })],
+  ]) {
+    await withLark({ caseSearch: noBlankRow, create: () => response.clone() }, async (calls) => {
+      const body = JSON.parse((await lookup()).body);
+      assert.ok(body.caseRowError, label);
+      assert.ok(calls.creates.length <= (label.startsWith("URL") ? 2 : 1), `${label}: ${calls.creates.length} creates`);
+    });
+  }
+});

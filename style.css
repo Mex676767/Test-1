@@ -1282,3 +1282,9 @@ body { font-size: 13px; }
 .ticket-search-row .secondary-btn { border: 0; background: var(--blue); color: #fff; }
 .ticket-status-card { margin-top: 12px; padding: 12px; border-radius: 11px; background: var(--surface); box-shadow: 0 10px 28px rgba(0,0,0,.13); }
 .ticket-explorer { background: var(--surface); box-shadow: 0 10px 28px rgba(0,0,0,.1); }
+
+/* New version available: the ⟳ Refresh button is how the widget updates (see deployment-refresh.js / app.js). */
+#refreshBtn.update-pending { position: relative; color: #8fb0ff; animation: update-pulse 1.8s ease-in-out infinite; }
+#refreshBtn.update-pending::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #ff5d5d; }
+@keyframes update-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(79, 124, 255, .55); } 50% { box-shadow: 0 0 0 6px rgba(79, 124, 255, 0); } }
+@media (prefers-reduced-motion: reduce) { #refreshBtn.update-pending { animation: none; } }
