@@ -3082,12 +3082,15 @@ function applyPreviewSampleState(chat) {
   }
   if (BONUS_SHOWCASE_PREVIEW) {
     Object.assign(sample.matchedRow, {
+      riskPlayer: "Eligible · 30%",
+      riskExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
       topPnl: "Batch 09-09-2026 Pass RM58",
       gracePeriod: "Pass 58",
       graceExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
       ltvTest: "Pass RM18",
       vipBooster: "Eligible",
       mooncake: "Eligible · RM28",
+      vs96Feedback: "Eligible",
       telegram28: { status: "Eligible · RM28" },
       redeemCode: { status: "SUNNY-88" },
       specialReload: { status: "Eligible Angpao" },
