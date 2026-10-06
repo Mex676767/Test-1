@@ -11,13 +11,16 @@
   Cache-Control: no-cache, must-revalidate
 
 /app.js
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, must-revalidate
 
 /style.css
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, must-revalidate
 
 /blast/popup.js
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, must-revalidate
 
 /blast/web-adapter.js
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, must-revalidate
+
+# JS/CSS used to be cached for a year as immutable, keyed only by a hand-written ?v= in index.html. A push that forgot
+# to bump it never reached browsers that had cached the old file. They now revalidate (cheap 304) on every load.
