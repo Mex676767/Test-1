@@ -155,6 +155,43 @@ async function larkFetch(url, init = {}) {
   // signal for cancelling a queued acquisition, but start the short upstream
   // deadline only after we have a permit and are actually making the request.
   const { queueSignal, upstreamTimeoutMs, ...fetchInit } = init;
+  // Record searches go through the shared Durable Object as a short-window
+  // fan-in. Concurrent searches for the same table become one OR query over
+  // usernames, then the response is filtered back to this caller below.
+  if (LARK_SEARCH_QUEUE && String(url).includes("/records/search")) {
+    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    try {
+      const headers = Object.fromEntries(new Headers(fetchInit.headers || {}).entries());
+      let batchBody = typeof fetchInit.body === "string" ? fetchInit.body : "";
+      try {
+        const payload = JSON.parse(batchBody || "{}");
+        // The coordinator filters merged results using the caller's original
+        // predicates. Make sure projected responses include every field used
+        // by those predicates (usually Brand as well as Username).
+        if (Array.isArray(payload.field_names) && Array.isArray(payload.filter?.conditions)) {
+          payload.field_names = [...new Set([
+            ...payload.field_names,
+            ...payload.filter.conditions.map((condition) => condition.field_name).filter(Boolean),
+          ])];
+          batchBody = JSON.stringify(payload);
+        }
+      } catch (_) { /* Keep malformed payload handling with the normal API path. */ }
+      const pending = stub.searchBatch({
+        url: String(url),
+        method: fetchInit.method || "GET",
+        headers,
+        body: batchBody,
+      });
+      const result = queueSignal || fetchInit.signal
+        ? await awaitWithSignal(pending, queueSignal || fetchInit.signal)
+        : await pending;
+      return new Response(result.body, { status: result.status, statusText: result.statusText, headers: result.headers });
+    } catch (error) {
+      if (queueSignal?.aborted || fetchInit.signal?.aborted) throw error;
+      // During a staggered deployment or if the batch RPC is unavailable,
+      // fall through to the already-tested one-request permit path.
+    }
+  }
   const permit = await acquireSharedLarkPermit(queueSignal || fetchInit.signal);
   let upstreamTimer;
   let upstreamController;
@@ -407,7 +444,10 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         if (limited) reportSharedLarkRateLimit(res, err.retryAfterMs);
         throw err;
       }
-      return data.data.items || [];
+      const items = data.data.items || [];
+      return res.headers?.get?.("x-lark-batched") === "1"
+        ? items.filter((record) => matchesLarkSearchConditions(record, conditions))
+        : items;
     } catch (err) {
       if (controller.signal.aborted) {
         lastErr = new Error(`Lark search timed out after ${Math.round(timeoutMs / 1000)} seconds (table ${tableId}).`);
@@ -434,6 +474,18 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
     }
   }
   throw lastErr;
+}
+
+function matchesLarkSearchConditions(record, conditions) {
+  return (conditions || []).every(({ field_name: fieldName, operator, value = [] }) => {
+    const display = toDisplay(record?.fields?.[fieldName]).trim();
+    if (operator === "is") return (Array.isArray(value) ? value : [value]).some((expected) => display === toDisplay(expected).trim());
+    if (operator === "isEmpty") return !display;
+    if (operator === "isNotEmpty") return !!display;
+    // The batch coordinator only batches these simple predicates. Keep the
+    // guard explicit so any future operator uses the ordinary Lark query.
+    return true;
+  });
 }
 
 // Same as searchRecords, but follows Lark's page_token across up to

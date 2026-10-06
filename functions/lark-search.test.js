@@ -79,6 +79,82 @@ test("bonus-table searches request only the fields needed for eligibility and di
   }
 });
 
+test("batched search responses are filtered by the original username and brand conditions", async () => {
+  initEnv({ LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    code: 0,
+    data: { items: [
+      { fields: { Username: "alice", Brand: "PP" } },
+      { fields: { Username: "alice", Brand: "MY" } },
+      { fields: { Username: "bob", Brand: "PP" } },
+    ] },
+  }), { status: 200, headers: { "content-type": "application/json", "x-lark-batched": "1" } });
+
+  try {
+    const rows = await searchRecords("batched-table", [
+      { field_name: "Username", operator: "is", value: ["alice"] },
+      { field_name: "Brand", operator: "is", value: ["PP"] },
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].fields.Username, "alice");
+    assert.equal(rows[0].fields.Brand, "PP");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("100 concurrent callers for one table are coalesced without cross-player or cross-brand results", async () => {
+  const pending = [];
+  let upstreamBatchCalls = 0;
+  const queueStub = {
+    searchBatch: (request) => new Promise((resolve) => {
+      pending.push({ request, resolve });
+      if (pending.length === 1) setTimeout(() => {
+        const batch = pending.splice(0);
+        upstreamBatchCalls++;
+        const merged = batch.flatMap(({ request: item }) => JSON.parse(item.body).filter.conditions);
+        const usernames = [...new Set(merged.map((condition) => condition.value[0]))];
+        const records = usernames.flatMap((username) => ["PP", "MY"].map((brand) => ({ fields: { Username: username, Brand: brand } })));
+        for (const { request: item, resolve: finish } of batch) {
+          finish({
+            status: 200,
+            statusText: "OK",
+            headers: [["content-type", "application/json"], ["x-lark-batched", "1"]],
+            body: JSON.stringify({ code: 0, data: { items: records.filter((record) => usernames.includes(record.fields.Username)) } }),
+          });
+        }
+      }, 15);
+    }),
+    acquire: async () => { throw new Error("batch test should not acquire individual permits"); },
+    release: async () => {},
+    penalize: async () => {},
+  };
+  initEnv({
+    LARK_APP_ID: "batch-load-app", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
+    LARK_SEARCH_QUEUE: { idFromName: () => "global", get: () => queueStub },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => response({ code: 0, tenant_access_token: "batch-token", expire: 3600 });
+
+  try {
+    const results = await Promise.all(Array.from({ length: 100 }, (_, index) => {
+      const username = `agent-player-${index}`;
+      const brand = index % 2 ? "MY" : "PP";
+      return searchRecords("shared-bonus-table", [
+        { field_name: "Username", operator: "is", value: [username] },
+        { field_name: "Brand", operator: "is", value: [brand] },
+      ], undefined, { fieldNames: ["Bonus"] }).then((rows) => ({ username, brand, rows }));
+    }));
+    assert.ok(upstreamBatchCalls < 100, `batching should reduce 100 per-player upstream calls, observed ${upstreamBatchCalls}`);
+    assert.ok(upstreamBatchCalls <= 40, `local concurrency cap should still allow useful coalescing, observed ${upstreamBatchCalls}`);
+    assert.ok(results.every(({ username, brand, rows }) => rows.length === 1
+      && rows[0].fields.Username === username && rows[0].fields.Brand === brand));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("bonus lookup falls back to a table's Username column when Username/UID is absent", async () => {
   initEnv({ LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
   const originalFetch = globalThis.fetch;
