@@ -2,6 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
+  <meta name="widget-release" content="development" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Console</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
@@ -58,7 +59,7 @@
 
   <main id="chatList" class="chat-list"></main>
   <section id="blastView" class="blast-view" hidden>
-    <iframe data-src="/blast/index.html?v=20261006-4" loading="lazy" title="LiveChat Engagement"></iframe>
+    <iframe data-src="/blast/index.html?v=20261006-6" loading="lazy" title="LiveChat Engagement"></iframe>
   </section>
   <section id="knowledgeView" class="knowledge-view" hidden>
     <iframe data-src="/knowledge/index.html" loading="lazy" title="CS Learning Assistant"></iframe>
@@ -70,7 +71,8 @@
        time app.js checks for it; harmless (just unused) when previewed
        standalone outside LiveChat, or if this CDN fails to load. -->
   <script src="vendor/livechat-agentapp-1.16.0.min.js"></script>
-  <script src="app.js?v=20261006-5"></script>
+  <script src="app.js?v=20261006-6"></script>
+  <script src="deployment-refresh.js?v=20261006-6"></script>
 </body>
 </html>
 

@@ -23,6 +23,7 @@
   let runSequence = 0;
   let activeRunId = 0;
   let journal = null;
+  let recoveryIdle = false;
   let unloading = false;
   window.addEventListener("pagehide", () => { unloading = true; });
 
@@ -76,6 +77,7 @@
     if (journal && !stopRequested) sessionStorage.setItem(journalKey(), JSON.stringify(journal));
   };
   globalThis.__blastSavedQueue = savedQueue;
+  globalThis.__blastSessionKey = name => `${prefix}${name}:${selectedAccount()}`;
   const accountStorageKey = (base, accountKey) => `${base}:${accountKey || selectedAccount()}`;
   const token = (accountKey = selectedAccount()) => accountKey && Number(sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, accountKey)) || 0) > Date.now()
     ? sessionStorage.getItem(accountStorageKey(TOKEN_KEY, accountKey)) || ""
@@ -255,22 +257,23 @@
     let resumed = Boolean(progress.resumed);
     let temporarilyAddedAgent = Boolean(progress.added);
     let agentAccountId = progress.agentAccountId || "";
-    let chatId = "";
+    let chatId = progress.chatId || "";
     try {
       emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
       const chat = await resolveChat(job.url);
       if (runWasStopped(runId)) throw new Error("Stopped by user");
       chatId = chat.chatId;
-      if (progress.delivered) {
+      progress.chatId = chatId;
+      checkpoint();
+      if (progress.delivered || progress.deliveryFinished) {
         // Closing the last chat can itself replace the widget. Never reopen
         // that chat just to discover its messages were already sent.
-        if (resumed && chat.isActive === true) await action("deactivate_chat", { id: chatId, ignore_requester_presence: true });
-        resumed = false;
         return;
       }
       if (chat.isActive !== true) {
         try {
           progress.resumed = true;
+          resumed = true;
           checkpoint();
           await action("resume_chat", { chat: { id: chat.chatId } });
           resumed = true;
@@ -303,11 +306,6 @@
       if (!progress.events.image?.done) await sendImage(chat.chatId, job, (_name, body) => sendCheckpointed(body, progress, "image"));
       progress.delivered = true;
       checkpoint();
-      if (resumed) {
-        await action("deactivate_chat", { id: chat.chatId, ignore_requester_presence: true });
-        resumed = false;
-      }
-      emit({ type: "PROGRESS", text: `Completed chat ${index + 1} of ${total}`, progress: `${index + 1}/${total}`, log: `✓ Chat ${index + 1} sent as the connected agent`, logType: "ok" });
     } catch (error) {
       if (unloading) return;
       const stopped = runWasStopped(runId) || error.message === "Stopped by user";
@@ -321,8 +319,9 @@
       });
     } finally {
       if (unloading) return;
-      progress.done = true;
+      progress.deliveryFinished = true;
       checkpoint();
+      let cleanupFailed = false;
       if (temporarilyAddedAgent && chatId && agentAccountId) {
         try {
           await action("remove_user_from_chat", {
@@ -330,12 +329,29 @@
             user_id: agentAccountId,
             user_type: "agent",
           });
-        } catch (_) {}
+          progress.added = false;
+          checkpoint();
+        } catch (error) { cleanupFailed = true; }
       }
       // Do not leave a customer chat open when a later message or image fails.
       if (resumed && chatId) {
-        try { await action("deactivate_chat", { id: chatId, ignore_requester_presence: true }); } catch (_) {}
+        try {
+          const current = await action("get_chat", { chat_id: chatId });
+          if (current.thread?.active !== false) {
+            await action("deactivate_chat", { id: chatId, ignore_requester_presence: true });
+            const closed = await action("get_chat", { chat_id: chatId });
+            if (closed.thread?.active === true) throw new Error("Chat is still active");
+          }
+          progress.resumed = false;
+          checkpoint();
+        } catch (error) { cleanupFailed = true; }
       }
+      if (unloading) return;
+      // A reload during cleanup must return here, not skip a supposedly done job.
+      progress.done = !cleanupFailed;
+      checkpoint();
+      if (cleanupFailed) emit({ type: "PROGRESS", text: `Retrying cleanup for chat ${index + 1}…`, log: `Chat ${index + 1}: delivery finished; cleanup still pending`, logType: "info" });
+      else if (progress.delivered) emit({ type: "PROGRESS", text: `Completed chat ${index + 1} of ${total}`, progress: `${index + 1}/${total}`, log: `✓ Chat ${index + 1} sent and cleaned up`, logType: "ok" });
     }
   }
 
@@ -367,7 +383,25 @@
       }
     };
     await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));
+    for (let attempt = 0; attempt < 3 && !runWasStopped(runId); attempt++) {
+      const pending = jobs.map((job, index) => ({ job, index })).filter(({ index }) => !journal.progress[index]?.done);
+      if (!pending.length) break;
+      await sleep(1000 * (attempt + 1));
+      for (const { job, index } of pending) {
+        if (runWasStopped(runId)) return;
+        await waitWhilePaused();
+        await runJob(job, index, jobs.length, delay, runId);
+      }
+    }
     if (!unloading && runId === activeRunId) {
+      if (jobs.some((_, index) => !journal.progress[index]?.done)) {
+        journal.paused = true;
+        checkpoint();
+        setPaused(true);
+        recoveryIdle = true;
+        emit({ type: "PAUSED", text: "Messages processed; chat cleanup is pending. Resume retries cleanup only." });
+        return;
+      }
       sessionStorage.removeItem(journalKey());
       journal = null;
       emit({ type: "DONE", stopped: stopRequested });
@@ -375,6 +409,7 @@
   }
 
   function launchQueue(saved) {
+    recoveryIdle = false;
     journal = saved;
     stopRequested = false;
     setPaused(Boolean(saved.paused));
@@ -551,6 +586,7 @@
         if (message?.type === "RESUME" && !stopRequested) {
           if (journal) { journal.paused = false; checkpoint(); }
           setPaused(false);
+          if (recoveryIdle && journal) launchQueue(journal);
           emit({ type: "RESUMED" });
         }
         if (message?.type === "LOG_FAILURES") (message.failures || []).forEach((failure) => recordFailure(failure.job, failure.index, failure.stage || "queue validation", failure.reason || "Invalid queue item"));

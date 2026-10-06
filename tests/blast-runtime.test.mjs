@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {webcrypto} from 'node:crypto';
 
-test('embedded Blast sends all 151 chats without opening a delivery window', async () => {
+test('embedded Blast sends 151 chats and retries failed final cleanup without resending', async () => {
   const values = new Map([
     ['ca-livechat-agent-token:lc2','mock-agent-token'],
     ['ca-livechat-agent-token-expiry:lc2', String(Date.now()+3600000)],
@@ -27,6 +27,7 @@ test('embedded Blast sends all 151 chats without opening a delivery window', asy
       if(url==='/livechat-chat-status')return Response.json({ok:true,chatId:body.realChatId,isActive:false,accountKey:'lc2',raw:{users:[]}});
       const action=String(url).split('/').pop();
       calls.push({action,body});
+      if(action==='deactivate_chat' && body.id==='C150' && calls.filter(c=>c.action==='deactivate_chat'&&c.body.id==='C150').length===1)throw new Error('Temporary cleanup network failure');
       assert.equal(init.headers.Authorization,'Bearer mock-agent-token');
       return Response.json(action==='send_event'?{event_id:'mock-event'}:{});
     },
@@ -39,10 +40,11 @@ test('embedded Blast sends all 151 chats without opening a delivery window', asy
   assert.equal((await done).stopped,false);
   assert.equal(calls.filter(c=>c.action==='send_event').length,151);
   assert.equal(new Set(calls.filter(c=>c.action==='send_event').map(c=>c.body.chat_id)).size,151);
-  assert.equal(calls.filter(c=>c.action==='deactivate_chat').length,151);
+  assert.equal(calls.filter(c=>c.action==='deactivate_chat').length,152);
+  assert.equal(new Set(calls.filter(c=>c.action==='deactivate_chat').map(c=>c.body.id)).size,151);
 });
 
-test('widget does not automatically reload for deployments', () => {
+test('main application delegates deployment refresh to the release checker', () => {
   const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
   assert.doesNotMatch(app,/location\.reload\s*\(|checkForUpdate|reloadWhenSafe/);
 });
@@ -79,7 +81,7 @@ test('SDK connection preserves selected Blast and queue pins its existing iframe
   assert.equal(view.hidden,true);
 });
 
-for (const reloadAt of ['resume_chat', 'send_event', 'deactivate_chat', 'unconfirmed_send']) {
+for (const reloadAt of ['resume_chat', 'send_event', 'deactivate_chat', 'unconfirmed_send', 'last_close']) {
   test(`151-chat queue recovers a destroyed iframe during ${reloadAt} without duplicate messages`, async () => {
     const values=new Map([
       ['ca-livechat-agent-token:lc2','mock-token'],
@@ -113,8 +115,8 @@ for (const reloadAt of ['resume_chat', 'send_event', 'deactivate_chat', 'unconfi
           calls.push({name,id});
           if(name==='resume_chat')chat.active=true;
           if(name==='send_event' && !(reloadAt==='unconfirmed_send' && !destroyed))chat.events.push(body.event);
-          if(name==='deactivate_chat')chat.active=false;
-          if(!destroyed&&name===(reloadAt==='unconfirmed_send'?'send_event':reloadAt)) {
+          if(name==='deactivate_chat' && !(reloadAt==='last_close'&&id==='C150'&&!destroyed))chat.active=false;
+          if(!destroyed&&((reloadAt==='last_close'&&name==='deactivate_chat'&&id==='C150')||name===(reloadAt==='unconfirmed_send'?'send_event':reloadAt))) {
             destroyed=true;
             events.pagehide();
             notifyDestroyed();

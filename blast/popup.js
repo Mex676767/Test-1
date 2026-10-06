@@ -383,6 +383,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (msg.log) addLog(msg.log, msg.logType || '');
   }
   if (msg.type === 'DONE') {
+    try { if (globalThis.__blastSessionKey) sessionStorage.setItem(globalThis.__blastSessionKey('last-result'), msg.stopped ? 'Stopped' : 'Last queue completed'); } catch (_) {}
     running = false;
     paused = false;
     chrome.storage.sync.set({ isRunning: false, isPaused: false });
@@ -394,7 +395,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'PAUSED') {
     paused = true;
     chrome.storage.sync.set({ isPaused: true });
-    statusText.textContent = 'Pausing — active chats will finish safely';
+    statusText.textContent = msg.text || 'Pausing — active chats will finish safely';
     updateRunControls();
     addLog('Ⅱ Paused before starting any more chats', 'info');
   }
@@ -464,6 +465,7 @@ startBtn.addEventListener('click', () => {
 
   running = true;
   paused = false;
+  try { if (globalThis.__blastSessionKey) sessionStorage.removeItem(globalThis.__blastSessionKey('last-result')); } catch (_) {}
   chrome.storage.sync.set({ isRunning: true, isPaused: false });
   log.innerHTML = '';
   status.classList.add('on');
@@ -770,4 +772,42 @@ if (bulkImgUrl) {
     const n = bulkImgUrl.value.split('\n').filter(l => l.trim()).length;
     document.getElementById('cntImg').textContent = n > 0 ? `${n} / ${MAX_ROWS}` : '—';
   });
+}
+
+// Keep the visible paste grid through host-driven iframe replacements.
+const blastDraftKey = globalThis.__blastSessionKey?.('draft');
+const draftFields = [bulkLinks, bulkMsg1, bulkMsg2, bulkMsg3, bulkImgUrl];
+function saveBlastDraft() {
+  if (!blastDraftKey) return;
+  try {
+    sessionStorage.setItem(blastDraftKey, JSON.stringify({
+      values: draftFields.map(field => field?.value || ''), mode: bulkMessageMode(),
+      imageMode: bulkImgMode, imageDataUrl: bulkImgDataUrl, imageFileName: bulkImgFileName,
+    }));
+  } catch (_) { showBulkStatus('Draft could not be saved in this browser. Keep this widget open.', 'err'); }
+}
+try {
+  const draft = JSON.parse(sessionStorage.getItem(blastDraftKey) || 'null');
+  if (draft) {
+    draftFields.forEach((field, i) => { if (field) field.value = draft.values?.[i] || ''; });
+    const mode = bulkMessageModeInputs.find(input => input.value === draft.mode);
+    if (mode) mode.checked = true;
+    if (draft.imageMode === 'file' && draft.imageDataUrl) {
+      imgSubFile.click();
+      bulkImgMode = 'file'; bulkImgDataUrl = draft.imageDataUrl; bulkImgFileName = draft.imageFileName;
+      imgFileName.textContent = draft.imageFileName || 'Saved image';
+      imgFileName.style.display = 'block'; imgFileClear.style.display = 'inline';
+      imgFileType.style.display = 'none'; imgFileWrap.classList.add('has-file');
+    }
+    syncBulkMessageMode();
+    updateCounter(bulkLinks, 'cntLinks');
+  }
+} catch (_) { /* An invalid draft must not stop queue recovery. */ }
+document.addEventListener('input', saveBlastDraft);
+document.addEventListener('change', saveBlastDraft);
+document.addEventListener('click', () => setTimeout(saveBlastDraft, 0));
+window.addEventListener('pagehide', saveBlastDraft);
+if (!running && globalThis.__blastSessionKey) {
+  const lastResult = sessionStorage.getItem(globalThis.__blastSessionKey('last-result'));
+  if (lastResult) { status.classList.add('on'); statusText.textContent = lastResult; }
 }

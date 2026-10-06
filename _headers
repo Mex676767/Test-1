@@ -4,6 +4,9 @@
 /index.html
   Cache-Control: no-cache, must-revalidate
 
+/release.json
+  Cache-Control: no-store
+
 /blast/index.html
   Cache-Control: no-cache, must-revalidate
 

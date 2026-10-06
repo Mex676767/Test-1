@@ -5689,3 +5689,13 @@ document.getElementById("needsAttentionToggle").addEventListener("click", () => 
 });
 
 // Updates load on the next manual refresh or when LiveChat recreates the widget.
+
+// A new release may refresh only after all queue work, including cleanup, ends.
+window.canRefreshForDeployment = () => {
+  if (blastRunInProgress || Object.values(state).some(s => s?.lookupInFlight || s?.unclaimInFlight)) return false;
+  for (let i = 0; i < sessionStorage.length; i++) {
+    if (sessionStorage.key(i)?.startsWith('ca-livechat-engagement:queue:')) return false;
+  }
+  const element = document.activeElement;
+  return !element || !['INPUT', 'TEXTAREA', 'SELECT', 'IFRAME'].includes(element.tagName);
+};
