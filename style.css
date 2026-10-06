@@ -101,18 +101,6 @@ body {
 .blast-view iframe,
 .knowledge-view iframe { display: block; width: 100%; height: 100%; min-height: 760px; border: 0; }
 
-/* Global "don't log chats" toggle — deliberately styled to stand out only
-   once ticked (danger color), so an idle unticked state doesn't compete
-   for attention with the agent badge right next to it. */
-.logging-pause-toggle {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;
-}
-.topbar .logging-pause-toggle { margin-top: 6px; }
-.logging-pause-toggle input { accent-color: var(--danger); width: 13px; height: 13px; cursor: pointer; }
-.logging-pause-toggle.active { color: var(--danger); font-weight: 600; }
-.logging-pause-toggle.blast-locked { color: var(--gold); }
-.logging-pause-toggle.blast-locked input { opacity: 1; cursor: not-allowed; }
 
 .icon-btn, .theme-toggle {
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
@@ -1054,8 +1042,6 @@ body { font-size: 13px; }
   color: #fff; background: color-mix(in srgb, var(--blue) 74%, var(--surface));
   box-shadow: 0 4px 12px color-mix(in srgb, var(--blue) 24%, transparent), inset 0 0 0 1px color-mix(in srgb, #fff 14%, transparent);
 }
-.customer-tools { min-height: 34px; padding: 5px 13px 10px; border-top: 0; background: var(--bg); font-size: 11px; }
-.logging-pause-toggle { font-size: 11px; }
 
 .chat-list { padding: 9px 10px; gap: 8px; }
 #chatList:has(.chat-card.needs-attention) {

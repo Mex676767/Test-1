@@ -58,7 +58,7 @@ function sweepHarness({ succeedOnAttempt = Infinity } = {}) {
   const submits = [];
   const context = vm.createContext({
     PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date: { now: () => clock.now }, JSON,
-    activeChats: [], state: st, loggingPaused: false, currentLiveChatAccount: 'lc1', selectedAgent: 'Agent A',
+    activeChats: [], state: st, isLoggingPaused: () => false, currentLiveChatAccount: 'lc1', selectedAgent: 'Agent A',
     document: { hidden: false },
     // storage mirrors what submitRecord's saveState() writes: a recorded chat is persisted as logged
     loadPersistedState: () => ({ c1: { chatOpen: false, logged: !!st.c1?.logged, liveChatAccount: 'lc1', caOwner: 'Agent A', inquiry: [], status: '' } }),
