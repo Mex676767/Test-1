@@ -3,9 +3,8 @@
 (() => {
   if (globalThis.chrome?.storage?.local && globalThis.chrome?.runtime?.sendMessage) return;
 
-  // Lets popup.js distinguish this embedded web runtime from the browser
-  // extension. A web run cannot survive an iframe/page reload, so persisted
-  // running flags must never restore a run that no longer exists.
+  // Embedded queues checkpoint before API mutations so a replaced LiveChat
+  // iframe can resume without replaying acknowledged customer messages.
   globalThis.__blastWebAdapter = true;
 
   const storageListeners = [];
@@ -23,6 +22,9 @@
   let pauseWaiters = [];
   let runSequence = 0;
   let activeRunId = 0;
+  let journal = null;
+  let unloading = false;
+  window.addEventListener("pagehide", () => { unloading = true; });
 
   const setPaused = (next) => {
     pauseRequested = next;
@@ -67,6 +69,13 @@
     try { return validAccountKey(window.parent?.sessionStorage?.getItem(DETECTED_ACCOUNT_KEY)); } catch (_) { return ""; }
   };
   const selectedAccount = () => detectedAccount() || validAccountKey(sessionStorage.getItem(SELECTED_ACCOUNT_KEY));
+  const journalKey = () => `${prefix}queue:${selectedAccount()}`;
+  const savedQueue = () => { try { return JSON.parse(sessionStorage.getItem(journalKey()) || "null"); } catch (_) { return null; } };
+  const checkpoint = () => {
+    if (unloading) throw new Error("Widget reloading");
+    if (journal && !stopRequested) sessionStorage.setItem(journalKey(), JSON.stringify(journal));
+  };
+  globalThis.__blastSavedQueue = savedQueue;
   const accountStorageKey = (base, accountKey) => `${base}:${accountKey || selectedAccount()}`;
   const token = (accountKey = selectedAccount()) => accountKey && Number(sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, accountKey)) || 0) > Date.now()
     ? sessionStorage.getItem(accountStorageKey(TOKEN_KEY, accountKey)) || ""
@@ -156,12 +165,14 @@
     return { chatId: data.chatId, threadId: ids.threadId, isActive: data.isActive, users: data.raw?.users || [] };
   }
 
-  async function action(name, body, formData) {
+  async function action(name, body, formData, beforeDispatch) {
     const accessToken = token();
     if (!accessToken) throw new Error("Your agent authorization expired. Connect LiveChat again.");
     const maxAttempts = 8;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       await waitForActionSlot();
+      if (unloading) throw new Error("Widget reloading");
+      beforeDispatch?.();
       const response = await fetch(`https://api.livechatinc.com/v3.6/agent/action/${name}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}`, ...(formData ? {} : { "Content-Type": "application/json" }) },
@@ -171,7 +182,7 @@
       let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (_) {}
       const errorType = String(data.error?.type || data.error?.code || "").toLowerCase();
       const isTransient = response.status === 429 || response.status >= 500 || ["too_many_requests", "request_timeout", "service_unavailable", "internal"].includes(errorType);
-      if (isTransient && attempt < maxAttempts) {
+      if (isTransient && attempt < maxAttempts && (name !== "send_event" || response.status === 429)) {
         const retryAfter = Number(response.headers?.get?.("retry-after"));
         const backoff = Number.isFinite(retryAfter) && retryAfter > 0
           ? retryAfter * 1000
@@ -198,7 +209,7 @@
     return new File([bytes], fileName || "image.png", { type: mime });
   };
 
-  async function sendImage(chatId, job) {
+  async function sendImage(chatId, job, send = action) {
     let file;
     if (job.imageDataUrl) file = dataUrlFile(job.imageDataUrl, job.imageFileName);
     else if (job.imageUrl) {
@@ -211,23 +222,56 @@
     const form = new FormData();
     form.append("file", file);
     const uploaded = await action("upload_file", null, form);
-    await action("send_event", { chat_id: chatId, event: { type: "file", url: uploaded.url, visibility: "all", alternative_text: file.name } });
+    await send("send_event", { chat_id: chatId, event: { type: "file", url: uploaded.url, visibility: "all", alternative_text: file.name } });
   }
 
-  const runWasStopped = (runId) => stopRequested || runId !== activeRunId;
+  const runWasStopped = (runId) => unloading || stopRequested || runId !== activeRunId;
+
+  async function sendCheckpointed(body, progress, key) {
+    const saved = progress.events[key];
+    if (saved?.done) return;
+    if (saved?.dispatched) {
+      // A refresh may have discarded the send response. Custom IDs identify
+      // delivery; they are not an API idempotency guarantee. Never blindly retry.
+      const chat = await action("get_chat", { chat_id: body.chat_id });
+      if (!(chat.thread?.events || []).some(event => event.custom_id === saved.id)) {
+        throw new Error("Delivery could not be confirmed after widget reload; this chat was not resent. Check its history.");
+      }
+    } else {
+      progress.events[key] = { id: saved?.id || crypto.randomUUID(), done: false, dispatched: false };
+      checkpoint();
+      await action("send_event", { ...body, event: { ...body.event, custom_id: progress.events[key].id } }, null, () => {
+        progress.events[key].dispatched = true;
+        checkpoint();
+      });
+    }
+    progress.events[key].done = true;
+    checkpoint();
+  }
 
   async function runJob(job, index, total, delay, runId) {
-    let resumed = false;
-    let temporarilyAddedAgent = false;
-    let agentAccountId = "";
+    const progress = journal.progress[index] ||= { events: {} };
+    if (progress.done) return;
+    let resumed = Boolean(progress.resumed);
+    let temporarilyAddedAgent = Boolean(progress.added);
+    let agentAccountId = progress.agentAccountId || "";
     let chatId = "";
     try {
       emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
       const chat = await resolveChat(job.url);
       if (runWasStopped(runId)) throw new Error("Stopped by user");
       chatId = chat.chatId;
+      if (progress.delivered) {
+        // Closing the last chat can itself replace the widget. Never reopen
+        // that chat just to discover its messages were already sent.
+        if (resumed && chat.isActive === true) await action("deactivate_chat", { id: chatId, ignore_requester_presence: true });
+        resumed = false;
+        return;
+      }
       if (chat.isActive !== true) {
         try {
+          progress.resumed = true;
+          checkpoint();
           await action("resume_chat", { chat: { id: chat.chatId } });
           resumed = true;
         } catch (error) {
@@ -237,6 +281,9 @@
         agentAccountId = await currentAgentAccountId();
         const alreadyPresent = (chat.users || []).some((user) => String(user?.id || "") === agentAccountId);
         if (!alreadyPresent) {
+          progress.added = true;
+          progress.agentAccountId = agentAccountId;
+          checkpoint();
           await action("add_user_to_chat", {
             chat_id: chat.chatId,
             user_id: agentAccountId,
@@ -249,17 +296,20 @@
       }
       for (let i = 0; i < job.messages.length; i += 1) {
         if (runWasStopped(runId)) throw new Error("Stopped by user");
-        await action("send_event", { chat_id: chat.chatId, event: { type: "message", text: job.messages[i], visibility: "all" } });
+        await sendCheckpointed({ chat_id: chat.chatId, event: { type: "message", text: job.messages[i], visibility: "all" } }, progress, `message:${i}`);
         if (i < job.messages.length - 1) await sleep(delay);
       }
       if (runWasStopped(runId)) throw new Error("Stopped by user");
-      await sendImage(chat.chatId, job);
+      if (!progress.events.image?.done) await sendImage(chat.chatId, job, (_name, body) => sendCheckpointed(body, progress, "image"));
+      progress.delivered = true;
+      checkpoint();
       if (resumed) {
         await action("deactivate_chat", { id: chat.chatId, ignore_requester_presence: true });
         resumed = false;
       }
       emit({ type: "PROGRESS", text: `Completed chat ${index + 1} of ${total}`, progress: `${index + 1}/${total}`, log: `✓ Chat ${index + 1} sent as the connected agent`, logType: "ok" });
     } catch (error) {
+      if (unloading) return;
       const stopped = runWasStopped(runId) || error.message === "Stopped by user";
       if (!stopped) recordFailure(job, index, "LiveChat API", error.message);
       emit({
@@ -270,6 +320,9 @@
         logType: stopped ? "info" : "err",
       });
     } finally {
+      if (unloading) return;
+      progress.done = true;
+      checkpoint();
       if (temporarilyAddedAgent && chatId && agentAccountId) {
         try {
           await action("remove_user_from_chat", {
@@ -314,8 +367,44 @@
       }
     };
     await Promise.all(Array.from({ length: Math.min(10, Math.max(1, concurrency || 1), jobs.length) }, worker));
-    if (runId === activeRunId) emit({ type: "DONE", stopped: stopRequested });
+    if (!unloading && runId === activeRunId) {
+      sessionStorage.removeItem(journalKey());
+      journal = null;
+      emit({ type: "DONE", stopped: stopRequested });
+    }
   }
+
+  function launchQueue(saved) {
+    journal = saved;
+    stopRequested = false;
+    setPaused(Boolean(saved.paused));
+    const runId = ++runSequence;
+    activeRunId = runId;
+    const run = async () => {
+      if (runWasStopped(runId)) return;
+      // Another iframe may have finished the same saved run while this one
+      // waited for ownership. Read its latest checkpoint after taking the lock.
+      const latest = savedQueue();
+      if (!latest || latest.id !== saved.id) {
+        journal = null;
+        emit({ type: "DONE", stopped: false });
+        return;
+      }
+      journal = latest;
+      await runJobs(latest.jobs, latest.delay, latest.concurrency, runId);
+    };
+    // Only one iframe may own delivery while LiveChat replaces its widget.
+    const task = globalThis.navigator?.locks
+      ? navigator.locks.request(`blast-delivery:${selectedAccount()}`, run)
+      : run();
+    task.catch(error => emit({ type: "ERROR", text: error.message }));
+  }
+
+  globalThis.__blastRestoreQueue = () => {
+    const saved = savedQueue();
+    if (saved && !token()) { emit({ type: "AUTH_REQUIRED" }); return; }
+    if (saved && !journal) launchQueue(saved);
+  };
 
   function connectAgent(client, authWindow = null) {
     const state = crypto.randomUUID();
@@ -448,15 +537,19 @@
       openOptionsPage() { location.href = "settings.html"; },
       sendMessage(message) {
         if (message?.type === "STOP") {
+          sessionStorage.removeItem(journalKey());
+          journal = null;
           stopRequested = true;
           activeRunId = ++runSequence;
           setPaused(false);
         }
         if (message?.type === "PAUSE" && !stopRequested) {
+          if (journal) { journal.paused = true; checkpoint(); }
           setPaused(true);
           emit({ type: "PAUSED" });
         }
         if (message?.type === "RESUME" && !stopRequested) {
+          if (journal) { journal.paused = false; checkpoint(); }
           setPaused(false);
           emit({ type: "RESUMED" });
         }
@@ -465,11 +558,15 @@
           if (!token()) {
             setTimeout(() => emit({ type: "AUTH_REQUIRED" }), 0);
           } else {
-            stopRequested = false;
-            setPaused(false);
-            const runId = ++runSequence;
-            activeRunId = runId;
-            runJobs(message.jobs || [], Number(message.delay) || 0, Number(message.concurrency) || 1, runId);
+            if (journal) return Promise.resolve();
+            const saved = { id: crypto.randomUUID(), jobs: message.jobs || [], delay: Number(message.delay) || 0, concurrency: Number(message.concurrency) || 1, progress: {}, paused: false };
+            try {
+              sessionStorage.setItem(journalKey(), JSON.stringify(saved));
+              launchQueue(saved);
+            } catch (error) {
+              emit({ type: "ERROR", text: `Cannot save recoverable queue: ${error.message}` });
+              emit({ type: "DONE", stopped: true });
+            }
           }
         }
         return Promise.resolve();

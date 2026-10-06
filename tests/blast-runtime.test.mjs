@@ -86,3 +86,68 @@ test('SDK connection preserves selected Blast and queue pins its existing iframe
   vm.runInContext('syncMainTabs()',context);
   assert.equal(view.hidden,true);
 });
+
+for (const reloadAt of ['resume_chat', 'send_event', 'deactivate_chat', 'unconfirmed_send']) {
+  test(`151-chat queue recovers a destroyed iframe during ${reloadAt} without duplicate messages`, async () => {
+    const values=new Map([
+      ['ca-livechat-agent-token:lc2','mock-token'],
+      ['ca-livechat-agent-token-expiry:lc2',String(Date.now()+3600000)],
+      ['ca-livechat-agent-account-id:lc2','agent'],
+    ]);
+    const storage={getItem:k=>values.get(k)||null,setItem:(k,v)=>values.set(k,String(v)),removeItem:k=>values.delete(k)};
+    const chats=new Map();
+    const calls=[];
+    let destroyed=false;
+    let notifyDestroyed;
+    const destruction=new Promise(resolve=>notifyDestroyed=resolve);
+    function boot() {
+      const events={};
+      let time=Date.now();
+      const browser={
+        location:{origin:'https://widget.test',pathname:'/blast/index',search:'?account=lc2'},
+        sessionStorage:storage,localStorage:storage,document:{getElementById:()=>null},
+        addEventListener:(name,fn)=>{events[name]=fn;},
+        URL,URLSearchParams,Response,FormData,File,AbortSignal,crypto:webcrypto,
+        Date:class extends Date{static now(){time+=350;return time;}},
+        setTimeout:fn=>setTimeout(fn,0),clearTimeout,
+        async fetch(url,init={}) {
+          if(url==='/livechat-oauth-config')return Response.json({});
+          const body=JSON.parse(init.body||'{}');
+          const id=body.realChatId||body.chat_id||body.chat?.id||body.id;
+          const chat=chats.get(id)||{active:false,events:[]};
+          chats.set(id,chat);
+          if(url==='/livechat-chat-status')return Response.json({ok:true,chatId:id,isActive:chat.active,accountKey:'lc2',raw:{users:[{id:'agent'}]}});
+          const name=String(url).split('/').pop();
+          calls.push({name,id});
+          if(name==='resume_chat')chat.active=true;
+          if(name==='send_event' && !(reloadAt==='unconfirmed_send' && !destroyed))chat.events.push(body.event);
+          if(name==='deactivate_chat')chat.active=false;
+          if(!destroyed&&name===(reloadAt==='unconfirmed_send'?'send_event':reloadAt)) {
+            destroyed=true;
+            events.pagehide();
+            notifyDestroyed();
+            return new Promise(()=>{}); // The old document never gets the response.
+          }
+          return Response.json(name==='get_chat'?{thread:{events:chat.events}}:{event_id:'mock-event'});
+        },
+      };
+      browser.window=browser;browser.parent=browser;
+      vm.runInContext(readFileSync(new URL('../blast/web-adapter.js',import.meta.url),'utf8'),vm.createContext(browser));
+      return browser;
+    }
+    const first=boot();
+    first.chrome.runtime.sendMessage({type:'START',concurrency:5,delay:0,jobs:Array.from({length:151},(_,i)=>({url:`https://my.livechatinc.com/chats/C${i}/T${i}`,messages:[`Test ${i}`]}))});
+    await destruction;
+    assert.ok(values.get('ca-livechat-engagement:queue:lc2'));
+    const next=boot();
+    const done=new Promise(resolve=>next.chrome.runtime.onMessage.addListener(event=>{if(event.type==='DONE')resolve(event);}));
+    next.__blastRestoreQueue();
+    assert.equal((await done).stopped,false);
+    assert.equal(calls.filter(c=>c.name==='send_event').length,151);
+    for(let i=0;i<151;i++) {
+      assert.equal(chats.get(`C${i}`).events.length,reloadAt==='unconfirmed_send'&&i===0?0:1);
+      assert.equal(chats.get(`C${i}`).active,false);
+    }
+    assert.equal(values.get('ca-livechat-engagement:queue:lc2'),undefined);
+  });
+}

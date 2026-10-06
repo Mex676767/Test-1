@@ -698,6 +698,8 @@ let previewMode = !IS_EMBEDDED_APP;
 const BONUS_SHOWCASE_PREVIEW = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("bonusPreview") === "all";
 let showPreviewClosedChat = false;
 let activeMainTab = "customer";
+const MAIN_TAB_SESSION_KEY = `rc-main-tab:${CONFIGURED_LIVECHAT_ACCOUNT || "default"}`;
+try { if (sessionStorage.getItem(MAIN_TAB_SESSION_KEY) === "blast") activeMainTab = "blast"; } catch (_) {}
 
 // Department access is intentionally session-only. Each incognito LiveChat
 // window gets its own value, and closing that window clears it. Until a valid
@@ -1460,6 +1462,7 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   if (!button || button.hidden) return;
   activeMainTab = button.dataset.mainTab;
   syncMainTabs();
+  try { sessionStorage.setItem(MAIN_TAB_SESSION_KEY, activeMainTab); } catch (_) {}
   if (activeMainTab !== "knowledge" && activeMainTab !== "blast") renderChats(activeChats);
 });
 const statusEl = document.getElementById("statusBar");
@@ -5071,6 +5074,7 @@ window.addEventListener("message", async (event) => {
     if (event.source !== document.querySelector('#blastView iframe')?.contentWindow) return;
     blastRunInProgress = Boolean(event.data.running);
     syncMainTabs();
+    if (blastRunInProgress) { try { sessionStorage.setItem(MAIN_TAB_SESSION_KEY, "blast"); } catch (_) {} }
     setBlastLoggingLock(Boolean(event.data.active));
     return;
   }

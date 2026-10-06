@@ -78,9 +78,15 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency
     renderDefaultPreview();
   });
 
-  // Extension background runs may survive a popup close. Embedded web runs
-  // cannot survive an iframe reload, so clear any orphaned persisted state.
-  if (globalThis.__blastWebAdapter && d.isRunning) {
+  const savedQueue = globalThis.__blastSavedQueue?.();
+  if (savedQueue) {
+    running = true;
+    paused = Boolean(savedQueue.paused);
+    status.classList.add('on');
+    statusText.textContent = paused ? 'Paused — press Resume to continue' : 'Recovering queue after widget refresh…';
+    // Let the runtime listener below attach before replaying progress.
+    setTimeout(() => globalThis.__blastRestoreQueue?.(), 0);
+  } else if (globalThis.__blastWebAdapter && d.isRunning) {
     chrome.storage.sync.set({ isRunning: false, isPaused: false });
   } else if (d.isRunning) {
     running = true;
@@ -502,7 +508,7 @@ const bulkWorkspace = document.querySelector('.bulk-workspace');
 const bulkMessageModeInputs = [...document.querySelectorAll('input[name="bulkMessageMode"]')];
 
 function bulkMessageMode() {
-  return bulkMessageModeInputs.find(input => input.checked)?.value || 'same';
+  return bulkMessageModeInputs.find(input => input.checked)?.value || 'rows';
 }
 
 function syncBulkMessageMode() {
