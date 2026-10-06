@@ -69,6 +69,7 @@ const LOGGING_PAUSED_KEY = "rc-logging-paused";
 const BLAST_LOGGING_PREVIOUS_KEY = "rc-blast-logging-previous";
 let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
 let blastLoggingLock = false;
+let blastRunInProgress = false;
 
 async function fetchAgentOptions({ fresh = false } = {}) {
   try {
@@ -5065,6 +5066,8 @@ function setBlastLoggingLock(running) {
 window.addEventListener("message", async (event) => {
   if (event.origin !== window.location.origin) return;
   if (event.data?.type === "blast-run-state") {
+    if (event.source !== document.querySelector('#blastView iframe')?.contentWindow) return;
+    blastRunInProgress = Boolean(event.data.running);
     setBlastLoggingLock(Boolean(event.data.active));
     return;
   }
@@ -5734,7 +5737,7 @@ function isSafeToAutoReload() {
   const typing = !!a && (a.tagName === "TEXTAREA" || a.tagName === "SELECT" ||
     (a.tagName === "INPUT" && !["checkbox", "radio", "button"].includes(a.type)));
   const busy = Object.values(state).some((s) => s && (s.lookupInFlight || s.unclaimInFlight));
-  return !typing && !busy;
+  return !typing && !busy && !blastRunInProgress;
 }
 
 function reloadWhenSafe() {
