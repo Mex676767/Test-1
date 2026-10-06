@@ -10,6 +10,14 @@ export const CA = {
   vs96FeedbackQuery2: "Query 2 Feedback (VS96 Feedback)",
 };
 
+// Every Customer Approaching column summarizeRow() reads. Searches that feed summarizeRow ask Lark for
+// exactly these (plus automatic_fields), not the table's full row with all its lookup/formula columns.
+// A test records the fields summarizeRow touches, so this list cannot silently fall behind it.
+export const CA_SUMMARY_FIELDS = [
+  CA.username, CA.brand, CA.agentName, CA.inquiry, CA.status, CA.link, CA.amount, CA.claimSecret,
+  CA.dob, CA.telegram, CA.vs96FeedbackQuery1, CA.vs96FeedbackQuery2,
+];
+
 // "link" is a Lark Link field -- {link, text}, sometimes wrapped in an array.
 export function linkUrl(v) {
   if (!v) return "";

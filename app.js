@@ -1589,8 +1589,27 @@ function markStateSynced(chatId) {
   lastSyncedJson.set(chatId, stateSnapshot(state[chatId]));
 }
 
+// saveState() runs every 10 s and from ~23 call sites. It used to JSON.parse ALL of localStorage and stringify
+// every chat (twice) on each call even when nothing had changed. Now: if no chat in THIS tab changed since it
+// last synced and no other tab has written (the 'storage' event sets storageDirty), it returns without
+// touching localStorage. A full sync still runs at least once a minute as a safety net. The per-field merge /
+// adopt logic below is unchanged.
+let storageDirty = true;          // true until the first full sync; set again by the 'storage' event
+let lastFullStateSyncAt = 0;
+const FULL_STATE_SYNC_MS = 60_000;
+function hasLocalStateChanges() {
+  for (const [chatId, s] of Object.entries(state)) {
+    const synced = lastSyncedJson.get(chatId);
+    if (synced === undefined || stateSnapshot(s) !== synced) return true;
+  }
+  return false;
+}
+
 function saveState() {
   try {
+    if (!storageDirty && Date.now() - lastFullStateSyncAt < FULL_STATE_SYNC_MS && !hasLocalStateChanges()) return;
+    storageDirty = false;
+    lastFullStateSyncAt = Date.now();
     let raw = {};
     try { raw = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}") || {}; } catch (_) { raw = {}; }
     const now = Date.now();
@@ -5264,6 +5283,7 @@ setInterval(() => {
 // what actually differs, so this can't ping-pong between tabs.
 window.addEventListener("storage", (e) => {
   if (e.key !== STATE_STORAGE_KEY) return;
+  storageDirty = true; // another tab wrote: the next saveState() must read and adopt it
   saveState();
   renderNeedsAttentionPanel();
   scheduleNeedsAttentionRefresh(300);
@@ -5430,6 +5450,11 @@ async function saveLinkToRecord(chatId) {
   if (!s || !s.caRecordId || !s.chatUrl || s.caLinkSaved || s.logged || linkSaveInFlight.has(chatId)) return;
   if (!ownsCaseRecord(s)) return;
   const recordId = s.caRecordId;
+  // This is called from the 2 s chat-status tick, so a failing save used to hit Lark every 2 s. Back off
+  // (8 s, 16 s, ... cap 5 min) per record+link; a different record or link retries immediately.
+  const retry = s.linkSaveRetry;
+  const sameTarget = !!retry && retry.recordId === recordId && retry.url === s.chatUrl;
+  if (sameTarget && Date.now() < retry.nextAt) return;
   linkSaveInFlight.add(chatId);
   try {
     const res = await fetch("/lark-record", {
@@ -5440,8 +5465,11 @@ async function saveLinkToRecord(chatId) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "link save failed");
     if (s.caRecordId === recordId) s.caLinkSaved = true;
+    delete s.linkSaveRetry;
   } catch (err) {
-    logDiagnostic("Couldn't save chat link to Lark yet: " + err.message, "warn");
+    const failures = (sameTarget ? retry.n : 0) + 1;
+    s.linkSaveRetry = { n: failures, nextAt: Date.now() + nextSweepDelay(failures), recordId, url: s.chatUrl };
+    logDiagnostic("Couldn't save chat link to Lark yet: " + err.message + ` (retrying in ${Math.round(nextSweepDelay(failures) / 1000)} s)`, "warn");
   } finally {
     linkSaveInFlight.delete(chatId);
   }

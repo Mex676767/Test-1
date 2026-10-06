@@ -399,13 +399,31 @@ export async function getTenantToken() {
 // opts.pageSize: Lark's search defaults to only 20 rows per page -- fine for
 // the per-username lookups everywhere else, too few for a table-wide sweep
 // (see lark-stale-records.js). opts.automaticFields adds created_time etc.
+// A projected column that does not exist in the table makes Lark reject the whole search. Projection is
+// only an optimisation, so retry once without it rather than failing a lookup over a renamed column.
+function isFieldNameProblem(error) {
+  const message = String(error?.message || "");
+  return !error?.rateLimited && /field|column/i.test(message) && /not found|invalid|unknown|does not exist|unsupported|illegal/i.test(message);
+}
 export function searchRecords(tableId, conditions, baseToken, opts = {}) {
   if (!tableId) throw new Error("Missing table ID — check env vars.");
+  if (opts.fieldNames?.length && !opts.noProjectionFallback) {
+    const { fieldNames, ...withoutProjection } = opts;
+    return searchRecordsOnce(tableId, conditions, baseToken, opts).catch((error) => {
+      if (!isFieldNameProblem(error)) throw error;
+      console.warn("Lark search projection rejected; retrying without it", tableId, String(error.message).slice(0, 120));
+      return searchRecordsOnce(tableId, conditions, baseToken, withoutProjection);
+    });
+  }
+  return searchRecordsOnce(tableId, conditions, baseToken, opts);
+}
+function searchRecordsOnce(tableId, conditions, baseToken, opts = {}) {
   const cacheKey = JSON.stringify({
     baseToken: baseToken || BASE_APP_TOKEN,
     tableId,
     conditions,
     pageSize: opts.pageSize || null,
+    maxRows: opts.maxRows || null,
     automaticFields: !!opts.automaticFields,
     fieldNames: opts.fieldNames || null,
   });
@@ -460,7 +478,10 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
       // silently truncated lookups for users with many rows (the batched path
       // already read up to 500 per page, so the two paths disagreed). Follow
       // has_more up to MAX_SEARCH_PAGES, and refuse a partial result beyond that.
-      const pageSize = Number(opts.pageSize) || 500;
+      // maxRows: for callers that only use the first match(es). One page of at most that many rows,
+      // no paging and no "too many rows" refusal (they never wanted the rest).
+      const maxRows = Math.max(0, Math.floor(Number(opts.maxRows) || 0));
+      const pageSize = maxRows ? Math.min(maxRows, 500) : (Number(opts.pageSize) || 500);
       const collected = [];
       let pageToken = "";
       let batched = false;
@@ -505,6 +526,7 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         collected.push(...(data.data.items || []));
         batched = batched || res.headers?.get?.("x-lark-batched") === "1";
         more = !!data.data.has_more && !!data.data.page_token;
+        if (maxRows) { more = false; break; }
         if (!more) break;
         pageToken = String(data.data.page_token);
       }
@@ -523,9 +545,8 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         seenIds.add(id);
         return true;
       });
-      return batched
-        ? unique.filter((record) => matchesLarkSearchConditions(record, conditions))
-        : unique;
+      const rows = batched ? unique.filter((record) => matchesLarkSearchConditions(record, conditions)) : unique;
+      return maxRows ? rows.slice(0, maxRows) : rows;
     } catch (err) {
       if (controller.signal.aborted) {
         lastErr = new Error(`Lark search timed out after ${Math.round(timeoutMs / 1000)} seconds (table ${tableId}).`);
@@ -568,7 +589,17 @@ function matchesLarkSearchConditions(record, conditions) {
 
 // Same as searchRecords, but follows Lark's page_token across up to
 // maxPages pages of 500 -- for scans that can outgrow a single page.
-export async function searchAllRecords(tableId, conditions, { maxPages = 5, automaticFields = false } = {}) {
+export async function searchAllRecords(tableId, conditions, { maxPages = 5, automaticFields = false, fieldNames } = {}) {
+  if (fieldNames?.length) {
+    try { return await searchAllRecordsOnce(tableId, conditions, { maxPages, automaticFields, fieldNames }); }
+    catch (error) {
+      if (!isFieldNameProblem(error)) throw error;
+      console.warn("Lark scan projection rejected; retrying without it", tableId);
+    }
+  }
+  return searchAllRecordsOnce(tableId, conditions, { maxPages, automaticFields });
+}
+async function searchAllRecordsOnce(tableId, conditions, { maxPages = 5, automaticFields = false, fieldNames } = {}) {
   if (!tableId) throw new Error("Missing table ID — check env vars.");
   const token = await getTenantToken();
   const all = [];
@@ -581,6 +612,7 @@ export async function searchAllRecords(tableId, conditions, { maxPages = 5, auto
         body: JSON.stringify({
           filter: { conjunction: "and", conditions },
           ...(automaticFields ? { automatic_fields: true } : {}),
+          ...(fieldNames?.length ? { field_names: fieldNames } : {}),
         }) }
     );
     const data = await res.json();
@@ -771,7 +803,8 @@ export async function findOldestClaimableRow(tableId, username, brand, isClaimab
       { field_name: brandField || "Brand", operator: "is", value: [brand] },
     ];
     try {
-      matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true, fieldNames, timeoutMs });
+      // This function has its own projection fallback below, so the generic one is off (no extra call).
+      matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true, fieldNames, timeoutMs, noProjectionFallback: true });
       break;
     } catch (err) {
       lastErr = err;

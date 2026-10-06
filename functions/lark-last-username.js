@@ -35,15 +35,18 @@ export async function handler(event) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, found: false }) };
     }
 
+    // Only the FIRST match's Username is used, so read one small page (maxRows: 1) of just that column
+    // instead of up to 5,000 full P&L rows. Projections are per search so a renamed Telegram column
+    // can never break the Live Chat link search.
     const [liveChatMatches, telegramMatches] = await Promise.all([
       searchRecords(TABLE_PNL, [
         { field_name: F.brand, operator: "is", value: [brand] },
         { field_name: F.lastLink, operator: "contains", value: [chatId] },
-      ]),
+      ], undefined, { maxRows: 1, fieldNames: [F.username, F.lastLink, F.brand] }),
       searchRecords(TABLE_PNL, [
         { field_name: F.brand, operator: "is", value: [brand] },
         { field_name: F.lastTelegramLink, operator: "contains", value: [chatId] },
-      ]).catch(() => []), // non-fatal — e.g. if the Telegram field ever gets renamed, Live Chat link still works
+      ], undefined, { maxRows: 1, fieldNames: [F.username, F.lastTelegramLink, F.brand] }).catch(() => []), // non-fatal — e.g. if the Telegram field ever gets renamed, Live Chat link still works
     ]);
     const match = liveChatMatches[0] || telegramMatches[0];
     if (!match) {

@@ -1,10 +1,22 @@
 import { adapt } from "./_lib/adapt.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
+// The catalog is the same for every agent and changes rarely, but every open widget refetched it (a 100-ticket
+// list) on its options timer. Cache the successful result per isolate for 5 minutes; the manual Refresh button
+// sends ?fresh=1 and always bypasses it.
+const CONFIG_TTL_MS = 5 * 60_000;
+let cachedConfig = null; // { key, at, body }
+export function resetTicketConfigCache() { cachedConfig = null; }
+
 export async function handler(event) {
   if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
   try {
     const settings = ticketSettings(event.env);
+    const cacheKey = String(event.env?.TICKETS_API_KEY || "") + "|" + String(event.env?.TICKETS_API_BASE_URL || "");
+    const fresh = event.queryStringParameters?.fresh === "1";
+    if (!fresh && cachedConfig && cachedConfig.key === cacheKey && Date.now() - cachedConfig.at < CONFIG_TTL_MS) {
+      return json(200, cachedConfig.body);
+    }
     if (!settings.configured) {
       return json(200, {
         ok: false,
@@ -38,7 +50,7 @@ export async function handler(event) {
           .map((value) => ({ value, label: value, isActive: true }));
         return { ...field, options };
       });
-    return json(200, {
+    const body = {
       ok: true,
       configured: true,
       fields,
@@ -46,7 +58,9 @@ export async function handler(event) {
       markets,
       defaultDepartmentId: settings.departmentId,
       defaultMarketId: settings.marketId,
-    });
+    };
+    cachedConfig = { key: cacheKey, at: Date.now(), body };
+    return json(200, body);
   } catch (err) {
     return ticketError(err);
   }

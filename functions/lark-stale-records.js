@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { searchRecords, getRecord, deleteRecord, toDisplay, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
-import { CA, summarizeRow, parseChatLink, archiveUrl, isBlank } from "./_lib/ca-row.js";
+import { CA, CA_SUMMARY_FIELDS, summarizeRow, parseChatLink, archiveUrl, isBlank } from "./_lib/ca-row.js";
 
 // Server-side half of Needs Attention. The browser-side list (app.js's
 // getIncompleteChats) only knows about chats THIS browser remembers in
@@ -42,7 +42,7 @@ async function removeCompletedTwinDuplicate(row) {
     { field_name: CA.agentName, operator: "is", value: [row.agent] },
     { field_name: CA.username, operator: "is", value: [row.username] },
     { field_name: CA.brand, operator: "is", value: [row.brand] },
-  ], undefined, { pageSize: 100, automaticFields: true });
+  ], undefined, { pageSize: 100, automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
   const completedTwin = related.map(summarizeRow).some((candidate) =>
     candidate.recordId !== row.recordId
     && String(candidate.link || "").trim().replace(/\/$/, "") === exactLink
@@ -123,7 +123,7 @@ export async function handler(event) {
       { field_name: CA.agentName, operator: "is", value: [agent] },
       { field_name: CA.inquiry, operator: "isEmpty", value: [] },
       { field_name: CA.status, operator: "isEmpty", value: [] },
-    ], undefined, { pageSize: 500, automaticFields: true });
+    ], undefined, { pageSize: 500, automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
 
     // Re-check on our side too, in case Lark's filter ever loosely matches.
     const blank = items
