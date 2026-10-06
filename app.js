@@ -72,16 +72,16 @@ function saveBlastMessages(messages) {
   }, window.location.origin);
 }
 
-// Global "don't log chats" toggle — for chats deliberately not wanted in
-// Lark data at all (unlike Unknown player, which is per-chat and permanent
-// once a case closes, this is a temporary gate any chat can pass through
-// once it's unticked again — see submitRecord). Persisted so it survives
-// this widget's iframe reloading (same reason chat state itself does).
-const LOGGING_PAUSED_KEY = "rc-logging-paused";
-const BLAST_LOGGING_PREVIOUS_KEY = "rc-blast-logging-previous";
-let loggingPaused = localStorage.getItem(LOGGING_PAUSED_KEY) === "true";
+// Chats are recorded to Lark ONLY while the agent is on the Retention tab. Any other tab (Blast, Tickets, Knowledge, and any
+// tab added later) pauses recording automatically, and so does a running Blast. This replaces the old manual "Don't log chats"
+// checkbox. Nothing is lost while paused: submitRecord returns without marking the chat logged, so the background sweep
+// records it a few seconds after the agent is back on Retention. To pause on a new tab, just don't add it to LOGGING_TABS.
+const LOGGING_TABS = new Set(["customer"]);
 let blastLoggingLock = false;
 let blastRunInProgress = false;
+function isLoggingPaused() { return blastRunInProgress || blastLoggingLock || !LOGGING_TABS.has(activeMainTab); }
+// The old checkbox kept its state in localStorage; stale values must not linger.
+try { localStorage.removeItem("rc-logging-paused"); localStorage.removeItem("rc-blast-logging-previous"); } catch (_) {}
 
 async function fetchAgentOptions({ fresh = false } = {}) {
   try {
@@ -803,12 +803,6 @@ function syncMainTabs() {
   document.querySelectorAll("[data-main-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mainTab === activeMainTab);
   });
-  const customerTools = document.getElementById("customerTools");
-  const loggingToggle = document.getElementById("loggingPauseToggle");
-  const topbar = document.querySelector(".topbar");
-  if (previewMode && customerTools && loggingToggle && loggingToggle.parentElement !== customerTools) customerTools.appendChild(loggingToggle);
-  if (!previewMode && topbar && loggingToggle && loggingToggle.parentElement !== topbar) topbar.appendChild(loggingToggle);
-  if (customerTools) customerTools.hidden = !previewMode || activeMainTab !== "customer";
   const chatList = document.getElementById("chatList");
   if (chatList) chatList.hidden = activeMainTab === "knowledge" || activeMainTab === "blast";
   const blastView = document.getElementById("blastView");
@@ -2556,7 +2550,7 @@ function renderExpandedCard(chat) {
     ${
       previewMode
         ? `<div class="preview-readonly-note">${showPreviewClosedChat ? "Closed-chat example: the chat ended without Inquiry or Status, so it was not recorded." : BONUS_SHOWCASE_PREVIEW ? "Bonus showcase uses sample eligibility and amounts." : "Test mode reads live bonus data."} Claims and form changes stay on this preview card and never create or update a Lark record.</div>`
-        : loggingPaused && !s.logged
+        : isLoggingPaused() && !s.logged
         ? `<div class="logged-badge unknown">Logging paused — not recorded</div>`
         : s.isUnknown
           ? `<div class="logged-badge unknown">Unknown player — won't be recorded</div>`
@@ -4943,8 +4937,8 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
   // the next attempt (a manual click, the next auto-close, or the next
   // background sweep retry) records normally once logging resumes. Never
   // flagged as an error either — nothing's actually wrong.
-  if (loggingPaused) {
-    if (!auto) setStatus('Logging is paused — not recorded. Untick "Don\'t log chats" at the top to resume.', "error");
+  if (isLoggingPaused()) {
+    if (!auto) setStatus("Logging is paused while you are on another tab — go back to Retention to record this chat.", "error");
     return;
   }
 
@@ -5156,39 +5150,12 @@ function handleRefreshClick() {
 document.getElementById("refreshBtn").addEventListener("click", handleRefreshClick);
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
 
-const loggingPauseCheck = document.getElementById("loggingPauseCheck");
-function setBlastLoggingLock(running) {
-  const toggle = document.getElementById("loggingPauseToggle");
-  if (running) {
-    if (!blastLoggingLock) {
-      if (localStorage.getItem(BLAST_LOGGING_PREVIOUS_KEY) === null) {
-        localStorage.setItem(BLAST_LOGGING_PREVIOUS_KEY, String(loggingPaused));
-      }
-      logDiagnostic("Chat logging paused automatically while Blast is running.", "warn");
-    }
-    if (!toggle.dataset.defaultTitle) toggle.dataset.defaultTitle = toggle.title;
-    blastLoggingLock = true;
-    loggingPaused = true;
-    loggingPauseCheck.checked = true;
-    loggingPauseCheck.disabled = true;
-    toggle.classList.add("active", "blast-locked");
-    toggle.title = "Chat logging is paused automatically while Blast is running.";
-    localStorage.setItem(LOGGING_PAUSED_KEY, "true");
-    renderChats(activeChats);
-    return;
-  }
-  if (!blastLoggingLock && localStorage.getItem(BLAST_LOGGING_PREVIOUS_KEY) === null) return;
-  const previous = localStorage.getItem(BLAST_LOGGING_PREVIOUS_KEY) === "true";
-  localStorage.removeItem(BLAST_LOGGING_PREVIOUS_KEY);
-  blastLoggingLock = false;
-  loggingPaused = previous;
-  loggingPauseCheck.checked = previous;
-  loggingPauseCheck.disabled = false;
-  toggle.classList.toggle("active", previous);
-  toggle.classList.remove("blast-locked");
-  toggle.title = toggle.dataset.defaultTitle || "When ticked, no chat gets recorded to Lark Base.";
-  localStorage.setItem(LOGGING_PAUSED_KEY, String(previous));
-  logDiagnostic(previous ? "Blast finished; chat logging remains paused by the agent." : "Blast finished; chat logging restored.", "success");
+// Blast reports whether a queue is active (running, paused or cleaning up); recording stays off for all of it.
+function setBlastLoggingLock(active) {
+  const next = Boolean(active);
+  if (next === blastLoggingLock) return;
+  blastLoggingLock = next;
+  logDiagnostic(next ? "Chat logging paused automatically while Blast is running." : "Blast finished; chat logging restored.", next ? "warn" : "success");
   renderChats(activeChats);
 }
 
@@ -5205,18 +5172,6 @@ window.addEventListener("message", async (event) => {
   if (event.data?.type !== "bonus-config-changed") return;
   await fetchConfiguredBonusPrograms();
   renderChats(activeChats);
-});
-
-loggingPauseCheck.addEventListener("change", () => {
-  if (blastLoggingLock) {
-    loggingPauseCheck.checked = true;
-    return;
-  }
-  loggingPaused = loggingPauseCheck.checked;
-  localStorage.setItem(LOGGING_PAUSED_KEY, String(loggingPaused));
-  document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
-  logDiagnostic(loggingPaused ? "Logging paused — no chat will be recorded until this is unticked." : "Logging resumed.", loggingPaused ? "warn" : "success");
-  renderChats(activeChats); // every card's bottom banner depends on this
 });
 
 // Schedules non-critical work after the first paint. requestIdleCallback is
@@ -5238,8 +5193,6 @@ function runWhenIdle(task, timeout = 1500) {
   // ensureChatState only fills in defaults for a chatId it hasn't seen yet.
   Object.assign(state, loadPersistedState());
   for (const chatId of Object.keys(state)) markStateSynced(chatId);
-  loggingPauseCheck.checked = loggingPaused;
-  document.getElementById("loggingPauseToggle").classList.toggle("active", loggingPaused);
   if (!IS_EMBEDDED_APP) logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
   applyDepartmentChrome();
   syncMainTabs();
@@ -5289,7 +5242,7 @@ function runWhenIdle(task, timeout = 1500) {
     fetchStaleRecords();
     // Recover claims saved by an older app version that stopped at
     // "Auto-record failed (Failed to fetch)" while the chat was still open.
-    if (!loggingPaused) {
+    if (!isLoggingPaused()) {
       for (const [chatId, saved] of Object.entries(state)) {
         if (shouldResumeInterruptedSave(saved)
           && (!currentLiveChatAccount || saved.liveChatAccount === currentLiveChatAccount)
@@ -5405,12 +5358,12 @@ async function sweepPendingChats() {
     if (!state[chatId]) { state[chatId] = saved; markStateSynced(chatId); }
     if (saved.chatOpen === false) {
       // While logging is paused, submitRecord would just no-op anyway (see
-      // its own loggingPaused check) -- skip calling it at all so a chat
+      // its own isLoggingPaused() check) -- skip calling it at all so a chat
       // that's permanently missing fields (or anything else that'll never
       // resolve on its own) doesn't keep re-attempting and re-logging every
       // sweep tick while the agent has deliberately paused recording.
-      // Resumes retrying normally the moment logging is unticked again.
-      if (loggingPaused) continue;
+      // Resumes retrying normally as soon as the agent is back on the Retention tab.
+      if (isLoggingPaused()) continue;
       // Already known closed but never successfully recorded — the one-time
       // auto-record attempt that fired when checkChatStatus first detected
       // the close can still fail for reasons that have nothing to do with

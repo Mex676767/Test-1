@@ -8,7 +8,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <link rel="stylesheet" href="style.css?v=20261007-1" />
+  <link rel="stylesheet" href="style.css?v=20261007-3" />
 </head>
 <body>
   <header class="topbar">
@@ -36,13 +36,6 @@
     <button type="button" id="knowledgeTab" class="main-tab" data-main-tab="knowledge" hidden>Knowledge</button>
   </nav>
 
-  <div id="customerTools" class="customer-tools">
-    <label id="loggingPauseToggle" class="logging-pause-toggle" title="When ticked, no chat gets recorded to Lark Base at all -- for chats you deliberately don't want counted. Applies to every chat until unticked.">
-      <input type="checkbox" id="loggingPauseCheck" />
-      <span>Don't log chats</span>
-    </label>
-  </div>
-
   <div id="statusBar" class="status-bar hidden"></div>
 
   <!-- Every chat this browser knows about that closed without ever being
@@ -59,7 +52,7 @@
 
   <main id="chatList" class="chat-list"></main>
   <section id="blastView" class="blast-view" hidden>
-    <iframe data-src="/blast/index.html?v=20261007-2" loading="lazy" title="LiveChat Engagement"></iframe>
+    <iframe data-src="/blast/index.html?v=20261007-3" loading="lazy" title="LiveChat Engagement"></iframe>
   </section>
   <section id="knowledgeView" class="knowledge-view" hidden>
     <iframe data-src="/knowledge/index.html" loading="lazy" title="CS Learning Assistant"></iframe>
@@ -71,7 +64,7 @@
        time app.js checks for it; harmless (just unused) when previewed
        standalone outside LiveChat, or if this CDN fails to load. -->
   <script src="vendor/livechat-agentapp-1.16.0.min.js"></script>
-  <script src="app.js?v=20261007-1"></script>
+  <script src="app.js?v=20261007-3"></script>
   <script src="deployment-refresh.js?v=20261007-1"></script>
 </body>
 </html>

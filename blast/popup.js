@@ -764,10 +764,11 @@ imgPickBtn.addEventListener('click', function(e) {
   imgFileInput.click();
 });
 
-imgFileInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // base64 grows it by a third; the queue is saved in ~5 MB of browser storage
+
+// Shared by the file picker and Ctrl+V: validates the size, reads the file and shows it as the image for every chat.
+function loadImageFile(file) {
   if (!file) return;
-  const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // base64 grows it by a third; the queue is saved in ~5 MB of browser storage
   if (file.size > MAX_IMAGE_BYTES) {
     imgFileInput.value = '';
     addLog('⚠ ' + file.name + ' is ' + (file.size / 1048576).toFixed(1) + ' MB. Use an image under 3 MB.', 'err');
@@ -787,6 +788,32 @@ imgFileInput.addEventListener('change', (e) => {
     document.getElementById('cntImg').textContent = '1 file';
   };
   reader.readAsDataURL(file);
+}
+
+imgFileInput.addEventListener('change', (e) => loadImageFile(e.target.files[0]));
+
+// The image on the clipboard (a screenshot, or "Copy image" from a browser), or null. Text copied from a spreadsheet
+// carries an image preview too, so anything that also has text is left to the normal paste into the text boxes.
+function imageFromClipboard(data) {
+  if (!data) return null;
+  if (String(data.getData('text/plain') || '').trim()) return null;
+  for (const item of Array.from(data.items || [])) {
+    if (item.kind !== 'file' || !/^image\//.test(item.type)) continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+    const ext = { 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[file.type] || 'png';
+    return new File([file], 'pasted-image-' + Date.now() + '.' + ext, { type: file.type });
+  }
+  return null;
+}
+
+document.addEventListener('paste', (e) => {
+  if (running) return;
+  const file = imageFromClipboard(e.clipboardData);
+  if (!file) return;
+  e.preventDefault();
+  imgSubFile.click();   // pasted images go in the FILE tab
+  loadImageFile(file);
 });
 
 imgFileClear.addEventListener('click', () => {
