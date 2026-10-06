@@ -1,5 +1,13 @@
 import { adapt } from "./_lib/adapt.js";
-import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
+import { LIVECHAT_PATS, LIVECHAT_ACCOUNTS, accountKeyForPat } from "./_lib/livechat.js";
+
+// The widget already knows which LiveChat license a chat belongs to (this endpoint told it).
+// Try that license first so the common case costs one API call instead of one per license.
+// The other licenses are still tried afterwards, so a wrong label can never hide a chat.
+function orderedPats(preferredAccountKey) {
+  const preferred = LIVECHAT_ACCOUNTS.find((account) => account.key === preferredAccountKey);
+  return preferred ? [preferred.pat, ...LIVECHAT_PATS.filter((pat) => pat !== preferred.pat)] : LIVECHAT_PATS;
+}
 
 // Reuses the same LiveChat PAT(s) as livechat-group-name.js, against
 // LiveChat's Agent Chat API — this is where per-chat data lives, not group
@@ -116,6 +124,10 @@ export async function handler(event) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, isTelegram: null, isActive: null, notConfigured: true }) };
     }
     const body = JSON.parse(event.body || "{}");
+    const pats = orderedPats(typeof body.accountKey === "string" ? body.accountKey : "");
+    // The raw LiveChat payload is only for diagnosing a chat's first check (or when asked);
+    // a normal poll every 2 s should not ship it. "Not found"/unrecognised replies keep it.
+    const wantRaw = !!body.debug;
     threadId = body.chatId; // wire name kept as chatId for app.js compat; it's actually the thread id — see header note
     if (!threadId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "chatId is required" }) };
@@ -128,7 +140,7 @@ export async function handler(event) {
     // correctly instead of silently going notFound forever (see getChatFor's
     // header note).
     if (body.realChatId) {
-      for (const pat of LIVECHAT_PATS) {
+      for (const pat of pats) {
         try {
           const data = await getChatFor(pat, body.realChatId);
           if (!data || !data.thread) continue; // this account doesn't recognize this chat_id — try the next
@@ -143,7 +155,7 @@ export async function handler(event) {
               threadId,
               chatUrl,
               accountKey: accountKeyForPat(pat),
-              raw: { id: data.id, thread: data.thread, users: data.users },
+              ...(wantRaw ? { raw: { id: data.id, thread: data.thread, users: data.users } } : {}),
             }),
           };
         } catch (_) { /* this account's get_chat call failed outright — try the next, then fall through to list_chats below */ }
@@ -155,7 +167,7 @@ export async function handler(event) {
     let lastErr = null;
     let totalSearched = 0;
     let matchedPat = "";
-    for (const pat of LIVECHAT_PATS) {
+    for (const pat of pats) {
       try {
         const data = await listChatsFor(pat);
         lastData = data;
@@ -173,7 +185,7 @@ export async function handler(event) {
     // remains fast even when a license has tens of thousands of chats.
     if (!match) {
       let archiveData = null;
-      for (const pat of LIVECHAT_PATS) {
+      for (const pat of pats) {
         try {
           const result = await getArchiveForThread(pat, threadId);
           archiveData = result.data;
@@ -192,7 +204,7 @@ export async function handler(event) {
               chatUrl: `https://my.livechatinc.com/chats/${archive.id}/${threadId}`,
               accountKey: accountKeyForPat(pat),
               lookup: "archive",
-              raw: { id: archive.id, thread: archiveThread, users: archive.users },
+              ...(wantRaw ? { raw: { id: archive.id, thread: archiveThread, users: archive.users } } : {}),
             }),
           };
         } catch (err) {
@@ -228,7 +240,7 @@ export async function handler(event) {
         threadId,
         chatUrl,
         accountKey: accountKeyForPat(matchedPat),
-        raw: { id: match.id, last_thread_summary: thread, users: match.users }, // small, targeted — kept for app.js to surface if detection still looks wrong
+        ...(wantRaw || typeof thread.active !== "boolean" ? { raw: { id: match.id, last_thread_summary: thread, users: match.users } } : {}), // only when asked, or when the status could not be read
       }),
     };
   } catch (err) {

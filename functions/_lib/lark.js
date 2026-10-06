@@ -513,9 +513,19 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
         err.retryable = false;
         throw err;
       }
+      // A row can appear on two pages if Lark's pagination shifts while paging (or a queue replays a
+      // page); every record must reach the caller exactly once.
+      const seenIds = new Set();
+      const unique = collected.filter((record) => {
+        const id = record && record.record_id;
+        if (!id) return true;
+        if (seenIds.has(id)) return false;
+        seenIds.add(id);
+        return true;
+      });
       return batched
-        ? collected.filter((record) => matchesLarkSearchConditions(record, conditions))
-        : collected;
+        ? unique.filter((record) => matchesLarkSearchConditions(record, conditions))
+        : unique;
     } catch (err) {
       if (controller.signal.aborted) {
         lastErr = new Error(`Lark search timed out after ${Math.round(timeoutMs / 1000)} seconds (table ${tableId}).`);

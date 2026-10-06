@@ -44,7 +44,16 @@ const F = {
 // exact agent/player/brand/thread instead. If an older deployment already
 // produced several blank twins, keep the oldest deterministically and remove
 // the rest so concurrent callers converge on the same record.
-async function reusableBlankCase(agent, username, brand, link) {
+// Create-with-link falls back to a link-less create ONLY when Lark rejected the link column
+// itself. A timeout, 5xx, throttle or batch-mismatch can all mean the row WAS created, so
+// those are re-thrown: the agent's next lookup reuses the blank row instead of creating a twin.
+function isLinkFieldRejection(error) {
+  const message = String(error?.message || "");
+  return /^Lark create failed/i.test(message) && /\blink\b/i.test(message) && !error?.rateLimited
+    && !/timed? ?out|rate.?limit|too ?many|could not be matched|internal|temporar|busy|server error/i.test(message);
+}
+
+async function reusableBlankCase(agent, username, brand, link, timeoutMs = CASE_SEARCH_TIMEOUT_MS) {
   const exactLink = String(link || "").trim().replace(/\/$/, "");
   if (!parseChatLink(exactLink).threadId) return null;
   const rows = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
@@ -54,7 +63,7 @@ async function reusableBlankCase(agent, username, brand, link) {
     { field_name: "Inquiry", operator: "isEmpty", value: [] },
     { field_name: "Status", operator: "isEmpty", value: [] },
   ], undefined, {
-    pageSize: 100, automaticFields: true, timeoutMs: CASE_SEARCH_TIMEOUT_MS,
+    pageSize: 100, automaticFields: true, timeoutMs,
     // Exactly the columns the filter below re-checks. Projecting them lets the shared
     // queue merge this lookup with other agents' (one OR query over many usernames,
     // filtered back per caller) instead of spending a Lark call per lookup on it.
@@ -240,6 +249,10 @@ export async function handler(event) {
     });
 
     const chatLink = String(link || "").trim();
+    const caseMinMs = Number(event.env?.LOOKUP_CASE_MIN_MS) || 2_000;
+    const caseGraceMs = Number(event.env?.LOOKUP_CASE_GRACE_MS) || 6_000;
+    // Whatever is left of the overall lookup budget, never above the per-search ceiling.
+    const caseBudgetMs = () => Math.max(caseMinMs, Math.min(CASE_SEARCH_TIMEOUT_MS, startedAt + lookupBudgetMs - Date.now()));
     // Start case-row work alongside the independent bonus-table reads below.
     // Previously its search and create calls both completed before those reads
     // even began, adding two network waits to every new chat lookup.
@@ -252,7 +265,7 @@ export async function handler(event) {
       let recordId = null;
       if (!preview && chatLink) {
         for (let attempt = 0; ; attempt++) {
-          try { recordId = await reusableBlankCase(agentVal, uname, brandVal, chatLink); break; }
+          try { recordId = await reusableBlankCase(agentVal, uname, brandVal, chatLink, caseBudgetMs()); break; }
           catch (error) {
             if (attempt >= 1 || (error.retryable === false && !error.rateLimited)) throw error;
             await new Promise((resolve) => setTimeout(resolve, 400 + Math.floor(Math.random() * 300)));
@@ -271,16 +284,37 @@ export async function handler(event) {
 
       let created = false;
       if (!preview && !recordId) {
+        if (startedAt + lookupBudgetMs - Date.now() < caseMinMs) {
+          // No time left to create AND report back; starting a create now could finish after the
+          // widget has given up. Nothing was created -- the agent just looks up again.
+          throw Object.assign(new Error("Case row skipped: the lookup time budget was already used up."), { retryable: true });
+        }
         const baseFields = { [F.username]: uname, [F.brand]: brandVal, [F.agentName]: agentVal };
-        const result = chatLink
-          ? await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } })
-              .catch(() => createRecord(TABLE_CUSTOMER_APPROACHING, baseFields))
-          : await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
+        let result;
+        if (chatLink) {
+          try {
+            result = await createRecord(TABLE_CUSTOMER_APPROACHING, { ...baseFields, link: { link: chatLink, text: chatLink } });
+          } catch (error) {
+            if (!isLinkFieldRejection(error)) throw error;
+            result = await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
+          }
+        } else {
+          result = await createRecord(TABLE_CUSTOMER_APPROACHING, baseFields);
+        }
         recordId = result.record_id;
         created = true;
       }
       return { recordId, created };
     })();
+    // A case-row failure must not throw away the bonus results (and leave the reads running for
+    // nothing): it is reported next to them instead. Bounded so it can never outlive the widget.
+    const caseSafeP = caseRecordP.then(
+      (value) => ({ ...value, error: null }),
+      (error) => {
+        console.warn("Case row not saved", String(error?.message || error).slice(0, 160));
+        return { recordId: null, created: false, error };
+      },
+    );
 
     // Every lookup below is fully independent of the others (and of
     // caRecordId) -- previously each was its own separate `await`, one
@@ -306,7 +340,6 @@ export async function handler(event) {
       redeemTask,
       mooncakeTask,
       vs96Task,
-      caseRecordState,
     ] = await Promise.all([
       // Warn CS if username exists under other brands
       optionalLookup("Other-brand check", async () => {
@@ -488,7 +521,6 @@ export async function handler(event) {
         undefined,
         { fieldNames: [F.status, "Time of Inspection"] }
       )),
-      caseRecordP,
     ]);
     const { configs: configuredBonusConfigs, lookups: configuredBonusTasks } = await configuredBonusLookupsP;
     const [
@@ -530,14 +562,28 @@ export async function handler(event) {
       config.key,
       configuredBonusValues[index],
     ]));
+    // Wait for the case row, but only up to the widget's own deadline (budget + grace).
+    const caseRecordState = await Promise.race([
+      caseSafeP,
+      new Promise((resolve) => setTimeout(() => resolve({
+        recordId: null, created: false,
+        error: new Error("Case row did not finish inside the lookup time budget."),
+      }), Math.max(0, startedAt + lookupBudgetMs + caseGraceMs - Date.now()))),
+    ]);
     let caRecordId = caseRecordState.recordId;
+    const caseRowError = caseRecordState.error
+      ? "Case row not saved — press Look Up again (the results below are still valid)."
+      : undefined;
 
     // A second request can begin at the same moment and pass the pre-create
     // check above before either row exists. Re-run the same deterministic
     // coalescing after the slower bonus reads; both requests then return the
     // same surviving record instead of leaving a blank twin behind.
-    if (!preview && link && caseRecordState.created) {
-      caRecordId = await reusableBlankCase(agentVal, uname, brandVal, link).catch(() => caRecordId);
+    const dedupeRemainingMs = startedAt + lookupBudgetMs - Date.now();
+    if (!preview && link && caseRecordState.created && dedupeRemainingMs >= 3_000) {
+      // "||": if Lark's search does not show the row we just created yet (index lag) the check finds
+      // nothing -- that must never replace the new row's id with null.
+      caRecordId = (await reusableBlankCase(agentVal, uname, brandVal, link, Math.min(CASE_SEARCH_TIMEOUT_MS, dedupeRemainingMs)).catch(() => null)) || caRecordId;
     }
 
     return {
@@ -546,9 +592,10 @@ export async function handler(event) {
         ok: true,
         otherBrands,
         lookupWarnings: [...new Set(lookupWarnings)],
-        justCreated: !preview,
+        justCreated: !preview && !caseRowError,
         notVip,
         caRecordId,
+        ...(caseRowError ? { caseRowError } : {}),
         row: {
           tier,
           customerName,

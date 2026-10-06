@@ -689,6 +689,7 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
         otherBrands: data.otherBrands || [],
         lookupWarnings: data.lookupWarnings || [],
         caRecordId: data.caRecordId,
+        caseRowError: data.caseRowError || "",
         justCreated: data.justCreated,
         notVip: data.notVip,
       };
@@ -1197,7 +1198,9 @@ const firstCheckLoggedFor = new Set(); // one confirmation per chat that get_cha
 const errorLoggedFor = new Set(); // avoid spamming the same persistent error every 20s
 const autoMissingLoggedFor = new Map(); // chatId -> last "missing" list logged by submitRecord's auto path, so sweepPendingChats retrying a permanently-incomplete chat doesn't spam the identical message every 8s forever
 
+let chatStatusPollTick = null;
 function stopChatStatusPolling() {
+  chatStatusPollTick = null;
   if (chatStatusPollTimer) {
     clearInterval(chatStatusPollTimer);
     chatStatusPollTimer = null;
@@ -1216,8 +1219,13 @@ function startChatStatusPolling(chatId) {
   const tick = () => {
     const s = state[chatId];
     if (!s || !s.chatOpen || s.logged) { stopChatStatusPolling(); return; }
+    // A hidden widget cannot show anything, so do not spend a Lark/LiveChat call every 2 s on it.
+    // The background sweep still checks this chat while hidden (see sweepPendingChats), and one
+    // immediate tick runs the moment the widget becomes visible again.
+    if (document.hidden) return;
     checkChatStatus(chatId);
   };
+  chatStatusPollTick = tick;
   tick(); // don't wait for the first interval tick
   chatStatusPollTimer = setInterval(tick, CHAT_STATUS_POLL_MS);
 }
@@ -1243,7 +1251,9 @@ async function checkChatStatus(chatId) {
     const res = await fetch("/livechat-chat-status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatId, realChatId }),
+      // accountKey: ask the license this chat is known to belong to first; debug: ask for the raw
+      // LiveChat payload only until this chat's first successful check has been logged.
+      body: JSON.stringify({ chatId, realChatId, accountKey: s.liveChatAccount || currentLiveChatAccount || undefined, debug: !firstCheckLoggedFor.has(chatId) || undefined }),
     });
     const data = await res.json();
     if (!data.ok) return;
@@ -3701,7 +3711,7 @@ chatListEl.addEventListener("click", async (e) => {
       // record hasn't been logged (submitted) yet — a completed case is
       // never deleted by a stray re-lookup.
       const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
-      const { row, otherBrands, lookupWarnings, caRecordId, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId, controller.signal);
+      const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId, controller.signal);
       s.caLinkSaved = !!(s.chatUrl || chatDef?.link);
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
@@ -3742,6 +3752,10 @@ chatListEl.addEventListener("click", async (e) => {
       if (lookupWarnings.length) {
         setStatus(`Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error");
       }
+      // The bonus results above are valid; only the Lark case row was not saved. Warn, do not fail.
+      if (caseRowError) {
+        setStatus(lookupWarnings.length ? `${caseRowError} Also unavailable: ${lookupWarnings.join(", ")}.` : caseRowError, "error");
+      }
     } catch (err) {
       if (forcing) s.isUnknown = true; // failed force lookup -- back to how it was
       if (controller.signal.aborted) {
@@ -3752,6 +3766,7 @@ chatListEl.addEventListener("click", async (e) => {
     } finally {
       clearTimeout(timeoutId);
       if (lookupControllers.get(chatId) === controller) lookupControllers.delete(chatId);
+      scheduleNeedsAttentionRefresh(1500); // a new case row may now belong in Needs Attention (the timer is slower now)
       s.lookupInFlight = false;
       if (needFullRender) {
         renderChats(activeChats);
@@ -5290,8 +5305,33 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 // closed while the agent was looking at a different one. checkChatStatus
 // itself is safe to call this way — see its own header note.
 const PENDING_SWEEP_MS = 8_000;
+const SWEEP_BACKOFF_CAP_MS = 5 * 60_000;
+const SWEEP_TAB_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+// Every open tab/LiveChat account on this origin runs this timer against the same localStorage, which
+// multiplied every retry. One tab per account+agent holds a short renewable lease and sweeps; the
+// others skip until it expires (tab closed). Without usable storage this falls back to sweeping.
+function holdsSweepLease() {
+  const key = `rc-sweeper:${currentLiveChatAccount || "-"}:${selectedAgent || "-"}`;
+  try {
+    const now = Date.now();
+    let lease = null;
+    try { lease = JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { lease = null; }
+    if (lease && lease.tabId !== SWEEP_TAB_ID && lease.expiresAt > now) return false;
+    localStorage.setItem(key, JSON.stringify({ tabId: SWEEP_TAB_ID, expiresAt: now + PENDING_SWEEP_MS * 3 }));
+    const check = JSON.parse(localStorage.getItem(key) || "null");
+    return !!check && check.tabId === SWEEP_TAB_ID;
+  } catch (_) { return true; }
+}
+// 8 s, 16 s, 32 s ... capped at 5 min.
+function nextSweepDelay(failures) { return Math.min(PENDING_SWEEP_MS * 2 ** Math.max(0, failures - 1), SWEEP_BACKOFF_CAP_MS); }
+// What the agent could have changed to make a retry succeed; if it changes, retry immediately.
+function sweepSignature(s) {
+  const { _savedAt, sweepRetry, ...rest } = s || {};
+  return JSON.stringify(rest);
+}
 
 async function sweepPendingChats() {
+  if (!holdsSweepLease()) { renderNeedsAttentionPanel(); return; }
   let persisted;
   try {
     persisted = loadPersistedState();
@@ -5300,7 +5340,8 @@ async function sweepPendingChats() {
   }
   const currentChatId = activeChats[0]?.chatId;
   for (const [chatId, saved] of Object.entries(persisted)) {
-    if (chatId === currentChatId) continue; // already covered by its own tight poll
+    // The focused chat has its own tight poll -- unless that poll is paused because the widget is hidden.
+    if (chatId === currentChatId && !document.hidden) continue;
     if (!saved || saved.logged) continue;
     // Two LiveChat accounts share this origin's incognito localStorage.
     // Never sweep or auto-record another account's pending chat.
@@ -5329,7 +5370,16 @@ async function sweepPendingChats() {
       // already moved on. Retry the submit itself here instead of
       // checkChatStatus, which has nothing left to check once a chat's
       // open/closed status is already known.
+      const live = state[chatId] || saved;
+      const backoff = live.sweepRetry;
+      if (backoff && backoff.signature === sweepSignature(live) && Date.now() < backoff.nextAt) continue;
       await submitRecord(chatId, { auto: true, reason: "Retrying an earlier failed auto-record" });
+      const after = state[chatId] || saved;
+      if (after.logged) delete after.sweepRetry;
+      else {
+        const failures = (backoff && backoff.signature === sweepSignature(live) ? backoff.n : 0) + 1;
+        after.sweepRetry = { n: failures, nextAt: Date.now() + nextSweepDelay(failures), signature: sweepSignature(after) };
+      }
     } else {
       await checkChatStatus(chatId);
     }
@@ -5530,7 +5580,9 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
 // vanish just because the browser that started it forgot about it
 // (incognito closed, cleared storage, another PC). Only ever the selected
 // agent's own rows, never anyone else's.
-const STALE_POLL_MS = 120_000; // Needs Attention refresh; was 60 s (one unbatchable Lark search per widget per tick)
+// One unbatchable Lark search per widget per tick, so keep it slow (was 60 s). A lookup or a recording
+// triggers its own refresh right away (scheduleNeedsAttentionRefresh), so this is only the safety net.
+const STALE_POLL_MS = 240_000;
 let staleRecords = [];
 let needsAttentionRefreshTimer = null;
 
@@ -5732,7 +5784,10 @@ setInterval(() => {
   if (!document.hidden) fetchStaleRecords();
 }, STALE_POLL_MS);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) scheduleNeedsAttentionRefresh(150);
+  if (!document.hidden) {
+    scheduleNeedsAttentionRefresh(150);
+    if (chatStatusPollTick) chatStatusPollTick(); // one immediate chat-status check on becoming visible
+  }
 });
 
 document.getElementById("needsAttentionToggle").addEventListener("click", () => {

@@ -49,7 +49,7 @@ test("a throttled projected search does not trigger the unprojected fallback sea
   assert.equal(searches, 1, "a rate-limited request must not immediately fan out into a second search");
 });
 
-test("a failed blank-row lookup never creates a replacement Customer Approaching row", async () => {
+test("a failed blank-row lookup never creates a replacement row, and the bonus results are still returned", async () => {
   initEnv({ ...ENV });
   const calls = [];
   await withFetch(async (url, options = {}) => {
@@ -67,8 +67,11 @@ test("a failed blank-row lookup never creates a replacement Customer Approaching
     const result = await handler({ body: JSON.stringify({
       username: "Player1", brand: "PP", picName: "Agent A", link: "https://my.livechatinc.com/chats/CHAT1/THREAD1",
     }) });
-    assert.equal(result.statusCode, 500, "the lookup fails visibly instead of guessing");
-    assert.equal(JSON.parse(result.body).ok, false);
+    const body = JSON.parse(result.body);
+    assert.equal(result.statusCode, 200, "bonus results are still returned");
+    assert.equal(body.ok, true);
+    assert.equal(body.caRecordId, null, "no row id is guessed");
+    assert.match(body.caseRowError, /Look Up again/);
   });
   const creates = calls.filter((c) => c.method === "POST" && c.url.endsWith("/records"));
   assert.equal(creates.length, 0, "no row may be created when the duplicate check could not run");
@@ -275,4 +278,18 @@ test("any other createBatch failure surfaces the error and NEVER creates a secon
 test("a Lark error returned by createBatch is reported as a failed create", async () => {
   const { error } = await createWith({ flag: true, stub: baseStub({ createBatch: async () => ({ status: 200, statusText: "", headers: [], body: JSON.stringify({ code: 1254002, msg: "Fail" }) }) }) });
   assert.match(error.message, /Lark create failed.*Fail/);
+});
+
+test("a record that appears on two pages is returned to the caller exactly once", async () => {
+  initEnv({ ...ENV });
+  await withFetch(async (url) => {
+    if (isToken(url)) return json({ code: 0, tenant_access_token: "t", expire: 3600 });
+    const token = new URL(String(url)).searchParams.get("page_token") || "";
+    return token === ""
+      ? json({ code: 0, data: { items: [{ record_id: "a", fields: {} }, { record_id: "b", fields: {} }], has_more: true, page_token: "2" } })
+      : json({ code: 0, data: { items: [{ record_id: "b", fields: {} }, { record_id: "c", fields: {} }], has_more: false } });
+  }, async () => {
+    const rows = await searchRecords("dedupe-table", usernameCond);
+    assert.deepEqual(rows.map((r) => r.record_id), ["a", "b", "c"]);
+  });
 });
