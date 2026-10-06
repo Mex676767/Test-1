@@ -104,6 +104,7 @@ function setBrandOptions(list) {
 // Brand auto-detect depends on the option list AND on a LiveChat lookup; either
 // can fail transiently. Retry a few times instead of leaving Brand blank.
 const brandRetryAttempts = new Map();
+let lastBrandListRefreshAt = 0;
 function scheduleBrandRetry(chatId, groupID) {
   if (!chatId || !groupID) return;
   const attempt = brandRetryAttempts.get(chatId) || 0;
@@ -1065,9 +1066,16 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     const matchedBrand = brandOptions.find((b) => b.toLowerCase() === derived.toLowerCase());
     if (!matchedBrand) {
       if (!brandOptions.length) scheduleBrandRetry(chatId, groupID); // option list not loaded yet
+      // A Brand added in Lark after this widget loaded is not in the in-memory list yet (it is only
+      // re-read on a slow timer). Re-read it now -- at most once every 30 s -- and try again.
+      if (derived && Date.now() - lastBrandListRefreshAt > 30_000) {
+        lastBrandListRefreshAt = Date.now();
+        if (!(await fetchBootstrapOptions({ fresh: true }))) await fetchBrandOptions({ fresh: true });
+        if (brandOptions.some((b) => b.toLowerCase() === derived.toLowerCase())) return resolveBrandFromGroupId(chatId, groupID);
+      }
       if (derived) {
         logDiagnostic(
-          `Brand auto-detect found "${derived}" from group "${data.groupName}", but that's not an existing Brand option — left blank for manual pick.`,
+          `Brand auto-detect found "${derived}" from group "${data.groupName}", but that's not an existing Brand option (${brandOptions.length} options loaded) — left blank for manual pick.`,
           "warn"
         );
       }
