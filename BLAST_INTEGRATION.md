@@ -1,6 +1,7 @@
-# LiveChat Blast
+# LiveChat Blast (admin preview)
 
-The **Blast** tab is available in the widget and standalone preview.
+The **Blast** tab is available only on the standalone preview page. It is
+hidden when Customer Approaching runs inside LiveChat.
 
 ## Why it uses agent authorization
 
@@ -43,18 +44,8 @@ exact URI registered in both Developer Console apps.
 2. Click **Connect LiveChat** and sign in as the CS agent who should receive
    KPI credit.
 3. Add archive links and messages manually, or use **Bulk Import**.
-4. Review the queue and start it. A separate **Blast delivery** window opens.
-   Keep it open until delivery finishes; the LiveChat widget can be reloaded
-   or switched between chats without destroying the running queue. Allow
-   pop-ups if the browser blocks this window. Each archived chat is reopened, messages
+4. Review the queue and start it. Each archived chat is reopened, messages
    and an optional image are sent as the connected agent, and chats reopened
    by the tool are closed again.
 
 The shared admin PAT never authors a blast message.
-
-The widget monitors the delivery window and can pause, resume, or stop it.
-Use **Open Blast window** to bring the running queue back into view. Queue
-progress is saved locally; the OAuth token stays in session storage and is
-passed only to the same-origin delivery window. Closing that window stops
-delivery. An interrupted queue is never automatically replayed, because an
-interrupted send may already have reached a customer.

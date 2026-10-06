@@ -78,18 +78,10 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency
     renderDefaultPreview();
   });
 
-  // The delivery window survives this widget reload. Reattach to its state
-  // instead of clearing running flags and losing the visible queue status.
-  const detachedRun = globalThis.__blastRunState?.();
-  if (globalThis.__blastWebAdapter) {
-    running = Boolean(detachedRun?.running);
-    paused = running && Boolean(detachedRun?.paused);
-    chrome.storage.sync.set({ isRunning: running, isPaused: paused });
-    if (running) {
-      status.classList.add('on');
-      statusText.textContent = paused ? 'Paused in Blast window' : (detachedRun.text || 'Running in Blast window…');
-      prog.textContent = detachedRun.progress || '';
-    }
+  // Extension background runs may survive a popup close. Embedded web runs
+  // cannot survive an iframe reload, so clear any orphaned persisted state.
+  if (globalThis.__blastWebAdapter && d.isRunning) {
+    chrome.storage.sync.set({ isRunning: false, isPaused: false });
   } else if (d.isRunning) {
     running = true;
     paused = Boolean(d.isPaused);
@@ -368,8 +360,6 @@ function updateRunControls() {
   startBtn.hidden = running;
   pauseBtn.hidden = !running;
   stopBtn.hidden = !running;
-  const focusRunner = document.getElementById('focusRunnerBtn');
-  if (focusRunner) focusRunner.hidden = !running || !globalThis.__blastWebAdapter;
   const clearButton = document.getElementById('bulkClearBtn');
   if (clearButton) clearButton.hidden = running;
   pauseBtn.textContent = paused ? 'Resume' : 'Pause';
@@ -382,13 +372,6 @@ function updateRunControls() {
 // ── Background messages ───────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'PROGRESS') {
-    const detachedRun = globalThis.__blastRunState?.();
-    if (detachedRun?.running && !running) {
-      running = true;
-      paused = Boolean(detachedRun.paused);
-      status.classList.add('on');
-      updateRunControls();
-    }
     statusText.innerHTML = msg.text;
     prog.textContent = msg.progress || '';
     if (msg.log) addLog(msg.log, msg.logType || '');
@@ -397,8 +380,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     running = false;
     paused = false;
     chrome.storage.sync.set({ isRunning: false, isPaused: false });
-    statusText.textContent = msg.interrupted ? 'Run interrupted — check Blast window'
-      : msg.stopped ? 'Stopped' : `✓ Finished · ${msg.sent || 0} sent · ${msg.failed || 0} failed`;
+    statusText.innerHTML = msg.stopped ? 'Stopped' : '✓ All chats completed';
     prog.textContent = '';
     updateRunControls();
     addLog(msg.stopped ? '■ Automation stopped' : '✓ Automation finished', msg.stopped ? 'info' : 'ok');
@@ -498,11 +480,14 @@ pauseBtn.addEventListener('click', () => {
 stopBtn.addEventListener('click', () => {
   if (!running) return;
   chrome.runtime.sendMessage({ type: 'STOP' });
-  stopBtn.disabled = true;
-  pauseBtn.disabled = true;
-  statusText.textContent = 'Stopping — finishing chat cleanup…';
+  running = false;
+  paused = false;
+  chrome.storage.sync.set({ isRunning: false, isPaused: false });
+  statusText.textContent = 'Stopped';
+  prog.textContent = '';
+  updateRunControls();
+  addLog('■ Automation stopped', 'info');
 });
-document.getElementById('focusRunnerBtn')?.addEventListener('click', () => globalThis.__blastFocusRunner?.());
 
 // ── Bulk Import ───────────────────────────────────────────────────────────────
 const MAX_ROWS = 1000;
