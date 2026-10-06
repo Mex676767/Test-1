@@ -3,7 +3,7 @@
 // Function export. This is the live entry point: the deployed project
 // ("test-1") is classic Pages, so each functions/*.js file's own onRequest
 // export (built from this adapt()) is what actually runs per request.
-import { initEnv as initLarkEnv } from "./lark.js";
+import { initEnv as initLarkEnv, runWithRequestStart } from "./lark.js";
 import { initEnv as initLivechatEnv } from "./livechat.js";
 
 export function adapt(handler) {
@@ -36,7 +36,8 @@ export function adapt(handler) {
       waitUntil: (promise) => { try { context.waitUntil?.(promise); } catch (_) { /* no execution context: the work is simply best effort */ } },
     };
 
-    const result = await handler(event);
+    // Everything this request asks of the shared Lark queue is stamped with this moment (the queue orders by request age).
+    const result = await runWithRequestStart(() => handler(event));
     return new Response(result.body, {
       status: result.statusCode,
       headers: { "Content-Type": "application/json", ...(result.headers || {}) },

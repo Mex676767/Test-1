@@ -110,7 +110,7 @@ export async function listBonusConfigs({ includeInactive = false, fresh = false 
   if (!fresh && Date.now() < cache.expires) {
     return includeInactive ? cache.configs : cache.configs.filter((item) => item.active);
   }
-  const configs = (await listRecords(TABLE_BONUS_CONFIG, 500))
+  const configs = (await listRecords(TABLE_BONUS_CONFIG, 500, { sharedCacheMs: 60_000, force: fresh }))
     .map((record) => {
       try { return configFromRecord(record); } catch (_) { return null; }
     })

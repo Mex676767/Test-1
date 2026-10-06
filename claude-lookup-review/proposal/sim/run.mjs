@@ -15,7 +15,8 @@ const N = Number(args.n || 100), DO_V = args.do || "v1", PAGES = args.pages || "
 const ARRIVAL = args.arrival || "burst", LIVE = args.live === "1", MEDIAN = Number(args.median || 200);
 const QUOTA = Number(args.quota || 20), RPC_MS = Number(args.rpc || 8), USERS = Number(args.users || 600);
 const ROWS_MAX = Number(args.rows || 4);
-const DUPES = Number(args.dupes || 0);                 // this many of the first agents look the SAME chat up twice at the same moment
+const DUPES = Number(args.dupes || 0);
+const MODE = args.mode || "lookup";                    // "lookup" (default) or "submit": N simultaneous /lark-record submits                 // this many of the first agents look the SAME chat up twice at the same moment
 const CA_HIST = Number(args.cahist || 12), BG_MS = Number(args.bg || 0), CFG = Number(args.cfg || 0);
 const PER_COND = Number(args.percond || 0), LIMIT_STATUS = Number(args.limitstatus || 429);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,7 @@ function buildPages(variant) {
   const read = (rel) => fromHead ? execFileSync("git", ["show", `HEAD:${rel}`], { cwd: repo, maxBuffer: 1 << 26 }).toString("utf8")
     : fs.readFileSync(path.join(repo, rel), "utf8");
   fs.writeFileSync(path.join(dest, "lark-search.js"), read("functions/lark-search.js"));
+  fs.writeFileSync(path.join(dest, "lark-record.js"), read("functions/lark-record.js"));
   const libFiles = execFileSync("git", ["ls-files", "functions/_lib"], { cwd: repo }).toString().split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean);
   for (const rel of libFiles) fs.writeFileSync(path.join(dest, "_lib", path.basename(rel)), read(rel));
   fs.writeFileSync(path.join(dest, "package.json"), '{"type":"module"}');
@@ -122,6 +124,7 @@ const pagesDir = buildPages(PAGES);
 const { handler } = await import(pathToFileURL(path.join(pagesDir, "lark-search.js")).href);
 const { initEnv } = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js")).href);
 const realFetch = globalThis.fetch;
+const larkLib0 = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js")).href);
 const agents = Array.from({ length: N }, (_, i) => ({ username: `u${String(i).padStart(4, "0")}`, brand: i % 2 ? "MY" : "PP",
   link: `https://my.livechatinc.com/chats/SIMCHAT${i}/SIMTHREAD${i}` }));
 for (let i = 0; i < DUPES && i < N; i++) agents.push({ ...agents[i], dupeOf: i });
@@ -132,7 +135,7 @@ const refLark = createFakeLark({ tables, medianMs: 0, sigma: 0, perRowMs: 0, enf
 globalThis.fetch = refLark.fetch;
 initEnv({ ...tableEnv });
 const expected = new Map();
-for (const a of agents) { const r = JSON.parse((await handler({ body: JSON.stringify({ username: a.username, brand: a.brand, preview: true }) })).body); expected.set(a.username, JSON.stringify({ row: r.row, otherBrands: r.otherBrands, notVip: r.notVip })); }
+if (MODE === "lookup") for (const a of agents) { const r = JSON.parse((await handler({ body: JSON.stringify({ username: a.username, brand: a.brand, preview: true }) })).body); expected.set(a.username, JSON.stringify({ row: r.row, otherBrands: r.otherBrands, notVip: r.notVip })); }
 for (const t of Object.values(tables)) t.rows = t.rows.filter((r) => !String(r.record_id).startsWith("rec_new_"));
 
 // System under test
@@ -143,10 +146,56 @@ const rpc = (fn) => async (...a) => { await new Promise((r) => setTimeout(r, RPC
 if (DO_V !== "none") {
   const DO = await loadDO(DO_V);
   doInstance = new DO(fakeCtx(), { GATE_START_GAP_MS: args.gap ? Number(args.gap) : undefined, GATE_CONCURRENCY: args.conc ? Number(args.conc) : undefined, GATE_LONGPOLL_MS: args.longpoll ? Number(args.longpoll) : undefined });
-  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "forgetCreated"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
+  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "forgetCreated", "larkCall", "cachedCall"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
   queue = { idFromName: () => "g", get: () => stub };
 }
 initEnv({ ...tableEnv, LARK_SEARCH_QUEUE: queue, ...(PAGES === "v2" ? { LARK_QUEUE_PROTOCOL: "v2" } : {}), ...(args.batchcreate === "1" ? { LARK_BATCH_CREATE: "1" } : {}) });
+
+if (MODE === "submit") {
+  const { handler: recordHandler } = await import(pathToFileURL(path.join(pagesDir, "lark-record.js")).href);
+  const AGENT = "agentSUB", caTable = tables[T.ca];
+  // Seed one blank case row per submitter (created by an earlier lookup), next to the usual per-player history.
+  const targets = Array.from({ length: N }, (_, i) => ({ id: `rec_sub_${i}`, username: `u${String(i).padStart(4, "0")}`, brand: i % 2 ? "MY" : "PP", status: i % 2 ? "Solved" : "Unsolved" }));
+  for (const t of targets) caTable.rows.push({ record_id: t.id, created_time: 1.8e12 + 1, fields: { Username: [{ text: t.username, type: "text" }], Brand: t.brand, "Agent Name": AGENT,
+    link: { link: `https://my.livechatinc.com/chats/SUB${t.id}/TSUB${t.id}`, text: "x" } } });
+  // One row belongs to ANOTHER agent: it must be refused and left untouched.
+  const foreign = targets[Math.min(7, N - 1)];
+  caTable.rows.find((r) => r.record_id === foreign.id).fields["Agent Name"] = "agentOTHER";
+  const before = new Map(caTable.rows.map((r) => [r.record_id, JSON.stringify(r.fields)]));
+  lark.resetWindow();
+  const startStats = { ...lark.stats, order: undefined };
+  const start = Date.now();
+  const outcomes = await Promise.all(targets.map(async (t) => {
+    const s = Date.now();
+    const res = await recordHandler({ body: JSON.stringify({ recordId: t.id, username: t.username, agentName: AGENT, brand: t.brand, inquiry: ["Others"], status: t.status,
+      chatLink: `https://my.livechatinc.com/chats/SUB${t.id}/TSUB${t.id}`, telegram: false, claimSecret: false }) });
+    return { t, ms: Date.now() - s, status: res.statusCode };
+  }));
+  const wall = Date.now() - start;
+  const ms = outcomes.map((o) => o.ms).sort((a, b) => a - b);
+  const q2 = (p) => ms[Math.min(ms.length - 1, Math.floor(p * ms.length))];
+  let wrongRows = 0, refusedOk = 0, updatedOk = 0, touchedOthers = 0;
+  for (const row of caTable.rows) {
+    const target = targets.find((t) => t.id === row.record_id);
+    if (!target) { if (before.get(row.record_id) !== undefined && before.get(row.record_id) !== JSON.stringify(row.fields)) touchedOthers++; continue; }
+    if (target === foreign) { if (before.get(row.record_id) === JSON.stringify(row.fields)) refusedOk++; else wrongRows++; continue; }
+    const f = row.fields;
+    if (fieldText(f.Status) === target.status && JSON.stringify(f.Inquiry) === JSON.stringify(["Others"]) && fieldText(f["Agent Name"]) === AGENT) updatedOk++; else wrongRows++;
+  }
+  const statuses = {}; outcomes.forEach((o) => { statuses[o.status] = (statuses[o.status] || 0) + 1; });
+  const dstats = doInstance?.getStats?.();
+  console.log(JSON.stringify({
+    mode: "submit", config: { do: DO_V, pages: PAGES, n: N, upstreamMedianMs: MEDIAN, rpcMs: RPC_MS, gap: args.gap, conc: args.conc },
+    latencyMs: { p50: q2(0.5), p95: q2(0.95), max: ms.at(-1), wallToLastResult: wall },
+    results: { http: statuses, updatedOk, refusedForeignRowOk: refusedOk, wrongRows, otherRowsTouched: touchedOthers },
+    upstream: { total: lark.stats.calls - startStats.calls, search: lark.stats.search - startStats.search, get: (lark.stats.get || 0) - (startStats.get || 0),
+      update: (lark.stats.update || 0) - (startStats.update || 0), http429: lark.stats.limited, peakStartsPerSecond: lark.stats.peakPerSecond, peakInFlight: lark.stats.peakInFlight },
+    ...(dstats ? { doStats: { startsByClass: dstats.startsByClass, permits: dstats.permits, lark: dstats.lark, labels: dstats.labels, peakQueue: dstats.peakQueue, writeRetries: dstats.writeRetries } } : {}),
+    clientStats: larkLib0.larkClientStats,
+  }));
+  globalThis.fetch = realFetch;
+  process.exit(0);
+}
 
 let bgCount = 0, bgFail = 0, stopBg = false;
 const larkLib = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js")).href);
