@@ -388,12 +388,16 @@
       // Do not leave a customer chat open when a later message or image fails.
       if (resumed && chatId) {
         try {
-          const current = await action("get_chat", { chat_id: chatId });
-          if (current.thread?.active !== false) {
+          // We resumed this chat, so it is active: close it directly instead of reading it first. If the close is refused
+          // (for example someone already closed it), fall back to the old read-first check before treating that as a failure.
+          try {
             await action("deactivate_chat", { id: chatId, ignore_requester_presence: true });
-            const closed = await action("get_chat", { chat_id: chatId });
-            if (closed.thread?.active === true) throw new Error("Chat is still active");
+          } catch (error) {
+            const current = await action("get_chat", { chat_id: chatId });
+            if (current.thread?.active !== false) throw error;
           }
+          const closed = await action("get_chat", { chat_id: chatId });
+          if (closed.thread?.active === true) throw new Error("Chat is still active");
           progress.resumed = false;
           checkpoint();
         } catch (error) { cleanupFailed = true; }

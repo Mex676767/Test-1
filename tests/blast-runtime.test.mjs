@@ -42,6 +42,8 @@ test('embedded Blast sends 151 chats and retries failed final cleanup without re
   assert.equal(new Set(calls.filter(c=>c.action==='send_event').map(c=>c.body.chat_id)).size,151);
   assert.equal(calls.filter(c=>c.action==='deactivate_chat').length,152);
   assert.equal(new Set(calls.filter(c=>c.action==='deactivate_chat').map(c=>c.body.id)).size,151);
+  // Cleanup closes directly and confirms once: one get_chat per chat, plus one more only for the chat whose first close failed.
+  assert.equal(calls.filter(c=>c.action==='get_chat').length,152);
 });
 
 test('main application delegates deployment refresh to the release checker', () => {
