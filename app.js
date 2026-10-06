@@ -43,7 +43,19 @@ const CONFIGURED_LIVECHAT_ACCOUNT = /^lc[12]$/.test(new URLSearchParams(location
   ? new URLSearchParams(location.search).get("account")
   : "";
 let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
-let agentOptions = [];
+// Dropdown option lists are cached in localStorage, and a fetch can only ever
+// REPLACE a list with a non-empty one. Before this, a slow/throttled Lark read
+// came back as an empty list that overwrote the working one -- Brand
+// auto-detection then found no matching option and Brand "disappeared".
+const OPTIONS_CACHE_KEY = "rc-options-cache";
+function readCachedOptions() { try { return JSON.parse(localStorage.getItem(OPTIONS_CACHE_KEY) || "{}") || {}; } catch (_) { return {}; } }
+function writeCachedOptions(patch) { try { localStorage.setItem(OPTIONS_CACHE_KEY, JSON.stringify({ ...readCachedOptions(), ...patch })); } catch (_) { /* non-fatal */ } }
+let agentOptions = Array.isArray(readCachedOptions().agents) ? readCachedOptions().agents : [];
+function setAgentOptions(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  agentOptions = list;
+  writeCachedOptions({ agents: list });
+}
 
 function readBlastStorage(key) {
   try { return JSON.parse(localStorage.getItem(key) || "{}"); }
@@ -75,19 +87,42 @@ async function fetchAgentOptions({ fresh = false } = {}) {
   try {
     const res = await fetch("/lark-pic-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
-    if (data.ok) agentOptions = data.pics || [];
+    if (data.ok) setAgentOptions(data.pics);
   } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
 }
 
 // Brand's dropdown options — real Brand values from Customer Approaching's
 // own field, not free text (see renderAutoFields). Fetched once at boot,
 // same as agentOptions.
-let brandOptions = [];
+let brandOptions = Array.isArray(readCachedOptions().brands) ? readCachedOptions().brands : [];
+function setBrandOptions(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  brandOptions = list;
+  writeCachedOptions({ brands: list });
+  retryMissingBrandDetection(); // chats opened while the list was missing can now be matched
+}
+// Brand auto-detect depends on the option list AND on a LiveChat lookup; either
+// can fail transiently. Retry a few times instead of leaving Brand blank.
+const brandRetryAttempts = new Map();
+function scheduleBrandRetry(chatId, groupID) {
+  if (!chatId || !groupID) return;
+  const attempt = brandRetryAttempts.get(chatId) || 0;
+  if (attempt >= 4) return;
+  brandRetryAttempts.set(chatId, attempt + 1);
+  setTimeout(() => {
+    if (state[chatId] && !state[chatId].brand) resolveBrandFromGroupId(chatId, groupID);
+  }, [2_000, 5_000, 15_000, 40_000][attempt]);
+}
+function retryMissingBrandDetection() {
+  for (const [chatId, groupID] of groupIdFor) {
+    if (state[chatId] && !state[chatId].brand) resolveBrandFromGroupId(chatId, groupID);
+  }
+}
 async function fetchBrandOptions({ fresh = false } = {}) {
   try {
     const res = await fetch("/lark-brand-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
-    if (data.ok) brandOptions = data.brands || [];
+    if (data.ok) setBrandOptions(data.brands);
   } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
 }
 
@@ -498,8 +533,8 @@ async function fetchBootstrapOptions({ fresh = false } = {}) {
     const res = await fetch(fresh ? "/app-bootstrap?fresh=1" : "/app-bootstrap", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (!res.ok || !data.ok) return false;
-    if (Array.isArray(data.agents)) agentOptions = data.agents;
-    if (Array.isArray(data.brands)) brandOptions = data.brands;
+    if (Array.isArray(data.agents)) setAgentOptions(data.agents);
+    if (Array.isArray(data.brands)) setBrandOptions(data.brands);
     if (Array.isArray(data.inquiries) && data.inquiries.length) inquiryOptions = data.inquiries;
     if (Array.isArray(data.statuses) && data.statuses.length) statusOptions = data.statuses;
     if (Array.isArray(data.bonuses)) configuredBonusPrograms = data.bonuses;
@@ -1011,6 +1046,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
         `Brand auto-detect failed for group ID "${groupID}"${data.error ? `: ${data.error}` : " — group not found in LiveChat's group list."}`,
         "warn"
       );
+      scheduleBrandRetry(chatId, groupID); // LiveChat lookup failed -- try again shortly
       return;
     }
     const s = state[chatId];
@@ -1028,6 +1064,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     const derived = deriveBrandFromGroup(data.groupName);
     const matchedBrand = brandOptions.find((b) => b.toLowerCase() === derived.toLowerCase());
     if (!matchedBrand) {
+      if (!brandOptions.length) scheduleBrandRetry(chatId, groupID); // option list not loaded yet
       if (derived) {
         logDiagnostic(
           `Brand auto-detect found "${derived}" from group "${data.groupName}", but that's not an existing Brand option — left blank for manual pick.`,
@@ -1037,6 +1074,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
       return;
     }
     detectedBrandFor.set(chatId, matchedBrand);
+    brandRetryAttempts.delete(chatId);
     s.brand = matchedBrand; // canonical casing from Lark's own option list, not whatever the group name happened to use
     // Full code (with digits) for the Escalation Ticket section's own Brand
     // field, which expects e.g. "VS96" not "VS" -- only fills in if blank,
@@ -1047,6 +1085,7 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     checkLastUsername(chatId); // brand is one of the two things this needs — try now that it's ready
   } catch (err) {
     logDiagnostic(`Brand auto-detect request failed: ${err.message}`, "warn");
+    scheduleBrandRetry(chatId, groupID);
   }
 }
 const rawGroupIdMissingLoggedFor = new Set(); // avoid re-logging the same missing-groupID chat repeatedly
@@ -1521,6 +1560,13 @@ function stateSnapshot(s) {
   const { _savedAt, ...rest } = s || {};
   return JSON.stringify(rest);
 }
+// Last non-empty Brand seen for each chat in THIS tab. If merging with / adopting
+// another tab's older saved copy would blank it, put it back.
+const knownBrandFor = new Map();
+function keepBrand(chatId, s) {
+  if (s && !s.brand && knownBrandFor.get(chatId)) { s.brand = knownBrandFor.get(chatId); return true; }
+  return false;
+}
 function markStateSynced(chatId) {
   lastSyncedJson.set(chatId, stateSnapshot(state[chatId]));
 }
@@ -1533,6 +1579,7 @@ function saveState() {
     let dirty = false;
     let adopted = false;
     for (const [chatId, s] of Object.entries(state)) {
+      if (s && s.brand) knownBrandFor.set(chatId, s.brand);
       const cur = stateSnapshot(s);
       const synced = lastSyncedJson.get(chatId);
       const stored = raw[chatId];
@@ -1557,6 +1604,7 @@ function saveState() {
         }
         for (const k of Object.keys(s)) delete s[k];
         Object.assign(s, JSON.parse(JSON.stringify(merged)));
+        keepBrand(chatId, s);
         raw[chatId] = { ...s, _savedAt: now };
         lastSyncedJson.set(chatId, stateSnapshot(s));
         dirty = true;
@@ -1570,8 +1618,11 @@ function saveState() {
           if (storedJson !== cur) {
             // Mutate in place so existing references to state[chatId] stay valid.
             for (const k of Object.keys(s)) delete s[k];
+            const storedSnapshot = stateSnapshot(rest);
             Object.assign(s, rest);
-            lastSyncedJson.set(chatId, stateSnapshot(s));
+            const restoredBrand = keepBrand(chatId, s);
+            // If Brand had to be restored, leave this tab "changed" so the next save writes it back.
+            lastSyncedJson.set(chatId, restoredBrand ? storedSnapshot : stateSnapshot(s));
             adopted = true;
           }
         }
@@ -4992,7 +5043,7 @@ function setStatus(text, kind) {
 // and on this slow background timer — a widget an agent leaves open all
 // day would otherwise only ever see whatever was live when it first
 // loaded. Doesn't touch anything already picked on an open card.
-const OPTIONS_REFRESH_MS = 3 * 60_000;
+const OPTIONS_REFRESH_MS = 10 * 60_000; // was 3 min: every open widget re-read Lark's field catalog on this timer
 async function refreshDropdownOptions({ fresh = false } = {}) {
   const loaded = await fetchBootstrapOptions({ fresh });
   if (!loaded) {
@@ -5471,7 +5522,7 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
 // vanish just because the browser that started it forgot about it
 // (incognito closed, cleared storage, another PC). Only ever the selected
 // agent's own rows, never anyone else's.
-const STALE_POLL_MS = 60_000;
+const STALE_POLL_MS = 120_000; // Needs Attention refresh; was 60 s (one unbatchable Lark search per widget per tick)
 let staleRecords = [];
 let needsAttentionRefreshTimer = null;
 

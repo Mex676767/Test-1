@@ -14,9 +14,11 @@ export async function handler() {
     // Lark's current list (rather than up to 10 min stale) costs nothing.
     const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Agent Name", undefined, { fresh: true });
     const names = Array.from(optionMap.values()).filter(Boolean).sort();
+    // Same reasoning as lark-brand-list.js: never report an empty/failed read as success.
+    if (!names.length) return { statusCode: 502, body: JSON.stringify({ ok: false, pics: [], error: "Agent Name option list came back empty." }) };
     return { statusCode: 200, body: JSON.stringify({ ok: true, pics: names }) };
   } catch (err) {
-    return { statusCode: 200, body: JSON.stringify({ ok: true, pics: [] }) };
+    return { statusCode: 502, body: JSON.stringify({ ok: false, pics: [], error: String(err.message || err) }) };
   }
 }
 

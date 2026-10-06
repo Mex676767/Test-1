@@ -24,16 +24,23 @@ export async function handler(event = {}) {
     // browser startup and periodic refresh.
     const fresh = event.queryStringParameters?.fresh === "1";
     const [fields, bonuses] = await Promise.all([
-      listFields(TABLE_CUSTOMER_APPROACHING),
+      listFields(TABLE_CUSTOMER_APPROACHING, undefined, { force: fresh }),
       listBonusConfigs({ fresh }),
     ]);
+    // Brand and Agent Name always have options. An empty catalog means the read
+    // was partial/failed -- say so, so the widget keeps the lists it already has.
+    const brands = optionNames(fields, "Brand", { sort: true });
+    const agents = optionNames(fields, "Agent Name", { sort: true });
+    if (!brands.length || !agents.length) {
+      return { statusCode: 502, body: JSON.stringify({ ok: false, error: "Field catalog came back without Brand/Agent options." }) };
+    }
     return {
       statusCode: 200,
       headers: { "Cache-Control": fresh ? "no-store" : "private, max-age=60" },
       body: JSON.stringify({
         ok: true,
-        agents: optionNames(fields, "Agent Name", { sort: true }),
-        brands: optionNames(fields, "Brand", { sort: true }),
+        agents,
+        brands,
         inquiries: optionNames(fields, "Inquiry"),
         statuses: optionNames(fields, "Status"),
         bonuses: bonuses.map(publicBonus),

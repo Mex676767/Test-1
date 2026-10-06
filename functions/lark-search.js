@@ -9,6 +9,17 @@ import {
 import { readOwnership, ownedBy, summarizeRow, parseChatLink } from "./_lib/ca-row.js";
 import { isConfiguredBonusEligible, listBonusConfigs } from "./_lib/bonus-config.js";
 
+// The widget aborts a lookup at 45 s. Keep the whole server-side lookup inside
+// that: a bounded first pass over every source, then a bounded retry of only the
+// sources that failed. A source that still has not answered is reported in
+// lookupWarnings (explicitly unavailable) instead of the whole lookup hanging
+// until the browser gives up with nothing.
+const FIRST_PASS_TIMEOUT_MS = 22_000;
+const RETRY_MIN_MS = 3_000;
+const RETRY_MAX_MS = 14_000;
+const LOOKUP_BUDGET_MS = 36_000;
+const CASE_SEARCH_TIMEOUT_MS = 20_000;
+
 const F = {
   username: "Username",
   usernameUid: "Username/UID",
@@ -42,7 +53,7 @@ async function reusableBlankCase(agent, username, brand, link) {
     { field_name: F.brand, operator: "is", value: [brand] },
     { field_name: "Inquiry", operator: "isEmpty", value: [] },
     { field_name: "Status", operator: "isEmpty", value: [] },
-  ], undefined, { pageSize: 100, automaticFields: true });
+  ], undefined, { pageSize: 100, automaticFields: true, timeoutMs: CASE_SEARCH_TIMEOUT_MS });
   const matches = rows.map(summarizeRow)
     .filter((row) => row.agent === agent && row.username === username && row.brand === brand
       && String(row.link || "").trim().replace(/\/$/, "") === exactLink
@@ -125,11 +136,29 @@ export async function handler(event) {
     const brandVal = brand.trim();
     const agentVal = (picName || "").trim();
     const lookupWarnings = [];
+    const startedAt = Date.now();
+    // Overridable through the request env only so tests need not wait 22 s.
+    const firstPassMs = Number(event.env?.LOOKUP_FIRST_PASS_MS) || FIRST_PASS_TIMEOUT_MS;
+    const lookupBudgetMs = Number(event.env?.LOOKUP_BUDGET_MS) || LOOKUP_BUDGET_MS;
+    const retryMinMs = Number(event.env?.LOOKUP_RETRY_MIN_MS) || RETRY_MIN_MS;
+    const budget = { searchMs: firstPassMs };
+    const search = (table, conditions, base, opts = {}) => searchRecords(table, conditions, base, { ...opts, timeoutMs: budget.searchMs });
+    const findRow = (table, name, brandName, isClaimable, base, opts = {}) =>
+      findOldestClaimableRow(table, name, brandName, isClaimable, base, { ...opts, timeoutMs: budget.searchMs });
+    // Reads that are not searches (config table listing, field catalogs) have no
+    // per-call deadline of their own, so every source is raced against one here.
+    const guard = (promise, ms, label) => {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(`${label} did not answer within ${Math.round(ms / 1000)} seconds.`), { retryable: true })), ms);
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    };
     // Let the whole first wave finish before retrying anything. The second
     // wave then contains only failed sources, so a partial Lark outage cannot
     // make every table independently retry at once.
     const optionalLookup = (label, read, fallback = null) => Promise.resolve()
-      .then(read)
+      .then(() => guard(read(), firstPassMs + 2_000, label))
       .then(
         (value) => ({ label, read, fallback, value, error: null }),
         (error) => ({ label, read, fallback, value: fallback, error }),
@@ -139,7 +168,7 @@ export async function handler(event) {
       let error = task.error;
       if (error.retryable !== false) {
         try {
-          return await task.read();
+          return await guard(task.read(), budget.searchMs + 1_000, task.label);
         } catch (retryError) {
           error = retryError;
         }
@@ -158,7 +187,7 @@ export async function handler(event) {
         if (!task.error) return task.value;
         if (task.error.retryable !== false) {
           try {
-            return await task.read();
+            return await guard(task.read(), budget.searchMs + 1_000, task.label);
           } catch (error) {
             console.warn("Lark lookup source unavailable", task.label, String(error?.message || error).slice(0, 180));
           }
@@ -185,7 +214,7 @@ export async function handler(event) {
       const configs = await resolveLookup(task);
       const lookups = await Promise.all(configs.map((config) => optionalLookup(
         `Custom bonus ${config.key}`,
-        () => findOldestClaimableRow(
+        () => findRow(
           config.sourceTableId,
           uname,
           brandVal,
@@ -209,9 +238,21 @@ export async function handler(event) {
     // Previously its search and create calls both completed before those reads
     // even began, adding two network waits to every new chat lookup.
     const caseRecordP = (async () => {
-      let recordId = !preview && chatLink
-        ? await reusableBlankCase(agentVal, uname, brandVal, chatLink).catch(() => null)
-        : null;
+      // Only a *successful* "no blank row found" may lead to creating a new
+      // row. If the check itself fails (e.g. Lark throttling), swallowing the
+      // error here used to create a second blank row for the same chat, which
+      // later surfaced as a duplicate under Needs Attention. Retry once, then
+      // fail the lookup so the agent can simply look up again.
+      let recordId = null;
+      if (!preview && chatLink) {
+        for (let attempt = 0; ; attempt++) {
+          try { recordId = await reusableBlankCase(agentVal, uname, brandVal, chatLink); break; }
+          catch (error) {
+            if (attempt >= 1 || (error.retryable === false && !error.rateLimited)) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 400 + Math.floor(Math.random() * 300)));
+          }
+        }
+      }
 
       if (!preview && previousRecordId) {
         try {
@@ -263,7 +304,7 @@ export async function handler(event) {
     ] = await Promise.all([
       // Warn CS if username exists under other brands
       optionalLookup("Other-brand check", async () => {
-        const caUsernameOnly = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
+        const caUsernameOnly = await search(TABLE_CUSTOMER_APPROACHING, [
           { field_name: F.username, operator: "is", value: [uname] },
         ], undefined, { fieldNames: [F.brand] });
         return [...new Set(
@@ -280,7 +321,7 @@ export async function handler(event) {
       // rather than just silently leaving Tier blank.
       optionalLookup("P&L tier", async () => {
         if (!TABLE_PNL) return { tier: "", customerName: "", notVip: false };
-        const pnlMatches = await searchRecords(TABLE_PNL, [
+        const pnlMatches = await search(TABLE_PNL, [
           { field_name: F.username, operator: "is", value: [uname] },
           { field_name: F.brand, operator: "is", value: [brandVal] },
         ], undefined, { fieldNames: [F.tier, F.titleName] });
@@ -299,7 +340,7 @@ export async function handler(event) {
       // what it said — a "Failed" row (customer didn't qualify) slipped
       // through as a claimable ticket. Now hidden() (Claimed/Expired/Failed)
       // gates the actual text too, same as every other bonus table.
-      optionalLookup("Top 10 P&L", () => findOldestClaimableRow(
+      optionalLookup("Top 10 P&L", () => findRow(
         TABLE_TOP_PNL_NIGHT, uname, brandVal,
         (fields) => {
           const display = toDisplay(fields[F.swCheck]).trim();
@@ -312,7 +353,7 @@ export async function handler(event) {
       // LTV(Day): read the live "SW Checker" field. Only values beginning
       // with Pass are eligible, and recurring rows are consumed FIFO by
       // Time of Inspection, matching Top 10 P&L.
-      optionalLookup("LTV", () => findOldestClaimableRow(
+      optionalLookup("LTV", () => findRow(
         TABLE_LTV_DAY, uname, brandVal,
         (fields) => {
           const display = toDisplay(fields[F.swChecker]).trim();
@@ -340,7 +381,7 @@ export async function handler(event) {
       // when a current, still-valid one existed -- confirmed live: a
       // genuinely not-yet-expired Grace Period bonus wasn't showing
       // Reactivate at all.
-      optionalLookup("Grace Period", () => findOldestClaimableRow(
+      optionalLookup("Grace Period", () => findRow(
         TABLE_GRACE_PERIOD, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.swCheck])),
         undefined,
@@ -365,7 +406,7 @@ export async function handler(event) {
       // call site here catches that as "nothing claimable", indistinguishable
       // from a real no-match without checking the table's own columns
       // directly like this did.
-      optionalLookup("Risk Player", () => findOldestClaimableRow(
+      optionalLookup("Risk Player", () => findRow(
         TABLE_RISK_PLAYER, uname, brandVal,
         (fields) => {
           const status = String(toDisplay(fields[F.status]) || "").trim();
@@ -376,7 +417,7 @@ export async function handler(event) {
       )),
 
       // 12hour VIP Deposit Booster: only "Eligible" (exact) counts.
-      optionalLookup("12h VIP Booster", () => findOldestClaimableRow(
+      optionalLookup("12h VIP Booster", () => findRow(
         TABLE_VIP_BOOSTER, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
         undefined,
@@ -386,7 +427,7 @@ export async function handler(event) {
       // Special Reload Event: only "Eligible Angpao" counts — the Free Spin
       // variant that used to live in this table is retired (kept for old
       // record history only), so it's intentionally not checked for here.
-      optionalLookup("Special Reload", () => findOldestClaimableRow(
+      optionalLookup("Special Reload", () => findRow(
         TABLE_SPECIAL_RELOAD, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao",
         undefined,
@@ -400,7 +441,7 @@ export async function handler(event) {
       // "Eligible — RM18" — and so the existing "grab the number after RM"
       // extraction (already fixed for the Top 10 P&L bug) picks up the right
       // amount for Released Amount with no new extraction logic needed.
-      optionalLookup("Telegram RM28", () => findOldestClaimableRow(
+      optionalLookup("Telegram RM28", () => findRow(
         TABLE_TELEGRAM28, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
         undefined,
@@ -408,7 +449,7 @@ export async function handler(event) {
       )),
 
       optionalLookup("Redeem Code", async () => {
-        const redeemMatches = (await searchRecords(TABLE_REDEEM_CODE, [
+        const redeemMatches = (await search(TABLE_REDEEM_CODE, [
           { field_name: F.usernameUid, operator: "is", value: [uname] },
           { field_name: F.brand, operator: "is", value: [brandVal] },
         ], undefined, { fieldNames: [F.status] })).filter((r) => !hidden(toDisplay(r.fields[F.status])));
@@ -422,7 +463,7 @@ export async function handler(event) {
       // ever adds another non-Claimed status). No monetary amount column,
       // so it's not in AMOUNT_ELIGIBLE_PROGRAMS on the frontend. Username
       // column is plain "UID" here, not "Username/UID".
-      optionalLookup("Mooncake", () => findOldestClaimableRow(
+      optionalLookup("Mooncake", () => findRow(
         TABLE_MOONCAKE, uname, brandVal,
         (fields) => !hidden(toDisplay(fields[F.status])) && !!toDisplay(fields[F.status]),
         undefined,
@@ -432,7 +473,7 @@ export async function handler(event) {
       // VS96 Feedback Bonus: any non-empty Status is eligible except the
       // shared terminal states. Pick the oldest eligible inspection so a
       // player with several campaign rows is handled FIFO and deterministically.
-      optionalLookup("VS96 Feedback", () => findOldestClaimableRow(
+      optionalLookup("VS96 Feedback", () => findRow(
         TABLE_VS96_FEEDBACK, uname, brandVal,
         (fields) => {
           const status = toDisplay(fields[F.status]).trim();
@@ -458,7 +499,11 @@ export async function handler(event) {
       mooncakeRow,
       vs96Row,
       ...configuredBonusValues
-    ] = await resolveLookups([
+    ] = await (async () => {
+      // Whatever time the first pass left (inside the overall budget) is what the
+      // retry wave of failed sources may use.
+      budget.searchMs = Math.max(retryMinMs, Math.min(RETRY_MAX_MS, startedAt + lookupBudgetMs - Date.now()));
+      return resolveLookups([
       otherBrandsTask,
       pnlTask,
       topPnlTask,
@@ -472,7 +517,8 @@ export async function handler(event) {
       mooncakeTask,
       vs96Task,
       ...configuredBonusTasks,
-    ]);
+      ]);
+    })();
     const { tier, customerName, notVip } = pnlInfo;
     const configuredBonuses = Object.fromEntries(configuredBonusConfigs.map((config, index) => [
       config.key,

@@ -21,9 +21,13 @@ let TABLE_MOONCAKE;
 let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
 let LARK_SEARCH_QUEUE;
+let LARK_QUEUE_LONGPOLL = false;
 
 export function initEnv(env) {
   LARK_SEARCH_QUEUE = env.LARK_SEARCH_QUEUE;
+  // Opt-in: the v2 Durable Object long-polls acquire() inside the DO, so the
+  // client must wait longer than the legacy 250 ms before treating it as hung.
+  LARK_QUEUE_LONGPOLL = String(env.LARK_QUEUE_PROTOCOL || "") === "v2";
   APP_ID = env.LARK_APP_ID;
   APP_SECRET = env.LARK_APP_SECRET;
   BASE_APP_TOKEN = env.LARK_BASE_APP_TOKEN;
@@ -52,9 +56,24 @@ export function initEnv(env) {
 
 const larkQueueResponses = new WeakMap();
 const LARK_QUEUE_RPC_TIMEOUT_MS = 250;
+const LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS = 6_000;
 const LARK_QUEUE_RELEASE_WAIT_MS = 250;
 const LARK_UPSTREAM_TIMEOUT_MS = 6_000;
 const LARK_SEARCH_QUEUE_TIMEOUT_MS = 60_000;
+// The widget gives up on a lookup after 45 s (app.js), so queued searches
+// older than this are dropped by the shared queue instead of consuming quota.
+const LARK_SEARCH_CALLER_DEADLINE_MS = 40_000;
+const MAX_SEARCH_PAGES = 10;
+// Read-only counters for diagnostics (logged on rate limits / fail-open).
+export const larkClientStats = { rateLimited: 0, failOpen: 0, batchFallbacks: 0 };
+
+// Lark documents code 1254290 as TooManyRequest but not which HTTP status it
+// rides on, so recognise it from the code as well as from 429.
+export function isLarkRateLimited(status, data) {
+  const code = Number(data?.code);
+  return status === 429 || code === 99991400 || code === 1254290
+    || /too ?many ?requests?|rate.?limit/i.test(String(data?.msg || ""));
+}
 
 function bestEffortQueueCall(stub, method, ...args) {
   try {
@@ -74,8 +93,9 @@ async function releaseQueuePermit(stub, ticket, rateLimited = false, retryAfterM
   clearTimeout(timer);
 }
 
-function callQueueAcquire(stub, signal) {
-  const pending = Promise.resolve().then(() => stub.acquire());
+function callQueueAcquire(stub, signal, kind, waiterId) {
+  const rpcTimeoutMs = LARK_QUEUE_LONGPOLL ? LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS : LARK_QUEUE_RPC_TIMEOUT_MS;
+  const pending = Promise.resolve().then(() => stub.acquire(kind, waiterId));
   let abandoned = false;
   // If the RPC eventually grants a permit after the local request has timed
   // out, return that lease so a slow coordinator cannot strand capacity.
@@ -98,7 +118,7 @@ function callQueueAcquire(stub, signal) {
       abandoned = true;
       cleanup();
       reject(new Error("Lark queue coordinator timed out."));
-    }, LARK_QUEUE_RPC_TIMEOUT_MS);
+    }, rpcTimeoutMs);
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) return onAbort();
     pending.then((permit) => {
@@ -131,17 +151,21 @@ function waitForLarkPermit(ms, signal) {
   });
 }
 
-async function acquireSharedLarkPermit(signal) {
+async function acquireSharedLarkPermit(signal, kind = "write") {
   if (!LARK_SEARCH_QUEUE) return null;
   const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+  // Stable id so a v2 DO keeps this waiter's place in line across re-polls.
+  const waiterId = crypto.randomUUID();
   while (!signal?.aborted) {
     let permit;
     try {
-      permit = await callQueueAcquire(stub, signal);
+      permit = await callQueueAcquire(stub, signal, kind, waiterId);
     } catch (error) {
       if (signal?.aborted) throw error;
       // The local semaphore remains the fallback if the shared coordinator
       // is unhealthy. Do not let a hung RPC hold up the lookup.
+      larkClientStats.failOpen++;
+      console.warn("Lark queue fail-open", JSON.stringify({ kind, error: String(error?.message || error).slice(0, 80) }));
       return null;
     }
     if (permit?.ticket) return { stub, ticket: permit.ticket };
@@ -154,7 +178,7 @@ async function larkFetch(url, init = {}) {
   // A shared-queue delay is not an upstream Lark timeout. Keep the caller's
   // signal for cancelling a queued acquisition, but start the short upstream
   // deadline only after we have a permit and are actually making the request.
-  const { queueSignal, upstreamTimeoutMs, ...fetchInit } = init;
+  const { queueSignal, upstreamTimeoutMs, expiresAt, ...fetchInit } = init;
   // Record searches go through the shared Durable Object as a short-window
   // fan-in. Concurrent searches for the same table become one OR query over
   // usernames, then the response is filtered back to this caller below.
@@ -181,6 +205,7 @@ async function larkFetch(url, init = {}) {
         method: fetchInit.method || "GET",
         headers,
         body: batchBody,
+        expiresAt,
       });
       const result = queueSignal || fetchInit.signal
         ? await awaitWithSignal(pending, queueSignal || fetchInit.signal)
@@ -190,9 +215,12 @@ async function larkFetch(url, init = {}) {
       if (queueSignal?.aborted || fetchInit.signal?.aborted) throw error;
       // During a staggered deployment or if the batch RPC is unavailable,
       // fall through to the already-tested one-request permit path.
+      larkClientStats.batchFallbacks++;
     }
   }
-  const permit = await acquireSharedLarkPermit(queueSignal || fetchInit.signal);
+  const permitKind = String(url).includes("tenant_access_token") ? "token"
+    : String(fetchInit.method || "GET").toUpperCase() === "GET" || String(url).includes("/records/search") ? "read" : "write";
+  const permit = await acquireSharedLarkPermit(queueSignal || fetchInit.signal, permitKind);
   let upstreamTimer;
   let upstreamController;
   if (upstreamTimeoutMs > 0) {
@@ -409,45 +437,76 @@ async function performSearchRecords(tableId, conditions, baseToken, opts) {
     try {
       // The timeout includes time waiting for a local slot and the shared
       // token request; previously it only started after the slot was granted.
-      await acquireLarkSearchSlot(controller.signal);
-      hasSlot = true;
-      await waitForLarkSearchCooldown(controller.signal);
+      // With the v2 shared gate the Durable Object is the single authority for
+      // concurrency and cooldown. The per-isolate cap of 3 would otherwise keep
+      // concurrent callers from ever reaching the batcher (it held a slot for
+      // the whole DO wait), defeating batching.
+      if (!(LARK_SEARCH_QUEUE && LARK_QUEUE_LONGPOLL)) {
+        await acquireLarkSearchSlot(controller.signal);
+        hasSlot = true;
+        await waitForLarkSearchCooldown(controller.signal);
+      }
       const token = await awaitWithSignal(getTenantToken(), controller.signal);
-      const res = await larkFetch(
-        `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`
-          + (opts.pageSize ? `?page_size=${opts.pageSize}` : ""),
-        { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          signal: controller.signal,
-          queueSignal: controller.signal,
-          upstreamTimeoutMs,
-          body: JSON.stringify({
-            filter: { conjunction: "and", conditions },
-            ...(opts.automaticFields ? { automatic_fields: true } : {}),
-            ...(opts.fieldNames?.length ? { field_names: opts.fieldNames } : {}),
-          }) }
-      );
-      const data = await res.json();
-      if (data.code !== 0) {
-        const limited = res.status === 429 || Number(data.code) === 99991400 || /too many requests|rate.?limit/i.test(String(data.msg || ""));
-        const err = new Error(limited
-          ? `Lark is rate-limiting searches (table ${tableId}): ${data.msg || "Too many requests"}`
-          : `Lark search failed on table ${tableId}: ${data.msg}`);
-        err.rateLimited = limited;
-        // Lark may return schema/permission errors in an HTTP 200 response.
-        // A 429 is surfaced immediately instead of retrying every bonus table
-        // in the same request and worsening app-wide contention.
-        err.retryable = limited || (
-          res.status === 408 || res.status >= 500
-          || /internal|temporar|timeout|server error|system busy/i.test(String(data.msg || ""))
+      // Always ask for an explicit page size: Lark's default is 20, which
+      // silently truncated lookups for users with many rows (the batched path
+      // already read up to 500 per page, so the two paths disagreed). Follow
+      // has_more up to MAX_SEARCH_PAGES, and refuse a partial result beyond that.
+      const pageSize = Number(opts.pageSize) || 500;
+      const collected = [];
+      let pageToken = "";
+      let batched = false;
+      let more = false;
+      for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+        const res = await larkFetch(
+          `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/search`
+            + `?page_size=${pageSize}` + (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""),
+          { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+            queueSignal: controller.signal,
+            expiresAt: Date.now() + Math.min(timeoutMs, LARK_SEARCH_CALLER_DEADLINE_MS),
+            upstreamTimeoutMs,
+            body: JSON.stringify({
+              filter: { conjunction: "and", conditions },
+              ...(opts.automaticFields ? { automatic_fields: true } : {}),
+              ...(opts.fieldNames?.length ? { field_names: opts.fieldNames } : {}),
+            }) }
         );
-        err.retryAfterMs = Number(res.headers.get("Retry-After")) * 1000 || 0;
-        if (limited) reportSharedLarkRateLimit(res, err.retryAfterMs);
+        const data = await res.json();
+        if (data.code !== 0) {
+          const limited = isLarkRateLimited(res.status, data);
+          const err = new Error(limited
+            ? `Lark is rate-limiting searches (table ${tableId}): ${data.msg || "Too many requests"}`
+            : `Lark search failed on table ${tableId}: ${data.msg}`);
+          err.rateLimited = limited;
+          // Lark may return schema/permission errors in an HTTP 200 response.
+          // A 429 is surfaced immediately instead of retrying every bonus table
+          // in the same request and worsening app-wide contention.
+          err.retryable = limited || (
+            res.status === 408 || res.status >= 500
+            || /internal|temporar|timeout|server error|system busy/i.test(String(data.msg || ""))
+          );
+          err.retryAfterMs = Number(res.headers.get("Retry-After")) * 1000 || 0;
+          if (limited) {
+            reportSharedLarkRateLimit(res, err.retryAfterMs);
+            larkClientStats.rateLimited++;
+            console.warn("Lark rate limit", JSON.stringify({ table: tableId, httpStatus: res.status, code: data.code, retryAfter: res.headers.get("Retry-After") }));
+          }
+          throw err;
+        }
+        collected.push(...(data.data.items || []));
+        batched = batched || res.headers?.get?.("x-lark-batched") === "1";
+        more = !!data.data.has_more && !!data.data.page_token;
+        if (!more) break;
+        pageToken = String(data.data.page_token);
+      }
+      if (more) {
+        const err = new Error(`Lark search on table ${tableId} returned more than ${MAX_SEARCH_PAGES * pageSize} rows; refusing to return a partial result.`);
+        err.retryable = false;
         throw err;
       }
-      const items = data.data.items || [];
-      return res.headers?.get?.("x-lark-batched") === "1"
-        ? items.filter((record) => matchesLarkSearchConditions(record, conditions))
-        : items;
+      return batched
+        ? collected.filter((record) => matchesLarkSearchConditions(record, conditions))
+        : collected;
     } catch (err) {
       if (controller.signal.aborted) {
         lastErr = new Error(`Lark search timed out after ${Math.round(timeoutMs / 1000)} seconds (table ${tableId}).`);
@@ -589,15 +648,46 @@ function resolveOption(text, optionMap) {
   return text;
 }
 
-export async function listFields(tableId, baseToken) {
-  const token = await getTenantToken();
-  const res = await larkFetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  const data = await res.json();
-  if (data.code !== 0) throw new Error(`Lark listFields failed on table ${tableId}: ${data.msg}`);
-  return data.data.items || [];
+// Field catalogs (dropdown option lists, tier option ids) change rarely but
+// are requested by every widget at boot and on a timer. Serve them from a
+// short per-isolate cache, share concurrent reads, and -- crucially -- fall
+// back to the last good copy when Lark is slow/throttled, so a Lark hiccup
+// can never turn into an EMPTY Brand/Agent/Inquiry list in the widget.
+const FIELDS_TTL_MS = 30_000;
+const FIELDS_STALE_OK_MS = 6 * 60 * 60_000;
+const fieldsCache = new Map();    // key -> { items, at }
+const fieldsInFlight = new Map(); // key -> Promise
+export async function listFields(tableId, baseToken, { force = false } = {}) {
+  const key = (baseToken || BASE_APP_TOKEN) + "::" + tableId;
+  const cached = fieldsCache.get(key);
+  if (!force && cached && Date.now() - cached.at < FIELDS_TTL_MS) return cached.items;
+  const pending = fieldsInFlight.get(key);
+  if (pending) return pending;
+  const request = (async () => {
+    try {
+      const token = await getTenantToken();
+      const res = await larkFetch(
+        `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`,
+        { headers: { Authorization: `Bearer ${token}` }, upstreamTimeoutMs: LARK_UPSTREAM_TIMEOUT_MS,
+          queueSignal: AbortSignal.timeout(15_000) }
+      );
+      const data = await res.json();
+      if (data.code !== 0) throw new Error(`Lark listFields failed on table ${tableId}: ${data.msg}`);
+      const items = data.data.items || [];
+      fieldsCache.set(key, { items, at: Date.now() });
+      return items;
+    } catch (error) {
+      if (cached && Date.now() - cached.at < FIELDS_STALE_OK_MS) {
+        console.warn("Lark listFields failed; serving last good field catalog", tableId, String(error?.message || error).slice(0, 120));
+        return cached.items;
+      }
+      throw error;
+    } finally {
+      fieldsInFlight.delete(key);
+    }
+  })();
+  fieldsInFlight.set(key, request);
+  return request;
 }
 
 const fieldOptionMapCache = new Map(); // key -> { map, expiry }
@@ -617,7 +707,7 @@ export async function getFieldOptionMap(tableId, fieldName, baseToken, { fresh =
     if (cached && Date.now() < cached.expiry) return cached.map;
   }
 
-  const fields = await listFields(tableId, baseToken);
+  const fields = await listFields(tableId, baseToken, { force: fresh });
   const field = fields.find((f) => f.field_name === fieldName);
   const options = field && field.property && field.property.options;
   const map = new Map((options || []).map((o) => [o.id, o.name]));
@@ -631,7 +721,7 @@ function findTimeOfInspection(fields, dateFieldName) {
   return key ? fields[key] : 0;
 }
 
-export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest, fieldNames } = {}) {
+export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest, fieldNames, timeoutMs } = {}) {
   if (!tableId) return null;
   const defaultUsernameField = !usernameField;
   const usernameFields = usernameField ? [usernameField] : ["Username/UID", "Username"];
@@ -643,7 +733,7 @@ export async function findOldestClaimableRow(tableId, username, brand, isClaimab
       { field_name: brandField || "Brand", operator: "is", value: [brand] },
     ];
     try {
-      matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true, fieldNames });
+      matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true, fieldNames, timeoutMs });
       break;
     } catch (err) {
       lastErr = err;
@@ -652,7 +742,7 @@ export async function findOldestClaimableRow(tableId, username, brand, isClaimab
       // otherwise valid bonus row isn't lost because of projection.
       if (fieldNames?.length && err.retryable === false && !err.rateLimited) {
         try {
-          matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true });
+          matches = await searchRecords(tableId, conditions, baseToken, { pageSize: 500, automaticFields: true, timeoutMs });
           break;
         } catch (fallbackErr) {
           lastErr = fallbackErr;

@@ -16,9 +16,14 @@ export async function handler() {
     // serve a stale (up to 10 min old) list here.
     const optionMap = await getFieldOptionMap(TABLE_CUSTOMER_APPROACHING, "Brand", undefined, { fresh: true });
     const names = Array.from(optionMap.values()).filter(Boolean).sort();
+    // An empty list is never a real answer (Brand always has options). Reporting
+    // it as ok:true used to make the widget REPLACE its working list with [],
+    // which is how Brand auto-detection and the Brand dropdown "disappeared"
+    // whenever Lark was slow. Fail instead so the widget keeps its last list.
+    if (!names.length) return { statusCode: 502, body: JSON.stringify({ ok: false, brands: [], error: "Brand option list came back empty." }) };
     return { statusCode: 200, body: JSON.stringify({ ok: true, brands: names }) };
   } catch (err) {
-    return { statusCode: 200, body: JSON.stringify({ ok: true, brands: [] }) };
+    return { statusCode: 502, body: JSON.stringify({ ok: false, brands: [], error: String(err.message || err) }) };
   }
 }
 
