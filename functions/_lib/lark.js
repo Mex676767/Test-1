@@ -95,7 +95,8 @@ async function releaseQueuePermit(stub, ticket, rateLimited = false, retryAfterM
 
 function callQueueAcquire(stub, signal, kind, waiterId) {
   const rpcTimeoutMs = LARK_QUEUE_LONGPOLL ? LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS : LARK_QUEUE_RPC_TIMEOUT_MS;
-  const pending = Promise.resolve().then(() => stub.acquire(kind, waiterId));
+  // The bare acquire() call is the legacy protocol every deployed Durable Object understands.
+  const pending = Promise.resolve().then(() => (LARK_QUEUE_LONGPOLL ? stub.acquire(kind, waiterId) : stub.acquire()));
   let abandoned = false;
   // If the RPC eventually grants a permit after the local request has timed
   // out, return that lease so a slow coordinator cannot strand capacity.

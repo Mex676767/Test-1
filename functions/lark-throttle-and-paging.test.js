@@ -181,3 +181,17 @@ test("shared permits carry their kind and a stable waiter id so a v2 queue keeps
   assert.equal(calls.at(-1)[0], "write");
   assert.match(String(calls.at(-1)[1]), /^[0-9a-f-]{36}$/);
 });
+
+test("without the v2 flag the shared permit uses the legacy bare acquire() every deployed queue understands", async () => {
+  const calls = [];
+  const stub = {
+    acquire: async (...args) => { calls.push(args); return { ticket: "t", retryAfterMs: 0 }; },
+    release: async () => {}, penalize: async () => {}, searchBatch: async () => { throw new Error("n/a"); },
+  };
+  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub } });   // no LARK_QUEUE_PROTOCOL
+  const { createRecord } = await import("./_lib/lark.js");
+  await withFetch(async (url) => isToken(url)
+    ? json({ code: 0, tenant_access_token: "t", expire: 3600 })
+    : json({ code: 0, data: { record: { record_id: "r1" } } }), async () => { await createRecord("customer-table", { Username: "p1" }); });
+  assert.deepEqual(calls.at(-1), [], "no kind/waiterId arguments sent to a legacy queue");
+});
