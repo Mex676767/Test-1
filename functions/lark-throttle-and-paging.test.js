@@ -195,3 +195,32 @@ test("without the v2 flag the shared permit uses the legacy bare acquire() every
     : json({ code: 0, data: { record: { record_id: "r1" } } }), async () => { await createRecord("customer-table", { Username: "p1" }); });
   assert.deepEqual(calls.at(-1), [], "no kind/waiterId arguments sent to a legacy queue");
 });
+
+test("the blank-case lookup is projected to the columns it re-checks, and still reuses a matching blank row instead of creating one", async () => {
+  initEnv({ ...ENV });
+  let caSearchBody = null;
+  const creates = [];
+  await withFetch(async (url, options = {}) => {
+    const text = String(url);
+    if (isToken(text)) return json({ code: 0, tenant_access_token: "t", expire: 3600 });
+    const body = options.body ? JSON.parse(options.body) : {};
+    if (text.includes("customer-table") && text.endsWith("/records") && options.method === "POST") { creates.push(body); return json({ code: 0, data: { record: { record_id: "rec-new" } } }); }
+    if (text.includes("customer-table") && (body.filter?.conditions || []).some((c) => c.field_name === "Inquiry")) {
+      caSearchBody = body;
+      return json({ code: 0, data: { items: [{
+        record_id: "rec-blank", created_time: 1,
+        fields: { Username: "player1", Brand: "PP", "Agent Name": "Agent A", link: { link: "https://my.livechatinc.com/chats/CHAT1/THREAD1", text: "x" } },
+      }], has_more: false } });
+    }
+    return json({ code: 0, data: { items: [], has_more: false } });
+  }, async () => {
+    const result = await handler({ body: JSON.stringify({
+      username: "Player1", brand: "PP", picName: "Agent A", link: "https://my.livechatinc.com/chats/CHAT1/THREAD1",
+    }) });
+    const parsed = JSON.parse(result.body);
+    assert.equal(result.statusCode, 200);
+    assert.equal(parsed.caRecordId, "rec-blank", "the existing blank row is reused");
+  });
+  assert.equal(creates.length, 0, "no duplicate row created");
+  assert.deepEqual([...caSearchBody.field_names].sort(), ["Agent Name", "Brand", "Inquiry", "Status", "Username", "link"].sort());
+});

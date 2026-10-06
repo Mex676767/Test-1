@@ -59,6 +59,7 @@ const LARK_QUEUE_RPC_TIMEOUT_MS = 250;
 const LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS = 6_000;
 const LARK_QUEUE_RELEASE_WAIT_MS = 250;
 const LARK_UPSTREAM_TIMEOUT_MS = 6_000;
+const LARK_DEFAULT_UPSTREAM_TIMEOUT_MS = 15_000;
 const LARK_SEARCH_QUEUE_TIMEOUT_MS = 60_000;
 // The widget gives up on a lookup after 45 s (app.js), so queued searches
 // older than this are dropped by the shared queue instead of consuming quota.
@@ -179,7 +180,10 @@ async function larkFetch(url, init = {}) {
   // A shared-queue delay is not an upstream Lark timeout. Keep the caller's
   // signal for cancelling a queued acquisition, but start the short upstream
   // deadline only after we have a permit and are actually making the request.
-  const { queueSignal, upstreamTimeoutMs, expiresAt, ...fetchInit } = init;
+  // Every call gets an upstream ceiling; searches and token reads pass their own (6 s). Without one a hung
+  // create/get/delete could stall a whole lookup. A timed-out create is safe to retry: the lookup's blank-row
+  // check reuses the row if Lark did create it.
+  const { queueSignal, upstreamTimeoutMs = LARK_DEFAULT_UPSTREAM_TIMEOUT_MS, expiresAt, ...fetchInit } = init;
   // Record searches go through the shared Durable Object as a short-window
   // fan-in. Concurrent searches for the same table become one OR query over
   // usernames, then the response is filtered back to this caller below.

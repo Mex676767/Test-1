@@ -53,7 +53,13 @@ async function reusableBlankCase(agent, username, brand, link) {
     { field_name: F.brand, operator: "is", value: [brand] },
     { field_name: "Inquiry", operator: "isEmpty", value: [] },
     { field_name: "Status", operator: "isEmpty", value: [] },
-  ], undefined, { pageSize: 100, automaticFields: true, timeoutMs: CASE_SEARCH_TIMEOUT_MS });
+  ], undefined, {
+    pageSize: 100, automaticFields: true, timeoutMs: CASE_SEARCH_TIMEOUT_MS,
+    // Exactly the columns the filter below re-checks. Projecting them lets the shared
+    // queue merge this lookup with other agents' (one OR query over many usernames,
+    // filtered back per caller) instead of spending a Lark call per lookup on it.
+    fieldNames: [F.agentName, F.username, F.brand, "Inquiry", "Status", "link"],
+  });
   const matches = rows.map(summarizeRow)
     .filter((row) => row.agent === agent && row.username === username && row.brand === brand
       && String(row.link || "").trim().replace(/\/$/, "") === exactLink
