@@ -732,7 +732,10 @@ let activeChats = IS_EMBEDDED_APP ? [] : SAMPLE_CHATS;
 // bonus tables, but every write path is disabled until the LiveChat SDK
 // successfully connects and replaces the sample cards with a real chat.
 let previewMode = !IS_EMBEDDED_APP;
-const BONUS_SHOWCASE_PREVIEW = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("bonusPreview") === "all";
+// The standalone admin/test preview is also the bonus showcase: populate one
+// sample eligible result for every built-in and configured bonus so reviewers
+// can see the complete card set without needing a live player lookup.
+const BONUS_SHOWCASE_PREVIEW = !IS_EMBEDDED_APP;
 let showPreviewClosedChat = false;
 let activeMainTab = "customer";
 const MAIN_TAB_SESSION_KEY = `rc-main-tab:${CONFIGURED_LIVECHAT_ACCOUNT || "default"}`;
