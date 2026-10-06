@@ -586,6 +586,11 @@ function updateCounter(ta, counterId) {
     updateCounter(ta, ids[i]);
   });
   ta.addEventListener('paste', (e) => {
+    // Cells copied from a spreadsheet into any box: fill this box and the ones after it, one column each.
+    if (ta !== bulkLinks) {
+      const text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+      if (isSpreadsheetPaste(text)) { e.preventDefault(); parseTabbedPaste(text, i); return; }
+    }
     // Give the paste time to land before checking
     setTimeout(() => {
       if (ta === bulkLinks && ta.value.includes('\t')) {
@@ -600,36 +605,49 @@ function updateCounter(ta, counterId) {
 bulkMessageModeInputs.forEach(input => input.addEventListener('change', syncBulkMessageMode));
 syncBulkMessageMode();
 
-// Parse tab-separated paste (copied from Excel/Sheets with all 4 columns)
-function parseTabbedPaste(raw) {
+// Boxes in page order. A spreadsheet paste fills the box it lands in and the ones after it, one column each.
+const TABBED_BOX_NAMES = ['Links', 'Message 1', 'Message 2', 'Message 3', 'Image URL'];
+const tabbedBoxes = () => [bulkLinks, bulkMsg1, bulkMsg2, bulkMsg3, bulkImgUrl];
+
+// Spreadsheet cells = every non-empty line has a tab. A message that merely contains an indented line is not one.
+function isSpreadsheetPaste(text) {
+  const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim());
+  return lines.length > 0 && lines.every((l) => l.includes('\t'));
+}
+
+// Parse tab-separated paste (copied from Excel/Sheets). Column 1 goes to the box that was pasted into (startIndex),
+// column 2 to the next box, and so on. Pasting into Links with the usual 4 columns behaves exactly as before.
+function parseTabbedPaste(raw, startIndex = 0) {
   const rowsMode = bulkMessageModeInputs.find(input => input.value === 'rows');
   if (rowsMode) rowsMode.checked = true;
   syncBulkMessageMode();
   const rows = raw.split('\n').map(r => r.split('\t').map(c => c.trim())).filter(r => r.some(c => c));
+  if (!rows.length) return;
 
-  // Check if first row is a header (LINKS / MESSAGE 1 etc.) — skip it
-  const firstRow = rows[0].map(c => c.toLowerCase());
-  const startIdx = (firstRow[0] === 'links' || firstRow[0] === 'link') ? 1 : 0;
-  const dataRows = rows.slice(startIdx);
+  // Skip a header row (LINKS / MESSAGE 1 / IMAGE URL ...)
+  const isHeader = (cells) => cells.every((c) => !c || /^(links?|message\s*[123]|image(\s*url)?)$/i.test(c));
+  const dataRows = isHeader(rows[0]) ? rows.slice(1) : rows;
+  if (!dataRows.length) return;
 
-  const links = [], m1 = [], m2 = [], m3 = [];
-  dataRows.forEach(cols => {
-    links.push(cols[0] || '');
-    m1.push(cols[1] || '');
-    m2.push(cols[2] || '');
-    m3.push(cols[3] || '');
-  });
+  const boxes = tabbedBoxes();
+  const columns = Math.max(...dataRows.map((cols) => cols.length));
+  const fitting = boxes.length - startIndex;
+  for (let c = 0; c < fitting; c += 1) {
+    const box = boxes[startIndex + c];
+    // The four text boxes are always rewritten (as before); the Image URL box only if the paste actually has a column for it.
+    if (!box || (startIndex + c === 4 && c >= columns)) continue;
+    box.value = dataRows.map((cols) => cols[c] || '').join('\n');
+  }
+  if (startIndex + columns > 4 && typeof imgSubUrl !== 'undefined') imgSubUrl.click();   // image URLs live on the URL tab
 
-  bulkLinks.value = links.join('\n');
-  bulkMsg1.value  = m1.join('\n');
-  bulkMsg2.value  = m2.join('\n');
-  bulkMsg3.value  = m3.join('\n');
+  ['cntLinks','cntMsg1','cntMsg2','cntMsg3'].forEach((id, i) => updateCounter(boxes[i], id));
+  if (bulkImgUrl) bulkImgUrl.dispatchEvent(new Event('input'));
 
-  ['cntLinks','cntMsg1','cntMsg2','cntMsg3'].forEach((id, i) => {
-    updateCounter([bulkLinks,bulkMsg1,bulkMsg2,bulkMsg3][i], id);
-  });
-
-  showBulkStatus(`Auto-parsed ${dataRows.length} rows from tabbed paste.`, 'ok');
+  const dropped = Math.max(0, columns - fitting);
+  showBulkStatus(
+    'Auto-parsed ' + dataRows.length + ' rows from tabbed paste' + (startIndex ? ' (starting at ' + TABBED_BOX_NAMES[startIndex] + ')' : '') + '.'
+      + (dropped ? ' ' + dropped + ' extra column' + (dropped > 1 ? 's were' : ' was') + ' ignored.' : ''),
+    'ok');
 }
 
 function showBulkStatus(msg, type) {
@@ -830,6 +848,10 @@ imgFileClear.addEventListener('click', () => {
 // Track URL counter
 const bulkImgUrl = document.getElementById('bulkImgUrl');
 if (bulkImgUrl) {
+  bulkImgUrl.addEventListener('paste', (e) => {
+    const text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+    if (isSpreadsheetPaste(text)) { e.preventDefault(); parseTabbedPaste(text, 4); }
+  });
   bulkImgUrl.addEventListener('input', () => {
     const n = bulkImgUrl.value.split('\n').filter(l => l.trim()).length;
     document.getElementById('cntImg').textContent = n > 0 ? `${n} / ${MAX_ROWS}` : '—';
