@@ -59,6 +59,8 @@ node --no-warnings --test claude-lookup-review/proposal/worker-v2/gate.test.mjs
 
 GitHub Actions (`.github/workflows/ci.yml`) runs both on every push and pull request. Tests use fakes only — they never call Lark, LiveChat or the ticket API. Simulator for the queue under load: `claude-lookup-review/proposal/sim/`.
 
+Load test: `node scripts/stress-lookup.mjs --base <staging url> --agents 100 [--users players.txt] [--rounds 3]` sends N simultaneous read-only (`preview`) lookups and prints p50/p95/max. It refuses the production host (and `--write`, which creates rows, is only for a staging copy with its own Lark base). It needs a staging Pages project + separate Lark base to be fully realistic; the in-repo simulator covers the queue logic without Lark.
+
 ## 5. Watching it
 
 - Cloudflare → Pages → test-1 → Functions → real-time logs. Look for: `Lark rate limit`, `Lark queue fail-open`, `Case row not saved`, `Lark lookup source unavailable`, `Lark queue has no createBatch`.
