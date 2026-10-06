@@ -25,18 +25,22 @@ import { DurableObject } from "cloudflare:workers";
 type Env = { MY_DURABLE_OBJECT: DurableObjectNamespace<MyDurableObject> } & Record<string, unknown>;
 type Klass = "token" | "read" | "write";
 type PermitResult = { ticket: string | null; retryAfterMs: number };
-type SearchBatchInput = { url: string; method: string; headers: Record<string, string>; body: string; expiresAt?: number };
+// requestStartedAt: when the Pages request (lookup / submit) that made this call began. The queue orders ALL of one request's steps
+// by it, so an older request's next step runs before a newer request's first one. label: what the call is for (diagnostics only).
+type SearchBatchInput = { url: string; method: string; headers: Record<string, string>; body: string; expiresAt?: number; requestStartedAt?: number; label?: string };
+type CachedCallInput = SearchBatchInput & { cacheKey: string; ttlMs: number; staleMs?: number; force?: boolean };
 type SearchBatchResult = { status: number; statusText: string; headers: [string, string][]; body: string };
 type Waiter = {
   input: SearchBatchInput; body: any; usernameField: string; username: string;
-  expiresAt: number; enqueuedAt: number; resolve: (r: SearchBatchResult) => void;
+  expiresAt: number; enqueuedAt: number; since: number; timed: boolean; resolve: (r: SearchBatchResult) => void;
 };
 type Bucket = { key: string; baseKey: string; waiters: Waiter[]; createdAt: number };
-type CreateWaiter = { input: SearchBatchInput; fields: Record<string, unknown>; expiresAt: number; enqueuedAt: number; resolve: (r: SearchBatchResult) => void };
+type CreateWaiter = { input: SearchBatchInput; fields: Record<string, unknown>; expiresAt: number; enqueuedAt: number; since: number; timed: boolean; resolve: (r: SearchBatchResult) => void };
 type CreateBucket = { key: string; waiters: CreateWaiter[]; createdAt: number };
 type Grant = { klass: Klass; at: number };                       // a granted slot: which class, and when (for hold-time stats)
 type SlotEntry = { grant: (g: Grant) => void; cancelled: boolean; order: number; klass: Klass; requestedAt: number };
-type CallType = "search" | "batchCreate" | "create" | "other";
+type CallType = "search" | "batchCreate" | "create" | "get" | "update" | "delete" | "list" | "fields" | "other";
+const CALL_TYPES: CallType[] = ["search", "batchCreate", "create", "get", "update", "delete", "list", "fields", "other"];
 type Slot = { promise: Promise<Grant>; cancel: () => void };
 type Poll = { slot: Slot; granted: Promise<void>; ticket: string | null; idle: ReturnType<typeof setTimeout> | null };
 type Ticket = { timer: ReturnType<typeof setTimeout>; grant: Grant };
@@ -51,6 +55,8 @@ const WRITE_TIMEOUT_MS = 15_000;       // creates / other writes (Env GATE_WRITE
 const CREATE_MEMORY_MS = 120_000;      // identical creates within this window share ONE row (Env CREATE_MEMORY_MS; 0 = off)
 const CREATE_MEMORY_MAX = 2_000;
 const WRITE_RETRIES = 1;               // one retry of a timed-out / 5xx create, with the SAME client_token
+const CACHE_MAX_ENTRIES = 50;          // shared read cache (field catalogs, bonus config)
+const MAX_LABELS = 24;
 const MAX_429_RETRIES = 2;
 const MAX_COOLDOWN_MS = 5_000;
 const PERMIT_LEASE_MS = 8_000;
@@ -76,9 +82,12 @@ const upstreamFailures = new WeakSet<SearchBatchResult>();
 const callType = (input: SearchBatchInput): CallType => {
   let path = "";
   try { path = new URL(input.url).pathname; } catch { /* unknown */ }
+  const method = (input.method || "POST").toUpperCase();
   if (/\/records\/batch_create$/.test(path)) return "batchCreate";
   if (/\/records\/search$/.test(path)) return "search";
-  if (/\/records$/.test(path) && (input.method || "POST").toUpperCase() === "POST") return "create";
+  if (/\/records$/.test(path)) return method === "POST" ? "create" : "list";
+  if (/\/records\/[^/]+$/.test(path)) return method === "GET" ? "get" : method === "DELETE" ? "delete" : "update";
+  if (/\/fields$/.test(path)) return "fields";
   return "other";
 };
 const summary = (values: number[]) => {
@@ -143,12 +152,16 @@ export class MyDurableObject extends DurableObject<Env> {
   private m = {
     waitMs: { token: [] as number[], read: [] as number[], write: [] as number[] } as Record<Klass, number[]>,
     holdMs: { token: [] as number[], read: [] as number[], write: [] as number[] } as Record<Klass, number[]>,
-    larkMs: { search: [] as number[], batchCreate: [] as number[], create: [] as number[], other: [] as number[] } as Record<CallType, number[]>,
+    larkMs: Object.fromEntries(CALL_TYPES.map((t) => [t, [] as number[]])) as Record<CallType, number[]>,
   };
+  private labels: Record<string, number> = {};                                              // permit/call counts by purpose
+  private cache = new Map<string, { at: number; result: SearchBatchResult }>();             // shared read cache
+  private cacheInflight = new Map<string, Promise<SearchBatchResult>>();
   private recentStarts: number[] = [];
   private pruneCounter = 0;
   private s = {
     upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0, createMemoryHits: 0, createSharedInflight: 0, writeRetries: 0,
+    cacheHits: 0, cacheShared: 0, cacheStaleServed: 0, larkCalls: 0,
     noBatchTrips: 0, peakQueue: 0, truncatedFails: 0, heavyUsers: 0, peakStartsPerSec: 0,
     startsByClass: { token: 0, read: 0, write: 0 } as Record<Klass, number>,
     batchSizes: [] as number[], queueWaitMs: [] as number[],
@@ -172,15 +185,25 @@ export class MyDurableObject extends DurableObject<Env> {
       queueWaitP50: sorted[Math.floor(sorted.length / 2)] ?? 0, queueWaitMax: sorted.at(-1) ?? 0,
       // ms. wait = permit requested -> granted; hold = granted -> released (for ticketed calls this is the caller's whole Lark call).
       permits: Object.fromEntries((["token", "read", "write"] as Klass[]).map((k) => [k, { wait: summary(this.m.waitMs[k]), hold: summary(this.m.holdMs[k]) }])),
-      lark: Object.fromEntries((["search", "batchCreate", "create", "other"] as CallType[]).map((t) => [t, summary(this.m.larkMs[t])])) };
+      lark: Object.fromEntries(CALL_TYPES.map((t) => [t, summary(this.m.larkMs[t])])),
+      labels: { ...this.labels }, cacheEntries: this.cache.size };
+  }
+  private countLabel(label: unknown): void {
+    const name = typeof label === "string" && /^[a-z0-9-]{1,24}$/.test(label) ? label : "other";
+    if (!(name in this.labels) && Object.keys(this.labels).length >= MAX_LABELS) { this.labels.other = (this.labels.other || 0) + 1; return; }
+    this.labels[name] = (this.labels[name] || 0) + 1;
   }
   private sample(arr: number[], value: number) { arr.push(value); if (arr.length > STAT_SAMPLES) arr.splice(0, arr.length - STAT_SAMPLES); }
 
   // ---- gate -------------------------------------------------------------
-  private acquireSlot(klass: Klass, since = Date.now()): Slot {
+  // `since` is the ordering key (the START OF THE REQUEST this step belongs to, or arrival time for legacy callers). The 3 s
+  // write delay applies only to writes without a request start time (`aged`): a request that has a start time keeps its age
+  // across all its steps, so its PUT is not pushed behind newer requests' reads.
+  private acquireSlot(klass: Klass, since = Date.now(), aged = true): Slot {
     let entry!: SlotEntry;
     const requestedAt = Date.now();
-    const promise = new Promise<Grant>((grant) => { entry = { grant, cancelled: false, order: since + CLASS_OFFSET[klass], klass, requestedAt }; });
+    const offset = klass === "write" && !aged ? 0 : CLASS_OFFSET[klass];
+    const promise = new Promise<Grant>((grant) => { entry = { grant, cancelled: false, order: since + offset, klass, requestedAt }; });
     let at = this.waitq.length;
     while (at > 0 && this.waitq[at - 1].order > entry.order) at--;       // stable insert by order
     this.waitq.splice(at, 0, entry);
@@ -254,16 +277,16 @@ export class MyDurableObject extends DurableObject<Env> {
   }
 
   // `held` is a slot the caller already holds (used for the first attempt only); null = acquire one.
-  private async fetchPage(input: SearchBatchInput, held: Grant | null, since: number, deadline: number, klass: Klass = "read"): Promise<SearchBatchResult> {
+  private async fetchPage(input: SearchBatchInput, held: Grant | null, since: number, deadline: number, klass: Klass = "read", aged = true, timeoutMs?: number): Promise<SearchBatchResult> {
     for (let attempt = 0; ; attempt++) {
       let grant = held;
       held = null;
       if (!grant) {
         if (Date.now() >= deadline) { this.s.expiredDropped++; return failure(504, "Lark search deadline exceeded in queue."); }
-        grant = await this.acquireSlot(klass, since).promise;   // a retried write keeps WRITE priority
+        grant = await this.acquireSlot(klass, since, aged).promise;   // a retried write keeps WRITE priority
       }
       if (Date.now() >= deadline) { this.s.expiredDropped++; this.releaseSlot(false, 0, grant); return failure(504, "Lark search deadline exceeded in queue."); }
-      const { result, limited } = await this.fetchOnce(input, grant, klass === "write" ? this.writeTimeoutMs : UPSTREAM_TIMEOUT_MS);
+      const { result, limited } = await this.fetchOnce(input, grant, timeoutMs ?? (klass === "write" ? this.writeTimeoutMs : UPSTREAM_TIMEOUT_MS));
       if (!limited || attempt >= MAX_429_RETRIES) return result;
       this.s.retries429++;
     }
@@ -272,14 +295,16 @@ export class MyDurableObject extends DurableObject<Env> {
   // ---- RPC: permits for non-search calls (token, create, update, fields) -----
   // Long-polls inside the DO. A caller that comes back with the same waiterId
   // (after its RPC timed out) keeps its original place in line.
-  async acquire(kind?: Klass, waiterId?: string): Promise<PermitResult> {
+  async acquire(kind?: Klass, waiterId?: string, requestStartedAt?: number, label?: string): Promise<PermitResult> {
     // A bare acquire() is the legacy protocol (current Pages code, 250 ms RPC timeout):
     // wait briefly, then answer "retry in N ms" instead of holding the call open.
     if (kind === undefined && waiterId === undefined) return this.acquireLegacy();
     kind = kind ?? "write";
     let poll = waiterId ? this.polls.get(waiterId) : undefined;
     if (!poll) {
-      const slot = this.acquireSlot(kind === "token" || kind === "read" ? kind : "write");
+      const startedAt = Number(requestStartedAt) || 0;
+      this.countLabel(label);
+      const slot = this.acquireSlot(kind === "token" || kind === "read" ? kind : "write", startedAt || Date.now(), !startedAt);
       const created: Poll = { slot, ticket: null, idle: null, granted: Promise.resolve() };
       created.granted = slot.promise.then((grant) => {
         created.ticket = this.issueTicket(grant);
@@ -369,7 +394,9 @@ export class MyDurableObject extends DurableObject<Env> {
     const key = isHeavy ? `${baseKey}#solo#${username}` : baseKey;
 
     return new Promise<SearchBatchResult>((resolve) => {
-      const waiter: Waiter = { input, body, usernameField: String(userConds[0].field_name), username, expiresAt, enqueuedAt: now, resolve };
+      const startedAt = Number(input.requestStartedAt) || 0;
+      this.countLabel(input.label || "search");
+      const waiter: Waiter = { input, body, usernameField: String(userConds[0].field_name), username, expiresAt, enqueuedAt: now, since: startedAt || now, timed: !!startedAt, resolve };
       let bucket = this.buckets.get(key);
       if (!bucket) { bucket = { key, baseKey, waiters: [], createdAt: now }; this.buckets.set(key, bucket); void this.runBucket(bucket); }
       bucket.waiters.push(waiter);
@@ -406,7 +433,9 @@ export class MyDurableObject extends DurableObject<Env> {
       if (pending) { this.s.createSharedInflight++; return pending; }
     }
     const run = new Promise<SearchBatchResult>((resolve) => {
-      const waiter: CreateWaiter = { input, fields: parsed.fields, expiresAt, enqueuedAt: Date.now(), resolve };
+      const startedAt = Number(input.requestStartedAt) || 0;
+      this.countLabel(input.label || "create");
+      const waiter: CreateWaiter = { input, fields: parsed.fields, expiresAt, enqueuedAt: Date.now(), since: startedAt || Date.now(), timed: !!startedAt, resolve };
       let bucket = this.createBuckets.get(key);
       if (!bucket) { bucket = { key, waiters: [], createdAt: Date.now() }; this.createBuckets.set(key, bucket); void this.runCreateBucket(bucket); }
       bucket.waiters.push(waiter);
@@ -424,7 +453,8 @@ export class MyDurableObject extends DurableObject<Env> {
 
   // The Pages side calls this when it deletes or updates a row it created, so a later identical create can never be
   // answered with a row that has since been removed or completed.
-  async forgetCreated(recordId: string): Promise<void> {
+  async forgetCreated(recordId: string): Promise<void> { this.dropRecord(recordId); }
+  private dropRecord(recordId: string): void {
     const key = this.recordIndex.get(String(recordId));
     if (key === undefined) return;
     this.recordIndex.delete(String(recordId));
@@ -450,13 +480,64 @@ export class MyDurableObject extends DurableObject<Env> {
     return this.fetchPage(input, grant, since, expiresAt, "write");
   }
 
+  // ---- RPC: any other single Lark call (record get / update / delete), run INSIDE the DO ----------------------------
+  // The caller sends the whole call at once; the DO takes a slot, calls Lark and releases the slot, so the slot is held for
+  // Lark's latency only (not for Pages<->DO round trips), and a write the DO has accepted completes even if the Pages request
+  // that sent it has since been cancelled. A timed-out / 5xx GET or PUT is retried once (both are idempotent); DELETE is not.
+  async larkCall(input: SearchBatchInput): Promise<SearchBatchResult> {
+    const method = (input.method || "GET").toUpperCase();
+    const klass: Klass = method === "GET" ? "read" : "write";
+    const startedAt = Number(input.requestStartedAt) || 0;
+    const since = startedAt || Date.now();
+    const expiresAt = Number(input.expiresAt) || Date.now() + 40_000;
+    this.s.larkCalls++;
+    this.countLabel(input.label || callType(input));
+    let result = await this.fetchPage(input, null, since, expiresAt, klass, !startedAt, this.writeTimeoutMs);
+    if (method !== "DELETE" && upstreamFailures.has(result) && Date.now() < expiresAt - 1_000) {
+      this.s.writeRetries++;
+      result = await this.fetchPage(input, null, since, expiresAt, klass, !startedAt, this.writeTimeoutMs);
+    }
+    if (method !== "GET" && result.status >= 200 && result.status < 300) {
+      const id = (new URL(input.url).pathname.match(/\/records\/([^/]+)$/) || [])[1];
+      if (id) this.dropRecord(id);                      // a row that changed or was deleted must never be handed out by the create memory
+    }
+    return result;
+  }
+
+  // ---- RPC: a read that many isolates need (field catalogs, bonus config): one Lark call per TTL, shared ---------------
+  // Fresh copy within ttlMs is answered with no Lark call; concurrent callers share one call; if Lark fails the last good copy
+  // (up to staleMs old) is served instead. Failures are never cached.
+  async cachedCall(input: CachedCallInput): Promise<SearchBatchResult> {
+    const key = String(input.cacheKey || "");
+    if (!key) return this.larkCall(input);
+    const now = Date.now();
+    const hit = this.cache.get(key);
+    if (!input.force && hit && now - hit.at < input.ttlMs) { this.s.cacheHits++; return hit.result; }
+    const pending = this.cacheInflight.get(key);
+    if (pending) { this.s.cacheShared++; return pending; }
+    const run = this.larkCall(input).then((result) => {
+      let ok = false;
+      try { ok = result.status >= 200 && result.status < 300 && JSON.parse(result.body)?.code === 0; } catch { /* not JSON */ }
+      if (ok) {
+        this.cache.set(key, { at: Date.now(), result });
+        while (this.cache.size > CACHE_MAX_ENTRIES) this.cache.delete(this.cache.keys().next().value as string);
+        return result;
+      }
+      if (hit && input.staleMs && Date.now() - hit.at < input.staleMs) { this.s.cacheStaleServed++; return hit.result; }
+      return result;
+    }).finally(() => { this.cacheInflight.delete(key); });
+    this.cacheInflight.set(key, run);
+    return run;
+  }
+
   private async runCreateBucket(bucket: CreateBucket): Promise<void> {
     if (bucket.createdAt) {
       const wait = bucket.createdAt + MIN_WINDOW_MS - Date.now();
       if (wait > 0) await sleep(wait);
     }
-    const since = Math.min(...bucket.waiters.map((w) => w.enqueuedAt), Date.now());
-    const grant = await this.acquireSlot("write", since).promise;      // stays open (batching) until the slot is granted
+    const since = Math.min(...bucket.waiters.map((w) => w.since), Date.now());
+    const aged = bucket.waiters.some((w) => !w.timed);                 // any waiter without a request start keeps the 3 s write delay
+    const grant = await this.acquireSlot("write", since, aged).promise;      // stays open (batching) until the slot is granted
     if (this.createBuckets.get(bucket.key) === bucket) this.createBuckets.delete(bucket.key);
     const now = Date.now();
     const live: CreateWaiter[] = [];
@@ -541,7 +622,7 @@ export class MyDurableObject extends DurableObject<Env> {
       const wait = bucket.createdAt + MIN_WINDOW_MS - Date.now();
       if (wait > 0) await sleep(wait);
     }
-    const since = Math.min(...bucket.waiters.map((w) => w.enqueuedAt), Date.now());
+    const since = Math.min(...bucket.waiters.map((w) => w.since), Date.now());
     const grant = await this.acquireSlot("read", since).promise;       // bucket stays open (in this.buckets) until now
     if (this.buckets.get(bucket.key) === bucket) this.buckets.delete(bucket.key);   // close: later arrivals open a new bucket
 

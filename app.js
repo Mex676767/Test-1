@@ -3999,7 +3999,7 @@ chatListEl.addEventListener("click", async (e) => {
         const res = await fetch("/lark-record", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recordId: s.caRecordId, unclaim: true, agentName: selectedAgent }),
+          body: JSON.stringify({ recordId: s.caRecordId, unclaim: true, agentName: selectedAgent, username: s.username }),
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "Unclaim failed");
@@ -4865,6 +4865,7 @@ async function resyncLoggedRecord(chatId) {
   try {
     await writeLarkRecord({
         recordId: s.caRecordId,
+        username: s.username,
         agentName: selectedAgent,
         brand: s.brand,
         inquiry: s.inquiry,
@@ -5020,6 +5021,7 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
   try {
     await writeLarkRecord({
         recordId: s.caRecordId,
+        username: s.username,
         agentName: selectedAgent,
         brand: s.brand,
         inquiry: s.inquiry,
@@ -5444,7 +5446,7 @@ async function saveLinkToRecord(chatId) {
     const res = await fetch("/lark-record", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recordId, linkOnly: true, chatLink: s.chatUrl, agentName: selectedAgent }),
+      body: JSON.stringify({ recordId, linkOnly: true, chatLink: s.chatUrl, agentName: selectedAgent, username: s.username }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "link save failed");

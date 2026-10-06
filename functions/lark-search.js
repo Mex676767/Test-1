@@ -1,6 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import {
-  searchRecords, createRecord, deleteRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow,
+  searchRecords, createRecord, deleteRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow, runWithRequestStart,
   TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
@@ -144,7 +144,9 @@ function toEpochMs(v) {
 // gives up at 45 s and a late answer is worse than an honest "look up again". Env override exists for tests only.
 const HARD_DEADLINE_MS = 40_000;
 
-export async function handler(event) {
+export function handler(event) { return runWithRequestStart(() => lookupWithDeadline(event)); }
+
+async function lookupWithDeadline(event) {
   const hardMs = Number(event.env?.LOOKUP_HARD_DEADLINE_MS) || HARD_DEADLINE_MS;
   let timer;
   const hardStop = new Promise((resolve) => {

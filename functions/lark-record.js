@@ -1,6 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { updateRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
-import { readOwnership, ownedBy } from "./_lib/ca-row.js";
+import { readOwnershipMerged, ownedBy } from "./_lib/ca-row.js";
+import { runWithRequestStart } from "./_lib/lark.js";
 
 // "Released amount" is a Number field in Lark. The frontend's display
 // string (e.g. "LTV - Test: Pass RM18") isn't usable directly — sending it
@@ -39,7 +40,9 @@ function toEpochMs(dateStr) {
   return Number.isNaN(ms) ? null : ms;
 }
 
-export async function handler(event) {
+export function handler(event) { return runWithRequestStart(() => recordHandler(event)); }
+
+async function recordHandler(event) {
   try {
     var body = JSON.parse(event.body || "{}");
     var recordId = body.recordId;
@@ -67,7 +70,7 @@ export async function handler(event) {
     if (!String(agentName).trim()) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "agentName is required" }) };
     }
-    var ownership = await readOwnership(recordId);
+    var ownership = await readOwnershipMerged(recordId, body.username);
     if (!ownedBy(ownership.owner, agentName)) {
       return { statusCode: 409, body: JSON.stringify({ ok: false, notOwner: true, owner: ownership.owner,
         error: "This case is logged under " + ownership.owner + " — not changed. Press Look up to log your own record." }) };

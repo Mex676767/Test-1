@@ -29,7 +29,7 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
   let hangs = hangAfterWrite;
   const tokens = new Map();
   const stats = {
-    calls: 0, search: 0, create: 0, fields: 0, token: 0, other: 0, limited: 0, replays: 0, hung: 0,
+    calls: 0, search: 0, create: 0, fields: 0, token: 0, other: 0, limited: 0, replays: 0, hung: 0, get: 0, update: 0, delete: 0, order: [],
     peakPerSecond: 0, orQueries: 0, orSizes: [], pagesBeyondFirst: 0, rowsReturned: 0, inFlight: 0, peakInFlight: 0,
   };
   const starts = [];
@@ -68,7 +68,8 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
       : /\/records\/search$/.test(u.pathname) ? "search"
       : /\/fields$/.test(u.pathname) ? "fields"
       : /\/records$/.test(u.pathname) && init.method === "POST" ? "create"
-      : /\/records$/.test(u.pathname) ? "list" : "other";
+      : /\/records$/.test(u.pathname) ? "list"
+      : /\/records\/[^/]+$/.test(u.pathname) ? ((init.method || "GET") === "GET" ? "get" : init.method === "DELETE" ? "delete" : "update") : "other";
     stats[kind] = (stats[kind] || 0) + 1;
     const now = Date.now();
     while (starts.length && now - starts[0] >= 1000) starts.shift();
@@ -85,6 +86,17 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
       const tableId = u.pathname.match(/tables\/([^/]+)\//)?.[1] || u.pathname.match(/tables\/([^/]+)$/)?.[1];
       const table = tables[tableId];
       if (!table) return json({ code: 1254004, msg: "table not found" });
+      stats.order.push(kind);                                    // order in which calls ACTUALLY reached Lark
+      if (kind === "get" || kind === "update" || kind === "delete") {
+        await sleep(latency(0), init.signal);
+        const id = decodeURIComponent(u.pathname.split("/").pop());
+        const at = table.rows.findIndex((r) => r.record_id === id);
+        if (at < 0) return json({ code: 1254043, msg: "RecordIdNotFound" });
+        if (kind === "get") return json({ code: 0, data: { record: { record_id: id, fields: table.rows[at].fields } } });
+        if (kind === "delete") { table.rows.splice(at, 1); return json({ code: 0, data: { deleted: true, record_id: id } }); }
+        table.rows[at].fields = { ...table.rows[at].fields, ...(body.fields || {}) };
+        return json({ code: 0, data: { record: { record_id: id, fields: table.rows[at].fields } } });
+      }
       const clientToken = (kind === "batchCreate" || kind === "create") ? u.searchParams.get("client_token") : null;
       if (clientToken && tokens.has(clientToken)) {
         stats.replays++;

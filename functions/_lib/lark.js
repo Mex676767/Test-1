@@ -20,6 +20,7 @@ let TABLE_TELEGRAM28;
 let TABLE_MOONCAKE;
 let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
+import { AsyncLocalStorage } from "node:async_hooks";
 let LARK_SEARCH_QUEUE;
 let LARK_QUEUE_LONGPOLL = false;
 let LARK_BATCH_CREATE = false;
@@ -58,6 +59,15 @@ export function initEnv(env) {
   TABLE_BONUS_CONFIG = env.LARK_TABLE_BONUS_CONFIG;
 }
 
+// When the current request (lookup / submit) began, server-side. Every call this request makes to the shared queue carries it, so
+// the queue orders all of a request's steps by its age: an older request's next step runs before a newer request's first one.
+const requestContext = new AsyncLocalStorage();
+export function runWithRequestStart(fn, startedAt = Date.now()) {
+  if (requestContext.getStore()) return fn();            // already inside a request (adapt() started it): keep the earlier start
+  return requestContext.run({ startedAt }, fn);
+}
+const currentRequestStart = () => requestContext.getStore()?.startedAt;
+
 const larkQueueResponses = new WeakMap();
 const LARK_QUEUE_RPC_TIMEOUT_MS = 250;
 const LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS = 6_000;
@@ -70,7 +80,7 @@ const LARK_SEARCH_QUEUE_TIMEOUT_MS = 60_000;
 const LARK_SEARCH_CALLER_DEADLINE_MS = 40_000;
 const MAX_SEARCH_PAGES = 10;
 // Read-only counters for diagnostics (logged on rate limits / fail-open).
-export const larkClientStats = { rateLimited: 0, failOpen: 0, batchFallbacks: 0 };
+export const larkClientStats = { rateLimited: 0, failOpen: 0, batchFallbacks: 0, queueCallFallbacks: 0, ownershipFallbacks: 0 };
 
 // Lark documents code 1254290 as TooManyRequest but not which HTTP status it
 // rides on, so recognise it from the code as well as from 429.
@@ -98,10 +108,22 @@ async function releaseQueuePermit(stub, ticket, rateLimited = false, retryAfterM
   clearTimeout(timer);
 }
 
-function callQueueAcquire(stub, signal, kind, waiterId) {
+// What a call is for (shown in the queue's stats): token / fields / list / record-get / update / delete / create / search.
+function labelFor(url, method = "GET") {
+  const text = String(url);
+  const m = String(method).toUpperCase();
+  if (text.includes("tenant_access_token")) return "token";
+  if (text.includes("/records/search")) return "search";
+  if (text.includes("/fields")) return "fields";
+  if (/\/records\/[^/?]+(\?|$)/.test(text)) return m === "GET" ? "record-get" : m === "DELETE" ? "delete" : "update";
+  if (/\/records(\?|$)/.test(text)) return m === "POST" ? "create" : "list";
+  return "other";
+}
+
+function callQueueAcquire(stub, signal, kind, waiterId, label) {
   const rpcTimeoutMs = LARK_QUEUE_LONGPOLL ? LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS : LARK_QUEUE_RPC_TIMEOUT_MS;
   // The bare acquire() call is the legacy protocol every deployed Durable Object understands.
-  const pending = Promise.resolve().then(() => (LARK_QUEUE_LONGPOLL ? stub.acquire(kind, waiterId) : stub.acquire()));
+  const pending = Promise.resolve().then(() => (LARK_QUEUE_LONGPOLL ? stub.acquire(kind, waiterId, currentRequestStart(), label) : stub.acquire()));
   let abandoned = false;
   // If the RPC eventually grants a permit after the local request has timed
   // out, return that lease so a slow coordinator cannot strand capacity.
@@ -157,7 +179,7 @@ function waitForLarkPermit(ms, signal) {
   });
 }
 
-async function acquireSharedLarkPermit(signal, kind = "write") {
+async function acquireSharedLarkPermit(signal, kind = "write", label = "other") {
   if (!LARK_SEARCH_QUEUE) return null;
   const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
   // Stable id so a v2 DO keeps this waiter's place in line across re-polls.
@@ -165,7 +187,7 @@ async function acquireSharedLarkPermit(signal, kind = "write") {
   while (!signal?.aborted) {
     let permit;
     try {
-      permit = await callQueueAcquire(stub, signal, kind, waiterId);
+      permit = await callQueueAcquire(stub, signal, kind, waiterId, label);
     } catch (error) {
       if (signal?.aborted) throw error;
       // The local semaphore remains the fallback if the shared coordinator
@@ -215,6 +237,8 @@ async function larkFetch(url, init = {}) {
         headers,
         body: batchBody,
         expiresAt,
+        requestStartedAt: currentRequestStart(),
+        label: "search",
       });
       const result = queueSignal || fetchInit.signal
         ? await awaitWithSignal(pending, queueSignal || fetchInit.signal)
@@ -229,7 +253,7 @@ async function larkFetch(url, init = {}) {
   }
   const permitKind = String(url).includes("tenant_access_token") ? "token"
     : String(fetchInit.method || "GET").toUpperCase() === "GET" || String(url).includes("/records/search") ? "read" : "write";
-  const permit = await acquireSharedLarkPermit(queueSignal || fetchInit.signal, permitKind);
+  const permit = await acquireSharedLarkPermit(queueSignal || fetchInit.signal, permitKind, labelFor(url, fetchInit.method));
   let upstreamTimer;
   let upstreamController;
   if (upstreamTimeoutMs > 0) {
@@ -267,6 +291,47 @@ async function larkFetch(url, init = {}) {
   } finally {
     clearTimeout(upstreamTimer);
   }
+}
+
+// ---- single Lark calls run INSIDE the queue (record get / update / delete) -----------------------------------------------
+// The whole call is sent to the Durable Object at once; it takes a slot, calls Lark and releases the slot, so the slot is held for
+// Lark's latency only, and a write it has accepted completes even if this request is cancelled meanwhile. Returns null when the
+// queue is not in v2 mode or does not implement the method (older deploy): callers then use the permit path as before.
+const LARK_WRITE_CALLER_DEADLINE_MS = 90_000;
+const NO_QUEUE_METHOD = /does not implement|not a function|no such method|is not a function/i;
+function rpcResult(result) {
+  let data;
+  try { data = JSON.parse(result.body); } catch (_) { data = { code: -1, msg: `HTTP ${result.status}` }; }
+  return { res: { status: result.status, headers: new Headers(result.headers || []) }, data };
+}
+async function queueCall(method, input, waitMs) {
+  if (!(LARK_SEARCH_QUEUE && LARK_QUEUE_LONGPOLL)) return null;
+  const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+  let timer;
+  try {
+    const pending = Promise.resolve().then(() => stub[method](input));
+    pending.catch(() => {});                              // a late answer after we stopped waiting must not become an unhandled rejection
+    const result = await Promise.race([
+      pending,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("Lark queue did not answer in time."), { retryable: true })), waitMs); }),
+    ]);
+    return rpcResult(result);
+  } catch (error) {
+    if (NO_QUEUE_METHOD.test(String(error?.message || error))) { larkClientStats.queueCallFallbacks++; return null; }
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+function callInput(url, init, extra = {}) {
+  return {
+    url, method: init.method || "GET", headers: Object.fromEntries(new Headers(init.headers || {}).entries()),
+    ...(typeof init.body === "string" ? { body: init.body } : {}),
+    label: labelFor(url, init.method), requestStartedAt: currentRequestStart(), ...extra,
+  };
+}
+// A read that every isolate needs (field catalogs, bonus config) and that changes rarely: the queue keeps ONE shared copy for
+// ttlMs (and serves the last good copy for staleMs if Lark fails), so a cold isolate does not cost a Lark call.
+async function sharedCachedRead(cacheKey, url, init, { ttlMs, staleMs = 0, force = false }) {
+  return queueCall("cachedCall", callInput(url, init, { cacheKey, ttlMs, staleMs, force, expiresAt: Date.now() + 20_000 }), 20_000);
 }
 
 export function reportSharedLarkRateLimit(response, retryAfterMs = 0) {
@@ -653,11 +718,11 @@ async function searchAllRecordsOnce(tableId, conditions, { maxPages = 5, automat
 
 export async function getRecord(tableId, recordId) {
   const token = await getTenantToken();
-  const res = await larkFetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  const data = await res.json();
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`;
+  const init = { headers: { Authorization: `Bearer ${token}` } };
+  const queued = await queueCall("larkCall", callInput(url, init, { expiresAt: Date.now() + LARK_SEARCH_CALLER_DEADLINE_MS }), LARK_SEARCH_CALLER_DEADLINE_MS);
+  const res = queued ? queued.res : await larkFetch(url, init);
+  const data = queued ? queued.data : await res.json();
   if (data.code !== 0) throw larkApiError(`Lark getRecord failed: ${data.msg}`, res, data);
   return data.data.record;
 }
@@ -680,14 +745,14 @@ async function forgetCreatedRow(tableId, recordId) {
 
 export async function updateRecord(tableId, recordId, fields, baseToken) {
   const token = await getTenantToken();
-  const res = await larkFetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
-    { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ fields }) }
-  );
-  const data = await res.json();
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`;
+  const init = { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ fields }) };
+  // Inside the queue when possible: it also drops the row from its create memory itself.
+  const queued = await queueCall("larkCall", callInput(url, init, { expiresAt: Date.now() + LARK_WRITE_CALLER_DEADLINE_MS }), LARK_WRITE_CALLER_DEADLINE_MS);
+  const res = queued ? queued.res : await larkFetch(url, init);
+  const data = queued ? queued.data : await res.json();
   if (data.code !== 0) throw larkApiError(`Lark update failed on table ${tableId}: ${data.msg}`, res, data);
-  await forgetCreatedRow(tableId, recordId);
+  if (!queued) await forgetCreatedRow(tableId, recordId);
   return data.data.record;
 }
 
@@ -700,6 +765,7 @@ export async function createRecord(tableId, fields, baseToken) {
       const result = await stub.createBatch({
         url: createUrl, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ fields }), expiresAt: Date.now() + LARK_SEARCH_CALLER_DEADLINE_MS,
+        requestStartedAt: currentRequestStart(), label: "create",
       });
       const data = JSON.parse(result.body);
       if (data.code !== 0) throw larkApiError(`Lark create failed on table ${tableId}: ${data.msg}`, { status: result.status, headers: new Headers(result.headers || []) }, data);
@@ -724,23 +790,25 @@ export async function createRecord(tableId, fields, baseToken) {
 
 export async function deleteRecord(tableId, recordId, baseToken) {
   const token = await getTenantToken();
-  const res = await larkFetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`,
-    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
-  );
-  const data = await res.json();
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`;
+  const init = { method: "DELETE", headers: { Authorization: `Bearer ${token}` } };
+  const queued = await queueCall("larkCall", callInput(url, init, { expiresAt: Date.now() + LARK_WRITE_CALLER_DEADLINE_MS }), LARK_WRITE_CALLER_DEADLINE_MS);
+  const res = queued ? queued.res : await larkFetch(url, init);
+  const data = queued ? queued.data : await res.json();
   if (data.code !== 0) throw larkApiError(`Lark delete failed on table ${tableId}: ${data.msg}`, res, data);
-  await forgetCreatedRow(tableId, recordId);
+  if (!queued) await forgetCreatedRow(tableId, recordId);
   return true;
 }
 
-export async function listRecords(tableId, pageSize = 500) {
+// sharedCacheMs: keep one copy in the shared queue for this long (every isolate then reads the same copy, no Lark call);
+// force skips a fresh copy. Without it this is an ordinary read.
+export async function listRecords(tableId, pageSize = 500, { sharedCacheMs = 0, force = false } = {}) {
   const token = await getTenantToken();
-  const res = await larkFetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records?page_size=${pageSize}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  const data = await res.json();
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records?page_size=${pageSize}`;
+  const init = { headers: { Authorization: `Bearer ${token}` } };
+  const shared = sharedCacheMs > 0 ? await sharedCachedRead(`list::${BASE_APP_TOKEN}::${tableId}::${pageSize}`, url, init, { ttlMs: sharedCacheMs, force }) : null;
+  const res = shared ? shared.res : await larkFetch(url, init);
+  const data = shared ? shared.data : await res.json();
   if (data.code !== 0) throw larkApiError(`Lark listRecords failed: ${data.msg}`, res, data);
   return data.data.items || [];
 }
@@ -781,12 +849,12 @@ export async function listFields(tableId, baseToken, { force = false } = {}) {
   const request = (async () => {
     try {
       const token = await getTenantToken();
-      const res = await larkFetch(
-        `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`,
-        { headers: { Authorization: `Bearer ${token}` }, upstreamTimeoutMs: LARK_UPSTREAM_TIMEOUT_MS,
-          queueSignal: AbortSignal.timeout(15_000) }
-      );
-      const data = await res.json();
+      const fieldsUrl = `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/fields?page_size=100`;
+      const fieldsInit = { headers: { Authorization: `Bearer ${token}` }, upstreamTimeoutMs: LARK_UPSTREAM_TIMEOUT_MS, queueSignal: AbortSignal.timeout(15_000) };
+      // Same TTLs as this isolate's own cache, but shared by every isolate through the queue.
+      const shared = await sharedCachedRead(`fields::${key}`, fieldsUrl, fieldsInit, { ttlMs: FIELDS_TTL_MS, staleMs: FIELDS_STALE_OK_MS, force });
+      const res = shared ? shared.res : await larkFetch(fieldsUrl, fieldsInit);
+      const data = shared ? shared.data : await res.json();
       if (data.code !== 0) throw new Error(`Lark listFields failed on table ${tableId}: ${data.msg}`);
       const items = data.data.items || [];
       fieldsCache.set(key, { items, at: Date.now() });
