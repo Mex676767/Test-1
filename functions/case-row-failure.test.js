@@ -170,3 +170,44 @@ test("the same code on a link-LESS create is not retried again, and timeouts / 5
     });
   }
 });
+
+// ---- repeat lookups: the previous row is only read/cleaned up when it is a DIFFERENT row ------------------------
+const blankRow = (id) => ({ record_id: id, fields: { Username: "player1", Brand: "PP", "Agent Name": "Agent A", link: { link: LINK, text: LINK } } });
+const lookupAgain = (previousRecordId) => handler({ body: JSON.stringify({ username: "Player1", brand: "PP", picName: "Agent A", link: LINK, previousRecordId }), env: {} });
+
+test("a repeat lookup that matches the same blank row reuses it without reading or deleting it again", async () => {
+  await withLark({
+    caseSearch: () => json({ code: 0, data: { items: [blankRow("rec-prev")], has_more: false } }),
+    create: created,
+  }, async (calls) => {
+    const urls = [];
+    const wrapped = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => { urls.push(`${options.method || "GET"} ${String(url)}`); return wrapped(url, options); };
+    const body = JSON.parse((await lookupAgain("rec-prev")).body);
+    assert.equal(body.caRecordId, "rec-prev");
+    assert.equal(calls.creates.length, 0, "no second row");
+    assert.equal(urls.filter((u) => u.includes("rec-prev")).length, 0, "the reused row is not fetched or deleted");
+  });
+});
+
+test("a repeat lookup for a different player still deletes the old blank row (once) and creates the new one", async () => {
+  await withLark({
+    caseSearch: noBlankRow,
+    create: created,
+  }, async (calls) => {
+    const seen = [];
+    const wrapped = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+      const text = String(url), method = options.method || "GET";
+      if (text.includes("customer-table/records/rec-old")) {
+        seen.push(method);
+        return method === "DELETE" ? json({ code: 0, data: { deleted: true } }) : json({ code: 0, data: { record: { record_id: "rec-old", fields: { "Agent Name": "Agent A" } } } });
+      }
+      return wrapped(url, options);
+    };
+    const body = JSON.parse((await lookupAgain("rec-old")).body);
+    assert.equal(body.caRecordId, "rec-created");
+    assert.equal(calls.creates.length, 1);
+    assert.deepEqual(seen, ["GET", "DELETE"], "ownership read, then delete");
+  });
+});

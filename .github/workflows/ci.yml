@@ -1,0 +1,24 @@
+name: tests
+
+# Runs the whole suite on every push and pull request, on branches as well as main, so a broken change is caught
+# before it reaches the branch Cloudflare Pages auto-deploys. Uses only fakes: it never calls Lark, LiveChat or the ticket API.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Widget, Functions and Blast tests
+        run: node --test functions/*.test.js tests/*.test.mjs
+      - name: Queue (Durable Object) tests
+        run: node --no-warnings --test claude-lookup-review/proposal/worker-v2/gate.test.mjs

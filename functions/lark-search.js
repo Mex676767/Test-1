@@ -279,10 +279,11 @@ export async function handler(event) {
         }
       }
 
-      if (!preview && previousRecordId) {
+      // Same row as last time (the blank-row check just matched it): nothing to clean up, so no read either.
+      if (!preview && previousRecordId && previousRecordId !== recordId) {
         try {
           const { owner, blank } = await readOwnership(previousRecordId);
-          if (blank && ownedBy(owner, agentVal) && previousRecordId !== recordId) {
+          if (blank && ownedBy(owner, agentVal)) {
             await deleteRecord(TABLE_CUSTOMER_APPROACHING, previousRecordId);
           }
         } catch (_) { /* non-fatal */ }
