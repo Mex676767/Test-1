@@ -224,3 +224,55 @@ test("the blank-case lookup is projected to the columns it re-checks, and still 
   assert.equal(creates.length, 0, "no duplicate row created");
   assert.deepEqual([...caSearchBody.field_names].sort(), ["Agent Name", "Brand", "Inquiry", "Status", "Username", "link"].sort());
 });
+
+// ---- opt-in batched row creation -----------------------------------------------------
+async function createWith({ flag, stub }) {
+  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub },
+    ...(flag ? { LARK_QUEUE_PROTOCOL: "v2", LARK_BATCH_CREATE: "1" } : {}) });
+  const { createRecord } = await import("./_lib/lark.js");
+  const direct = [];
+  const outcome = await withFetch(async (url, options = {}) => {
+    if (isToken(url)) return json({ code: 0, tenant_access_token: "t", expire: 3600 });
+    direct.push({ url: String(url), method: options.method });
+    return json({ code: 0, data: { record: { record_id: "direct-1" } } });
+  }, async () => { try { return { record: await createRecord("customer-table", { Username: "p1" }) }; } catch (error) { return { error }; } });
+  return { ...outcome, direct };
+}
+const baseStub = (extra = {}) => ({ acquire: async () => ({ ticket: "t", retryAfterMs: 0 }), release: async () => {}, penalize: async () => {}, searchBatch: async () => { throw new Error("n/a"); }, ...extra });
+
+test("batched create is OFF by default: rows are created directly", async () => {
+  let used = false;
+  const { record, direct } = await createWith({ flag: false, stub: baseStub({ createBatch: async () => { used = true; } }) });
+  assert.equal(record.record_id, "direct-1");
+  assert.equal(used, false);
+  assert.equal(direct.filter((c) => c.method === "POST").length, 1);
+});
+
+test("with LARK_BATCH_CREATE=1 the row goes through the queue's createBatch and its record is returned", async () => {
+  const seen = [];
+  const { record, direct } = await createWith({ flag: true, stub: baseStub({ createBatch: async (request) => {
+    seen.push(request);
+    return { status: 200, statusText: "OK", headers: [], body: JSON.stringify({ code: 0, data: { record: { record_id: "batched-1", fields: {} } } }) };
+  } }) });
+  assert.equal(record.record_id, "batched-1");
+  assert.equal(direct.filter((c) => c.method === "POST").length, 0, "no second, direct create");
+  assert.deepEqual(JSON.parse(seen[0].body), { fields: { Username: "p1" } });
+  assert.ok(seen[0].expiresAt > Date.now());
+});
+
+test("a queue that does not implement createBatch falls back to one direct create", async () => {
+  const { record, direct } = await createWith({ flag: true, stub: baseStub({ createBatch: async () => { throw new Error('The RPC receiver does not implement the method "createBatch".'); } }) });
+  assert.equal(record.record_id, "direct-1");
+  assert.equal(direct.filter((c) => c.method === "POST").length, 1);
+});
+
+test("any other createBatch failure surfaces the error and NEVER creates a second row directly", async () => {
+  const { error, direct } = await createWith({ flag: true, stub: baseStub({ createBatch: async () => { throw new Error("network connection lost"); } }) });
+  assert.match(error.message, /connection lost/);
+  assert.equal(direct.filter((c) => c.method === "POST").length, 0, "outcome unknown: do not risk a duplicate");
+});
+
+test("a Lark error returned by createBatch is reported as a failed create", async () => {
+  const { error } = await createWith({ flag: true, stub: baseStub({ createBatch: async () => ({ status: 200, statusText: "", headers: [], body: JSON.stringify({ code: 1254002, msg: "Fail" }) }) }) });
+  assert.match(error.message, /Lark create failed.*Fail/);
+});

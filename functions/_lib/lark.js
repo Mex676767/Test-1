@@ -22,12 +22,16 @@ let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
 let LARK_SEARCH_QUEUE;
 let LARK_QUEUE_LONGPOLL = false;
+let LARK_BATCH_CREATE = false;
 
 export function initEnv(env) {
   LARK_SEARCH_QUEUE = env.LARK_SEARCH_QUEUE;
   // Opt-in: the v2 Durable Object long-polls acquire() inside the DO, so the
   // client must wait longer than the legacy 250 ms before treating it as hung.
   LARK_QUEUE_LONGPOLL = String(env.LARK_QUEUE_PROTOCOL || "") === "v2";
+  // Opt-in (needs a v2 queue that implements createBatch): coalesce Customer Approaching row
+  // creation into Lark's batch_create. Off by default.
+  LARK_BATCH_CREATE = LARK_QUEUE_LONGPOLL && String(env.LARK_BATCH_CREATE || "") === "1";
   APP_ID = env.LARK_APP_ID;
   APP_SECRET = env.LARK_APP_SECRET;
   BASE_APP_TOKEN = env.LARK_BASE_APP_TOKEN;
@@ -603,8 +607,27 @@ export async function updateRecord(tableId, recordId, fields, baseToken) {
 
 export async function createRecord(tableId, fields, baseToken) {
   const token = await getTenantToken();
+  const createUrl = `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records`;
+  if (LARK_BATCH_CREATE && LARK_SEARCH_QUEUE && tableId === TABLE_CUSTOMER_APPROACHING) {
+    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    try {
+      const result = await stub.createBatch({
+        url: createUrl, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fields }), expiresAt: Date.now() + LARK_SEARCH_CALLER_DEADLINE_MS,
+      });
+      const data = JSON.parse(result.body);
+      if (data.code !== 0) throw new Error(`Lark create failed on table ${tableId}: ${data.msg}`);
+      return data.data.record;
+    } catch (error) {
+      // Fall back to a plain create ONLY when the queue does not implement createBatch (nothing
+      // ran). Any other failure leaves the outcome unknown: creating again could duplicate the
+      // row, so surface the error -- the agent's retry reuses a blank row if one landed.
+      if (!/does not implement|not a function|no such method/i.test(String(error?.message || error))) throw error;
+      console.warn("Lark queue has no createBatch; creating directly");
+    }
+  }
   const res = await larkFetch(
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records`,
+    createUrl,
     { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ fields }) }
   );
