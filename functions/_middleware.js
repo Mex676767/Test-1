@@ -9,6 +9,8 @@ const HIDDEN_PREFIXES = [
   "/.claude", "/.git", "/.wrangler", "/.playwright-cli",
 ];
 const HIDDEN_ROOT_FILE = /^\/[^/]+\.(md|ps1|zip|log)$/;
+// Any top-level dot-file or dot-folder (.github, .gitattributes, .claude, ...).
+const HIDDEN_DOT_ROOT = /^\/\./;
 
 export function normalizePath(pathname) {
   let path = String(pathname || "/");
@@ -19,7 +21,7 @@ export function normalizePath(pathname) {
 export function isHiddenPath(pathname) {
   const path = normalizePath(pathname);
   if (HIDDEN_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix + "/"))) return true;
-  return HIDDEN_ROOT_FILE.test(path);
+  return HIDDEN_ROOT_FILE.test(path) || HIDDEN_DOT_ROOT.test(path);
 }
 
 export async function onRequest(context) {
