@@ -155,30 +155,88 @@ test('jobs that still carry the image inline (older callers) keep working', asyn
   assert.equal(calls.filter((c) => c === 'upload_file').length, 3);
 });
 
-// ---- popup: the saved chat entries hold the image once too -----------------------------------------------
-test('popup save() persists one copy of the image plus a reference per chat, and survives a storage error', () => {
+// ---- popup: image bytes never go to localStorage (shared ~5 MB quota with the widget's chat state) ------------
+function popupFns(names, context) {
   const popup = readFileSync(new URL('../blast/popup.js', import.meta.url), 'utf8');
   const NL = String.fromCharCode(10);
-  const grab = (name) => { const start = popup.indexOf(`function ${name}(`); return popup.slice(start, popup.indexOf(NL + '}', start) + 2); };
-  const saved = [], logs = [];
-  let throwQuota = false;
+  const grab = (name) => { const start = popup.indexOf('function ' + name + '('); return popup.slice(start, popup.indexOf(NL + '}', start) + 2); };
+  vm.runInContext(names.map(grab).join(NL), context);
+  return popup;
+}
+const STATE_KEY = 'rc-chat-state';
+function quotaLocalStorage(initial) {
+  const m = new Map(initial);
+  const used = () => [...m].reduce((n, [k, v]) => n + k.length + v.length, 0);
+  return { _m: m, used, getItem: (k) => (m.has(k) ? m.get(k) : null), removeItem: (k) => m.delete(k),
+    setItem(k, v) {
+      const next = used() - (m.has(k) ? m.get(k).length + k.length : 0) + k.length + String(v).length;
+      if (next > QUOTA) { const e = new Error('QuotaExceededError'); e.name = 'QuotaExceededError'; throw e; }
+      m.set(k, String(v));
+    } };
+}
+
+test('a 3 MB image across a whole queue leaves the widget\'s chat-state key writable (no image bytes in localStorage)', () => {
+  const bigImage = 'data:image/png;base64,' + Buffer.alloc(3 * 1024 * 1024, 9).toString('base64');     // a 3 MB file = 4 MB of base64
+  const local = quotaLocalStorage([[STATE_KEY, JSON.stringify({ c1: { username: 'x'.repeat(1_500_000) } })]]);   // 1.5 MB of existing chat state
+  const logs = [];
   const context = vm.createContext({
-    chatEntries: Array.from({ length: 50 }, (_, i) => ({ url: `u${i}`, messages: null, imageDataUrl: PNG, imageFileName: 'a.png' })).concat([{ url: 'no-image', messages: null }]),
-    chrome: { storage: { local: { set: (v) => { if (throwQuota) { const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e; } saved.push(v); } } } },
-    addLog: (m, t) => logs.push([m, t]), Math, JSON,
+    chatEntries: Array.from({ length: 120 }, (_, i) => ({ url: `https://my.livechatinc.com/chats/C${i}/T${i}`, messages: null, imageDataUrl: bigImage, imageFileName: 'promo.png' })),
+    chrome: { storage: { local: { set: (values) => { for (const [k, v] of Object.entries(values)) local.setItem('ca-livechat-engagement:local:' + k, JSON.stringify(v)); } } } },
+    addLog: (m, t) => logs.push([m, t]), Object, JSON,
   });
-  vm.runInContext([grab('fnvHash'), grab('entryImageId'), grab('save')].join('\n'), context);
+  popupFns(['save'], context);
   vm.runInContext('save()', context);
-  const { chatEntries, chatImages } = saved[0];
-  assert.equal(Object.keys(chatImages).length, 1, 'one stored image');
-  assert.equal(JSON.stringify(chatEntries).split(PNG).length - 1, 0, 'no entry carries the pixels');
-  assert.ok(chatEntries.slice(0, 50).every((e) => e.imageId === Object.keys(chatImages)[0]));
-  assert.equal(chatEntries[50].imageId, undefined);
-  throwQuota = true;
+  assert.equal(logs.length, 0, 'no storage error');
+  const storedBytes = [...local._m].filter(([k]) => k !== STATE_KEY).reduce((n, [, v]) => n + v.length, 0);
+  assert.ok(storedBytes < 100_000, `saved queue is ${storedBytes} chars (no image bytes)`);
+  assert.equal([...local._m.values()].some((v) => v.includes('data:image')), false);
+  // the widget's own state can still grow: this is the write that used to start failing silently
+  assert.doesNotThrow(() => local.setItem(STATE_KEY, JSON.stringify({ c1: { username: 'x'.repeat(2_500_000) } })));
+  assert.equal(JSON.parse(local._m.get('ca-livechat-engagement:local:chatEntries')).every((e) => e.imageDataUrl === undefined && e.imageFileName === 'promo.png'), true, 'the file name is kept, the bytes are not');
+  assert.equal(context.chatEntries[0].imageDataUrl, bigImage, 'the in-memory queue still has the image for this run');
+});
+
+test('popup save() survives a storage error and says so instead of aborting the click', () => {
+  const logs = [];
+  const context = vm.createContext({
+    chatEntries: [{ url: 'u', messages: null }],
+    chrome: { storage: { local: { set: () => { const e = new Error('full'); e.name = 'QuotaExceededError'; throw e; } } } },
+    addLog: (m, t) => logs.push([m, t]), Object, JSON,
+  });
+  popupFns(['save'], context);
   assert.doesNotThrow(() => vm.runInContext('save()', context));
-  assert.match(logs.at(-1)[0], /image too large for browser storage/);
-  // and the loader re-attaches the image from the shared store
-  assert.match(popup, /imageDataUrl: entry\.imageDataUrl \|\| savedImages\[entry\.imageId\] \|\| null/);
+  assert.match(logs.at(-1)[0], /browser storage is full/);
+});
+
+test('ensureEntryImages re-attaches the draft image after a reload, and refuses to start without it', () => {
+  const logs = [];
+  const make = (entries, extra = {}) => {
+    const context = vm.createContext({ chatEntries: entries, bulkImgMode: 'file', bulkImgDataUrl: PNG, addLog: (m, t) => logs.push([m, t]), ...extra });
+    popupFns(['ensureEntryImages'], context);
+    return context;
+  };
+  // restored entries: the file name survived, the bytes did not
+  let c = make([{ url: 'a', imageFileName: 'p.png' }, { url: 'b', imageFileName: 'p.png' }]);
+  assert.equal(vm.runInContext('ensureEntryImages()', c), true);
+  assert.ok(c.chatEntries.every((e) => e.imageDataUrl === PNG), 'every entry got the draft image back');
+  // nothing to restore: no-ops
+  c = make([{ url: 'a' }, { url: 'b', imageUrl: 'https://x/y.png', imageFileName: null }]);
+  assert.equal(vm.runInContext('ensureEntryImages()', c), true);
+  // the image is gone everywhere: do not silently send text-only
+  logs.length = 0;
+  c = make([{ url: 'a', imageFileName: 'p.png' }], { bulkImgDataUrl: null });
+  assert.equal(vm.runInContext('ensureEntryImages()', c), false);
+  assert.match(logs[0][0], /Choose it again/);
+});
+
+test('popup wiring: legacy chatImages freed on load, start is guarded, the draft drops the image before and during a run', () => {
+  const popup = readFileSync(new URL('../blast/popup.js', import.meta.url), 'utf8');
+  assert.match(popup, /chrome\.storage\.local\.remove\('chatImages'\)/);
+  assert.match(popup, /if \(!ensureEntryImages\(\)\) return;/);
+  assert.match(popup, /imageDataUrl: running \? null : bulkImgDataUrl/);
+  const startAt = popup.indexOf("type: 'START'");
+  assert.ok(popup.lastIndexOf('saveBlastDraft();', startAt) > popup.lastIndexOf('running = true', startAt), 'the draft is rewritten without the image just before START');
+  assert.doesNotMatch(popup, /chatImages\s*[:=]/, 'nothing writes chatImages any more');
 });
 
 test('a destroyed iframe mid-run is recovered WITH the image: every chat still gets its text and its image, queue + image store cleaned up', async () => {

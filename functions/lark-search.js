@@ -48,9 +48,15 @@ const F = {
 // itself. A timeout, 5xx, throttle or batch-mismatch can all mean the row WAS created, so
 // those are re-thrown: the agent's next lookup reuses the blank row instead of creating a twin.
 function isLinkFieldRejection(error) {
+  if (error?.rateLimited) return false;
   const message = String(error?.message || "");
-  return /^Lark create failed/i.test(message) && /\blink\b/i.test(message) && !error?.rateLimited
-    && !/timed? ?out|rate.?limit|too ?many|could not be matched|internal|temporar|busy|server error/i.test(message);
+  if (!/^Lark create failed/i.test(message)) return false;
+  // Never for anything where the row may exist: timeouts, 5xx/busy, throttling, a batch that could not be matched.
+  if (/timed? ?out|rate.?limit|too ?many|could not be matched|internal|temporar|busy|server error/i.test(message)) return false;
+  // Lark rejects a bad URL field with URLFieldConvFail (code 1254068); a missing/renamed column names the field.
+  return Number(error?.code) === 1254068
+    || /FieldConvFail/i.test(String(error?.larkMsg || "") + " " + message)
+    || /\blink\b/i.test(message);
 }
 
 async function reusableBlankCase(agent, username, brand, link, timeoutMs = CASE_SEARCH_TIMEOUT_MS) {

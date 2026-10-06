@@ -274,6 +274,7 @@ function refreshGuard(over = {}) {
   const keys = over.sessionKeys || [];
   const context = vm.createContext({
     window: {}, blastRunInProgress: false, state: {}, recordSubmitInFlight: new Map(), linkSaveInFlight: new Set(),
+    ticketCreateInFlight: new Set(), claimWriteInFlight: new Set(), ticketAttachmentsByChat: new Map(),
     sessionStorage: { length: keys.length, key: (i) => keys[i] }, document: { activeElement: null },
     Object, String, ...over.context,
   });
@@ -311,4 +312,105 @@ test('the app saves its state right before an update reload', () => {
   assert.equal(saved, 1);
   context.saveState = () => { throw new Error('storage blocked'); };
   assert.doesNotThrow(() => context.window.prepareForDeploymentRefresh(), 'a save hiccup never blocks the reload');
+});
+
+// ---- more blockers: ticket create, claim write, unsent attachments, unsent ticket form -----------------------
+test('update is also refused while a ticket is being created, a claim is being written, attachments are unsent, or a ticket form has typed input', () => {
+  assert.equal(refreshGuard({ context: { ticketCreateInFlight: new Set(['c1']) } }).ok(), false, 'ticket create in flight');
+  assert.equal(refreshGuard({ context: { claimWriteInFlight: new Set(['c1']) } }).ok(), false, 'bonus claim in flight');
+  assert.equal(refreshGuard({ context: { ticketAttachmentsByChat: new Map([['c1', [{ name: 'receipt.png' }]]]) } }).ok(), false, 'files chosen but not sent (memory only)');
+  assert.equal(refreshGuard({ context: { ticketAttachmentsByChat: new Map([['c1', []]]) } }).ok(), true, 'an emptied attachment list is fine');
+  for (const field of ['queries', 'transactionId', 'paymentGateway', 'remarks']) {
+    assert.equal(refreshGuard({ context: { state: { c1: { escalationSubmitted: false, escalation: { [field]: 'typed text' } } } } }).ok(), false, 'unsent ticket form: ' + field);
+  }
+  assert.equal(refreshGuard({ context: { state: { c1: { escalationSubmitted: true, escalation: { queries: 'Deposit' } } } } }).ok(), true, 'a raised ticket does not block');
+  assert.equal(refreshGuard({ context: { state: { c1: { escalationSubmitted: false, escalation: { memberUserId: 'auto', brand: 'PP', amount: '18', queries: '   ' } } } } }).ok(), true, 'auto-filled fields and blanks do not block');
+});
+
+test('the in-flight sets are added before the request and removed in a finally (so a failure cannot leave a stuck blocker)', () => {
+  assert.match(app, /ticketCreateInFlight\.add\(chatId\);\s*try \{/);
+  assert.match(app, /\} finally \{\s*ticketCreateInFlight\.delete\(chatId\);\s*\}/);
+  assert.match(app, /claimWriteInFlight\.add\(chatId\);\s*try \{/);
+  assert.match(app, /\} finally \{\s*claimWriteInFlight\.delete\(chatId\);\s*\}/);
+});
+
+// ---- the refresh button ---------------------------------------------------------------------------------------
+function refreshButton(over = {}) {
+  const NL = String.fromCharCode(10);
+  const fnStart = app.indexOf('function handleRefreshClick() {');
+  const handler = app.slice(fnStart, app.indexOf(NL + '}', fnStart) + 2);
+  const guardStart = app.indexOf('window.canRefreshForDeployment = () => {');
+  const guard = app.slice(guardStart, app.indexOf(NL + '};', guardStart) + 3);
+  const log = { toasts: [], reloads: 0, prepared: 0, dropdown: [], renders: 0 };
+  const win = { deploymentUpdatePending: () => !!over.pending, prepareForDeploymentRefresh: () => { log.prepared += 1; },
+    reloadForDeploymentUpdate: () => { log.reloads += 1; return over.reloadResult || 'reloaded'; } };
+  const context = vm.createContext({
+    window: win, blastRunInProgress: false, state: {}, recordSubmitInFlight: new Map(), linkSaveInFlight: new Set(),
+    ticketCreateInFlight: new Set(), claimWriteInFlight: new Set(), ticketAttachmentsByChat: new Map(),
+    sessionStorage: { length: 0, key: () => null }, document: { activeElement: { tagName: 'BUTTON' } }, Object, String,
+    showChatToast: (message, kind) => log.toasts.push([message, kind]),
+    refreshDropdownOptions: (o) => log.dropdown.push(o),
+    liveWidget: null, setStatus() {}, renderChats() { log.renders += 1; }, activeChats: [], applyProfile() {},
+    ...over.context,
+  });
+  vm.runInContext(guard + NL + handler, context);
+  return { log, context, click: () => vm.runInContext('handleRefreshClick()', context) };
+}
+
+test('refresh button with an update pending and the widget safe: saves state, reloads ONCE, and does nothing else', () => {
+  const b = refreshButton({ pending: true });
+  b.click();
+  assert.equal(b.log.prepared, 1, 'state saved first');
+  assert.equal(b.log.reloads, 1);
+  assert.equal(b.log.dropdown.length, 0, 'the normal refresh is skipped: the page is reloading anyway');
+  assert.equal(b.log.toasts.length, 0);
+});
+
+test('refresh button with an update pending but BUSY (each blocker): no reload, nothing saved, and a toast saying what to finish', () => {
+  const blockers = {
+    'lookup in flight': { state: { c1: { lookupInFlight: true } } },
+    'unclaim in flight': { state: { c1: { unclaimInFlight: true } } },
+    'record submit in flight': { recordSubmitInFlight: new Map([['c1', Promise.resolve()]]) },
+    'link save in flight': { linkSaveInFlight: new Set(['c1']) },
+    'ticket create in flight': { ticketCreateInFlight: new Set(['c1']) },
+    'bonus claim in flight': { claimWriteInFlight: new Set(['c1']) },
+    'unsent attachments': { ticketAttachmentsByChat: new Map([['c1', [{ name: 'a.png' }]]]) },
+    'unsent ticket form': { state: { c1: { escalationSubmitted: false, escalation: { remarks: 'half typed' } } } },
+    'typed username': { state: { c1: { logged: false, usernameDraft: 'player1' } } },
+    'Blast running': { blastRunInProgress: true },
+    'cursor in a field': { document: { activeElement: { tagName: 'TEXTAREA' } } },
+  };
+  for (const [name, context] of Object.entries(blockers)) {
+    const b = refreshButton({ pending: true, context });
+    b.click();
+    assert.equal(b.log.reloads, 0, name + ': no reload');
+    assert.equal(b.log.prepared, 0, name + ': nothing saved or reloaded');
+    assert.deepEqual(b.log.toasts, [['Finish or cancel your current lookup / claim / ticket / Blast first, then click ⟳ again.', 'warn']], name + ': explained');
+  }
+});
+
+test('refresh button whose update was already tried for this release in this tab explains instead of looping', () => {
+  const b = refreshButton({ pending: true, reloadResult: 'already-tried' });
+  b.click();
+  assert.equal(b.log.toasts.length, 1);
+  assert.match(b.log.toasts[0][0], /already tried/i);
+});
+
+test('refresh button with NO update pending behaves exactly as before (re-reads dropdowns, re-syncs, never reloads)', () => {
+  const b = refreshButton({ pending: false });
+  b.click();
+  assert.equal(JSON.stringify(b.log.dropdown), JSON.stringify([{ fresh: true }]));
+  assert.equal(b.log.reloads, 0);
+  assert.equal(b.log.prepared, 0);
+  assert.equal(b.log.toasts.length, 0);
+  assert.equal(b.log.renders, 1, 'the preview-mode branch re-rendered the chats');
+  // a busy widget with no update pending is not nagged either
+  const busy = refreshButton({ pending: false, context: { state: { c1: { lookupInFlight: true } } } });
+  busy.click();
+  assert.equal(busy.log.toasts.length, 0);
+  assert.equal(JSON.stringify(busy.log.dropdown), JSON.stringify([{ fresh: true }]));
+});
+
+test('the refresh listener is the named handler', () => {
+  assert.match(app, /document\.getElementById\("refreshBtn"\)\.addEventListener\("click", handleRefreshClick\);/);
 });

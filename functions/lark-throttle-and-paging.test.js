@@ -293,3 +293,62 @@ test("a record that appears on two pages is returned to the caller exactly once"
     assert.deepEqual(rows.map((r) => r.record_id), ["a", "b", "c"]);
   });
 });
+
+// ---- item 2: write throttling is classified from Lark's code, not just HTTP 429 ----------------------------
+async function writeWithQueueSpy(responseFor) {
+  const spy = { acquired: [], released: [], penalized: [] };
+  const stub = {
+    acquire: async (...args) => { spy.acquired.push(args); return { ticket: "t1", retryAfterMs: 0 }; },
+    release: async (ticket, rateLimited, retryAfterMs) => { spy.released.push({ ticket, rateLimited, retryAfterMs }); },
+    penalize: async (retryAfterMs) => { spy.penalized.push(retryAfterMs); },
+    searchBatch: async () => { throw new Error("n/a"); },
+  };
+  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub } });
+  const lib = await import("./_lib/lark.js");
+  let outcome;
+  await withFetch(async (url, options = {}) => isToken(url) ? json({ code: 0, tenant_access_token: "t", expire: 3600 }) : responseFor(String(url), options), async () => {
+    try { outcome = { value: await lib.createRecord("customer-table", { Username: "p1" }) }; } catch (error) { outcome = { error }; }
+  });
+  return { ...outcome, spy };
+}
+
+test("a create throttled with code 1254290 on HTTP 200 releases the permit as rate-limited and cools the shared queue down", async () => {
+  const r = await writeWithQueueSpy(() => json({ code: 1254290, msg: "TooManyRequest" }));   // HTTP 200!
+  assert.equal(r.error.rateLimited, true);
+  assert.equal(r.error.retryable, true);
+  assert.equal(r.error.code, 1254290);
+  assert.equal(r.spy.released.at(-1).rateLimited, true, "the permit was released as rate-limited (read from the body)");
+  assert.ok(r.spy.penalized.length >= 1, "the shared queue was told to cool down");
+});
+
+test("HTTP 429 and 400-with-1254290 on writes are classified the same way", async () => {
+  for (const status of [429, 400]) {
+    const r = await writeWithQueueSpy(() => json({ code: 1254290, msg: "TooManyRequest" }, status));
+    assert.equal(r.error.rateLimited, true, `HTTP ${status}`);
+    assert.equal(r.spy.released.at(-1).rateLimited, true);
+  }
+});
+
+test("an ordinary Lark error on a write is NOT treated as throttling (no cooldown), and keeps Lark's code and message", async () => {
+  const r = await writeWithQueueSpy(() => json({ code: 1254068, msg: "URLFieldConvFail" }));
+  assert.equal(r.error.rateLimited, false);
+  assert.equal(r.error.retryable, undefined);
+  assert.equal(r.error.code, 1254068);
+  assert.equal(r.error.larkMsg, "URLFieldConvFail");
+  assert.match(r.error.message, /^Lark create failed on table customer-table: URLFieldConvFail$/);
+  assert.equal(r.spy.released.at(-1).rateLimited, false);
+  assert.equal(r.spy.penalized.length, 0);
+});
+
+test("update, delete and get classify throttling too, and a 5xx is retryable", async () => {
+  const lib = await import("./_lib/lark.js");
+  initEnv({ ...ENV });
+  await withFetch(async (url) => isToken(url) ? json({ code: 0, tenant_access_token: "t", expire: 3600 }) : json({ code: 1254290, msg: "TooManyRequest" }), async () => {
+    for (const call of [() => lib.updateRecord("customer-table", "r1", { a: 1 }), () => lib.deleteRecord("customer-table", "r1"), () => lib.getRecord("customer-table", "r1")]) {
+      await assert.rejects(call(), (error) => error.rateLimited === true && error.retryable === true);
+    }
+  });
+  await withFetch(async (url) => isToken(url) ? json({ code: 0, tenant_access_token: "t", expire: 3600 }) : json({ code: 1255001, msg: "InternalError" }, 500), async () => {
+    await assert.rejects(lib.deleteRecord("customer-table", "r1"), (error) => error.rateLimited === false && error.retryable === true);
+  });
+});

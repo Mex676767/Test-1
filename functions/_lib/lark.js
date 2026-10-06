@@ -248,8 +248,14 @@ async function larkFetch(url, init = {}) {
       // Wait briefly for the global permit to be released. Fire-and-forget
       // releases were canceled when the request completed, leaving the DO
       // lease occupied for eight seconds and stalling other agents.
-      await releaseQueuePermit(permit.stub, permit.ticket, response.status === 429,
-        Number(response.headers.get("Retry-After")) * 1000 || 0);
+      // 429 is obvious; Lark can also answer code 1254290 on an HTTP 200/400, which only the body shows. Searches classify
+      // their own (large) bodies; every other call is small, so peek at a clone before releasing the permit.
+      let limited = response.status === 429;
+      if (!limited && !String(url).includes("/records/search")) {
+        try { limited = isLarkRateLimited(response.status, await response.clone().json()); } catch (_) { /* not JSON / no clone: status only */ }
+      }
+      await releaseQueuePermit(permit.stub, permit.ticket, limited,
+        Number(response.headers?.get?.("Retry-After")) * 1000 || 0);
     }
     return response;
   } catch (error) {
@@ -266,6 +272,27 @@ async function larkFetch(url, init = {}) {
 export function reportSharedLarkRateLimit(response, retryAfterMs = 0) {
   const stub = larkQueueResponses.get(response);
   if (stub) bestEffortQueueCall(stub, "penalize", Number(retryAfterMs) || 0);
+}
+
+// Error for a failed Lark call. Carries Lark's own code and message (callers decide what a given code means, e.g. a
+// rejected URL field), classifies throttling from the CODE as well as the HTTP status (code 1254290 can arrive on a 200),
+// and tells the shared queue to cool down when throttled.
+function larkApiError(message, res, data) {
+  const err = new Error(message);
+  err.code = Number(data?.code);
+  err.larkMsg = String(data?.msg || "");
+  err.httpStatus = res?.status;
+  const limited = isLarkRateLimited(res?.status, data);
+  const transient = limited || res?.status === 408 || res?.status >= 500 || /internal|temporar|timeout|server error|system busy/i.test(err.larkMsg);
+  err.rateLimited = limited;
+  if (transient) err.retryable = true;
+  err.retryAfterMs = Number(res?.headers?.get?.("Retry-After")) * 1000 || 0;
+  if (limited) {
+    reportSharedLarkRateLimit(res, err.retryAfterMs);
+    larkClientStats.rateLimited++;
+    console.warn("Lark rate limit", JSON.stringify({ httpStatus: res?.status, code: data?.code, retryAfter: res?.headers?.get?.("Retry-After") ?? null }));
+  }
+  return err;
 }
 
 let cachedToken = null;
@@ -631,7 +658,7 @@ export async function getRecord(tableId, recordId) {
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const data = await res.json();
-  if (data.code !== 0) throw new Error(`Lark getRecord failed: ${data.msg}`);
+  if (data.code !== 0) throw larkApiError(`Lark getRecord failed: ${data.msg}`, res, data);
   return data.data.record;
 }
 
@@ -643,7 +670,7 @@ export async function updateRecord(tableId, recordId, fields, baseToken) {
       body: JSON.stringify({ fields }) }
   );
   const data = await res.json();
-  if (data.code !== 0) throw new Error(`Lark update failed on table ${tableId}: ${data.msg}`);
+  if (data.code !== 0) throw larkApiError(`Lark update failed on table ${tableId}: ${data.msg}`, res, data);
   return data.data.record;
 }
 
@@ -658,7 +685,7 @@ export async function createRecord(tableId, fields, baseToken) {
         body: JSON.stringify({ fields }), expiresAt: Date.now() + LARK_SEARCH_CALLER_DEADLINE_MS,
       });
       const data = JSON.parse(result.body);
-      if (data.code !== 0) throw new Error(`Lark create failed on table ${tableId}: ${data.msg}`);
+      if (data.code !== 0) throw larkApiError(`Lark create failed on table ${tableId}: ${data.msg}`, { status: result.status, headers: new Headers(result.headers || []) }, data);
       return data.data.record;
     } catch (error) {
       // Fall back to a plain create ONLY when the queue does not implement createBatch (nothing
@@ -674,7 +701,7 @@ export async function createRecord(tableId, fields, baseToken) {
       body: JSON.stringify({ fields }) }
   );
   const data = await res.json();
-  if (data.code !== 0) throw new Error(`Lark create failed on table ${tableId}: ${data.msg}`);
+  if (data.code !== 0) throw larkApiError(`Lark create failed on table ${tableId}: ${data.msg}`, res, data);
   return data.data.record;
 }
 
@@ -685,7 +712,7 @@ export async function deleteRecord(tableId, recordId, baseToken) {
     { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
   );
   const data = await res.json();
-  if (data.code !== 0) throw new Error(`Lark delete failed on table ${tableId}: ${data.msg}`);
+  if (data.code !== 0) throw larkApiError(`Lark delete failed on table ${tableId}: ${data.msg}`, res, data);
   return true;
 }
 
@@ -696,7 +723,7 @@ export async function listRecords(tableId, pageSize = 500) {
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const data = await res.json();
-  if (data.code !== 0) throw new Error(`Lark listRecords failed: ${data.msg}`);
+  if (data.code !== 0) throw larkApiError(`Lark listRecords failed: ${data.msg}`, res, data);
   return data.data.items || [];
 }
 
