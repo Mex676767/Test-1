@@ -178,6 +178,31 @@ export async function handler(event) {
       () => listBonusConfigs({ fresh: !!preview }),
       [],
     );
+    // Start configured table searches as soon as their metadata arrives,
+    // alongside the built-in checks below. Previously we waited for every
+    // built-in table to finish before even starting these reads.
+    const configuredBonusLookupsP = configuredBonusConfigsP.then(async (task) => {
+      const configs = await resolveLookup(task);
+      const lookups = await Promise.all(configs.map((config) => optionalLookup(
+        `Custom bonus ${config.key}`,
+        () => findOldestClaimableRow(
+          config.sourceTableId,
+          uname,
+          brandVal,
+          (fields) => isConfiguredBonusEligible(config, toDisplay(fields[config.displayField])),
+          config.sourceBaseToken || undefined,
+          {
+            usernameField: config.usernameField,
+            brandField: config.brandField,
+            dateField: config.dateField,
+            newest: config.selection === "newest",
+            fieldNames: [config.displayField, config.dateField || "Time of Inspection"],
+          }
+        ).then((row) => row ? toDisplay(row.fields[config.displayField]) : ""),
+        "",
+      )));
+      return { configs, lookups };
+    });
 
     const chatLink = String(link || "").trim();
     // Start case-row work alongside the independent bonus-table reads below.
@@ -418,25 +443,7 @@ export async function handler(event) {
       )),
       caseRecordP,
     ]);
-    const configuredBonusConfigs = await resolveLookup(await configuredBonusConfigsP);
-    const configuredBonusTasks = await Promise.all(configuredBonusConfigs.map((config) => optionalLookup(
-      `Custom bonus ${config.key}`,
-      () => findOldestClaimableRow(
-        config.sourceTableId,
-        uname,
-        brandVal,
-        (fields) => isConfiguredBonusEligible(config, toDisplay(fields[config.displayField])),
-        config.sourceBaseToken || undefined,
-        {
-          usernameField: config.usernameField,
-          brandField: config.brandField,
-          dateField: config.dateField,
-          newest: config.selection === "newest",
-          fieldNames: [config.displayField, config.dateField || "Time of Inspection"],
-        }
-      ).then((row) => row ? toDisplay(row.fields[config.displayField]) : ""),
-      "",
-    )));
+    const { configs: configuredBonusConfigs, lookups: configuredBonusTasks } = await configuredBonusLookupsP;
     const [
       otherBrands,
       pnlInfo,
