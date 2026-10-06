@@ -59,7 +59,8 @@ function isLinkFieldRejection(error) {
     || /\blink\b/i.test(message);
 }
 
-async function reusableBlankCase(agent, username, brand, link, timeoutMs = CASE_SEARCH_TIMEOUT_MS) {
+// `defer(promise)` runs work that must not hold up the response (deleting twin rows) after it has been sent.
+async function reusableBlankCase(agent, username, brand, link, timeoutMs = CASE_SEARCH_TIMEOUT_MS, defer = (promise) => { promise.catch(() => {}); }) {
   const exactLink = String(link || "").trim().replace(/\/$/, "");
   if (!parseChatLink(exactLink).threadId) return null;
   const rows = await searchRecords(TABLE_CUSTOMER_APPROACHING, [
@@ -81,12 +82,15 @@ async function reusableBlankCase(agent, username, brand, link, timeoutMs = CASE_
       && !row.inquiry.length && !row.status)
     .sort((a, b) => (a.createdAt - b.createdAt) || a.recordId.localeCompare(b.recordId));
   if (!matches.length) return null;
-  await Promise.allSettled(matches.slice(1).map(async (row) => {
-    // Re-check immediately before deletion. A concurrent submit may have
-    // completed the row after the search snapshot was returned.
-    const { owner, blank } = await readOwnership(row.recordId);
-    if (blank && ownedBy(owner, agent)) await deleteRecord(TABLE_CUSTOMER_APPROACHING, row.recordId);
-  }));
+  if (matches.length > 1) {
+    // The twins are cleaned up AFTER the answer is on its way: a slow or hanging delete must never delay (or fail) the lookup.
+    defer(Promise.allSettled(matches.slice(1).map(async (row) => {
+      // Re-check immediately before deletion. A concurrent submit may have
+      // completed the row after the search snapshot was returned.
+      const { owner, blank } = await readOwnership(row.recordId);
+      if (blank && ownedBy(owner, agent)) await deleteRecord(TABLE_CUSTOMER_APPROACHING, row.recordId);
+    })));
+  }
   return matches[0].recordId;
 }
 
@@ -136,7 +140,24 @@ function toEpochMs(v) {
   return null;
 }
 
+// The whole answer, bonus results and case row included, is on its way by this time no matter what is slow: the widget
+// gives up at 45 s and a late answer is worse than an honest "look up again". Env override exists for tests only.
+const HARD_DEADLINE_MS = 40_000;
+
 export async function handler(event) {
+  const hardMs = Number(event.env?.LOOKUP_HARD_DEADLINE_MS) || HARD_DEADLINE_MS;
+  let timer;
+  const hardStop = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({
+      statusCode: 504,
+      body: JSON.stringify({ ok: false, error: "The lookup took too long. Press Look Up again.", hardDeadline: true }),
+    }), hardMs);
+  });
+  try { return await Promise.race([lookupHandler(event, Date.now() + hardMs), hardStop]); }
+  finally { clearTimeout(timer); }
+}
+
+async function lookupHandler(event, hardEnd) {
   try {
     const { username, brand, picName, previousRecordId, link, preview } = JSON.parse(event.body || "{}");
     if (!username || !brand) {
@@ -163,6 +184,11 @@ export async function handler(event) {
     const lookupBudgetMs = Number(event.env?.LOOKUP_BUDGET_MS) || LOOKUP_BUDGET_MS;
     const retryMinMs = Number(event.env?.LOOKUP_RETRY_MIN_MS) || RETRY_MIN_MS;
     const budget = { searchMs: firstPassMs };
+    // Cleanup that may finish after the response (twin rows). waitUntil exists on Pages; without it the work still starts.
+    const defer = (promise) => {
+      const safe = Promise.resolve(promise).catch((error) => console.warn("Deferred cleanup failed", String(error?.message || error).slice(0, 160)));
+      if (typeof event.waitUntil === "function") event.waitUntil(safe);
+    };
     const search = (table, conditions, base, opts = {}) => searchRecords(table, conditions, base, { ...opts, timeoutMs: budget.searchMs });
     const findRow = (table, name, brandName, isClaimable, base, opts = {}) =>
       findOldestClaimableRow(table, name, brandName, isClaimable, base, { ...opts, timeoutMs: budget.searchMs });
@@ -271,7 +297,7 @@ export async function handler(event) {
       let recordId = null;
       if (!preview && chatLink) {
         for (let attempt = 0; ; attempt++) {
-          try { recordId = await reusableBlankCase(agentVal, uname, brandVal, chatLink, caseBudgetMs()); break; }
+          try { recordId = await reusableBlankCase(agentVal, uname, brandVal, chatLink, caseBudgetMs(), defer); break; }
           catch (error) {
             if (attempt >= 1 || (error.retryable === false && !error.rateLimited)) throw error;
             await new Promise((resolve) => setTimeout(resolve, 400 + Math.floor(Math.random() * 300)));
@@ -570,13 +596,16 @@ export async function handler(event) {
       configuredBonusValues[index],
     ]));
     // Wait for the case row, but only up to the widget's own deadline (budget + grace).
+    // Never later than ~1.5 s before the hard deadline, so there is still room to build and send the response.
+    const caseWaitMs = Math.max(0, Math.min(startedAt + lookupBudgetMs + caseGraceMs, hardEnd - 1_500) - Date.now());
+    let caseTimer;
     const caseRecordState = await Promise.race([
       caseSafeP,
-      new Promise((resolve) => setTimeout(() => resolve({
+      new Promise((resolve) => { caseTimer = setTimeout(() => resolve({
         recordId: null, created: false,
         error: new Error("Case row did not finish inside the lookup time budget."),
-      }), Math.max(0, startedAt + lookupBudgetMs + caseGraceMs - Date.now()))),
-    ]);
+      }), caseWaitMs); }),
+    ]).finally(() => clearTimeout(caseTimer));
     let caRecordId = caseRecordState.recordId;
     const caseRowError = caseRecordState.error
       ? "Case row not saved — press Look Up again (the results below are still valid)."
@@ -586,11 +615,18 @@ export async function handler(event) {
     // check above before either row exists. Re-run the same deterministic
     // coalescing after the slower bonus reads; both requests then return the
     // same surviving record instead of leaving a blank twin behind.
-    const dedupeRemainingMs = startedAt + lookupBudgetMs - Date.now();
+    // The check as a whole (search, and any twin handling) gets only what is left of the budget and never runs past the
+    // hard deadline; twin deletes are deferred, so only the search can take time.
+    const dedupeRemainingMs = Math.min(startedAt + lookupBudgetMs, hardEnd - 1_000) - Date.now();
     if (!preview && link && caseRecordState.created && dedupeRemainingMs >= 3_000) {
       // "||": if Lark's search does not show the row we just created yet (index lag) the check finds
       // nothing -- that must never replace the new row's id with null.
-      caRecordId = (await reusableBlankCase(agentVal, uname, brandVal, link, Math.min(CASE_SEARCH_TIMEOUT_MS, dedupeRemainingMs)).catch(() => null)) || caRecordId;
+      let dedupeTimer;
+      const found = await Promise.race([
+        reusableBlankCase(agentVal, uname, brandVal, link, Math.min(CASE_SEARCH_TIMEOUT_MS, dedupeRemainingMs), defer).catch(() => null),
+        new Promise((resolve) => { dedupeTimer = setTimeout(() => resolve(null), dedupeRemainingMs); }),
+      ]).finally(() => clearTimeout(dedupeTimer));
+      caRecordId = found || caRecordId;
     }
 
     return {
