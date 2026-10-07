@@ -22,7 +22,7 @@ Chat logging to Lark is automatic only while the agent is on the **Retention** t
 - **Keep the two Durable Object copies identical** (`diff -q` the two `index.ts`).
 - **Client cache:** JS/CSS are served `no-cache, must-revalidate`, but still bump the `?v=` on any changed client file in `index.html` / `blast/index.html`.
 - **Branches:** work on a separate branch; merge to `main` only when the user says so, **hotfixes included** (a broken deploy is not a reason to skip the OK; branch, test, tell the user, wait). Merging deploys Pages automatically. The user deploys the Durable Object themselves, **only off-peak** (a deploy restarts it and can fail lookups running at that moment; check `/queue-stats` perMinute is quiet first) (`npx wrangler deploy` from `claude-lookup-review/worker-v2-deploy`; Windows PowerShell has no `&&`, give two separate commands).
-- **Pace settings** (`GATE_CONCURRENCY`, `GATE_START_GAP_MS`) live in `claude-lookup-review/worker-v2-deploy/wrangler.jsonc`; change the file and deploy. No secrets in that file.
+- **Pace settings** (`GATE_CONCURRENCY`, `GATE_START_GAP_MS`, and the burst allowance `GATE_BURST`, default 1 = off) live in `claude-lookup-review/worker-v2-deploy/wrangler.jsonc`; change the file and deploy. No secrets in that file.
 - **Never** commit secrets, `.env` files or stats keys; do not print credential values.
 - **Production tests** (bursts against the live site) create real rows in Lark with `zz…` usernames; the user deletes them. Do not delete production data yourself. Keep bursts ≤ about 70 requests.
 - **Editing files:** `app.js` and most files use mixed CRLF/LF line endings; preserve each line's ending. The Bash tool mangles backslashes — write scripts with the Write tool.

@@ -158,7 +158,7 @@ let doInstance = null, queue;
 const rpc = (fn) => async (...a) => { await new Promise((r) => setTimeout(r, RPC_MS)); const v = await fn(...a); await new Promise((r) => setTimeout(r, RPC_MS)); return v; };
 if (DO_V !== "none") {
   const DO = await loadDO(DO_V);
-  doInstance = new DO(fakeCtx(), { GATE_START_GAP_MS: args.gap ? Number(args.gap) : undefined, GATE_CONCURRENCY: args.conc ? Number(args.conc) : undefined, GATE_LONGPOLL_MS: args.longpoll ? Number(args.longpoll) : undefined });
+  doInstance = new DO(fakeCtx(), { GATE_START_GAP_MS: args.gap ? Number(args.gap) : undefined, GATE_CONCURRENCY: args.conc ? Number(args.conc) : undefined, GATE_LONGPOLL_MS: args.longpoll ? Number(args.longpoll) : undefined, GATE_BURST: args.burst ? Number(args.burst) : undefined });
   const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "forgetCreated", "larkCall", "cachedCall", "updateBatch", "reportCounters"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
   queue = { idFromName: () => "g", get: () => stub };
 }
@@ -259,7 +259,7 @@ if (LIVE) {
 const sizes = lark.stats.orSizes, st = doInstance?.getStats?.();
 console.log(JSON.stringify({
   batchCreate: args.batchcreate === "1", background: BG_MS ? { intervalMs: BG_MS, polls: bgCount, failed: bgFail } : undefined,
-  config: { isolates: ISOLATES, do: DO_V, cfgBonuses: CFG, caHistoryPerUserBrand: CA_HIST, perCondMs: PER_COND, limitStatus: LIMIT_STATUS, gap: args.gap, conc: args.conc, pages: PAGES, n: N, arrival: ARRIVAL, live: LIVE, upstreamMedianMs: MEDIAN, quotaPerSec: QUOTA, rpcMs: RPC_MS },
+  config: { isolates: ISOLATES, do: DO_V, cfgBonuses: CFG, caHistoryPerUserBrand: CA_HIST, perCondMs: PER_COND, limitStatus: LIMIT_STATUS, gap: args.gap, conc: args.conc, pages: PAGES, n: N, arrival: ARRIVAL, live: LIVE, upstreamMedianMs: MEDIAN, quotaPerSec: QUOTA, rpcMs: RPC_MS, burst: args.burst },
   latencyMs: { p50: q(0.5), p95: q(0.95), max: sorted.at(-1), wallToLastResult: wall },
   caRows: LIVE ? { checked: caChecked, wrongOwner: caWrongOwner, duplicateIds: caDuplicateIds, rowsCreated: caRowsCreated, expectedRows: N, dupePairs: DUPES,
     dupePairsSameId: DUPES ? agents.filter((a) => a.dupeOf !== undefined).filter((a) => { const first = results[a.dupeOf]; const second = results[agents.indexOf(a)]; return first.ok && second.ok && first.body.caRecordId === second.body.caRecordId; }).length : undefined } : undefined,

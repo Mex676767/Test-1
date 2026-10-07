@@ -22,13 +22,17 @@ let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
 let TABLE_AGENT_LOGINS;
 import { AsyncLocalStorage } from "node:async_hooks";
+import { queueStubFrom } from "./queue-stub.js";
 let LARK_SEARCH_QUEUE;
+let QUEUE_ENV = {};                                  // LARK_QUEUE_NAME / LARK_QUEUE_LOCATION_HINT (both optional, see queue-stub.js)
+const queueStub = () => queueStubFrom(LARK_SEARCH_QUEUE, QUEUE_ENV);
 let LARK_QUEUE_LONGPOLL = false;
 let LARK_BATCH_CREATE = false;
 let LARK_BATCH_UPDATE = false;
 
 export function initEnv(env) {
   LARK_SEARCH_QUEUE = env.LARK_SEARCH_QUEUE;
+  QUEUE_ENV = { LARK_QUEUE_NAME: env.LARK_QUEUE_NAME, LARK_QUEUE_LOCATION_HINT: env.LARK_QUEUE_LOCATION_HINT };
   // Opt-in: the v2 Durable Object long-polls acquire() inside the DO, so the
   // client must wait longer than the legacy 250 ms before treating it as hung.
   LARK_QUEUE_LONGPOLL = String(env.LARK_QUEUE_PROTOCOL || "") === "v2";
@@ -144,7 +148,7 @@ export async function flushCounters({ heartbeat = false } = {}) {
   if (!LARK_SEARCH_QUEUE) return;
   let timer;
   try {
-    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    const stub = queueStub();
     await Promise.race([Promise.resolve(stub.reportCounters(report, getIsolateId())), new Promise((resolve) => { timer = setTimeout(resolve, 1_000); })]);
   } catch (_) { /* best effort */ } finally { clearTimeout(timer); }
 }
@@ -256,7 +260,7 @@ function waitForLarkPermit(ms, signal) {
 
 async function acquireSharedLarkPermit(signal, kind = "write", label = "other") {
   if (!LARK_SEARCH_QUEUE) return null;
-  const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+  const stub = queueStub();
   // Stable id so a v2 DO keeps this waiter's place in line across re-polls.
   const waiterId = crypto.randomUUID();
   while (!signal?.aborted) {
@@ -290,7 +294,7 @@ async function larkFetch(url, init = {}) {
   // fan-in. Concurrent searches for the same table become one OR query over
   // usernames, then the response is filtered back to this caller below.
   if (LARK_SEARCH_QUEUE && String(url).includes("/records/search")) {
-    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    const stub = queueStub();
     try {
       const headers = Object.fromEntries(new Headers(fetchInit.headers || {}).entries());
       let batchBody = typeof fetchInit.body === "string" ? fetchInit.body : "";
@@ -383,7 +387,7 @@ function rpcResult(result) {
 }
 async function queueCall(method, input, waitMs) {
   if (!(LARK_SEARCH_QUEUE && LARK_QUEUE_LONGPOLL)) return null;
-  const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+  const stub = queueStub();
   let timer;
   try {
     const pending = doRpc(stub, method, input);
@@ -857,7 +861,7 @@ async function getRecordWith(token, tableId, recordId) {
 async function forgetCreatedRow(tableId, recordId) {
   if (!(LARK_BATCH_CREATE && LARK_SEARCH_QUEUE) || tableId !== TABLE_CUSTOMER_APPROACHING) return;
   try {
-    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    const stub = queueStub();
     let timer;
     await Promise.race([
       Promise.resolve(stub.forgetCreated(String(recordId))),
@@ -886,7 +890,7 @@ export function createRecord(...args) { return withToken((token) => createRecord
 async function createRecordWith(token, tableId, fields, baseToken) {
   const createUrl = `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records`;
   if (LARK_BATCH_CREATE && LARK_SEARCH_QUEUE && tableId === TABLE_CUSTOMER_APPROACHING) {
-    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    const stub = queueStub();
     try {
       const result = await doRpc(stub, "createBatch", {
         url: createUrl, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
