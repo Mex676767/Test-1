@@ -98,8 +98,9 @@ export function noteCounter(name, n = 1) {
   if (pendingCounters.size < 200 || pendingCounters.has(key)) pendingCounters.set(key, (pendingCounters.get(key) || 0) + n);
 }
 // A random id for this isolate (this module instance). It is sent with the reports so the queue can count how many different isolates
-// are alive each minute; it identifies nothing else.
-const isolateId = crypto.randomUUID();
+// are alive each minute; it identifies nothing else. Created on first use: Cloudflare forbids generating random values in global scope.
+let isolateId = "";
+const getIsolateId = () => isolateId || (isolateId = crypto.randomUUID());
 let lastHeartbeatAt = 0;
 export async function flushCounters({ heartbeat = false } = {}) {
   if (!pendingCounters.size && !heartbeat) return;
@@ -109,7 +110,7 @@ export async function flushCounters({ heartbeat = false } = {}) {
   let timer;
   try {
     const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
-    await Promise.race([Promise.resolve(stub.reportCounters(report, isolateId)), new Promise((resolve) => { timer = setTimeout(resolve, 1_000); })]);
+    await Promise.race([Promise.resolve(stub.reportCounters(report, getIsolateId())), new Promise((resolve) => { timer = setTimeout(resolve, 1_000); })]);
   } catch (_) { /* best effort */ } finally { clearTimeout(timer); }
 }
 // What adapt() calls at the end of every request: counters are sent right away; otherwise at most one heartbeat per 5 s per isolate.
