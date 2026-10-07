@@ -1,0 +1,1093 @@
+{
+ "1-before": {
+  "at": "2026-10-07T07:49:28.062Z",
+  "upstream": 11,
+  "limited": 0,
+  "retries429": 0,
+  "batches": 4,
+  "expiredDropped": 0,
+  "bisected": 0,
+  "orphanFallbacks": 0,
+  "createBatches": 0,
+  "createdInBatches": 0,
+  "createMismatches": 0,
+  "createMemoryHits": 0,
+  "createSharedInflight": 0,
+  "writeRetries": 0,
+  "cacheHits": 0,
+  "cacheShared": 0,
+  "cacheStaleServed": 0,
+  "larkCalls": 2,
+  "writesSuperseded": 0,
+  "updateBatches": 0,
+  "updatedInBatches": 0,
+  "updateSplits": 0,
+  "updateMismatches": 0,
+  "noBatchTrips": 0,
+  "peakQueue": 2,
+  "truncatedFails": 0,
+  "heavyUsers": 0,
+  "peakStartsPerSec": 4,
+  "startsByClass": {
+   "token": 3,
+   "read": 11,
+   "write": 0
+  },
+  "gapMs": 250,
+  "queued": 0,
+  "active": 0,
+  "buckets": 0,
+  "meanBatch": 2,
+  "queueWaitP50": 183,
+  "queueWaitMax": 248,
+  "permits": {
+   "token": {
+    "wait": {
+     "n": 3,
+     "p50": 0,
+     "p95": 0,
+     "max": 0
+    },
+    "hold": {
+     "n": 3,
+     "p50": 153,
+     "p95": 162,
+     "max": 162
+    }
+   },
+   "read": {
+    "wait": {
+     "n": 11,
+     "p50": 85,
+     "p95": 497,
+     "max": 497
+    },
+    "hold": {
+     "n": 11,
+     "p50": 530,
+     "p95": 775,
+     "max": 775
+    }
+   },
+   "write": {
+    "wait": {
+     "n": 0,
+     "p50": 0,
+     "p95": 0,
+     "max": 0
+    },
+    "hold": {
+     "n": 0,
+     "p50": 0,
+     "p95": 0,
+     "max": 0
+    }
+   }
+  },
+  "lark": {
+   "search": {
+    "n": 9,
+    "p50": 530,
+    "p95": 566,
+    "max": 566
+   },
+   "batchCreate": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "batchUpdate": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "create": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "get": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "update": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "delete": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "list": {
+    "n": 1,
+    "p50": 775,
+    "p95": 775,
+    "max": 775
+   },
+   "fields": {
+    "n": 1,
+    "p50": 282,
+    "p95": 282,
+    "max": 282
+   },
+   "other": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   }
+  },
+  "labels": {
+   "token": 3,
+   "fields": 1,
+   "list": 1,
+   "search": 8
+  },
+  "cacheEntries": 2,
+  "startedAt": "2026-10-07T07:48:53.008Z",
+  "uptimeSec": 35,
+  "pagesCounters": {},
+  "perMinute": {
+   "minutes": [
+    29855988,
+    29855989
+   ],
+   "starts": [
+    5,
+    9
+   ],
+   "limited": [
+    0,
+    0
+   ],
+   "waitP95": [
+    142,
+    497
+   ],
+   "peakQueue": [
+    1,
+    2
+   ]
+  }
+ },
+ "1-after": {
+  "at": "2026-10-07T07:49:35.819Z",
+  "upstream": 29,
+  "limited": 0,
+  "retries429": 0,
+  "batches": 20,
+  "expiredDropped": 0,
+  "bisected": 0,
+  "orphanFallbacks": 0,
+  "createBatches": 1,
+  "createdInBatches": 25,
+  "createMismatches": 0,
+  "createMemoryHits": 0,
+  "createSharedInflight": 0,
+  "writeRetries": 0,
+  "cacheHits": 26,
+  "cacheShared": 0,
+  "cacheStaleServed": 0,
+  "larkCalls": 3,
+  "writesSuperseded": 0,
+  "updateBatches": 0,
+  "updatedInBatches": 0,
+  "updateSplits": 0,
+  "updateMismatches": 0,
+  "noBatchTrips": 0,
+  "peakQueue": 22,
+  "truncatedFails": 0,
+  "heavyUsers": 0,
+  "peakStartsPerSec": 4,
+  "startsByClass": {
+   "token": 15,
+   "read": 28,
+   "write": 1
+  },
+  "gapMs": 250,
+  "queued": 0,
+  "active": 0,
+  "buckets": 0,
+  "meanBatch": 17.9,
+  "queueWaitP50": 2793,
+  "queueWaitMax": 5293,
+  "permits": {
+   "token": {
+    "wait": {
+     "n": 15,
+     "p50": 717,
+     "p95": 2457,
+     "max": 2457
+    },
+    "hold": {
+     "n": 15,
+     "p50": 128,
+     "p95": 346,
+     "max": 346
+    }
+   },
+   "read": {
+    "wait": {
+     "n": 28,
+     "p50": 982,
+     "p95": 5028,
+     "max": 5278
+    },
+    "hold": {
+     "n": 28,
+     "p50": 530,
+     "p95": 775,
+     "max": 1021
+    }
+   },
+   "write": {
+    "wait": {
+     "n": 1,
+     "p50": 1973,
+     "p95": 1973,
+     "max": 1973
+    },
+    "hold": {
+     "n": 1,
+     "p50": 826,
+     "p95": 826,
+     "max": 826
+    }
+   }
+  },
+  "lark": {
+   "search": {
+    "n": 25,
+    "p50": 530,
+    "p95": 748,
+    "max": 1021
+   },
+   "batchCreate": {
+    "n": 1,
+    "p50": 826,
+    "p95": 826,
+    "max": 826
+   },
+   "batchUpdate": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "create": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "get": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "update": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "delete": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "list": {
+    "n": 1,
+    "p50": 775,
+    "p95": 775,
+    "max": 775
+   },
+   "fields": {
+    "n": 2,
+    "p50": 282,
+    "p95": 282,
+    "max": 282
+   },
+   "other": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   }
+  },
+  "labels": {
+   "token": 15,
+   "fields": 2,
+   "list": 1,
+   "search": 383,
+   "create": 25
+  },
+  "cacheEntries": 2,
+  "startedAt": "2026-10-07T07:48:53.008Z",
+  "uptimeSec": 43,
+  "pagesCounters": {},
+  "perMinute": {
+   "minutes": [
+    29855988,
+    29855989
+   ],
+   "starts": [
+    5,
+    39
+   ],
+   "limited": [
+    0,
+    0
+   ],
+   "waitP95": [
+    142,
+    5028
+   ],
+   "peakQueue": [
+    1,
+    22
+   ]
+  }
+ },
+ "2-before": {
+  "at": "2026-10-07T07:49:39.918Z",
+  "upstream": 29,
+  "limited": 0,
+  "retries429": 0,
+  "batches": 20,
+  "expiredDropped": 0,
+  "bisected": 0,
+  "orphanFallbacks": 0,
+  "createBatches": 1,
+  "createdInBatches": 25,
+  "createMismatches": 0,
+  "createMemoryHits": 0,
+  "createSharedInflight": 0,
+  "writeRetries": 0,
+  "cacheHits": 26,
+  "cacheShared": 0,
+  "cacheStaleServed": 0,
+  "larkCalls": 3,
+  "writesSuperseded": 0,
+  "updateBatches": 0,
+  "updatedInBatches": 0,
+  "updateSplits": 0,
+  "updateMismatches": 0,
+  "noBatchTrips": 0,
+  "peakQueue": 22,
+  "truncatedFails": 0,
+  "heavyUsers": 0,
+  "peakStartsPerSec": 4,
+  "startsByClass": {
+   "token": 15,
+   "read": 28,
+   "write": 1
+  },
+  "gapMs": 250,
+  "queued": 0,
+  "active": 0,
+  "buckets": 0,
+  "meanBatch": 17.9,
+  "queueWaitP50": 2793,
+  "queueWaitMax": 5293,
+  "permits": {
+   "token": {
+    "wait": {
+     "n": 15,
+     "p50": 717,
+     "p95": 2457,
+     "max": 2457
+    },
+    "hold": {
+     "n": 15,
+     "p50": 128,
+     "p95": 346,
+     "max": 346
+    }
+   },
+   "read": {
+    "wait": {
+     "n": 28,
+     "p50": 982,
+     "p95": 5028,
+     "max": 5278
+    },
+    "hold": {
+     "n": 28,
+     "p50": 530,
+     "p95": 775,
+     "max": 1021
+    }
+   },
+   "write": {
+    "wait": {
+     "n": 1,
+     "p50": 1973,
+     "p95": 1973,
+     "max": 1973
+    },
+    "hold": {
+     "n": 1,
+     "p50": 826,
+     "p95": 826,
+     "max": 826
+    }
+   }
+  },
+  "lark": {
+   "search": {
+    "n": 25,
+    "p50": 530,
+    "p95": 748,
+    "max": 1021
+   },
+   "batchCreate": {
+    "n": 1,
+    "p50": 826,
+    "p95": 826,
+    "max": 826
+   },
+   "batchUpdate": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "create": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "get": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "update": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "delete": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "list": {
+    "n": 1,
+    "p50": 775,
+    "p95": 775,
+    "max": 775
+   },
+   "fields": {
+    "n": 2,
+    "p50": 282,
+    "p95": 282,
+    "max": 282
+   },
+   "other": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   }
+  },
+  "labels": {
+   "token": 15,
+   "fields": 2,
+   "list": 1,
+   "search": 383,
+   "create": 25
+  },
+  "cacheEntries": 2,
+  "startedAt": "2026-10-07T07:48:53.008Z",
+  "uptimeSec": 47,
+  "pagesCounters": {},
+  "perMinute": {
+   "minutes": [
+    29855988,
+    29855989
+   ],
+   "starts": [
+    5,
+    39
+   ],
+   "limited": [
+    0,
+    0
+   ],
+   "waitP95": [
+    142,
+    5028
+   ],
+   "peakQueue": [
+    1,
+    22
+   ]
+  }
+ },
+ "2-after": {
+  "at": "2026-10-07T07:49:52.541Z",
+  "upstream": 64,
+  "limited": 0,
+  "retries429": 0,
+  "batches": 50,
+  "expiredDropped": 0,
+  "bisected": 0,
+  "orphanFallbacks": 0,
+  "createBatches": 3,
+  "createdInBatches": 85,
+  "createMismatches": 0,
+  "createMemoryHits": 0,
+  "createSharedInflight": 10,
+  "writeRetries": 0,
+  "cacheHits": 56,
+  "cacheShared": 0,
+  "cacheStaleServed": 0,
+  "larkCalls": 3,
+  "writesSuperseded": 0,
+  "updateBatches": 0,
+  "updatedInBatches": 0,
+  "updateSplits": 0,
+  "updateMismatches": 0,
+  "noBatchTrips": 0,
+  "peakQueue": 27,
+  "truncatedFails": 0,
+  "heavyUsers": 0,
+  "peakStartsPerSec": 4,
+  "startsByClass": {
+   "token": 31,
+   "read": 61,
+   "write": 3
+  },
+  "gapMs": 250,
+  "queued": 3,
+  "active": 2,
+  "buckets": 1,
+  "meanBatch": 24,
+  "queueWaitP50": 4149,
+  "queueWaitMax": 8405,
+  "permits": {
+   "token": {
+    "wait": {
+     "n": 31,
+     "p50": 1227,
+     "p95": 3477,
+     "max": 3727
+    },
+    "hold": {
+     "n": 31,
+     "p50": 96,
+     "p95": 253,
+     "max": 346
+    }
+   },
+   "read": {
+    "wait": {
+     "n": 61,
+     "p50": 3750,
+     "p95": 5990,
+     "max": 7462
+    },
+    "hold": {
+     "n": 59,
+     "p50": 496,
+     "p95": 748,
+     "max": 1021
+    }
+   },
+   "write": {
+    "wait": {
+     "n": 3,
+     "p50": 2242,
+     "p95": 2528,
+     "max": 2528
+    },
+    "hold": {
+     "n": 3,
+     "p50": 826,
+     "p95": 993,
+     "max": 993
+    }
+   }
+  },
+  "lark": {
+   "search": {
+    "n": 56,
+    "p50": 499,
+    "p95": 696,
+    "max": 1021
+   },
+   "batchCreate": {
+    "n": 3,
+    "p50": 826,
+    "p95": 993,
+    "max": 993
+   },
+   "batchUpdate": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "create": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "get": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "update": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "delete": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "list": {
+    "n": 1,
+    "p50": 775,
+    "p95": 775,
+    "max": 775
+   },
+   "fields": {
+    "n": 2,
+    "p50": 282,
+    "p95": 282,
+    "max": 282
+   },
+   "other": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   }
+  },
+  "labels": {
+   "token": 31,
+   "fields": 2,
+   "list": 1,
+   "search": 1421,
+   "create": 85
+  },
+  "cacheEntries": 2,
+  "startedAt": "2026-10-07T07:48:53.008Z",
+  "uptimeSec": 60,
+  "pagesCounters": {},
+  "perMinute": {
+   "minutes": [
+    29855988,
+    29855989
+   ],
+   "starts": [
+    5,
+    90
+   ],
+   "limited": [
+    0,
+    0
+   ],
+   "waitP95": [
+    142,
+    5740
+   ],
+   "peakQueue": [
+    1,
+    27
+   ]
+  }
+ },
+ "3-before": {
+  "at": "2026-10-07T07:50:02.730Z",
+  "upstream": 83,
+  "limited": 0,
+  "retries429": 0,
+  "batches": 66,
+  "expiredDropped": 0,
+  "bisected": 0,
+  "orphanFallbacks": 0,
+  "createBatches": 3,
+  "createdInBatches": 85,
+  "createMismatches": 0,
+  "createMemoryHits": 0,
+  "createSharedInflight": 10,
+  "writeRetries": 0,
+  "cacheHits": 56,
+  "cacheShared": 0,
+  "cacheStaleServed": 0,
+  "larkCalls": 3,
+  "writesSuperseded": 0,
+  "updateBatches": 0,
+  "updatedInBatches": 0,
+  "updateSplits": 0,
+  "updateMismatches": 0,
+  "noBatchTrips": 0,
+  "peakQueue": 27,
+  "truncatedFails": 0,
+  "heavyUsers": 0,
+  "peakStartsPerSec": 4,
+  "startsByClass": {
+   "token": 31,
+   "read": 80,
+   "write": 3
+  },
+  "gapMs": 250,
+  "queued": 0,
+  "active": 0,
+  "buckets": 0,
+  "meanBatch": 18.7,
+  "queueWaitP50": 4118,
+  "queueWaitMax": 8405,
+  "permits": {
+   "token": {
+    "wait": {
+     "n": 31,
+     "p50": 1227,
+     "p95": 3477,
+     "max": 3727
+    },
+    "hold": {
+     "n": 31,
+     "p50": 96,
+     "p95": 253,
+     "max": 346
+    }
+   },
+   "read": {
+    "wait": {
+     "n": 80,
+     "p50": 3062,
+     "p95": 5990,
+     "max": 7462
+    },
+    "hold": {
+     "n": 80,
+     "p50": 486,
+     "p95": 696,
+     "max": 1021
+    }
+   },
+   "write": {
+    "wait": {
+     "n": 3,
+     "p50": 2242,
+     "p95": 2528,
+     "max": 2528
+    },
+    "hold": {
+     "n": 3,
+     "p50": 826,
+     "p95": 993,
+     "max": 993
+    }
+   }
+  },
+  "lark": {
+   "search": {
+    "n": 77,
+    "p50": 486,
+    "p95": 652,
+    "max": 1021
+   },
+   "batchCreate": {
+    "n": 3,
+    "p50": 826,
+    "p95": 993,
+    "max": 993
+   },
+   "batchUpdate": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "create": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "get": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "update": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "delete": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "list": {
+    "n": 1,
+    "p50": 775,
+    "p95": 775,
+    "max": 775
+   },
+   "fields": {
+    "n": 2,
+    "p50": 282,
+    "p95": 282,
+    "max": 282
+   },
+   "other": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   }
+  },
+  "labels": {
+   "token": 31,
+   "fields": 2,
+   "list": 1,
+   "search": 1455,
+   "create": 85
+  },
+  "cacheEntries": 2,
+  "startedAt": "2026-10-07T07:48:53.008Z",
+  "uptimeSec": 70,
+  "pagesCounters": {},
+  "perMinute": {
+   "minutes": [
+    29855988,
+    29855989
+   ],
+   "starts": [
+    5,
+    109
+   ],
+   "limited": [
+    0,
+    0
+   ],
+   "waitP95": [
+    142,
+    5490
+   ],
+   "peakQueue": [
+    1,
+    27
+   ]
+  }
+ },
+ "3-after": {
+  "at": "2026-10-07T07:50:19.969Z",
+  "upstream": 138,
+  "limited": 0,
+  "retries429": 0,
+  "batches": 68,
+  "expiredDropped": 0,
+  "bisected": 0,
+  "orphanFallbacks": 0,
+  "createBatches": 3,
+  "createdInBatches": 85,
+  "createMismatches": 0,
+  "createMemoryHits": 0,
+  "createSharedInflight": 10,
+  "writeRetries": 0,
+  "cacheHits": 57,
+  "cacheShared": 0,
+  "cacheStaleServed": 0,
+  "larkCalls": 54,
+  "writesSuperseded": 0,
+  "updateBatches": 0,
+  "updatedInBatches": 0,
+  "updateSplits": 0,
+  "updateMismatches": 0,
+  "noBatchTrips": 0,
+  "peakQueue": 49,
+  "truncatedFails": 0,
+  "heavyUsers": 0,
+  "peakStartsPerSec": 4,
+  "startsByClass": {
+   "token": 31,
+   "read": 85,
+   "write": 53
+  },
+  "gapMs": 250,
+  "queued": 0,
+  "active": 2,
+  "buckets": 0,
+  "meanBatch": 18.9,
+  "queueWaitP50": 3977,
+  "queueWaitMax": 8405,
+  "permits": {
+   "token": {
+    "wait": {
+     "n": 31,
+     "p50": 1227,
+     "p95": 3477,
+     "max": 3727
+    },
+    "hold": {
+     "n": 31,
+     "p50": 96,
+     "p95": 253,
+     "max": 346
+    }
+   },
+   "read": {
+    "wait": {
+     "n": 85,
+     "p50": 3062,
+     "p95": 6731,
+     "max": 14154
+    },
+    "hold": {
+     "n": 83,
+     "p50": 486,
+     "p95": 652,
+     "max": 1021
+    }
+   },
+   "write": {
+    "wait": {
+     "n": 53,
+     "p50": 7119,
+     "p95": 15013,
+     "max": 15513
+    },
+    "hold": {
+     "n": 53,
+     "p50": 1070,
+     "p95": 1753,
+     "max": 2251
+    }
+   }
+  },
+  "lark": {
+   "search": {
+    "n": 79,
+    "p50": 486,
+    "p95": 652,
+    "max": 1021
+   },
+   "batchCreate": {
+    "n": 3,
+    "p50": 826,
+    "p95": 993,
+    "max": 993
+   },
+   "batchUpdate": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "create": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "get": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "update": {
+    "n": 50,
+    "p50": 1081,
+    "p95": 1753,
+    "max": 2251
+   },
+   "delete": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "list": {
+    "n": 2,
+    "p50": 775,
+    "p95": 775,
+    "max": 775
+   },
+   "fields": {
+    "n": 2,
+    "p50": 282,
+    "p95": 282,
+    "max": 282
+   },
+   "other": {
+    "n": 0,
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   }
+  },
+  "labels": {
+   "token": 31,
+   "fields": 2,
+   "list": 2,
+   "search": 1505,
+   "create": 85,
+   "update": 50
+  },
+  "cacheEntries": 2,
+  "startedAt": "2026-10-07T07:48:53.008Z",
+  "uptimeSec": 87,
+  "pagesCounters": {},
+  "perMinute": {
+   "minutes": [
+    29855988,
+    29855989,
+    29855990
+   ],
+   "starts": [
+    5,
+    109,
+    55
+   ],
+   "limited": [
+    0,
+    0,
+    0
+   ],
+   "waitP95": [
+    142,
+    5490,
+    15013
+   ],
+   "peakQueue": [
+    1,
+    27,
+    49
+   ]
+  }
+ }
+}

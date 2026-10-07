@@ -46,12 +46,13 @@ npx wrangler deployments list --name rtn-lark-rate-queue
 npx wrangler rollback <version-id> --name rtn-lark-rate-queue
 ```
 
-Durable Object versions (newest first). **Current rollback target: `387762b5-9d62-4d01-aa31-152907030586`** (items A–D; `GATE_CONCURRENCY` was 3 then):
-- `387762b5-9d62-4d01-aa31-152907030586` — items A–D (request-age ordering, `larkCall`/`cachedCall`, labels). Deployed.
+Durable Object versions (newest first). **Current: `72f10be6-fef0-4537-959e-dd679e371635`. Rollback target: `387762b5-9d62-4d01-aa31-152907030586`** (items A–D; `GATE_CONCURRENCY` was 3 then and the gate variables were set in the dashboard, not the file):
+- `72f10be6-fef0-4537-959e-dd679e371635` — review follow-ups (ownership only from the agent's own row, same-record write ordering, Pages counter reports, per-minute history, `updateBatch` for the OFF-by-default batch_update, gate vars `GATE_CONCURRENCY`=4 / `GATE_START_GAP_MS`=250 from `wrangler.jsonc`). Deployed.
+- `387762b5-9d62-4d01-aa31-152907030586` — items A–D (request-age ordering, `larkCall`/`cachedCall`, labels).
 - `2b76c017-f4f7-46e3-ada3-fde4139c21ca` — steps 0–3 (diagnostics, identical-create sharing, client_token + one retry).
 - `b8491272-767a-472a-8835-ff5bbd00179c` — first version with `createBatch`.
 - `d357b841-4199-409e-acd2-659a6dd2faa3` — before `createBatch` (keep `LARK_BATCH_CREATE` off if you roll back to it).
-The version after this follow-up branch is deployed by the user; add its id here when it is.
+Rolling back to `387762b5…` also removes the gate variables from the Worker (they came from the file), so the code defaults (concurrency 3, gap 250 ms) apply until you set them again.
 
 **Rollback the widget:** Cloudflare → test-1 → Deployments → pick an older Success deployment → Rollback; or `git revert` the commit and push.
 
