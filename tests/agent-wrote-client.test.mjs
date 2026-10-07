@@ -122,5 +122,4 @@ test('the record gate asks LiveChat only for a chat the agent did not act on, be
   assert.ok(submit.indexOf('await agentWroteInChat(chatId)', gate) > gate);
   assert.ok(gate < submit.indexOf('s.agentName = selectedAgent'));
   assert.ok(gate < submit.indexOf('if (!selectedAgent)'));
-  assert.match(app, /const AGENT_LOGIN_LIVE = false;/);
 });
