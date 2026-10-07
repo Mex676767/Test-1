@@ -24,8 +24,8 @@ const repo = path.resolve(here, "../../..");                      // claude-look
 const build = path.join(here, ".build"); fs.mkdirSync(build, { recursive: true });
 
 // ---- build variants of the Pages code and the DO --------------------------------
-function buildPages(variant) {
-  const dest = path.join(build, `pages-${variant}-${process.pid}`);
+function buildPages(variant, suffix = "") {
+  const dest = path.join(build, `pages-${variant}-${process.pid}${suffix}`);
   fs.mkdirSync(path.join(dest, "_lib"), { recursive: true });
   const fromHead = variant !== "v2";           // orig/nocap = code as of git HEAD (before the review fixes); v2 = working tree
   const read = (rel) => fromHead ? execFileSync("git", ["show", `HEAD:${rel}`], { cwd: repo, maxBuffer: 1 << 26 }).toString("utf8")
@@ -123,12 +123,25 @@ const tableEnv = { LARK_APP_ID: "synthetic", LARK_APP_SECRET: "synthetic", LARK_
 const pagesDir = buildPages(PAGES);
 const { handler } = await import(pathToFileURL(path.join(pagesDir, "lark-search.js")).href);
 const { initEnv } = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js")).href);
+// --isolates=N: N separate copies of the Pages code, each with its OWN module state (token cache), all cold. Lookups are dealt to them
+// round-robin, like a burst spread over N fresh Cloudflare isolates (each one fetches its own Lark token through the queue).
+const ISOLATES = Math.max(1, Number(args.isolates || 1));
+const isolateCopies = [];
+if (ISOLATES > 1) for (let i = 0; i < ISOLATES; i++) {
+  const dir = buildPages(PAGES, `-iso${i}`);
+  isolateCopies.push({
+    handler: (await import(pathToFileURL(path.join(dir, "lark-search.js")).href)).handler,
+    initEnv: (await import(pathToFileURL(path.join(dir, "_lib/lark.js")).href)).initEnv,
+  });
+}
 const realFetch = globalThis.fetch;
 const larkLib0 = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js")).href);
 const agents = Array.from({ length: N }, (_, i) => ({ username: `u${String(i).padStart(4, "0")}`, brand: i % 2 ? "MY" : "PP",
   link: `https://my.livechatinc.com/chats/SIMCHAT${i}/SIMTHREAD${i}` }));
 for (let i = 0; i < DUPES && i < N; i++) agents.push({ ...agents[i], dupeOf: i });
-const call = (a) => handler({ body: JSON.stringify({ username: a.username, brand: a.brand, picName: `agent${a.username}`, link: LIVE ? a.link : "", preview: !LIVE }) });
+agents.forEach((a, i) => { a.iso = i; });
+const pickHandler = (a) => (isolateCopies.length ? isolateCopies[a.iso % isolateCopies.length].handler : handler);
+const call = (a) => pickHandler(a)({ body: JSON.stringify({ username: a.username, brand: a.brand, picName: `agent${a.username}`, link: LIVE ? a.link : "", preview: !LIVE }) });
 
 // Oracle: the same handler, unbatched, unlimited quota, zero latency, sequential.
 const refLark = createFakeLark({ tables, medianMs: 0, sigma: 0, perRowMs: 0, enforce: false });
@@ -149,7 +162,9 @@ if (DO_V !== "none") {
   const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "forgetCreated", "larkCall", "cachedCall", "updateBatch", "reportCounters"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
   queue = { idFromName: () => "g", get: () => stub };
 }
-initEnv({ ...tableEnv, LARK_SEARCH_QUEUE: queue, ...(PAGES === "v2" ? { LARK_QUEUE_PROTOCOL: "v2" } : {}), ...(args.batchcreate === "1" ? { LARK_BATCH_CREATE: "1" } : {}), ...(args.batchupdate === "1" ? { LARK_BATCH_UPDATE: "1" } : {}) });
+const sutEnv = { ...tableEnv, LARK_SEARCH_QUEUE: queue, ...(PAGES === "v2" ? { LARK_QUEUE_PROTOCOL: "v2" } : {}), ...(args.batchcreate === "1" ? { LARK_BATCH_CREATE: "1" } : {}), ...(args.batchupdate === "1" ? { LARK_BATCH_UPDATE: "1" } : {}) };
+initEnv(sutEnv);
+for (const copy of isolateCopies) copy.initEnv(sutEnv);
 
 if (MODE === "submit") {
   const { handler: recordHandler } = await import(pathToFileURL(path.join(pagesDir, "lark-record.js")).href);
@@ -244,7 +259,7 @@ if (LIVE) {
 const sizes = lark.stats.orSizes, st = doInstance?.getStats?.();
 console.log(JSON.stringify({
   batchCreate: args.batchcreate === "1", background: BG_MS ? { intervalMs: BG_MS, polls: bgCount, failed: bgFail } : undefined,
-  config: { do: DO_V, cfgBonuses: CFG, caHistoryPerUserBrand: CA_HIST, perCondMs: PER_COND, limitStatus: LIMIT_STATUS, gap: args.gap, conc: args.conc, pages: PAGES, n: N, arrival: ARRIVAL, live: LIVE, upstreamMedianMs: MEDIAN, quotaPerSec: QUOTA, rpcMs: RPC_MS },
+  config: { isolates: ISOLATES, do: DO_V, cfgBonuses: CFG, caHistoryPerUserBrand: CA_HIST, perCondMs: PER_COND, limitStatus: LIMIT_STATUS, gap: args.gap, conc: args.conc, pages: PAGES, n: N, arrival: ARRIVAL, live: LIVE, upstreamMedianMs: MEDIAN, quotaPerSec: QUOTA, rpcMs: RPC_MS },
   latencyMs: { p50: q(0.5), p95: q(0.95), max: sorted.at(-1), wallToLastResult: wall },
   caRows: LIVE ? { checked: caChecked, wrongOwner: caWrongOwner, duplicateIds: caDuplicateIds, rowsCreated: caRowsCreated, expectedRows: N, dupePairs: DUPES,
     dupePairsSameId: DUPES ? agents.filter((a) => a.dupeOf !== undefined).filter((a) => { const first = results[a.dupeOf]; const second = results[agents.indexOf(a)]; return first.ok && second.ok && first.body.caRecordId === second.body.caRecordId; }).length : undefined } : undefined,

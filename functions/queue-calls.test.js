@@ -373,7 +373,7 @@ test("3a: the queue-side events are noted: requests without a start time, queue-
   assert.match(source, /noteCounter\(`lookupWarning:\$\{source\}`\)/);
   assert.match(source, /noteCounter\("lookupHardDeadline"\)/);
   const adapt = (await import("node:fs")).readFileSync(new URL("./_lib/adapt.js", import.meta.url), "utf8");
-  assert.match(adapt, /context\.waitUntil\?\.\(flushCounters\(\)\)/);
+  assert.match(adapt, /context\.waitUntil\?\.\(flushCountersThrottled\(\)\)/);
 });
 
 test("C: the widget sends the username with every record write (submit, edit, unclaim, link)", async () => {
@@ -412,4 +412,26 @@ test("4: LARK_BATCH_UPDATE is off by default (updates use larkCall); on, they go
   on.calls.length = 0;
   await withFetch(() => json({ code: 0, data: { record: { record_id: "r1", fields: {} } } }), async () => { await updateRecord("customer-table", "r1", {}); });
   assert.equal(on.calls.filter((c) => c.name === "updateBatch" || c.name === "larkCall").length, 0, "needs the v2 protocol");
+});
+
+// ---- isolate heartbeat: the queue counts distinct Pages isolates per minute ------------------------------------------------
+test("3: every report carries this isolate's random id; counters go out at once, an idle heartbeat at most every 5 s", async () => {
+  const { flushCountersThrottled } = await import("./_lib/lark.js");
+  const sent = [];
+  const stub = makeStub({ reportCounters: async (report, id) => { sent.push({ report, id }); } });
+  initEnv(queueEnv(stub));
+  await flushCounters(); sent.length = 0;
+  noteCounter("failOpen");
+  await flushCountersThrottled();                                        // counters pending: sent immediately
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].report, { failOpen: 1 });
+  assert.match(sent[0].id, /^[0-9a-f-]{36}$/, "a random UUID, nothing identifying");
+  await flushCountersThrottled();                                        // nothing pending and a report just went out: no extra RPC
+  assert.equal(sent.length, 1);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 6_000;
+  try { await flushCountersThrottled(); } finally { Date.now = realNow; }
+  assert.equal(sent.length, 2, "6 s later an empty heartbeat tells the queue this isolate is alive");
+  assert.deepEqual(sent[1].report, {});
+  assert.equal(sent[1].id, sent[0].id, "same isolate id every time");
 });
