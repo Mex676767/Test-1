@@ -1258,20 +1258,164 @@ test("4: a transient failure is retried ONCE with the same body; a second failur
   } finally { done(); }
 });
 
-test("4: a NON-transient error splits the batch: the good records are updated, only the bad one gets the error (atomic Lark)", async () => {
-  const tables = { ca: caTableWith(...manyRows(8)) };
-  const { lark, d, done } = await setup({ tables, gap: 10, conc: 2, batchUpdateAtomic: true });
+// ---- batch_update against the REAL Lark behaviour (measured 2026-10-07, see LARK_BATCH_UPDATE_NOTES.md): errors are HTTP 200 + a code, the whole
+// call is rejected and nothing is applied. 1254043 names the record in msg; field-value errors (1254061 NumberFieldConvFail) do not.
+const fiftyUpdateRows = () => manyRows(50);
+const fiftyCalls = (d, ids, fields = { Status: "Solved" }) => Promise.all(ids.map((id) => d.updateBatch(putCall(id, fields, { requestStartedAt: Date.now() }))));
+const idsOf = (n) => Array.from({ length: n }, (_, i) => `b${i}`);
+
+test("4 (real Lark): one ghost record_id in 50 -> only that caller fails (1254043), the other 49 are updated in a second batch call", async () => {
+  const tables = { ca: caTableWith(...fiftyUpdateRows()) };
+  const { lark, d, done } = await setup({ tables, gap: 10, conc: 2 });
   try {
     const bodies = spyOnBatchUpdates();
-    const ids = [...Array.from({ length: 8 }, (_, i) => `b${i}`).slice(0, 4), "ghost", ...Array.from({ length: 8 }, (_, i) => `b${i}`).slice(4)];
-    const out = await Promise.all(ids.map((id) => d.updateBatch(putCall(id, { Status: "Solved" }, { requestStartedAt: Date.now() }))));
+    const ids = idsOf(50); ids[23] = "ghost";
+    const out = await fiftyCalls(d, ids);
     out.forEach((res, i) => {
-      if (ids[i] === "ghost") assert.equal(JSON.parse(res.body).code, 1254043, "the bad record gets Lark's error");
+      if (ids[i] === "ghost") { assert.equal(JSON.parse(res.body).code, 1254043); assert.match(JSON.parse(res.body).msg, /ghost/); }
       else { assert.equal(res.status, 200, ids[i]); assert.equal(JSON.parse(res.body).data.record.fields.Status, "Solved"); }
     });
-    assert.ok(tables.ca.rows.every((row) => row.fields.Status === "Solved"), "every good record was written");
-    assert.ok(d.getStats().updateSplits >= 1);
-    assert.ok(bodies.length > 1, "the failing batch was split");
+    assert.equal(tables.ca.rows.filter((row) => row.fields.Status === "Solved").length, 49, "49 rows written, nothing for the ghost");
+    assert.ok(lark.stats.batchUpdate <= 2, `batch_update calls: ${lark.stats.batchUpdate}`);
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[0].length, 50); assert.equal(bodies[1].length, 49, "the rest went again as ONE batch");
+    assert.ok(!bodies[1].some((r) => r.record_id === "ghost"));
+    assert.equal(lark.stats.update || 0, 0, "no single PUTs");
+    const stats = d.getStats();
+    assert.equal(stats.updateRecordRejects, 1); assert.equal(stats.updateSplits, 0); assert.equal(stats.updateWholeCallErrors, 0);
+    assert.equal(stats.active, 0);
+  } finally { done(); }
+});
+
+test("4 (real Lark): several ghosts are peeled off one by one (each re-send removes at least one); everything else is updated", async () => {
+  const tables = { ca: caTableWith(...fiftyUpdateRows()) };
+  const { lark, d, done } = await setup({ tables, gap: 10, conc: 2 });
+  try {
+    const ids = idsOf(50); ids[3] = "ghostA"; ids[30] = "ghostB"; ids[44] = "ghostC";
+    const out = await fiftyCalls(d, ids);
+    out.forEach((res, i) => { if (ids[i].startsWith("ghost")) assert.equal(JSON.parse(res.body).code, 1254043); else assert.equal(res.status, 200); });
+    assert.equal(tables.ca.rows.filter((row) => row.fields.Status === "Solved").length, 47);
+    assert.ok(lark.stats.batchUpdate <= 4, `batch_update calls: ${lark.stats.batchUpdate}`);
+    assert.equal(d.getStats().updateRecordRejects, 3);
+  } finally { done(); }
+});
+
+test("4 (real Lark): one invalid field value in 50 (1254061, the record is NOT named) -> bisect isolates it; the other 49 are updated, the bad row is untouched", async () => {
+  const tables = { ca: caTableWith(...fiftyUpdateRows()) };
+  tables.ca.numberFields = ["Released amount"];
+  tables.ca.schema.add("Released amount");
+  const { lark, d, done } = await setup({ tables, gap: 10, conc: 4 });
+  try {
+    const bodies = spyOnBatchUpdates();
+    const ids = idsOf(50);
+    const out = await Promise.all(ids.map((id, i) => d.updateBatch(putCall(id, { Status: "Solved", "Released amount": i === 31 ? "twelve dollars" : 10 + i }, { requestStartedAt: Date.now() }))));
+    out.forEach((res, i) => {
+      if (i === 31) { assert.equal(JSON.parse(res.body).code, 1254061, "only the bad record's caller gets Lark's error"); assert.doesNotMatch(res.body, /b31/); }
+      else { assert.equal(res.status, 200, ids[i]); assert.equal(JSON.parse(res.body).code, 0); }
+    });
+    tables.ca.rows.forEach((row, i) => {
+      if (i === 31) { assert.equal(row.fields.Status, undefined); assert.equal(row.fields["Released amount"], undefined, "the bad row is untouched"); }
+      else { assert.equal(row.fields.Status, "Solved"); assert.equal(row.fields["Released amount"], 10 + i); }
+    });
+    const stats = d.getStats();
+    assert.ok(stats.updateSplits >= 1 && stats.updateSplits <= 7, `splits: ${stats.updateSplits}`);
+    assert.equal(stats.updateRecordRejects, 0, "1254061 has no record id to shortcut on");
+    assert.equal(stats.updateWholeCallErrors, 0);
+    assert.ok(lark.stats.batchUpdate <= 13, `bisect stayed cheap: ${lark.stats.batchUpdate} batch calls + ${lark.stats.update || 0} single PUT`);
+    assert.ok(bodies[0].length === 50 && bodies.slice(1).every((records) => records.length < 50));
+    assert.equal(stats.active, 0);
+  } finally { done(); }
+});
+
+for (const [label, reply] of [
+  ["invalid tenant token 99991663", { code: 99991663, msg: "Invalid access token for authorization" }],
+  ["permission denied 1254302", { code: 1254302, msg: "Permission denied" }],
+  ["permission denied 1254304", { code: 1254304, msg: "Permission denied" }],
+  ["table not found 1254041", { code: 1254041, msg: "TableIdNotFound" }],
+  ["wrong table id 1254004", { code: 1254004, msg: "WrongTableId" }],
+  ["write conflict 1254291", { code: 1254291, msg: "Write conflict" }],
+  ["a code nobody has seen", { code: 1299999, msg: "something new" }],
+]) {
+  test(`4 (real Lark): a whole-call error (${label}) is NOT split: exactly one batch call, every caller gets the error, nothing else is sent`, async () => {
+    const tables = { ca: caTableWith(...fiftyUpdateRows()) };
+    const { lark, d, done } = await setup({ tables, gap: 10, conc: 2 });
+    try {
+      const real = globalThis.fetch, seen = [];
+      globalThis.fetch = async (url, init = {}) => {
+        if (String(url).includes("/records/batch_update")) { seen.push(init.body); return new Response(JSON.stringify(reply), { status: 200 }); }
+        return real(url, init);
+      };
+      const out = await fiftyCalls(d, idsOf(50));
+      assert.equal(seen.length, 1, "no split, no retry");
+      for (const res of out) assert.equal(JSON.parse(res.body).code, reply.code, "every caller gets the error");
+      assert.equal(lark.stats.update || 0, 0, "no single PUTs either");
+      assert.ok(tables.ca.rows.every((row) => row.fields.Status === undefined));
+      const stats = d.getStats();
+      assert.equal(stats.updateWholeCallErrors, 1); assert.equal(stats.updateSplits, 0); assert.equal(stats.updateRecordRejects, 0);
+      assert.equal(stats.active, 0);
+    } finally { done(); }
+  });
+}
+
+test("4 (real Lark): a non-JSON non-2xx reply (e.g. 403 from a gateway) is a whole-call error too, not a reason to split", async () => {
+  const tables = { ca: caTableWith(...manyRows(10)) };
+  const { d, done } = await setup({ tables, gap: 10, conc: 2 });
+  try {
+    const real = globalThis.fetch; let calls = 0;
+    globalThis.fetch = async (url, init = {}) => (String(url).includes("/records/batch_update") ? (calls++, new Response("forbidden", { status: 403 })) : real(url, init));
+    const out = await fiftyCalls(d, idsOf(10));
+    assert.equal(calls, 1);
+    assert.ok(out.every((r) => r.status === 403));
+  } finally { done(); }
+});
+
+test("4 (real Lark): duplicates are never sent: the same record written three times in one burst is ONE entry carrying the newest values", async () => {
+  const tables = { ca: caTableWith(...manyRows(6)) };
+  const { d, done } = await setup({ tables, gap: 10, conc: 2 });
+  try {
+    const bodies = spyOnBatchUpdates();
+    const calls = [
+      d.updateBatch(putCall("b0", { Status: "First", Inquiry: ["I1"] }, { requestStartedAt: Date.now() })),
+      d.updateBatch(putCall("b0", { Status: "Second" }, { requestStartedAt: Date.now() })),
+      d.updateBatch(putCall("b0", { Status: "Third" }, { requestStartedAt: Date.now() })),
+      ...[1, 2, 3, 4].map((i) => d.updateBatch(putCall(`b${i}`, { Status: "Solved" }, { requestStartedAt: Date.now() }))),
+    ];
+    const out = await Promise.all(calls);
+    assert.ok(out.every((r) => r.status === 200));
+    const sent = bodies.flat();
+    assert.equal(sent.filter((r) => r.record_id === "b0").length, 1, "b0 was sent once");
+    assert.deepEqual(sent.find((r) => r.record_id === "b0").fields, { Status: "Third", Inquiry: ["I1"] });
+    assert.equal(tables.ca.rows[0].fields.Status, "Third");
+    assert.equal(new Set(sent.map((r) => r.record_id)).size, sent.length, "no record id twice in any batch");
+  } finally { done(); }
+});
+
+test("fake Lark mirrors the measured real replies (HTTP 200 + code, atomic rejection, order, last wins, client_token repeats)", async () => {
+  const tables = { ca: caTableWith(caRow("r1"), caRow("r2"), caRow("r3")) };
+  tables.ca.numberFields = ["Released amount"];
+  const { lark, done } = await setup({ tables, median: 1 });
+  try {
+    const base = "https://open.larksuite.com/open-apis/bitable/v1/apps/x/tables/ca/records";
+    const post = async (path, body) => { const res = await lark.fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(body) }); return { status: res.status, json: await res.json() }; };
+    let r = await post("/batch_update", { records: [{ record_id: "r2", fields: { Status: "B" } }, { record_id: "r1", fields: { Status: "A" } }] });
+    assert.equal(r.status, 200); assert.equal(r.json.code, 0);
+    assert.deepEqual(r.json.data.records, [{ record_id: "r2", fields: { Status: "B" } }, { record_id: "r1", fields: { Status: "A" } }], "request order, only the sent fields");
+    r = await post("/batch_update", { records: [{ record_id: "r1", fields: { Status: "X" } }, { record_id: "recNOPE", fields: { Status: "X" } }] });
+    assert.equal(r.status, 200); assert.equal(r.json.code, 1254043); assert.equal(r.json.msg, "record not found,id = recNOPE");
+    assert.equal(tables.ca.rows[0].fields.Status, "A", "atomic: the valid record was not applied");
+    r = await post("/batch_update", { records: [{ record_id: "r3", fields: { Status: "X" } }, { record_id: "r1", fields: { "Released amount": "not a number" } }] });
+    assert.equal(r.status, 200); assert.equal(r.json.code, 1254061); assert.equal(r.json.msg, "NumberFieldConvFail"); assert.doesNotMatch(JSON.stringify(r.json), /r1/);
+    assert.equal(tables.ca.rows[2].fields.Status, undefined, "atomic: nothing applied");
+    r = await post("/batch_update", { records: [{ record_id: "r3", fields: { Status: "first" } }, { record_id: "r3", fields: { Status: "last" } }] });
+    assert.equal(r.json.code, 0); assert.equal(tables.ca.rows[2].fields.Status, "last", "same record twice: the last value wins");
+    const before = tables.ca.rows.length;
+    const one = await post("/records?client_token=T1", { fields: { Username: "n", Brand: "PP" } });
+    const again = await post("/records?client_token=T1", { fields: { Username: "n", Brand: "PP" } });
+    assert.deepEqual(again.json, one.json, "a repeat returns the SAME record");
+    const batch = await post("/records/batch_create?client_token=T2", { records: [{ fields: { Username: "m", Brand: "PP" } }] });
+    const batchAgain = await post("/records/batch_create?client_token=T2", { records: [{ fields: { Username: "m", Brand: "PP" } }] });
+    assert.deepEqual(batchAgain.json, batch.json);
+    assert.equal(tables.ca.rows.length, before + 2, "no duplicate rows from the repeats");
   } finally { done(); }
 });
 

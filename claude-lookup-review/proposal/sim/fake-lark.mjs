@@ -24,8 +24,15 @@ export function fieldText(v) {
 // hangAfterWrite: the next N create/batch_create calls WRITE their rows and then never answer (until the caller aborts),
 // like a Lark call that times out after committing. client_token: a repeat of a token replays the stored answer and
 // writes nothing (Lark's documented idempotency).
-// batchUpdateAtomic: a batch_update that names an unknown record_id fails as a whole and applies NOTHING (true, the default) or applies the
-// others and omits the bad one from the reply (false). Lark's documentation does not say which; the code must be right under both.
+// batch_update, as measured against real Lark on 2026-10-07 (production base, a test table):
+//   - valid batch: every record applied, reply data.records in request order with record_id + the fields that were sent
+//   - an unknown record_id: the WHOLE call is rejected and nothing is applied. HTTP 200, code 1254043, msg "record not found,id = <id>"
+//   - an invalid field value (text into a number column; list the column in table.numberFields): the WHOLE call is rejected and nothing
+//     is applied. HTTP 200, code 1254061 "NumberFieldConvFail"; the record is NOT named in the reply
+//   - the same record_id twice: success, the last value wins
+//   - client_token on create and batch_create: a repeat returns the SAME record(s), no second row (see `tokens` below)
+// batchUpdateAtomic (default true = the measured behaviour). false is a hypothetical Lark that applies the others and omits an unknown
+// record_id from the reply; the code must not corrupt data under it either.
 export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs = 0.05, perCondMs = 0, quota = 20, enforce = true, seed = 7, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0, batchUpdateAtomic = true }) {
   const rnd = mulberry32(seed);
   let hangs = hangAfterWrite;
@@ -45,6 +52,13 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
     return medianMs * Math.exp(sigma * z) + rows * perRowMs;
   };
   const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
+  const notFound = (id) => json({ code: 1254043, msg: `record not found,id = ${id}` });
+  const numberFail = () => json({ code: 1254061, msg: "NumberFieldConvFail" });
+  const badNumberIn = (table, fields) => (table.numberFields || []).some((name) => {
+    if (!fields || !(name in fields)) return false;
+    const v = fields[name];
+    return typeof v !== "number" && !(typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)));
+  });
 
   function matches(row, filter, schema, ci = false) {
     const conds = filter?.conditions || [];
@@ -94,11 +108,14 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
         await sleep(latency(0), init.signal);
         const wanted = body.records || [];
         const known = wanted.filter((r) => table.rows.some((row) => row.record_id === r.record_id));
-        if (known.length !== wanted.length && batchUpdateAtomic) return json({ code: 1254043, msg: "RecordIdNotFound" });
+        for (const r of wanted) {                                  // the first problem, in request order, rejects the whole call
+          if (!known.includes(r) && batchUpdateAtomic) return notFound(r.record_id);
+          if (badNumberIn(table, r.fields)) return numberFail();
+        }
         const updated = known.map((r) => {
           const row = table.rows.find((x) => x.record_id === r.record_id);
           row.fields = { ...row.fields, ...(r.fields || {}) };
-          return { record_id: row.record_id, fields: row.fields };
+          return { record_id: row.record_id, fields: r.fields || {} };   // real Lark: only the fields that were sent, in request order
         });
         return json({ code: 0, data: { records: updated } });
       }
@@ -106,7 +123,8 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
         await sleep(latency(0), init.signal);
         const id = decodeURIComponent(u.pathname.split("/").pop());
         const at = table.rows.findIndex((r) => r.record_id === id);
-        if (at < 0) return json({ code: 1254043, msg: "RecordIdNotFound" });
+        if (at < 0) return notFound(id);
+        if (kind === "update" && badNumberIn(table, body.fields)) return numberFail();
         if (kind === "get") return json({ code: 0, data: { record: { record_id: id, fields: table.rows[at].fields } } });
         if (kind === "delete") { table.rows.splice(at, 1); return json({ code: 0, data: { deleted: true, record_id: id } }); }
         table.rows[at].fields = { ...table.rows[at].fields, ...(body.fields || {}) };
