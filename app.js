@@ -2008,6 +2008,16 @@ const CASE_KEYS = [
 function ownsCaseRecord(s) {
   return !s.caOwner || s.caOwner === selectedAgent;
 }
+
+// Did THIS agent actually work the chat? A username auto-filled from an earlier recording of the same customer,
+// or a chat that was only watched (supervising), has none of these: no Look up, no typed username, no inquiry or
+// status, no earlier case. Such a chat is never auto-recorded, never stamped with the agent's name and never put
+// on their Needs Attention list. The manual Record button still works on it.
+function agentTouchedChat(s) {
+  if (!s) return false;
+  return !!(s.caRecordId || (s.inquiry && s.inquiry.length) || s.status || String(s.usernameDraft || "").trim()
+    || (s.logs && s.logs.length) || Object.values(s.claimedPrograms || {}).some(Boolean));
+}
 const addingCaseFor = new Set(); // chatIds with an add/edit in flight (not persisted, so it can never get stuck)
 
 // What actually gets written to Lark for a case -- used to tell whether a
@@ -4959,6 +4969,9 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
     return;
   }
 
+  // Not worked by this agent (see agentTouchedChat): nothing to record or chase, and nothing is stamped on it.
+  if (auto && !agentTouchedChat(s)) return;
+
   if (!selectedAgent) {
     if (auto) {
       s.autoRecordError = `${reasonText}, but no agent name is set — open Settings (⚙), then fill in and record manually.`;
@@ -5382,6 +5395,12 @@ async function sweepPendingChats() {
       // sweep tick while the agent has deliberately paused recording.
       // Resumes retrying normally as soon as the agent is back on the Retention tab.
       if (isLoggingPaused()) continue;
+      // A chat this agent never worked has nothing to retry (submitRecord would skip it anyway).
+      const idle = state[chatId] || saved;
+      if (!agentTouchedChat(idle)) {
+        if (idle.autoRecordError) idle.autoRecordError = ""; // flagged by an older version of this widget
+        continue;
+      }
       // Already known closed but never successfully recorded — the one-time
       // auto-record attempt that fired when checkChatStatus first detected
       // the close can still fail for reasons that have nothing to do with
@@ -5430,6 +5449,7 @@ function getIncompleteChats() {
   }
   return Object.entries(persisted)
     .filter(([, s]) => s && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError
+      && agentTouchedChat(s)
       && s.agentName === selectedAgent
       && (!currentLiveChatAccount || s.liveChatAccount === currentLiveChatAccount))
     .map(([chatId, s]) => ({

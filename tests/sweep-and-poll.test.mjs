@@ -61,7 +61,7 @@ function sweepHarness({ succeedOnAttempt = Infinity } = {}) {
     activeChats: [], state: st, isLoggingPaused: () => false, currentLiveChatAccount: 'lc1', selectedAgent: 'Agent A',
     document: { hidden: false },
     // storage mirrors what submitRecord's saveState() writes: a recorded chat is persisted as logged
-    loadPersistedState: () => ({ c1: { chatOpen: false, logged: !!st.c1?.logged, liveChatAccount: 'lc1', caOwner: 'Agent A', inquiry: [], status: '' } }),
+    loadPersistedState: () => ({ c1: { chatOpen: false, logged: !!st.c1?.logged, liveChatAccount: 'lc1', caOwner: 'Agent A', caRecordId: 'rec1', inquiry: [], status: '' } }),
     markStateSynced() {}, renderNeedsAttentionPanel() {}, checkChatStatus: async () => {},
     holdsSweepLease: () => true,
     submitRecord: async (chatId) => {
@@ -70,7 +70,7 @@ function sweepHarness({ succeedOnAttempt = Infinity } = {}) {
       else st[chatId].autoRecordError = 'Lark is throttling';
     },
   });
-  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('sweepPendingChats')].join('\n'), context);
+  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('agentTouchedChat'), fn('sweepPendingChats')].join('\n'), context);
   return { clock, st, submits, context, sweep: () => vm.runInContext('sweepPendingChats()', context) };
 }
 
@@ -93,6 +93,14 @@ test('editing the card (new signature) retries immediately instead of waiting ou
   h.st.c1.inquiry = ['Deposit']; h.st.c1.status = 'Solved';   // the agent fixes the missing fields
   await h.sweep();
   assert.equal(h.submits.length, before + 1, 'retried at once');
+});
+
+test('a chat the agent never worked is not retried, and a flag left by an older version is cleared', async () => {
+  const h = sweepHarness();
+  h.context.loadPersistedState = () => ({ c1: { chatOpen: false, logged: false, liveChatAccount: 'lc1', username: 'nizamawsb', inquiry: [], status: '', autoRecordError: 'missing: look up the username' } });
+  for (let tick = 0; tick < 5; tick++) { await h.sweep(); h.clock.now += 8000; }
+  assert.equal(h.submits.length, 0, 'never submitted');
+  assert.equal(h.st.c1.autoRecordError, '', 'old flag cleared');
 });
 
 test('a successful record clears the backoff and stops retrying', async () => {
