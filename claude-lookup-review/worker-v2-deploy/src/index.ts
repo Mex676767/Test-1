@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 
-// PROPOSAL (not deployed). Redesign of the shared Lark gate + search batcher.
+// The shared Lark gate + search batcher: the Durable Object of the Worker `rtn-lark-rate-queue`. DEPLOYED from
+// claude-lookup-review/worker-v2-deploy (`npx wrangler deploy`); this file is kept identical to worker-v2-deploy/src/index.ts
+// (the tests run against this copy).
 //
 //  1. One ordered gate (concurrency + start spacing + shared cooldown). Waiters
 //     are granted slots by a single scheduler, ordered by arrival time within a
@@ -126,8 +128,25 @@ const putFields = (body?: string): Record<string, unknown> | null => {
 };
 const earlier = (a?: number, b?: number): number | undefined => (a && b ? Math.min(a, b) : a || b);
 type PutJob = { input: SearchBatchInput; fields: Record<string, unknown>; waiters: Array<(r: SearchBatchResult) => void> };
-type MinuteRow = { t: number; starts: number; limited: number; waitP95: number; peakQueue: number; searchP95: number; updateP95: number; tokenStarts: number; isolates: number };
-type Minute = { t: number; starts: number; limited: number; peakQueue: number; waits: number[]; searchMs: number[]; updateMs: number[]; tokenStarts: number; isolates: Set<string> };
+type MinuteRow = { t: number; starts: number; limited: number; waitP95: number; peakQueue: number; searchP95: number; updateP95: number; tokenStarts: number; isolates: number;
+  totalStarts: number; limitedSearch: number; limitedWrite: number; limitedOther: number };
+type Minute = { t: number; starts: number; limited: number; peakQueue: number; waits: number[]; searchMs: number[]; updateMs: number[]; tokenStarts: number; isolates: Set<string>;
+  limitedSearch: number; limitedWrite: number; limitedOther: number };
+// What Lark answered when it throttled (nothing here may contain a token: only the code, status, label, table id and rate-limit headers).
+type Throttle = { label: string; httpStatus?: number; code?: unknown; retryAfter?: string | null; ratelimit?: Record<string, string>; table?: string; logId?: string };
+const THROTTLE_LABELS = new Set<string>([...CALL_TYPES, "token", "ticket"]);
+const WRITE_LABELS = new Set<string>(["create", "batchCreate", "update", "batchUpdate", "delete"]);
+const bump = (counts: Record<string, number>, key: string, max = 24): void => {
+  if (!(key in counts) && Object.keys(counts).length >= max) key = "other";
+  counts[key] = (counts[key] || 0) + 1;
+};
+const tableIdOf = (url: string): string => { try { return (new URL(url).pathname.match(/\/tables\/([A-Za-z0-9]{1,40})(?:\/|$)/) || [])[1] || ""; } catch { return ""; } };
+// Retry-After and every x-ogw-ratelimit-* header (Lark's gateway limits), as text, for the log line.
+const throttleHeaders = (headers: Headers): Record<string, string> => {
+  const out: Record<string, string> = {};
+  headers.forEach((value, name) => { const key = name.toLowerCase(); if ((key.startsWith("x-ogw-ratelimit") || key === "retry-after") && Object.keys(out).length < 12) out[key] = scrubSecrets(value).slice(0, 64); });
+  return out;
+};
 const p95Of = (values: number[]) => { const s = [...values].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * 0.95))] : 0; };
 const canonicalFields = (fields: Record<string, unknown>) => JSON.stringify(Object.entries(fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 const createdRecord = (result: SearchBatchResult): any | null => {
@@ -213,6 +232,7 @@ export class MyDurableObject extends DurableObject<Env> {
     upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0, createMemoryHits: 0, createSharedInflight: 0, writeRetries: 0,
     cacheHits: 0, cacheShared: 0, cacheStaleServed: 0, larkCalls: 0, writesSuperseded: 0, tokenLimited: 0,
     updateBatches: 0, updatedInBatches: 0, updateSplits: 0, updateMismatches: 0, updateRecordRejects: 0, updateWholeCallErrors: 0,
+    limitedByLabel: {} as Record<string, number>, limitedByCode: {} as Record<string, number>,   // every throttle Lark answered, main gate AND token lane
     noBatchTrips: 0, peakQueue: 0, truncatedFails: 0, heavyUsers: 0, peakStartsPerSec: 0,
     startsByClass: { token: 0, read: 0, write: 0 } as Record<Klass, number>,
     batchSizes: [] as number[], queueWaitMs: [] as number[],
@@ -239,6 +259,7 @@ export class MyDurableObject extends DurableObject<Env> {
       // ms. wait = permit requested -> granted; hold = granted -> released (for ticketed calls this is the caller's whole Lark call).
       permits: Object.fromEntries((["token", "read", "write"] as Klass[]).map((k) => [k, { wait: summary(this.m.waitMs[k]), hold: summary(this.m.holdMs[k]) }])),
       lark: Object.fromEntries(CALL_TYPES.map((t) => [t, summary(this.m.larkMs[t])])),
+      limitedByLabel: { ...this.s.limitedByLabel }, limitedByCode: { ...this.s.limitedByCode },
       labels: { ...this.labels }, cacheEntries: this.cache.size,
       tokenLane: { concurrency: this.tokenConcurrency, gapMs: this.tokenGapMs, active: this.tokenActive, queued: this.tokenQ.length },
       startedAt: new Date(this.startedAt).toISOString(), uptimeSec: Math.round((Date.now() - this.startedAt) / 1000),
@@ -263,13 +284,14 @@ export class MyDurableObject extends DurableObject<Env> {
     const t = Math.floor(Date.now() / MINUTE_MS);
     if (!this.cur || this.cur.t !== t) {
       this.closeMinute();
-      this.cur = { t, starts: 0, limited: 0, peakQueue: 0, waits: [], searchMs: [], updateMs: [], tokenStarts: 0, isolates: new Set() };
+      this.cur = { t, starts: 0, limited: 0, peakQueue: 0, waits: [], searchMs: [], updateMs: [], tokenStarts: 0, isolates: new Set(), limitedSearch: 0, limitedWrite: 0, limitedOther: 0 };
     }
     return this.cur;
   }
   private rowOf(m: Minute): MinuteRow {
     return { t: m.t, starts: m.starts, limited: m.limited, waitP95: p95Of(m.waits), peakQueue: m.peakQueue,
-      searchP95: p95Of(m.searchMs), updateP95: p95Of(m.updateMs), tokenStarts: m.tokenStarts, isolates: m.isolates.size };
+      searchP95: p95Of(m.searchMs), updateP95: p95Of(m.updateMs), tokenStarts: m.tokenStarts, isolates: m.isolates.size,
+      totalStarts: m.starts + m.tokenStarts, limitedSearch: m.limitedSearch, limitedWrite: m.limitedWrite, limitedOther: m.limitedOther };
   }
   private closeMinute(): void {
     if (!this.cur) return;
@@ -295,7 +317,12 @@ export class MyDurableObject extends DurableObject<Env> {
     return { minutes: rows.map((r) => r.t), starts: rows.map((r) => r.starts), limited: rows.map((r) => r.limited),
       waitP95: rows.map((r) => r.waitP95), peakQueue: rows.map((r) => r.peakQueue),
       searchP95: rows.map((r) => r.searchP95), updateP95: rows.map((r) => r.updateP95),
-      tokenStarts: rows.map((r) => r.tokenStarts), isolates: rows.map((r) => r.isolates) };
+      tokenStarts: rows.map((r) => r.tokenStarts), isolates: rows.map((r) => r.isolates),
+      // totalStarts = gate starts + token-lane starts = every request this object let out to Lark that minute (the real Lark rate).
+      // limitedSearch / limitedWrite / limitedOther = throttles by kind of call (other: get, list, fields, token, ticketed calls); they
+      // include token-lane throttles, which the plain `limited` column (main gate only) does not.
+      totalStarts: rows.map((r) => r.totalStarts), limitedSearch: rows.map((r) => r.limitedSearch),
+      limitedWrite: rows.map((r) => r.limitedWrite), limitedOther: rows.map((r) => r.limitedOther) };
   }
   private countLabel(label: unknown): void {
     const name = typeof label === "string" && /^[a-z0-9-]{1,24}$/.test(label) ? label : "other";
@@ -370,11 +397,28 @@ export class MyDurableObject extends DurableObject<Env> {
     }
   }
 
-  private releaseSlot(limited: boolean, retryAfterMs = 0, grant: Grant | null = null): void {
+  // Every throttle Lark answers is counted by call label and by code, and logged with what Lark said (never a token).
+  private noteThrottle(info: Throttle): void {
+    const label = THROTTLE_LABELS.has(info.label) ? info.label : "other";
+    bump(this.s.limitedByLabel, label);
+    const code = info.code !== undefined && info.code !== null && info.code !== "" ? String(info.code) : info.httpStatus ? `http${info.httpStatus}` : "unknown";
+    bump(this.s.limitedByCode, /^[A-Za-z0-9]{1,12}$/.test(code) ? code : "other", 16);
+    const mm = this.minuteNow();
+    if (label === "search") mm.limitedSearch++; else if (WRITE_LABELS.has(label)) mm.limitedWrite++; else mm.limitedOther++;
+    console.warn("Lark rate limit", scrubSecrets(JSON.stringify({ label, httpStatus: info.httpStatus, code: info.code, retryAfter: info.retryAfter ?? null,
+      ratelimit: info.ratelimit && Object.keys(info.ratelimit).length ? info.ratelimit : undefined, table: info.table || undefined, logId: info.logId || undefined,
+      gapMs: this.gapMs, baseGapMs: this.baseGapMs, active: this.active, queued: this.waitq.length, startsLastSecond: this.recentStarts.length, tokenActive: this.tokenActive })));
+  }
+
+  private releaseSlot(limited: boolean, retryAfterMs = 0, grant: Grant | null = null, info?: Throttle): void {
     if (grant) this.sample(this.m.holdMs[grant.klass], Date.now() - grant.at);
     if (grant?.klass === "token") {                              // token lane: its own counters and cooldown, the main gate is untouched
       this.tokenActive = Math.max(0, this.tokenActive - 1);
-      if (limited) { this.s.tokenLimited++; this.tokenCooldownUntil = Math.max(this.tokenCooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs))); }
+      if (limited) {
+        this.s.tokenLimited++;
+        this.tokenCooldownUntil = Math.max(this.tokenCooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs)));
+        this.noteThrottle(info ?? { label: "token", retryAfter: retryAfterMs ? String(retryAfterMs / 1000) : null });
+      }
       this.pumpToken();
       return;
     }
@@ -385,6 +429,7 @@ export class MyDurableObject extends DurableObject<Env> {
       this.okStreak = 0;
       this.gapMs = Math.min(500, this.gapMs * 2);
       this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs)));
+      this.noteThrottle(info ?? { label: "ticket", retryAfter: retryAfterMs ? String(retryAfterMs / 1000) : null });   // gapMs in the log is the NEW (doubled) gap
     } else if (++this.okStreak >= 20) {
       this.okStreak = 0;
       this.gapMs = Math.max(this.baseGapMs, Math.floor(this.gapMs * 0.8));
@@ -406,10 +451,11 @@ export class MyDurableObject extends DurableObject<Env> {
       let parsed: any = null;
       try { parsed = JSON.parse(body); } catch { /* HTTP status only */ }
       const limited = isRateLimited(response.status, parsed);
-      if (limited) console.warn("Lark rate limit", JSON.stringify({ httpStatus: response.status, code: parsed?.code, retryAfter: response.headers.get("Retry-After"), gapMs: this.gapMs }));
       this.sample(this.m.larkMs[type], Date.now() - startedAt);
       this.sampleMinute(type, Date.now() - startedAt);
-      this.releaseSlot(limited, Number(response.headers.get("Retry-After")) * 1000 || 0, grant);
+      this.releaseSlot(limited, Number(response.headers.get("Retry-After")) * 1000 || 0, grant, limited ? {
+        label: type, httpStatus: response.status, code: parsed?.code, retryAfter: response.headers.get("Retry-After"),
+        ratelimit: throttleHeaders(response.headers), table: tableIdOf(input.url), logId: response.headers.get("x-tt-logid") || undefined } : undefined);
       const result: SearchBatchResult = { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()], body };
       if (response.status >= 500) upstreamFailures.add(result);
       return { limited, result };

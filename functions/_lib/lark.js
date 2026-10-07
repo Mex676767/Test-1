@@ -97,6 +97,39 @@ export function noteCounter(name, n = 1) {
   const key = counterName(name);
   if (pendingCounters.size < 200 || pendingCounters.has(key)) pendingCounters.set(key, (pendingCounters.get(key) || 0) + n);
 }
+// ---- the Durable Object restarts under us (a deploy, an eviction, a lost connection) -----------------------------------------
+// While the queue's code is being updated, calls to it fail with errors like "Durable Object reset because its code was updated" or
+// "Network connection lost". The object is back within a moment, so such a call is repeated ONCE after 300-500 ms -- but only calls that
+// are safe to repeat: permits, searches (reads), record updates (idempotent: the same values written again), batch updates and shared
+// cached reads. NOT repeated: createBatch (the queue's client_token and create memory are lost with the reset, so a create that was
+// already committed could be made twice; the lookup's existing duplicate check on the chat link handles a failed create), DELETE, and
+// our own timeouts (those are raised outside this function, never here). Every repeat is counted as doRetry:<reason>; every call that
+// still fails is counted as doFailed:<method> (it used to be invisible: only a missing method was counted).
+const DO_RESET_REASONS = [
+  ["codeUpdated", /code (?:was|has been) updated/i],
+  ["connectionLost", /network connection lost|connection lost|disconnected/i],
+  ["reset", /durable object.{0,40}reset|\bwas reset\b|reset because/i],
+];
+const DO_RETRY_METHODS = new Set(["acquire", "searchBatch", "larkCall", "updateBatch", "cachedCall"]);
+export function doResetReason(error) {
+  if (error?.overloaded) return "";                       // Cloudflare says: do not retry an overloaded object
+  const text = String(error?.message || error);
+  for (const [name, pattern] of DO_RESET_REASONS) if (pattern.test(text)) return name;
+  return error?.retryable === true && error?.remote === true ? "retryable" : "";
+}
+const DO_RETRY_DELAY_MS = [300, 500];
+async function doRpc(stub, method, ...args) {
+  const attempt = () => Promise.resolve().then(() => stub[method](...args));
+  const failed = (error) => { if (!NO_QUEUE_METHOD.test(String(error?.message || error))) noteCounter(`doFailed:${method}`); };
+  try { return await attempt(); }
+  catch (error) {
+    const reason = DO_RETRY_METHODS.has(method) && !(method === "larkCall" && String(args[0]?.method || "").toUpperCase() === "DELETE") ? doResetReason(error) : "";
+    if (!reason) { failed(error); throw error; }
+    noteCounter(`doRetry:${reason}`);
+    await new Promise((resolve) => setTimeout(resolve, DO_RETRY_DELAY_MS[0] + Math.floor(Math.random() * (DO_RETRY_DELAY_MS[1] - DO_RETRY_DELAY_MS[0]))));
+    try { return await attempt(); } catch (second) { failed(second); throw second; }
+  }
+}
 // A random id for this isolate (this module instance). It is sent with the reports so the queue can count how many different isolates
 // are alive each minute; it identifies nothing else. Created on first use: Cloudflare forbids generating random values in global scope.
 let isolateId = "";
@@ -163,7 +196,7 @@ function labelFor(url, method = "GET") {
 function callQueueAcquire(stub, signal, kind, waiterId, label) {
   const rpcTimeoutMs = LARK_QUEUE_LONGPOLL ? LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS : LARK_QUEUE_RPC_TIMEOUT_MS;
   // The bare acquire() call is the legacy protocol every deployed Durable Object understands.
-  const pending = Promise.resolve().then(() => (LARK_QUEUE_LONGPOLL ? stub.acquire(kind, waiterId, startForQueue(), label) : stub.acquire()));
+  const pending = Promise.resolve().then(() => (LARK_QUEUE_LONGPOLL ? doRpc(stub, "acquire", kind, waiterId, startForQueue(), label) : doRpc(stub, "acquire")));
   let abandoned = false;
   // If the RPC eventually grants a permit after the local request has timed
   // out, return that lease so a slow coordinator cannot strand capacity.
@@ -272,7 +305,7 @@ async function larkFetch(url, init = {}) {
           batchBody = JSON.stringify(payload);
         }
       } catch (_) { /* Keep malformed payload handling with the normal API path. */ }
-      const pending = stub.searchBatch({
+      const pending = doRpc(stub, "searchBatch", {
         url: String(url),
         method: fetchInit.method || "GET",
         headers,
@@ -290,6 +323,7 @@ async function larkFetch(url, init = {}) {
       // During a staggered deployment or if the batch RPC is unavailable,
       // fall through to the already-tested one-request permit path.
       larkClientStats.batchFallbacks++;
+      noteCounter("batchFallback");                       // was only in larkClientStats: invisible in /queue-stats
     }
   }
   const permitKind = String(url).includes("tenant_access_token") ? "token"
@@ -350,7 +384,7 @@ async function queueCall(method, input, waitMs) {
   const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
   let timer;
   try {
-    const pending = Promise.resolve().then(() => stub[method](input));
+    const pending = doRpc(stub, method, input);
     pending.catch(() => {});                              // a late answer after we stopped waiting must not become an unhandled rejection
     const result = await Promise.race([
       pending,
@@ -852,7 +886,7 @@ async function createRecordWith(token, tableId, fields, baseToken) {
   if (LARK_BATCH_CREATE && LARK_SEARCH_QUEUE && tableId === TABLE_CUSTOMER_APPROACHING) {
     const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
     try {
-      const result = await stub.createBatch({
+      const result = await doRpc(stub, "createBatch", {
         url: createUrl, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ fields }), expiresAt: Date.now() + LARK_SEARCH_CALLER_DEADLINE_MS,
         requestStartedAt: startForQueue(), label: "create",
