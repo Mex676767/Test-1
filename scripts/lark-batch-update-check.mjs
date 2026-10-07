@@ -17,8 +17,13 @@
 //
 //   node scripts/lark-batch-update-check.mjs --i-understand-this-writes-to-a-test-table [--cleanup]
 //
+//   e) the same create sent twice with the same client_token (single create, then batch_create)
+//                                                     -> one row or two? is the second reply identical, or an error? (settles whether
+//                                                        the queue's "retry a timed-out create with the SAME client_token" is safe)
+//
 // --cleanup deletes the rows this script created (only those) at the end.
 import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 
 const API = "https://open.larksuite.com/open-apis";
 const GHOST_ID = "recDOESNOTEXIST000";
@@ -108,14 +113,41 @@ export async function runBatchUpdateCheck({ env = process.env, argv = process.ar
   await experiment("(d) the same record_id twice", "error, or does one value win? which one?",
     [{ record_id: ids.F, fields: { [textField]: "d-first" } }, { record_id: ids.F, fields: { [textField]: "d-second" } }], ["F"]);
 
+  // (e) client_token replay. The text value carries a marker unique to this run, so the rows are found again by the marker alone.
+  const marker = `e-${Date.now().toString(36)}`;
+  const idsIn = (reply) => [reply.json?.data?.record?.record_id, ...(reply.json?.data?.records || []).map((r) => r.record_id)].filter(Boolean);
+  const countMarked = async (label) => {
+    const list = await call("GET", "/records?page_size=500");
+    const marked = (list.json?.data?.items || []).filter((r) => r.fields?.[textField] === marker);
+    say(`   rows carrying the marker after ${label}: ${marked.length}  ${JSON.stringify(marked.map((r) => r.record_id))}${list.json?.data?.has_more ? "  (table has more than 500 rows: count may be incomplete)" : ""}`);
+    return marked.map((r) => r.record_id);
+  };
+  const replay = async (title, path, body) => {
+    say(`\n=== ${title}`);
+    say("question: same request twice with the same client_token: how many rows exist afterwards, and is the 2nd reply identical, a copy of the 1st, or an error?");
+    say(`request: POST ${path}   body: ${JSON.stringify(body)}`);
+    const first = await call("POST", path, body);
+    say(`1st reply: HTTP ${first.status}${first.logId ? `   x-tt-logid ${first.logId}` : ""}\n   RAW: ${first.text}`);
+    const second = await call("POST", path, body);
+    say(`2nd reply: HTTP ${second.status}${second.logId ? `   x-tt-logid ${second.logId}` : ""}\n   RAW: ${second.text}`);
+    say(`   same record id(s) in both replies: ${JSON.stringify(idsIn(first)) === JSON.stringify(idsIn(second)) && idsIn(first).length > 0}`);
+    return countMarked(title);
+  };
+  const extra = new Set();
+  const token1 = randomUUID(), token2 = randomUUID();
+  (await replay("(e1) single create sent twice with the same client_token", `/records?client_token=${token1}`, { fields: { [textField]: marker, [numberField]: 1 } })).forEach((id) => extra.add(id));
+  (await replay("(e2) batch_create sent twice with the same client_token", `/records/batch_create?client_token=${token2}`, { records: [{ fields: { [textField]: marker, [numberField]: 2 } }] })).forEach((id) => extra.add(id));
+  say(`\n(e) total rows left carrying the marker: ${extra.size}   (1 + 1 = 2 would mean each repeated create was recognised as the same request)`);
+
   if (argv.includes("--cleanup")) {
     say("\n=== cleanup: deleting the rows this script created");
     for (const [key, id] of Object.entries(ids)) { const del = await call("DELETE", `/records/${id}`); say(`   deleted ${key} (${id}): HTTP ${del.status}`); }
+    for (const id of extra) { const del = await call("DELETE", `/records/${id}`); say(`   deleted client_token row (${id}): HTTP ${del.status}`); }
   } else {
     say("\nThe rows above were left in the test table (run again with --cleanup to delete them).");
   }
   say("\nDone. Paste everything above (it contains no token).");
-  return { ok: true, ids };
+  return { ok: true, ids, clientTokenRows: [...extra] };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

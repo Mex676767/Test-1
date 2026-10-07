@@ -22,3 +22,5 @@ jobs:
         run: node --test functions/*.test.js tests/*.test.mjs
       - name: Queue (Durable Object) tests
         run: node --no-warnings --test claude-lookup-review/proposal/worker-v2/gate.test.mjs
+      - name: Real Workers runtime smoke test (the Functions must load in workerd, as Cloudflare Pages loads them)
+        run: node scripts/runtime-smoke.mjs

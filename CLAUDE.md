@@ -18,10 +18,10 @@ Chat logging to Lark is automatic only while the agent is on the **Retention** t
 - **Data:** Lark Bitable. **Auth:** none on the API yet (decision pending; do not add it unasked).
 
 ## Rules to follow
-- **Tests:** `node --test functions/*.test.js tests/*.test.mjs` and `node --no-warnings --test claude-lookup-review/proposal/worker-v2/gate.test.mjs`. Both must pass before merging; CI runs them. Tests use **fakes only** — never call live Lark, LiveChat or ticket APIs from tests.
+- **Tests:** `node --test functions/*.test.js tests/*.test.mjs` and `node --no-warnings --test claude-lookup-review/proposal/worker-v2/gate.test.mjs`. Both must pass before merging; CI runs them, plus `node scripts/runtime-smoke.mjs` (loads the Functions in the real Workers runtime, which catches what Node accepts and Cloudflare rejects, such as random values or timers at module load). Tests use **fakes only** — never call live Lark, LiveChat or ticket APIs from tests.
 - **Keep the two Durable Object copies identical** (`diff -q` the two `index.ts`).
 - **Client cache:** JS/CSS are served `no-cache, must-revalidate`, but still bump the `?v=` on any changed client file in `index.html` / `blast/index.html`.
-- **Branches:** work on a separate branch; merge to `main` only when the user says so. Merging deploys Pages automatically. The user deploys the Durable Object themselves (`npx wrangler deploy` from `claude-lookup-review/worker-v2-deploy`; Windows PowerShell has no `&&`, give two separate commands).
+- **Branches:** work on a separate branch; merge to `main` only when the user says so, **hotfixes included** (a broken deploy is not a reason to skip the OK; branch, test, tell the user, wait). Merging deploys Pages automatically. The user deploys the Durable Object themselves (`npx wrangler deploy` from `claude-lookup-review/worker-v2-deploy`; Windows PowerShell has no `&&`, give two separate commands).
 - **Pace settings** (`GATE_CONCURRENCY`, `GATE_START_GAP_MS`) live in `claude-lookup-review/worker-v2-deploy/wrangler.jsonc`; change the file and deploy. No secrets in that file.
 - **Never** commit secrets, `.env` files or stats keys; do not print credential values.
 - **Production tests** (bursts against the live site) create real rows in Lark with `zz…` usernames; the user deletes them. Do not delete production data yourself. Keep bursts ≤ about 70 requests.
