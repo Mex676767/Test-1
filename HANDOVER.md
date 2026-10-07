@@ -78,7 +78,8 @@ Load test: `node scripts/stress-lookup.mjs --base <staging url> --agents 100 [--
 - Ownership rule: a submit is allowed from the merged search ONLY when the search shows this agent as the row's owner; a blank owner, another owner, a missing row, a failed search or an old widget (no username) are decided by the single-record GET (counted by reason).
 - Batch updates (`LARK_BATCH_UPDATE=1` on Pages, OFF by default; needs `LARK_QUEUE_PROTOCOL=v2` and a queue with `updateBatch`): submits' updates share Lark's `batch_update`. What Lark documents and what it does not: `claude-lookup-review/LARK_BATCH_UPDATE_NOTES.md`. Watch `updateBatches`, `updatedInBatches`, `updateSplits`, `updateMismatches`, `lark.batchUpdate`. Off = single PUTs run inside the queue.
 - Requires the Pages `nodejs_compat` compatibility flag (already set on production): request start times use `AsyncLocalStorage`.
-- Worker variables (rtn-lark-rate-queue): `GATE_WRITE_TIMEOUT_MS` (default 15000, creates/writes), `CREATE_MEMORY_MS` (default 120000; identical creates with a chat link share one row; 0 = off).
+- Worker variables (rtn-lark-rate-queue): `GATE_WRITE_TIMEOUT_MS` (default 15000, creates/writes), `CREATE_MEMORY_MS` (default 120000; identical creates with a chat link share one row; 0 = off), `TOKEN_CONCURRENCY` (default 4) and `TOKEN_GAP_MS` (default 50): the token lane, see section 10. The gate and token variables are set from `wrangler.jsonc`.
+- Per-minute columns added: `searchP95`, `updateP95` (ms, upstream Lark latency), `tokenStarts` (token-lane starts; NOT counted in `starts`) and `isolates` (distinct Pages isolates that reported that minute; each isolate sends a random id with its counter reports and at most one idle heartbeat per 5 s). `getStats()` also has `tokenLane` (concurrency, gapMs, active, queued) and `tokenLimited`.
 
 ## 6. Raising the gate pace (only with evidence)
 
@@ -107,3 +108,25 @@ Lark does not document the order or atomicity of `batch_create`, so the Durable 
 - `functions/_lib/lark.js` — Lark client, paging, rate-limit handling, queue calls.
 - `functions/_middleware.js`, `_routes.json`, `_headers` — hiding, routing, caching.
 - `functions/widget-version.js` — release id used by the update notice. `functions/queue-stats.js` — queue metrics.
+
+## 10. Lark access tokens: the token lane and invalid-token handling
+
+**Token lane.** Fetching Lark's tenant token (one per Pages isolate, cached for ~2 h) goes through the queue as a `token` permit. Token permits have their OWN limiter in the Durable Object (`TOKEN_CONCURRENCY` 4 at a time, `TOKEN_GAP_MS` 50 ms apart) and take no slot, start gap or priority from the read/write gate. A wave of cold isolates after a deploy therefore cannot delay lookups or submits; it only delays the isolates that are waiting for their own token (about 2.5 s for 30 isolates in the simulator). Watch `tokenLane`, `permits.token` and `perMinute.tokenStarts` / `isolates` in `/queue-stats`.
+
+**Invalid-token handling.** Lark's generic error codes for access tokens (table at https://open.feishu.cn/document/server-docs/api-call-guide/generic-error-code , same page in the Lark docs: https://open.larksuite.com/document/server-docs/api-call-guide/generic-error-code ; how to fix 99991663: https://open.feishu.cn/document/faq/trouble-shooting/how-to-fix-99991663-error). What the code does with each:
+
+| Code | Lark's message | Meaning | What the app does |
+|---|---|---|---|
+| **99991663** | Invalid access token for authorization | the tenant_access_token expired or is wrong | **drops the cached token, fetches a new one, retries the call ONCE** (counted `tokenRefreshRetry`); a second invalid reply is returned as the error, no loop |
+| 99991661 | Need a token | no Authorization header | a bug in the request: **no retry**, counted `authBug:99991661` |
+| 99991664 | invalid app token | malformed app_access_token | bug: no retry, counted `authBug:99991664` |
+| 99991665 | invalid tenant code | malformed tenant_access_token | bug: no retry, counted `authBug:99991665` |
+| 99991671 | Invalid token: must start with t-/u- | token format wrong | bug: no retry, counted `authBug:99991671` |
+| 99991668, 99991677, 99991679 | user_access_token problems | not used by this app | not handled |
+| 99991672 / 99991673 | missing scope / unauthorized app | app configuration | not retried |
+
+Who retries: Pages retries its own calls; for calls the queue runs (record get/update/delete, shared reads) the queue returns Lark's error and Pages repeats the whole call with the new token. The token / Authorization value never appears in stats, labels, logs or error text (`scrubSecrets` removes anything shaped like one). The doc page for 99991663 does not state the token's lifetime; the app uses the `expire` value Lark returns with the token.
+
+## 11. Checking how Lark's batch_update really behaves (one-off, by hand)
+
+`scripts/lark-batch-update-check.mjs` runs four experiments (valid batch; one non-existent record_id; one invalid field value; the same record_id twice) against a DEDICATED TEST TABLE (never an application table: it refuses a table id equal to any `LARK_TABLE_*` variable), reads every row back and prints Lark's raw replies without the token. Needs `LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_BASE_APP_TOKEN`, `BATCH_TEST_TABLE_ID` (and optionally `BATCH_TEST_TEXT_FIELD` / `BATCH_TEST_NUMBER_FIELD`, default "Text" / "Number"), and the flag `--i-understand-this-writes-to-a-test-table`; `--cleanup` deletes the rows it created. `LARK_BATCH_UPDATE` stays off until its output has been reviewed (see `claude-lookup-review/LARK_BATCH_UPDATE_NOTES.md`).

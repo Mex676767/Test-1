@@ -1135,7 +1135,7 @@ test("3c: per-minute history: starts, 429s, queue-wait p95 and peak queue per mi
     offset += 3 * 60_000;
     const last = await d.acquire("read", "c0"); await d.release(last.ticket);
     const pm = d.getStats().perMinute;
-    assert.deepEqual(Object.keys(pm).sort(), ["limited", "minutes", "peakQueue", "starts", "waitP95"]);
+    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "updateP95", "waitP95"]);
     assert.equal(pm.minutes.length, pm.starts.length);
     const at = (m) => pm.minutes.indexOf(m);
     assert.equal(pm.starts[at(minute0)], 6);
@@ -1346,5 +1346,162 @@ test("4: end to end with the flag on: refused (409) rows never enter a batch; th
     assert.ok(lark.stats.batchUpdate <= 3, `batch_update calls: ${lark.stats.batchUpdate}`);
     assert.equal(lark.stats.update || 0, 0);
     rows.forEach((row, i) => { if (i % 10 !== 7) assert.equal(row.fields.Status, "Solved"); });
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Token lane: tenant-token permits do not use the read/write gate
+// ======================================================================================
+const holdFor = async (d, kind, id, ms = 10) => { const p = await d.acquire(kind, id); await new Promise((r) => setTimeout(r, ms)); await d.release(p.ticket); return Date.now(); };
+
+test("TOKEN: a token permit is granted at once even while the read/write gate is completely busy, and it takes nothing from it", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, conc: 1, gap: 300, env: { TOKEN_GAP_MS: 5 } });
+  try {
+    const hold = await d.acquire("read", "hold");                                   // the only read/write slot is taken
+    const queuedRead = d.acquire("read", "r1");                                     // and a read is waiting
+    const queuedWrite = d.acquire("write", "w1");
+    const startedAt = Date.now();
+    const token = await d.acquire("token", "t1");
+    assert.ok(token.ticket, "token granted");
+    assert.ok(Date.now() - startedAt < 100, `token waited ${Date.now() - startedAt} ms behind a saturated gate`);
+    const before = d.getStats();
+    assert.equal(before.active, 1, "the main gate still has exactly its one held slot");
+    assert.equal(before.queued, 2, "and its two queued waiters are untouched");
+    await d.release(token.ticket);
+    const after = d.getStats();
+    assert.equal(after.active, 1);
+    assert.equal(after.peakStartsPerSec <= 1, true, "token starts are not counted as read/write starts");
+    assert.equal(after.perMinute.starts.at(-1), 1, "per-minute main starts exclude the token start");
+    assert.equal(after.perMinute.tokenStarts.at(-1), 1, "per-minute token-lane starts count it");
+    await d.release(hold.ticket);
+    for (const p of await Promise.all([queuedRead, queuedWrite])) if (p.ticket) await d.release(p.ticket).catch(() => {});
+  } finally { done(); }
+});
+
+test("TOKEN: 30 cold-isolate token fetches during a burst add at most 1 s to the reads' completion (they used to add ~7 s)", async () => {
+  const run = async (withTokens) => {
+    const { d, done } = await setup({ tables: { t1: mkTable(1) }, conc: 2, gap: 40 });
+    try {
+      const startedAt = Date.now();
+      const reads = Array.from({ length: 24 }, (_, i) => holdFor(d, "read", `r${i}`));
+      const tokens = withTokens ? Array.from({ length: 30 }, (_, i) => holdFor(d, "token", `t${i}`)) : [];
+      const readDone = Math.max(...await Promise.all(reads));
+      await Promise.all(tokens);
+      return { readsMs: readDone - startedAt, stats: d.getStats() };
+    } finally { done(); }
+  };
+  const baseline = await run(false);
+  const mixed = await run(true);
+  assert.ok(mixed.readsMs - baseline.readsMs <= 1_000, `reads took ${mixed.readsMs} ms with 30 token fetches vs ${baseline.readsMs} ms without`);
+  assert.equal(mixed.stats.startsByClass.token, 30);
+  assert.equal(mixed.stats.startsByClass.read, 24);
+  assert.equal(mixed.stats.active + mixed.stats.tokenLane.active, 0, "everything released");
+});
+
+test("TOKEN: the lane has its own limit (concurrency and spacing), configurable with TOKEN_CONCURRENCY / TOKEN_GAP_MS", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 5, env: { TOKEN_CONCURRENCY: 2, TOKEN_GAP_MS: 60 } });
+  try {
+    assert.deepEqual([d.getStats().tokenLane.concurrency, d.getStats().tokenLane.gapMs], [2, 60]);
+    const granted = [];
+    const held = [];
+    for (let i = 0; i < 5; i++) d.acquire("token", `t${i}`).then((p) => { granted.push(Date.now()); held.push(p); });
+    await new Promise((r) => setTimeout(r, 220));
+    assert.equal(granted.length, 2, "only 2 at a time while they are held");
+    assert.ok(granted[1] - granted[0] >= 50, `starts are spaced (${granted[1] - granted[0]} ms)`);
+    assert.equal(d.getStats().tokenLane.queued, 3);
+    for (const p of held.splice(0)) await d.release(p.ticket);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(granted.length, 4);
+    for (const p of held.splice(0)) await d.release(p.ticket);
+    await new Promise((r) => setTimeout(r, 120));
+    for (const p of held.splice(0)) await d.release(p.ticket);
+    assert.equal(granted.length, 5);
+    assert.equal(d.getStats().tokenLane.active, 0);
+    const defaults = await setup({ tables: { t1: mkTable(1) } });
+    try { assert.deepEqual([defaults.d.getStats().tokenLane.concurrency, defaults.d.getStats().tokenLane.gapMs], [4, 50]); } finally { defaults.done(); }
+  } finally { done(); }
+});
+
+test("TOKEN: a rate-limited token reply cools the token lane only; the main gate's 429 counters and gap are untouched", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 20 });
+  try {
+    const p = await d.acquire("token", "t1");
+    await d.release(p.ticket, true, 10);
+    const stats = d.getStats();
+    assert.equal(stats.limited, 0);
+    assert.equal(stats.tokenLimited, 1);
+    assert.equal(stats.gapMs, 20, "the main gate did not slow down");
+    const started = Date.now();
+    const next = await d.acquire("token", "t2");                                  // waits out the token lane's own cooldown (>= 1 s)
+    assert.ok(next.ticket);
+    assert.ok(Date.now() - started >= 900, "token lane cooled down");
+    await d.release(next.ticket);
+    const read = await d.acquire("read", "r1");                                   // reads never waited for it
+    assert.ok(read.ticket);
+    await d.release(read.ticket);
+  } finally { done(); }
+});
+
+test("TOKEN: an abandoned token waiter does not hold the lane (cancelled entries are skipped), and a lost ticket is reclaimed by the lease", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, env: { TOKEN_CONCURRENCY: 1, TOKEN_GAP_MS: 5 } });
+  try {
+    const first = await d.acquire("token", "a");
+    const abandoned = d.acquire("token", "b", undefined, undefined);              // queued, then the caller never comes back for it
+    await d.release(first.ticket);
+    const p = await abandoned;
+    assert.ok(p.ticket);
+    await d.release(p.ticket);
+    assert.equal(d.getStats().tokenLane.active, 0);
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Per-minute: search / update p95, token-lane starts, distinct isolate ids
+// ======================================================================================
+test("MINUTE: search p95, update p95, token-lane starts and distinct Pages isolates are recorded per minute", async () => {
+  const tables = { t1: mkTable(3), ca: caTableWith(caRow("r1"), caRow("r2")) };
+  const { d, done } = await setup({ tables, gap: 5, median: 30 });
+  try {
+    await d.searchBatch(req("t1", "u1"));
+    await d.larkCall(call("PUT", "r1", {}, { fields: { Status: "Solved" } }));
+    await d.updateBatch(putCall("r2", { Status: "Solved" }, { requestStartedAt: Date.now() }));
+    const t = await d.acquire("token", "t1"); await d.release(t.ticket);
+    await d.reportCounters({}, "isolate-aaaa-1111");
+    await d.reportCounters({ x: 1 }, "isolate-aaaa-1111");                          // same isolate again: counted once
+    await d.reportCounters({}, "isolate-bbbb-2222");
+    await d.reportCounters({}, "bad id with spaces");                               // ignored
+    await d.reportCounters({}, 12345);                                              // ignored
+    const pm = d.getStats().perMinute;
+    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "updateP95", "waitP95"]);
+    const last = pm.minutes.length - 1;
+    assert.ok(pm.searchP95[last] >= 25, `search p95 ${pm.searchP95[last]}`);
+    assert.ok(pm.updateP95[last] >= 25, `update p95 ${pm.updateP95[last]}`);
+    assert.equal(pm.tokenStarts[last], 1);
+    assert.equal(pm.isolates[last], 2);
+    assert.equal(new Set(Object.values(pm).map((a) => a.length)).size, 1, "all columns line up");
+    assert.equal(JSON.stringify(d.getStats()).includes("isolate-aaaa"), false, "isolate ids are only counted, never listed");
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Secrets never leave the queue in text
+// ======================================================================================
+test("SECRETS: a token-shaped string in an upstream error is scrubbed from the reply, and nothing token-like is in the stats", async () => {
+  const secret = "t-SECRETSECRETSECRETSECRET0123";
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 5 });
+  try {
+    const real = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      if (init.method === "GET") throw new Error(`connect failed for Authorization: Bearer ${secret} (${secret})`);
+      return real(url, init);
+    };
+    const reply = await d.larkCall({ ...call("GET", "r1"), headers: { authorization: `Bearer ${secret}` } });
+    assert.equal(reply.status, 504);
+    assert.doesNotMatch(reply.body, /SECRETSECRET/);
+    assert.match(reply.body, /\[token\]/);
+    const stats = JSON.stringify(d.getStats());
+    assert.doesNotMatch(stats, /SECRETSECRET|Bearer/);
+    await d.acquire("token", "x", Date.now(), `t-${secret}`).then((p) => d.release(p.ticket));
+    assert.doesNotMatch(JSON.stringify(d.getStats().labels), /SECRETSECRET/, "an odd label is grouped as 'other'");
   } finally { done(); }
 });
