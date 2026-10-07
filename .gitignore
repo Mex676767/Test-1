@@ -1,3 +1,6 @@
 .dev.vars*
 .wrangler/
 .claude/settings.local.json
+
+# simulator scratch output
+claude-lookup-review/proposal/sim/.build/
