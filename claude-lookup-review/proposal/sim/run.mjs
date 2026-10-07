@@ -146,10 +146,10 @@ const rpc = (fn) => async (...a) => { await new Promise((r) => setTimeout(r, RPC
 if (DO_V !== "none") {
   const DO = await loadDO(DO_V);
   doInstance = new DO(fakeCtx(), { GATE_START_GAP_MS: args.gap ? Number(args.gap) : undefined, GATE_CONCURRENCY: args.conc ? Number(args.conc) : undefined, GATE_LONGPOLL_MS: args.longpoll ? Number(args.longpoll) : undefined });
-  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "forgetCreated", "larkCall", "cachedCall"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
+  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "forgetCreated", "larkCall", "cachedCall", "updateBatch", "reportCounters"].map((m) => [m, rpc((...a) => doInstance[m](...a))]));
   queue = { idFromName: () => "g", get: () => stub };
 }
-initEnv({ ...tableEnv, LARK_SEARCH_QUEUE: queue, ...(PAGES === "v2" ? { LARK_QUEUE_PROTOCOL: "v2" } : {}), ...(args.batchcreate === "1" ? { LARK_BATCH_CREATE: "1" } : {}) });
+initEnv({ ...tableEnv, LARK_SEARCH_QUEUE: queue, ...(PAGES === "v2" ? { LARK_QUEUE_PROTOCOL: "v2" } : {}), ...(args.batchcreate === "1" ? { LARK_BATCH_CREATE: "1" } : {}), ...(args.batchupdate === "1" ? { LARK_BATCH_UPDATE: "1" } : {}) });
 
 if (MODE === "submit") {
   const { handler: recordHandler } = await import(pathToFileURL(path.join(pagesDir, "lark-record.js")).href);
@@ -185,12 +185,13 @@ if (MODE === "submit") {
   const statuses = {}; outcomes.forEach((o) => { statuses[o.status] = (statuses[o.status] || 0) + 1; });
   const dstats = doInstance?.getStats?.();
   console.log(JSON.stringify({
-    mode: "submit", config: { do: DO_V, pages: PAGES, n: N, upstreamMedianMs: MEDIAN, rpcMs: RPC_MS, gap: args.gap, conc: args.conc },
+    mode: "submit", batchUpdate: args.batchupdate === "1", config: { do: DO_V, pages: PAGES, n: N, upstreamMedianMs: MEDIAN, rpcMs: RPC_MS, gap: args.gap, conc: args.conc },
     latencyMs: { p50: q2(0.5), p95: q2(0.95), max: ms.at(-1), wallToLastResult: wall },
     results: { http: statuses, updatedOk, refusedForeignRowOk: refusedOk, wrongRows, otherRowsTouched: touchedOthers },
     upstream: { total: lark.stats.calls - startStats.calls, search: lark.stats.search - startStats.search, get: (lark.stats.get || 0) - (startStats.get || 0),
-      update: (lark.stats.update || 0) - (startStats.update || 0), http429: lark.stats.limited, peakStartsPerSecond: lark.stats.peakPerSecond, peakInFlight: lark.stats.peakInFlight },
-    ...(dstats ? { doStats: { startsByClass: dstats.startsByClass, permits: dstats.permits, lark: dstats.lark, labels: dstats.labels, peakQueue: dstats.peakQueue, writeRetries: dstats.writeRetries } } : {}),
+      update: (lark.stats.update || 0) - (startStats.update || 0), batchUpdate: (lark.stats.batchUpdate || 0) - (startStats.batchUpdate || 0), http429: lark.stats.limited, peakStartsPerSecond: lark.stats.peakPerSecond, peakInFlight: lark.stats.peakInFlight },
+    ...(dstats ? { doStats: { startsByClass: dstats.startsByClass, permits: dstats.permits, lark: dstats.lark, labels: dstats.labels, peakQueue: dstats.peakQueue, writeRetries: dstats.writeRetries,
+      updateBatches: dstats.updateBatches, updatedInBatches: dstats.updatedInBatches, updateSplits: dstats.updateSplits, updateMismatches: dstats.updateMismatches, writesSuperseded: dstats.writesSuperseded } } : {}),
     clientStats: larkLib0.larkClientStats,
   }));
   globalThis.fetch = realFetch;

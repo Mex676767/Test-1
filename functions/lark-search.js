@@ -1,6 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import {
-  searchRecords, createRecord, deleteRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow, runWithRequestStart,
+  searchRecords, createRecord, deleteRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow, runWithRequestStart, noteCounter,
   TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
@@ -150,10 +150,10 @@ async function lookupWithDeadline(event) {
   const hardMs = Number(event.env?.LOOKUP_HARD_DEADLINE_MS) || HARD_DEADLINE_MS;
   let timer;
   const hardStop = new Promise((resolve) => {
-    timer = setTimeout(() => resolve({
+    timer = setTimeout(() => { noteCounter("lookupHardDeadline"); resolve({
       statusCode: 504,
       body: JSON.stringify({ ok: false, error: "The lookup took too long. Press Look Up again.", hardDeadline: true }),
-    }), hardMs);
+    }); }, hardMs);
   });
   try { return await Promise.race([lookupHandler(event, Date.now() + hardMs), hardStop]); }
   finally { clearTimeout(timer); }
@@ -631,6 +631,8 @@ async function lookupHandler(event, hardEnd) {
       caRecordId = found || caRecordId;
     }
 
+    if (caseRowError) noteCounter("caseRowError");
+    for (const source of new Set(lookupWarnings)) noteCounter(`lookupWarning:${source}`);
     return {
       statusCode: 200,
       body: JSON.stringify({

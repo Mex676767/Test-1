@@ -1,7 +1,7 @@
 // Shared helpers for reading Customer Approaching rows back out of Lark --
 // used by lark-stale-records.js (Needs Attention) and lark-chat-records.js
 // (rebuilding a chat's card from Lark when the browser has no saved copy).
-import { toDisplay, getRecord, searchRecords, larkClientStats, TABLE_CUSTOMER_APPROACHING } from "./lark.js";
+import { toDisplay, getRecord, searchRecords, larkClientStats, noteCounter, TABLE_CUSTOMER_APPROACHING } from "./lark.js";
 
 export const CA = {
   username: "Username", brand: "Brand", agentName: "Agent Name", inquiry: "Inquiry", status: "Status",
@@ -93,24 +93,35 @@ export async function readOwnership(recordId) {
   };
 }
 
-// Who owns this row, WITHOUT a single-record GET: one search by Username (columns Agent Name / Inquiry / Status only). The queue
-// merges concurrent searches for different usernames into one Lark query, so many submits at once cost a few calls instead of
-// one GET each. The row is found by record_id in the answer. If it is not there (index lag, the agent changed the username,
-// an old widget that does not send one, any error) the ordinary GET is used, so the answer is always the row's real owner.
-export async function readOwnershipMerged(recordId, username) {
+// Who owns this row, WITHOUT a single-record GET in the common case: one search by Username (columns Agent Name / Inquiry / Status
+// only). The queue merges concurrent searches for different usernames into one Lark query, so many submits at once cost a few
+// calls instead of one GET each. The row is found by record_id in the answer.
+//
+// The search may only ALLOW a write, and only when it says the row's owner is exactly THIS agent. Anything else -- the row is not in
+// the result (index lag, the agent changed the username, an old widget that sends no username), the owner is blank, the owner is
+// someone else, the search failed -- is decided by the ordinary single-record GET, i.e. by Lark's current truth. Each fallback is
+// counted by reason (larkClientStats.ownershipFallbackReasons, and reported to the queue's stats).
+export async function readOwnershipMerged(recordId, username, agentName) {
   const name = String(username || "").trim().toLowerCase();
-  if (name) {
+  const me = String(agentName || "").trim();
+  let reason = !name ? "noUsername" : !me ? "noAgent" : "";
+  if (!reason) {
     try {
       const rows = await searchRecords(TABLE_CUSTOMER_APPROACHING, [{ field_name: CA.username, operator: "is", value: [name] }], undefined,
         { fieldNames: [CA.agentName, CA.inquiry, CA.status], pageSize: 500, timeoutMs: 15_000 });
       const row = rows.find((r) => r.record_id === recordId);
-      if (row) {
+      if (!row) reason = "missing";
+      else {
         const f = row.fields || {};
-        return { owner: toDisplay(f[CA.agentName]).trim(), blank: isBlank(f[CA.inquiry]) && isBlank(f[CA.status]), via: "search" };
+        const owner = toDisplay(f[CA.agentName]).trim();
+        if (owner && owner === me) return { owner, blank: isBlank(f[CA.inquiry]) && isBlank(f[CA.status]), via: "search" };
+        reason = owner ? "otherOwner" : "blankOwner";
       }
-    } catch (_) { /* fall through to the GET */ }
-    larkClientStats.ownershipFallbacks++;
+    } catch (_) { reason = "searchError"; }
   }
+  larkClientStats.ownershipFallbacks++;
+  larkClientStats.ownershipFallbackReasons[reason] = (larkClientStats.ownershipFallbackReasons[reason] || 0) + 1;
+  noteCounter(`ownershipFallback:${reason}`);
   return { ...(await readOwnership(recordId)), via: "get" };
 }
 

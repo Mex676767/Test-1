@@ -24,6 +24,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 let LARK_SEARCH_QUEUE;
 let LARK_QUEUE_LONGPOLL = false;
 let LARK_BATCH_CREATE = false;
+let LARK_BATCH_UPDATE = false;
 
 export function initEnv(env) {
   LARK_SEARCH_QUEUE = env.LARK_SEARCH_QUEUE;
@@ -33,6 +34,9 @@ export function initEnv(env) {
   // Opt-in (needs a v2 queue that implements createBatch): coalesce Customer Approaching row
   // creation into Lark's batch_create. Off by default.
   LARK_BATCH_CREATE = LARK_QUEUE_LONGPOLL && String(env.LARK_BATCH_CREATE || "") === "1";
+  // Opt-in, OFF by default (needs a v2 queue with updateBatch): record updates from many submits share Lark's batch_update.
+  // See claude-lookup-review/LARK_BATCH_UPDATE_NOTES.md for what Lark documents and what it does not.
+  LARK_BATCH_UPDATE = LARK_QUEUE_LONGPOLL && String(env.LARK_BATCH_UPDATE || "") === "1";
   APP_ID = env.LARK_APP_ID;
   APP_SECRET = env.LARK_APP_SECRET;
   BASE_APP_TOKEN = env.LARK_BASE_APP_TOKEN;
@@ -67,6 +71,8 @@ export function runWithRequestStart(fn, startedAt = Date.now()) {
   return requestContext.run({ startedAt }, fn);
 }
 const currentRequestStart = () => requestContext.getStore()?.startedAt;
+// For calls that carry the start to the queue: a call with none keeps the old arrival-order priority, so it is counted.
+const startForQueue = () => { const startedAt = currentRequestStart(); if (startedAt === undefined) noteCounter("noRequestStart"); return startedAt; };
 
 const larkQueueResponses = new WeakMap();
 const LARK_QUEUE_RPC_TIMEOUT_MS = 250;
@@ -80,7 +86,28 @@ const LARK_SEARCH_QUEUE_TIMEOUT_MS = 60_000;
 const LARK_SEARCH_CALLER_DEADLINE_MS = 40_000;
 const MAX_SEARCH_PAGES = 10;
 // Read-only counters for diagnostics (logged on rate limits / fail-open).
-export const larkClientStats = { rateLimited: 0, failOpen: 0, batchFallbacks: 0, queueCallFallbacks: 0, ownershipFallbacks: 0 };
+export const larkClientStats = { rateLimited: 0, failOpen: 0, batchFallbacks: 0, queueCallFallbacks: 0, ownershipFallbacks: 0, ownershipFallbackReasons: {} };
+
+// Counters the queue cannot see by itself (queue fallbacks, ownership fallbacks by reason, fail-open, case-row errors, lookup
+// warnings by source, requests without a start time). They are noted here and sent to the Durable Object fire-and-forget at the end of
+// a request (adapt() hands the send to waitUntil); a missing method or any failure just drops the report.
+const pendingCounters = new Map();
+const counterName = (name) => String(name).replace(/[^A-Za-z0-9:_.-]+/g, "_").slice(0, 48);
+export function noteCounter(name, n = 1) {
+  const key = counterName(name);
+  if (pendingCounters.size < 200 || pendingCounters.has(key)) pendingCounters.set(key, (pendingCounters.get(key) || 0) + n);
+}
+export async function flushCounters() {
+  if (!pendingCounters.size) return;
+  const report = Object.fromEntries(pendingCounters);
+  pendingCounters.clear();
+  if (!LARK_SEARCH_QUEUE) return;
+  let timer;
+  try {
+    const stub = LARK_SEARCH_QUEUE.get(LARK_SEARCH_QUEUE.idFromName("lark-api-global"));
+    await Promise.race([Promise.resolve(stub.reportCounters(report)), new Promise((resolve) => { timer = setTimeout(resolve, 1_000); })]);
+  } catch (_) { /* best effort */ } finally { clearTimeout(timer); }
+}
 
 // Lark documents code 1254290 as TooManyRequest but not which HTTP status it
 // rides on, so recognise it from the code as well as from 429.
@@ -123,7 +150,7 @@ function labelFor(url, method = "GET") {
 function callQueueAcquire(stub, signal, kind, waiterId, label) {
   const rpcTimeoutMs = LARK_QUEUE_LONGPOLL ? LARK_QUEUE_LONGPOLL_RPC_TIMEOUT_MS : LARK_QUEUE_RPC_TIMEOUT_MS;
   // The bare acquire() call is the legacy protocol every deployed Durable Object understands.
-  const pending = Promise.resolve().then(() => (LARK_QUEUE_LONGPOLL ? stub.acquire(kind, waiterId, currentRequestStart(), label) : stub.acquire()));
+  const pending = Promise.resolve().then(() => (LARK_QUEUE_LONGPOLL ? stub.acquire(kind, waiterId, startForQueue(), label) : stub.acquire()));
   let abandoned = false;
   // If the RPC eventually grants a permit after the local request has timed
   // out, return that lease so a slow coordinator cannot strand capacity.
@@ -193,6 +220,7 @@ async function acquireSharedLarkPermit(signal, kind = "write", label = "other") 
       // The local semaphore remains the fallback if the shared coordinator
       // is unhealthy. Do not let a hung RPC hold up the lookup.
       larkClientStats.failOpen++;
+      noteCounter("failOpen");
       console.warn("Lark queue fail-open", JSON.stringify({ kind, error: String(error?.message || error).slice(0, 80) }));
       return null;
     }
@@ -237,7 +265,7 @@ async function larkFetch(url, init = {}) {
         headers,
         body: batchBody,
         expiresAt,
-        requestStartedAt: currentRequestStart(),
+        requestStartedAt: startForQueue(),
         label: "search",
       });
       const result = queueSignal || fetchInit.signal
@@ -317,7 +345,7 @@ async function queueCall(method, input, waitMs) {
     ]);
     return rpcResult(result);
   } catch (error) {
-    if (NO_QUEUE_METHOD.test(String(error?.message || error))) { larkClientStats.queueCallFallbacks++; return null; }
+    if (NO_QUEUE_METHOD.test(String(error?.message || error))) { larkClientStats.queueCallFallbacks++; noteCounter("queueCallFallback"); return null; }
     throw error;
   } finally { clearTimeout(timer); }
 }
@@ -325,7 +353,7 @@ function callInput(url, init, extra = {}) {
   return {
     url, method: init.method || "GET", headers: Object.fromEntries(new Headers(init.headers || {}).entries()),
     ...(typeof init.body === "string" ? { body: init.body } : {}),
-    label: labelFor(url, init.method), requestStartedAt: currentRequestStart(), ...extra,
+    label: labelFor(url, init.method), requestStartedAt: startForQueue(), ...extra,
   };
 }
 // A read that every isolate needs (field catalogs, bonus config) and that changes rarely: the queue keeps ONE shared copy for
@@ -747,8 +775,11 @@ export async function updateRecord(tableId, recordId, fields, baseToken) {
   const token = await getTenantToken();
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${baseToken || BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`;
   const init = { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ fields }) };
-  // Inside the queue when possible: it also drops the row from its create memory itself.
-  const queued = await queueCall("larkCall", callInput(url, init, { expiresAt: Date.now() + LARK_WRITE_CALLER_DEADLINE_MS }), LARK_WRITE_CALLER_DEADLINE_MS);
+  // Inside the queue when possible: it also drops the row from its create memory itself. With LARK_BATCH_UPDATE the queue may send
+  // this update together with others as one batch_update; a queue without updateBatch (or the flag off) uses larkCall as before.
+  const input = callInput(url, init, { expiresAt: Date.now() + LARK_WRITE_CALLER_DEADLINE_MS });
+  const queued = (LARK_BATCH_UPDATE && await queueCall("updateBatch", input, LARK_WRITE_CALLER_DEADLINE_MS))
+    || await queueCall("larkCall", input, LARK_WRITE_CALLER_DEADLINE_MS);
   const res = queued ? queued.res : await larkFetch(url, init);
   const data = queued ? queued.data : await res.json();
   if (data.code !== 0) throw larkApiError(`Lark update failed on table ${tableId}: ${data.msg}`, res, data);
@@ -765,7 +796,7 @@ export async function createRecord(tableId, fields, baseToken) {
       const result = await stub.createBatch({
         url: createUrl, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ fields }), expiresAt: Date.now() + LARK_SEARCH_CALLER_DEADLINE_MS,
-        requestStartedAt: currentRequestStart(), label: "create",
+        requestStartedAt: startForQueue(), label: "create",
       });
       const data = JSON.parse(result.body);
       if (data.code !== 0) throw larkApiError(`Lark create failed on table ${tableId}: ${data.msg}`, { status: result.status, headers: new Headers(result.headers || []) }, data);

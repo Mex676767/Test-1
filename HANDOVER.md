@@ -46,7 +46,12 @@ npx wrangler deployments list --name rtn-lark-rate-queue
 npx wrangler rollback <version-id> --name rtn-lark-rate-queue
 ```
 
-Known versions: `b8491272-767a-472a-8835-ff5bbd00179c` = current (has `createBatch`); `d357b841-4199-409e-acd2-659a6dd2faa3` = previous (no `createBatch`; keep `LARK_BATCH_CREATE` off if you roll back to it, or creates fall back to single creates).
+Durable Object versions (newest first). **Current rollback target: `387762b5-9d62-4d01-aa31-152907030586`** (items A–D; `GATE_CONCURRENCY` was 3 then):
+- `387762b5-9d62-4d01-aa31-152907030586` — items A–D (request-age ordering, `larkCall`/`cachedCall`, labels). Deployed.
+- `2b76c017-f4f7-46e3-ada3-fde4139c21ca` — steps 0–3 (diagnostics, identical-create sharing, client_token + one retry).
+- `b8491272-767a-472a-8835-ff5bbd00179c` — first version with `createBatch`.
+- `d357b841-4199-409e-acd2-659a6dd2faa3` — before `createBatch` (keep `LARK_BATCH_CREATE` off if you roll back to it).
+The version after this follow-up branch is deployed by the user; add its id here when it is.
 
 **Rollback the widget:** Cloudflare → test-1 → Deployments → pick an older Success deployment → Rollback; or `git revert` the commit and push.
 
@@ -68,12 +73,17 @@ Load test: `node scripts/stress-lookup.mjs --base <staging url> --agents 100 [--
 - Worker logs: Cloudflare → Workers → rtn-lark-rate-queue → Logs (observability is enabled).
 - Diagnostics added to `getStats()` (all in ms): `permits.<token|read|write>.wait` (permit requested → granted) and `.hold` (granted → released), each with `n/p50/p95/max`; `lark.<search|batchCreate|create|other>` = latency of each kind of upstream call. If `wait` is large and `hold` is small, the gate pace is the limit; if `hold`/`lark` are large, Lark itself is slow. New counters: `createMemoryHits`, `createSharedInflight`, `writeRetries`.
 - Items A–D (request-age ordering, calls run inside the queue, ownership via merged search, shared cached reads): `getStats()` also has `labels` (permit/call counts by purpose: token, fields, list, record-get, update, delete, create, search, other), `lark.<get|update|delete|list|fields|…>` latency, and `cacheHits` / `cacheShared` / `cacheStaleServed` / `cacheEntries` / `larkCalls`. Pages side counters (`larkClientStats`): `queueCallFallbacks` (the queue lacked larkCall/cachedCall and the old permit path was used) and `ownershipFallbacks` (the merged ownership search missed and the single-record GET decided).
+- Follow-up (review of A–D): `getStats()` also has `startedAt` / `uptimeSec` (this queue instance), `pagesCounters` (what Pages reports fire-and-forget: `queueCallFallback`, `ownershipFallback:<noUsername|noAgent|missing|blankOwner|otherOwner|searchError>`, `failOpen`, `caseRowError`, `lookupWarning:<source>`, `lookupHardDeadline`, `noRequestStart`), `writesSuperseded` (a newer queued write for the same record replaced an older queued one) and `perMinute` (last 24 h, columnar: `minutes` = epoch minutes, `starts`, `limited`, `waitP95` ms, `peakQueue`; idle minutes are not stored).
+- Ownership rule: a submit is allowed from the merged search ONLY when the search shows this agent as the row's owner; a blank owner, another owner, a missing row, a failed search or an old widget (no username) are decided by the single-record GET (counted by reason).
+- Batch updates (`LARK_BATCH_UPDATE=1` on Pages, OFF by default; needs `LARK_QUEUE_PROTOCOL=v2` and a queue with `updateBatch`): submits' updates share Lark's `batch_update`. What Lark documents and what it does not: `claude-lookup-review/LARK_BATCH_UPDATE_NOTES.md`. Watch `updateBatches`, `updatedInBatches`, `updateSplits`, `updateMismatches`, `lark.batchUpdate`. Off = single PUTs run inside the queue.
 - Requires the Pages `nodejs_compat` compatibility flag (already set on production): request start times use `AsyncLocalStorage`.
 - Worker variables (rtn-lark-rate-queue): `GATE_WRITE_TIMEOUT_MS` (default 15000, creates/writes), `CREATE_MEMORY_MS` (default 120000; identical creates with a chat link share one row; 0 = off).
 
 ## 6. Raising the gate pace (only with evidence)
 
-Default is a 250 ms gap and 3 concurrent. Ramp 200 → 150 → 125 → 100 ms only after a full peak day at each step with `/queue-stats` showing no 429s (`limited` and `retries429` flat) and `queueWaitP50` low. Any 429 burst: go back one step (the gate also slows itself down after a 429). The pace comes from Worker variables `GATE_START_GAP_MS` (default 250) and `GATE_CONCURRENCY` (default 3), set on the **rtn-lark-rate-queue** worker (Settings → Variables), not on Pages; `GATE_LONGPOLL_MS` is the long-poll window.
+Default is a 250 ms gap and 3 concurrent. Ramp 200 → 150 → 125 → 100 ms only after a full peak day at each step with `/queue-stats` showing no 429s (`limited` and `retries429` flat) and `queueWaitP50` low. Any 429 burst: go back one step (the gate also slows itself down after a 429). The pace comes from the Worker variables `GATE_START_GAP_MS` (code default 250) and `GATE_CONCURRENCY` (code default 3) on the **rtn-lark-rate-queue** worker, not on Pages; `GATE_LONGPOLL_MS` is the long-poll window.
+
+**The repo is the source of truth for the pace.** The two values are in `claude-lookup-review/worker-v2-deploy/wrangler.jsonc` under `"vars"` (currently `GATE_CONCURRENCY` "4", `GATE_START_GAP_MS` "250"). Change the pace by editing that file and running `npx wrangler deploy`, or change it in the dashboard AND edit the file to match: a later `wrangler deploy` replaces the Worker's variables with the ones in the file, so a dashboard-only change would be silently undone. `keep_vars` is deliberately not used. Only non-secret numbers belong in that file.
 
 ## 7. Batched creates (`LARK_BATCH_CREATE`)
 

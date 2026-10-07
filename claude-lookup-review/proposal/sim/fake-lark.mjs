@@ -24,12 +24,14 @@ export function fieldText(v) {
 // hangAfterWrite: the next N create/batch_create calls WRITE their rows and then never answer (until the caller aborts),
 // like a Lark call that times out after committing. client_token: a repeat of a token replays the stored answer and
 // writes nothing (Lark's documented idempotency).
-export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs = 0.05, perCondMs = 0, quota = 20, enforce = true, seed = 7, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0 }) {
+// batchUpdateAtomic: a batch_update that names an unknown record_id fails as a whole and applies NOTHING (true, the default) or applies the
+// others and omits the bad one from the reply (false). Lark's documentation does not say which; the code must be right under both.
+export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs = 0.05, perCondMs = 0, quota = 20, enforce = true, seed = 7, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0, batchUpdateAtomic = true }) {
   const rnd = mulberry32(seed);
   let hangs = hangAfterWrite;
   const tokens = new Map();
   const stats = {
-    calls: 0, search: 0, create: 0, fields: 0, token: 0, other: 0, limited: 0, replays: 0, hung: 0, get: 0, update: 0, delete: 0, order: [],
+    calls: 0, search: 0, create: 0, fields: 0, token: 0, other: 0, limited: 0, replays: 0, hung: 0, get: 0, update: 0, delete: 0, batchUpdate: 0, order: [],
     peakPerSecond: 0, orQueries: 0, orSizes: [], pagesBeyondFirst: 0, rowsReturned: 0, inFlight: 0, peakInFlight: 0,
   };
   const starts = [];
@@ -65,6 +67,7 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
     stats.calls++;
     const kind = /tenant_access_token/.test(u.pathname) ? "token"
       : /\/records\/batch_create$/.test(u.pathname) ? "batchCreate"
+      : /\/records\/batch_update$/.test(u.pathname) ? "batchUpdate"
       : /\/records\/search$/.test(u.pathname) ? "search"
       : /\/fields$/.test(u.pathname) ? "fields"
       : /\/records$/.test(u.pathname) && init.method === "POST" ? "create"
@@ -87,6 +90,18 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
       const table = tables[tableId];
       if (!table) return json({ code: 1254004, msg: "table not found" });
       stats.order.push(kind);                                    // order in which calls ACTUALLY reached Lark
+      if (kind === "batchUpdate") {
+        await sleep(latency(0), init.signal);
+        const wanted = body.records || [];
+        const known = wanted.filter((r) => table.rows.some((row) => row.record_id === r.record_id));
+        if (known.length !== wanted.length && batchUpdateAtomic) return json({ code: 1254043, msg: "RecordIdNotFound" });
+        const updated = known.map((r) => {
+          const row = table.rows.find((x) => x.record_id === r.record_id);
+          row.fields = { ...row.fields, ...(r.fields || {}) };
+          return { record_id: row.record_id, fields: row.fields };
+        });
+        return json({ code: 0, data: { records: updated } });
+      }
       if (kind === "get" || kind === "update" || kind === "delete") {
         await sleep(latency(0), init.signal);
         const id = decodeURIComponent(u.pathname.split("/").pop());

@@ -70,7 +70,7 @@ async function recordHandler(event) {
     if (!String(agentName).trim()) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "agentName is required" }) };
     }
-    var ownership = await readOwnershipMerged(recordId, body.username);
+    var ownership = await readOwnershipMerged(recordId, body.username, agentName);
     if (!ownedBy(ownership.owner, agentName)) {
       return { statusCode: 409, body: JSON.stringify({ ok: false, notOwner: true, owner: ownership.owner,
         error: "This case is logged under " + ownership.owner + " — not changed. Press Look up to log your own record." }) };
