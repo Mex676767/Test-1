@@ -1294,3 +1294,13 @@ body { font-size: 13px; }
 #refreshBtn.update-pending::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #ff5d5d; }
 @keyframes update-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(79, 124, 255, .55); } 50% { box-shadow: 0 0 0 6px rgba(79, 124, 255, 0); } }
 @media (prefers-reduced-motion: reduce) { #refreshBtn.update-pending { animation: none; } }
+
+/* ---------- Lookups running / finished in another chat; the lookup message on its own card ---------- */
+.bg-lookup-pill { margin: 6px 12px; padding: 5px 12px; width: fit-content; max-width: calc(100% - 24px); border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.bg-lookup-pill.hidden { display: none; }
+.bg-lookup-pill.running { border-color: var(--blue); }
+.bg-lookup-pill.done { border-color: var(--teal); color: var(--teal); }
+.bg-lookup-pill.attention { border-color: var(--gold); color: var(--gold); }
+.lookup-message { margin: 6px 0; padding: 6px 8px; border-radius: 6px; border-left: 3px solid var(--blue); font-size: 12px; background: var(--surface-2); color: var(--text); }
+.lookup-message.error { border-left-color: var(--danger); }
+.lookup-message.attention { border-left-color: var(--gold); }

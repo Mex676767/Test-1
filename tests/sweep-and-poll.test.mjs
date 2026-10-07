@@ -154,7 +154,7 @@ test('fetchBonusRow passes caseRowError through, so the widget shows results plu
   assert.equal(result.caRecordId, null);
   assert.match(result.caseRowError, /Look Up again/);
   // and the lookup handler surfaces it as a status line instead of throwing
-  assert.match(app, /if \(caseRowError\) \{\s*setStatus\(/);
+  assert.match(app, /if \(caseRowError\) \{\s*lookupSay\(/);
 });
 
 // ---- saveLinkToRecord (called from the 2 s chat-status tick) backs off ----------------------------
