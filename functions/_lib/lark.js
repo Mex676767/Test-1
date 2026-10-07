@@ -20,6 +20,7 @@ let TABLE_TELEGRAM28;
 let TABLE_MOONCAKE;
 let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
+let TABLE_AGENT_LOGINS;
 import { AsyncLocalStorage } from "node:async_hooks";
 let LARK_SEARCH_QUEUE;
 let LARK_QUEUE_LONGPOLL = false;
@@ -61,6 +62,7 @@ export function initEnv(env) {
 
   TABLE_VS96_FEEDBACK = env.LARK_TABLE_VS96_FEEDBACK;
   TABLE_BONUS_CONFIG = env.LARK_TABLE_BONUS_CONFIG;
+  TABLE_AGENT_LOGINS = env.LARK_TABLE_AGENT_LOGINS;
 }
 
 // When the current request (lookup / submit) began, server-side. Every call this request makes to the shared queue carries it, so
@@ -1099,4 +1101,5 @@ export {
   TABLE_MOONCAKE,
   TABLE_VS96_FEEDBACK,
   TABLE_BONUS_CONFIG,
+  TABLE_AGENT_LOGINS,
 };
