@@ -40,6 +40,9 @@ Error codes (table at the bottom of the batch_update page, fetched 2026-10-07): 
 - A lone pending update is sent as an ordinary PUT (no batch of one).
 - Off by default. Switch: Pages env `LARK_BATCH_UPDATE=1` (needs `LARK_QUEUE_PROTOCOL=v2` and a Durable Object that has `updateBatch`); removing the variable returns to single PUTs run inside the queue.
 
+## Rate limiting (confirmed from production Worker logs, 2026-10-07 21:35:51 GMT+8)
+Lark's throttle arrives as `{"httpStatus":200,"code":1254290,"retryAfter":null}`: **TooManyRequest comes on HTTP 200 with NO Retry-After header.** 1254290 is Bitable's own limit, **likely per Base**, so it is probably shared with the Base's Lark automations / workflows, which our queue cannot see. Consequences for `batch_update` and everything else: **detection stays code-based, never status-based** (a whole-call 1254290 on a batch_update is returned to every caller and the gate backs off; it is not a record-level error and never splits a batch), and a throttle at low request rates from this app is not proof that the app alone exceeded Lark's documented per-endpoint limits (search 20/s, batch_update 50/s).
+
 ## Before enabling in production
 1. Done: atomicity and error shapes measured (above).
 2. Deploy the Pages side and the Durable Object that has this split rule (`updateBatch` with `RECORD_LEVEL_UPDATE_CODES`) first.
