@@ -7,8 +7,8 @@ const BASE_ENV = { LARK_APP_ID: 'app', LARK_APP_SECRET: 'secret', LARK_BASE_APP_
 const ARGS = ['--i-understand-this-writes-to-a-test-table'];
 
 // A small fake Lark: token, columns, create, get, delete, and batch_update that is either atomic or not.
-function fakeLark({ atomic = true, columns = [{ field_name: 'Text', type: 1 }, { field_name: 'Number', type: 2 }] } = {}) {
-  const rows = new Map(); let next = 0; const requests = [];
+function fakeLark({ atomic = true, honourClientToken = true, columns = [{ field_name: 'Text', type: 1 }, { field_name: 'Number', type: 2 }] } = {}) {
+  const rows = new Map(); let next = 0; const requests = []; const replies = new Map();
   const json = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'x-tt-logid': 'LOG123' } });
   const impl = async (url, init = {}) => {
     const text = String(url), method = init.method || 'GET';
@@ -16,9 +16,14 @@ function fakeLark({ atomic = true, columns = [{ field_name: 'Text', type: 1 }, {
     if (text.includes('tenant_access_token')) return json({ code: 0, tenant_access_token: TOKEN, expire: 7200 });
     if ((init.headers || {}).Authorization !== `Bearer ${TOKEN}`) return json({ code: 99991663, msg: 'Invalid access token for authorization' });
     const body = init.body ? JSON.parse(init.body) : {};
+    const path = text.split('?')[0], clientToken = new URL(text).searchParams.get('client_token');
+    if (clientToken && honourClientToken && replies.has(clientToken)) return replies.get(clientToken).clone(); // Lark's documented repeat-of-the-same-request behaviour
+    const remember = (response) => { if (clientToken) replies.set(clientToken, response.clone()); return response; };
+    if (method === 'GET' && path.endsWith('/records')) return json({ code: 0, data: { items: [...rows].map(([record_id, fields]) => ({ record_id, fields })), has_more: false } });
+    if (method === 'POST' && path.endsWith('/records/batch_create')) { const made = body.records.map((r) => { const id = `rec${++next}`; rows.set(id, { ...r.fields }); return { record_id: id, fields: rows.get(id) }; }); return remember(json({ code: 0, data: { records: made } })); }
     if (text.endsWith('/fields?page_size=100')) return json({ code: 0, data: { items: columns } });
-    if (method === 'POST' && text.endsWith('/records')) { const id = `rec${++next}`; rows.set(id, { ...body.fields }); return json({ code: 0, data: { record: { record_id: id, fields: rows.get(id) } } }); }
-    if (method === 'POST' && text.endsWith('/records/batch_update')) {
+    if (method === 'POST' && path.endsWith('/records')) { const id = `rec${++next}`; rows.set(id, { ...body.fields }); return remember(json({ code: 0, data: { record: { record_id: id, fields: rows.get(id) } } })); }
+    if (method === 'POST' && path.endsWith('/records/batch_update')) {
       const bad = body.records.filter((r) => !rows.has(r.record_id) || Object.values(r.fields).some((v) => typeof v === 'string' && /not a number/.test(v)));
       if (bad.length && atomic) return json({ code: 1254043, msg: 'RecordIdNotFound or invalid field' });
       const done = body.records.filter((r) => !bad.includes(r));
@@ -62,7 +67,22 @@ test('runs the four experiments against its own rows only, prints Lark\'s raw re
   assert.doesNotMatch(text, /Bearer\s+t-/);
   const urls = lark.requests.filter((q) => !q.url.includes('tenant_access_token')).map((q) => q.url);
   assert.ok(urls.length > 10 && urls.every((u) => u.includes('/tables/tblTEST/')), 'only the dedicated table was touched');
-  assert.equal(lark.rows.size, 6, 'its own six rows were left in the table (no --cleanup)');
+  assert.equal(lark.rows.size, 8, 'its own six rows plus the two client_token rows were left in the table (no --cleanup)');
+  assert.match(text, /\(e1\) single create sent twice with the same client_token/);
+  assert.match(text, /\(e2\) batch_create sent twice with the same client_token/);
+  assert.equal((text.match(/1st reply: HTTP 200/g) || []).length, 2);
+  assert.equal((text.match(/2nd reply: HTTP 200/g) || []).length, 2);
+  assert.match(text, /same record id\(s\) in both replies: true/, 'a repeat of the same request is answered with the same record');
+  assert.match(text, /rows carrying the marker after \(e1\).*: 1 /);
+  assert.match(text, /rows carrying the marker after \(e2\).*: 2 /, 'e1 row + e2 row; the repeats added nothing');
+  assert.match(text, /total rows left carrying the marker: 2/);
+});
+
+test('(e) shows the bad outcome too: a Lark that ignores client_token leaves a second row, and the output says so', async () => {
+  const lark = fakeLark({ honourClientToken: false });
+  const { text } = await run(lark);
+  assert.match(text, /same record id\(s\) in both replies: false/);
+  assert.match(text, /total rows left carrying the marker: 4/);
 });
 
 test('the non-atomic variant is visible in the read-back (the valid record WAS applied), and --cleanup deletes only the rows the script made', async () => {
@@ -71,7 +91,7 @@ test('the non-atomic variant is visible in the read-back (the valid record WAS a
   assert.match(text, /read back C \(rec3\).*b-1/, 'non-atomic: the valid record in the failed batch changed');
   assert.match(text, /deleted A \(rec1\): HTTP 200/);
   assert.equal(lark.rows.size, 0);
-  assert.equal(lark.requests.filter((q) => q.method === 'DELETE').length, 6);
+  assert.equal(lark.requests.filter((q) => q.method === 'DELETE').length, 8, 'six experiment rows + the two client_token rows, nothing else');
 });
 
 test('a table without the two columns is reported, nothing is written', async () => {
