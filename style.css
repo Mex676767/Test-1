@@ -817,6 +817,26 @@ body {
 .login-status.error { color: var(--danger); }
 .department-choice { width: 100%; min-height: 40px; }
 
+/* LiveChat sign-in and the one-time agent name choice: one centered card. */
+.agent-login-overlay { align-items: center; padding: 16px; }
+.agent-login-card {
+  width: 100%; max-width: 340px; max-height: calc(100vh - 32px); overflow-y: auto; scrollbar-width: none;
+  padding: 30px 24px 24px; text-align: center;
+  border: 1px solid var(--border); border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--blue)); box-shadow: 0 18px 48px rgba(0,0,0,.28);
+}
+.agent-login-card::-webkit-scrollbar { display: none; }
+.agent-login-card .login-mark {
+  display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin: 0 auto 14px;
+  border-radius: 16px; font-size: 24px; background: color-mix(in srgb, var(--blue) 14%, transparent);
+}
+.agent-login-app { margin-bottom: 6px; color: var(--text-faint); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.agent-login-card .settings-head { justify-content: center; margin-bottom: 8px; font-size: 20px; font-weight: 700; text-align: center; }
+.agent-login-card .settings-hint { margin-bottom: 18px; font-size: 12.5px; line-height: 1.55; }
+.agent-login-card .settings-select { margin-bottom: 14px; }
+.agent-login-card .login-actions .submit-btn { width: 100%; min-height: 42px; font-size: 14px; }
+.agent-login-card .login-status { margin-top: 12px; min-height: 18px; text-align: center; }
+
 /* Replaces the old "dump state to console" link — a plain-language
    activity log right in Settings. Routine confirmations that don't
    interrupt the compact top bar still land here for troubleshooting. */
