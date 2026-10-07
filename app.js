@@ -1571,9 +1571,16 @@ const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // since it last synced, keeps everything else already in storage, and adopts
 // the newer stored copy of any chat it hasn't touched.
 const lastSyncedJson = new Map(); // chatId -> JSON of that chat as of this tab's last load/save/adopt
+// "A request is running right now" flags. They describe this tab's live network calls (and the AbortController
+// that can cancel one is never persisted), so saving them leaves a reloaded widget with a Cancel button that has
+// nothing to abort -- and a stuck lookup/unclaim that also blocks the ⟳ update. Never saved, never adopted.
 function stateSnapshot(s) {
-  const { _savedAt, ...rest } = s || {};
+  const { _savedAt, lookupInFlight, unclaimInFlight, ...rest } = s || {};
   return JSON.stringify(rest);
+}
+function persistableState(s, savedAt) {
+  const { lookupInFlight, unclaimInFlight, ...rest } = s;
+  return { ...rest, _savedAt: savedAt };
 }
 // Last non-empty Brand seen for each chat in THIS tab. If merging with / adopting
 // another tab's older saved copy would blank it, put it back.
@@ -1639,7 +1646,7 @@ function saveState() {
         for (const k of Object.keys(s)) delete s[k];
         Object.assign(s, JSON.parse(JSON.stringify(merged)));
         keepBrand(chatId, s);
-        raw[chatId] = { ...s, _savedAt: now };
+        raw[chatId] = persistableState(s, now);
         lastSyncedJson.set(chatId, stateSnapshot(s));
         dirty = true;
         adopted = true;
@@ -1651,9 +1658,12 @@ function saveState() {
           const { _savedAt, ...rest } = stored;
           if (storedJson !== cur) {
             // Mutate in place so existing references to state[chatId] stay valid.
+            const { lookupInFlight, unclaimInFlight } = s;
             for (const k of Object.keys(s)) delete s[k];
             const storedSnapshot = stateSnapshot(rest);
             Object.assign(s, rest);
+            if (lookupInFlight) s.lookupInFlight = true; // a request running in THIS tab is not in the stored copy
+            if (unclaimInFlight) s.unclaimInFlight = true;
             const restoredBrand = keepBrand(chatId, s);
             // If Brand had to be restored, leave this tab "changed" so the next save writes it back.
             lastSyncedJson.set(chatId, restoredBrand ? storedSnapshot : stateSnapshot(s));
@@ -1662,7 +1672,7 @@ function saveState() {
         }
         continue;
       }
-      raw[chatId] = { ...s, _savedAt: now };
+      raw[chatId] = persistableState(s, now);
       lastSyncedJson.set(chatId, cur);
       dirty = true;
     }
@@ -1685,6 +1695,9 @@ function loadPersistedState() {
     for (const [chatId, s] of Object.entries(raw)) {
       if (s && now - (s._savedAt || 0) < STATE_MAX_AGE_MS) {
         delete s._savedAt;
+        // Saved by an older version, or by a tab whose request died with it: nothing is running now.
+        delete s.lookupInFlight;
+        delete s.unclaimInFlight;
         fresh[chatId] = s;
       }
     }
@@ -3672,6 +3685,9 @@ chatListEl.addEventListener("click", async (e) => {
       btn.textContent = "Stopping…";
       controller.abort();
     } else {
+      // Nothing is running for this chat (e.g. the flag outlived the request): clear it, or the card keeps
+      // re-rendering a Cancel button that can never do anything.
+      if (s) s.lookupInFlight = false;
       renderChats(activeChats);
     }
     return;
