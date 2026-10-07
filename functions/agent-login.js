@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { identifyAgent } from "./_lib/livechat-identity.js";
 import { listRecords, createRecord, deleteRecord, listFields, toDisplay, TABLE_AGENT_LOGINS, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 
 // LiveChat login -> agent name. The first time an agent signs in with LiveChat they pick their agent name once; it is
@@ -51,10 +52,6 @@ export function claimWinner(rows, account, name) {
   return rows.filter((row) => row.account === account && row.name.toLowerCase() === name.toLowerCase()).sort(claimOrder)[0] || null;
 }
 
-function clientIdFor(env, account) {
-  return clean(account === "lc2" ? (env?.LIVECHAT_CLIENT_ID_2 || env?.LIVECHAT_CLIENT_ID2) : env?.LIVECHAT_CLIENT_ID);
-}
-
 async function readBindings() {
   // force: this is the read that decides who owns a name, so it must never be a cached copy.
   return parseBindings(await listRecords(TABLE_AGENT_LOGINS, 500, { force: true }));
@@ -77,18 +74,9 @@ export async function handler(event) {
     }
 
     // Who does LiveChat say this token belongs to? The browser's word is never used for the identity.
-    const infoResponse = await fetch("https://accounts.livechat.com/v2/info", { headers: { Authorization: `Bearer ${agentToken}` } });
-    const info = await infoResponse.json().catch(() => ({}));
-    if (!infoResponse.ok || info?.error || !info?.account_id) {
-      return reply(200, { ok: false, loginExpired: true, error: "LiveChat login expired or invalid — connect LiveChat again." });
-    }
-    // The token has to come from the OAuth client of the account the browser says it is, so a login on one account
-    // cannot be presented as the other one.
-    const expectedClient = clientIdFor(event.env, accountKey);
-    if (expectedClient && info.client_id && clean(info.client_id) !== expectedClient) {
-      return reply(200, { ok: false, loginExpired: true, error: "This LiveChat login belongs to a different account — connect LiveChat again." });
-    }
-    const login = clean(info.account_id);
+    const who = await identifyAgent(event.env, accountKey, agentToken);
+    if (!who.ok) return reply(200, who);
+    const login = who.login;
 
     let rows = await readBindings();
     const bound = bindingFor(rows, accountKey, login);

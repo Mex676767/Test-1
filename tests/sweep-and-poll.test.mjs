@@ -57,7 +57,7 @@ function sweepHarness({ succeedOnAttempt = Infinity } = {}) {
   const st = {};
   const submits = [];
   const context = vm.createContext({
-    PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date: { now: () => clock.now }, JSON,
+    PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date: { now: () => clock.now }, JSON, AGENT_LOGIN_LIVE: false,
     activeChats: [], state: st, isLoggingPaused: () => false, currentLiveChatAccount: 'lc1', selectedAgent: 'Agent A',
     document: { hidden: false },
     // storage mirrors what submitRecord's saveState() writes: a recorded chat is persisted as logged
@@ -70,7 +70,7 @@ function sweepHarness({ succeedOnAttempt = Infinity } = {}) {
       else st[chatId].autoRecordError = 'Lark is throttling';
     },
   });
-  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('agentTouchedChat'), fn('sweepPendingChats')].join('\n'), context);
+  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('agentActed'), fn('agentTouchedChat'), fn('sweepPendingChats')].join('\n'), context);
   return { clock, st, submits, context, sweep: () => vm.runInContext('sweepPendingChats()', context) };
 }
 
@@ -163,7 +163,7 @@ function linkSaveHarness({ fail }) {
   const s = { caRecordId: 'rec1', chatUrl: 'https://my.livechatinc.com/chats/A/B', caLinkSaved: false, logged: false };
   const calls = [], logs = [];
   const context = vm.createContext({
-    PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date: { now: () => clock.now }, JSON, Math, Set,
+    PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date: { now: () => clock.now }, JSON, AGENT_LOGIN_LIVE: false, Math, Set,
     state: { c1: s }, linkSaveInFlight: new Set(), selectedAgent: 'Agent A', ownsCaseRecord: () => true,
     logDiagnostic: (m) => logs.push(m),
     fetch: async () => { calls.push(clock.now); return { json: async () => (fail() ? { ok: false, error: 'throttled' } : { ok: true }) }; },
