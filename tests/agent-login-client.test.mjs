@@ -11,14 +11,13 @@ function loginFlag(embedded, search) {
   return vm.runInContext(expr, vm.createContext({ IS_EMBEDDED_APP: embedded, location: { search }, URLSearchParams }));
 }
 
-test('the LiveChat login is OFF in the real widget; only the standalone preview can turn it on, with ?agentLogin=1', () => {
-  assert.equal(loginFlag(true, ''), false);
-  assert.equal(loginFlag(true, '?agentLogin=1'), false, 'the embedded widget ignores the switch');
-  assert.equal(loginFlag(true, '?account=lc1&agentLogin=1'), false);
-  assert.equal(loginFlag(false, ''), false, 'the preview is unchanged by default');
-  assert.equal(loginFlag(false, '?agentLogin=0'), false);
+test('the LiveChat login is ON for everyone; adding agentLogin=0 to the address turns it off without a deploy', () => {
+  assert.equal(loginFlag(true, '?account=lc1'), true, 'the real widget');
+  assert.equal(loginFlag(true, ''), true);
+  assert.equal(loginFlag(false, ''), true, 'the preview');
   assert.equal(loginFlag(false, '?agentLogin=1'), true);
-  assert.equal(loginFlag(false, '?account=lc2&agentLogin=1'), true);
+  assert.equal(loginFlag(true, '?account=lc1&agentLogin=0'), false, 'the emergency off switch');
+  assert.equal(loginFlag(false, '?agentLogin=0'), false);
 });
 
 test('the department switches were left alone', () => {
