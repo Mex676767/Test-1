@@ -565,10 +565,10 @@ function agentLoginPanel(innerHtml) {
   if (!overlay) {
     overlay = document.createElement("div");
     overlay.id = "agentLoginOverlay";
-    overlay.className = "settings-overlay";
+    overlay.className = "settings-overlay agent-login-overlay";
     document.body.appendChild(overlay);
   }
-  overlay.innerHTML = `<div class="settings-panel login-panel"><div class="login-mark">◆</div>${innerHtml}</div>`;
+  overlay.innerHTML = `<div class="agent-login-card"><div class="login-mark">◆</div><div class="agent-login-app">Console</div>${innerHtml}</div>`;
   return overlay;
 }
 
