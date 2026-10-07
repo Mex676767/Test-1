@@ -39,8 +39,8 @@ type CreateWaiter = { input: SearchBatchInput; fields: Record<string, unknown>; 
 type CreateBucket = { key: string; waiters: CreateWaiter[]; createdAt: number };
 type Grant = { klass: Klass; at: number };                       // a granted slot: which class, and when (for hold-time stats)
 type SlotEntry = { grant: (g: Grant) => void; cancelled: boolean; order: number; klass: Klass; requestedAt: number };
-type CallType = "search" | "batchCreate" | "create" | "get" | "update" | "delete" | "list" | "fields" | "other";
-const CALL_TYPES: CallType[] = ["search", "batchCreate", "create", "get", "update", "delete", "list", "fields", "other"];
+type CallType = "search" | "batchCreate" | "batchUpdate" | "create" | "get" | "update" | "delete" | "list" | "fields" | "other";
+const CALL_TYPES: CallType[] = ["search", "batchCreate", "batchUpdate", "create", "get", "update", "delete", "list", "fields", "other"];
 type Slot = { promise: Promise<Grant>; cancel: () => void };
 type Poll = { slot: Slot; granted: Promise<void>; ticket: string | null; idle: ReturnType<typeof setTimeout> | null };
 type Ticket = { timer: ReturnType<typeof setTimeout>; grant: Grant };
@@ -57,6 +57,11 @@ const CREATE_MEMORY_MAX = 2_000;
 const WRITE_RETRIES = 1;               // one retry of a timed-out / 5xx create, with the SAME client_token
 const CACHE_MAX_ENTRIES = 50;          // shared read cache (field catalogs, bonus config)
 const MAX_LABELS = 24;
+const MINUTE_MS = 60_000;
+const RING_MINUTES = 24 * 60;          // per-minute history kept for the last 24 h
+const MINUTE_WAIT_SAMPLES = 200;
+const MAX_REPORT_NAMES = 64;
+const MAX_UPDATE_BATCH = 100;          // Lark documents 1,000 per batch_update call; stay small so one bad batch is cheap
 const MAX_429_RETRIES = 2;
 const MAX_COOLDOWN_MS = 5_000;
 const PERMIT_LEASE_MS = 8_000;
@@ -84,6 +89,7 @@ const callType = (input: SearchBatchInput): CallType => {
   try { path = new URL(input.url).pathname; } catch { /* unknown */ }
   const method = (input.method || "POST").toUpperCase();
   if (/\/records\/batch_create$/.test(path)) return "batchCreate";
+  if (/\/records\/batch_update$/.test(path)) return "batchUpdate";
   if (/\/records\/search$/.test(path)) return "search";
   if (/\/records$/.test(path)) return method === "POST" ? "create" : "list";
   if (/\/records\/[^/]+$/.test(path)) return method === "GET" ? "get" : method === "DELETE" ? "delete" : "update";
@@ -94,6 +100,19 @@ const summary = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b);
   return { n: sorted.length, p50: sorted[Math.floor(sorted.length * 0.5)] ?? 0, p95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0, max: sorted.at(-1) ?? 0 };
 };
+const recordIdOf = (url: string): string => { try { return (new URL(url).pathname.match(/\/records\/([^/]+)$/) || [])[1] || ""; } catch { return ""; } };
+// The fields of a plain "update these fields" body, or null if it is anything else.
+const putFields = (body?: string): Record<string, unknown> | null => {
+  try {
+    const parsed = JSON.parse(body || "");
+    return parsed && typeof parsed.fields === "object" && parsed.fields && !Array.isArray(parsed.fields) && Object.keys(parsed).length === 1 ? parsed.fields : null;
+  } catch { return null; }
+};
+const earlier = (a?: number, b?: number): number | undefined => (a && b ? Math.min(a, b) : a || b);
+type PutJob = { input: SearchBatchInput; fields: Record<string, unknown>; waiters: Array<(r: SearchBatchResult) => void> };
+type MinuteRow = { t: number; starts: number; limited: number; waitP95: number; peakQueue: number };
+type Minute = { t: number; starts: number; limited: number; peakQueue: number; waits: number[] };
+const p95Of = (values: number[]) => { const s = [...values].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * 0.95))] : 0; };
 const canonicalFields = (fields: Record<string, unknown>) => JSON.stringify(Object.entries(fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 const createdRecord = (result: SearchBatchResult): any | null => {
   if (result.status < 200 || result.status >= 300) return null;
@@ -155,13 +174,20 @@ export class MyDurableObject extends DurableObject<Env> {
     larkMs: Object.fromEntries(CALL_TYPES.map((t) => [t, [] as number[]])) as Record<CallType, number[]>,
   };
   private labels: Record<string, number> = {};                                              // permit/call counts by purpose
+  private recordWrites = new Map<string, { running: boolean; pending: PutJob | null }>();   // same-record writes: one at a time, newest wins
+  private updateBuckets = new Map<string, { ready: Set<string>; running: boolean }>();    // per table: records waiting for a batch_update slot
+  private startedAt = Date.now();
+  private ring: MinuteRow[] = [];                                                           // closed minutes, oldest first, up to 24 h
+  private cur: Minute | null = null;
+  private pagesCounters: Record<string, number> = {};                                       // counters the Pages side reports (fire-and-forget)
   private cache = new Map<string, { at: number; result: SearchBatchResult }>();             // shared read cache
   private cacheInflight = new Map<string, Promise<SearchBatchResult>>();
   private recentStarts: number[] = [];
   private pruneCounter = 0;
   private s = {
     upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0, createMemoryHits: 0, createSharedInflight: 0, writeRetries: 0,
-    cacheHits: 0, cacheShared: 0, cacheStaleServed: 0, larkCalls: 0,
+    cacheHits: 0, cacheShared: 0, cacheStaleServed: 0, larkCalls: 0, writesSuperseded: 0,
+    updateBatches: 0, updatedInBatches: 0, updateSplits: 0, updateMismatches: 0,
     noBatchTrips: 0, peakQueue: 0, truncatedFails: 0, heavyUsers: 0, peakStartsPerSec: 0,
     startsByClass: { token: 0, read: 0, write: 0 } as Record<Klass, number>,
     batchSizes: [] as number[], queueWaitMs: [] as number[],
@@ -186,7 +212,46 @@ export class MyDurableObject extends DurableObject<Env> {
       // ms. wait = permit requested -> granted; hold = granted -> released (for ticketed calls this is the caller's whole Lark call).
       permits: Object.fromEntries((["token", "read", "write"] as Klass[]).map((k) => [k, { wait: summary(this.m.waitMs[k]), hold: summary(this.m.holdMs[k]) }])),
       lark: Object.fromEntries(CALL_TYPES.map((t) => [t, summary(this.m.larkMs[t])])),
-      labels: { ...this.labels }, cacheEntries: this.cache.size };
+      labels: { ...this.labels }, cacheEntries: this.cache.size,
+      startedAt: new Date(this.startedAt).toISOString(), uptimeSec: Math.round((Date.now() - this.startedAt) / 1000),
+      pagesCounters: { ...this.pagesCounters },
+      perMinute: this.perMinute() };
+  }
+  // Counters the Pages side reports (queue fallbacks, ownership fallbacks by reason, fail-open, caseRowError, lookup warnings by
+  // source, requests without a start time). Fire-and-forget from Pages; names are sanitised and the set is bounded.
+  async reportCounters(counters: Record<string, number>): Promise<void> {
+    if (!counters || typeof counters !== "object") return;
+    for (const [name, raw] of Object.entries(counters)) {
+      const n = Math.min(Number(raw), 1_000_000);
+      if (!/^[A-Za-z0-9:_.-]{1,48}$/.test(name) || !Number.isFinite(n) || n <= 0) continue;
+      const key = name in this.pagesCounters || Object.keys(this.pagesCounters).length < MAX_REPORT_NAMES ? name : "other";
+      this.pagesCounters[key] = (this.pagesCounters[key] || 0) + n;
+    }
+  }
+  // ---- per-minute history (last 24 h): starts, 429s, queue-wait p95, peak queue -------------------------------------
+  private minuteNow(): Minute {
+    const t = Math.floor(Date.now() / MINUTE_MS);
+    if (!this.cur || this.cur.t !== t) { this.closeMinute(); this.cur = { t, starts: 0, limited: 0, peakQueue: 0, waits: [] }; }
+    return this.cur;
+  }
+  private closeMinute(): void {
+    if (!this.cur) return;
+    this.ring.push({ t: this.cur.t, starts: this.cur.starts, limited: this.cur.limited, waitP95: p95Of(this.cur.waits), peakQueue: this.cur.peakQueue });
+    this.trimRing();
+    this.cur = null;
+  }
+  // Keep only the last 24 h counted from NOW (not from the minute being closed: after a long idle gap that would keep stale minutes).
+  private trimRing(): void {
+    const oldest = Math.floor(Date.now() / MINUTE_MS) - RING_MINUTES;
+    while (this.ring.length > RING_MINUTES || (this.ring.length && this.ring[0].t <= oldest)) this.ring.shift();
+  }
+  // Columnar to keep the answer small: minutes[i] is minute number (epoch minutes), the other arrays line up with it.
+  private perMinute() {
+    this.trimRing();
+    const rows = [...this.ring];
+    if (this.cur) rows.push({ t: this.cur.t, starts: this.cur.starts, limited: this.cur.limited, waitP95: p95Of(this.cur.waits), peakQueue: this.cur.peakQueue });
+    return { minutes: rows.map((r) => r.t), starts: rows.map((r) => r.starts), limited: rows.map((r) => r.limited),
+      waitP95: rows.map((r) => r.waitP95), peakQueue: rows.map((r) => r.peakQueue) };
   }
   private countLabel(label: unknown): void {
     const name = typeof label === "string" && /^[a-z0-9-]{1,24}$/.test(label) ? label : "other";
@@ -208,6 +273,7 @@ export class MyDurableObject extends DurableObject<Env> {
     while (at > 0 && this.waitq[at - 1].order > entry.order) at--;       // stable insert by order
     this.waitq.splice(at, 0, entry);
     this.s.peakQueue = Math.max(this.s.peakQueue, this.waitq.length);
+    { const mm = this.minuteNow(); mm.peakQueue = Math.max(mm.peakQueue, this.waitq.length); }
     promise.then(() => { this.s.startsByClass[klass]++; });
     this.pump();
     return { promise, cancel: () => { entry.cancelled = true; } };
@@ -228,6 +294,7 @@ export class MyDurableObject extends DurableObject<Env> {
       while (this.recentStarts.length && now - this.recentStarts[0] >= 1000) this.recentStarts.shift();
       this.s.peakStartsPerSec = Math.max(this.s.peakStartsPerSec, this.recentStarts.length);
       this.sample(this.m.waitMs[head.klass], now - head.requestedAt);
+      { const mm = this.minuteNow(); mm.starts++; if (mm.waits.length < MINUTE_WAIT_SAMPLES) mm.waits.push(now - head.requestedAt); }
       head.grant({ klass: head.klass, at: now });
     }
   }
@@ -237,6 +304,7 @@ export class MyDurableObject extends DurableObject<Env> {
     this.active = Math.max(0, this.active - 1);
     if (limited) {
       this.s.limited++;
+      this.minuteNow().limited++;
       this.okStreak = 0;
       this.gapMs = Math.min(500, this.gapMs * 2);
       this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs)));
@@ -492,7 +560,190 @@ export class MyDurableObject extends DurableObject<Env> {
     const expiresAt = Number(input.expiresAt) || Date.now() + 40_000;
     this.s.larkCalls++;
     this.countLabel(input.label || callType(input));
-    let result = await this.fetchPage(input, null, since, expiresAt, klass, !startedAt, this.writeTimeoutMs);
+    // Writes to the SAME record run one at a time, in order; a newer one queued behind an older one replaces it (see coalescePut).
+    if (method === "PUT") {
+      const fields = putFields(input.body);
+      if (fields && recordIdOf(input.url)) return this.coalescePut(new URL(input.url).pathname, input, fields);
+    }
+    return this.runLarkCall(input);
+  }
+
+  // Two submits for one record can be in the queue at once (agent edits again, widget retry, sweep). Applied in arrival order
+  // they would cost two PUTs and could finish out of order; instead the QUEUED older write is replaced by the newer one: their
+  // fields are merged with the newer values winning, which is exactly what applying them one after the other would leave. A write
+  // already in flight is never cancelled -- the newer one runs after it, so the newest is always applied last.
+  private coalescePut(key: string, input: SearchBatchInput, fields: Record<string, unknown>): Promise<SearchBatchResult> {
+    return new Promise<SearchBatchResult>((resolve) => {
+      let state = this.recordWrites.get(key);
+      if (!state) { state = { running: false, pending: null }; this.recordWrites.set(key, state); }
+      if (state.pending) {
+        const job = state.pending;
+        job.fields = { ...job.fields, ...fields };
+        job.input = { ...input, requestStartedAt: earlier(job.input.requestStartedAt, input.requestStartedAt), expiresAt: Math.max(Number(job.input.expiresAt) || 0, Number(input.expiresAt) || 0) || undefined };
+        job.waiters.push(resolve);
+        this.s.writesSuperseded++;
+        return;
+      }
+      state.pending = { input, fields, waiters: [resolve] };
+      if (!state.running) void this.drainRecordWrites(key);
+    });
+  }
+  private async drainRecordWrites(key: string): Promise<void> {
+    const state = this.recordWrites.get(key);
+    if (!state) return;
+    state.running = true;
+    try {
+      while (state.pending) {
+        // Wait for a slot FIRST and only then take the pending job: every newer write for this record that arrives while this one is
+        // still queued at the gate is merged into it, so the newest values are what gets sent.
+        const first = state.pending;
+        const startedAt = Number(first.input.requestStartedAt) || 0;
+        const grant = await this.acquireSlot("write", startedAt || Date.now(), !startedAt).promise;
+        const job = state.pending ?? first;
+        state.pending = null;
+        let result: SearchBatchResult;
+        try { result = await this.runLarkCall({ ...job.input, body: JSON.stringify({ fields: job.fields }) }, grant); }
+        catch (error) { result = failure(502, String((error as Error)?.message || error)); }
+        for (const waiter of job.waiters) waiter(result);
+      }
+    } finally { state.running = false; this.recordWrites.delete(key); }
+  }
+
+  // ---- RPC: record updates coalesced into Lark's batch_update (OFF unless the Pages side calls it: LARK_BATCH_UPDATE=1) -----------
+  // Same per-record rules as larkCall (a newer queued write for the record replaces an older queued one, a write in flight is never
+  // cancelled, one record is written at a time); on top of that, the records that are ready for the same table share ONE
+  // batch_update call. Ownership (409) is decided by Pages BEFORE a write is sent here, so only writes that passed it get in.
+  // See claude-lookup-review/LARK_BATCH_UPDATE_NOTES.md for what Lark's documentation does and does not promise.
+  async updateBatch(input: SearchBatchInput): Promise<SearchBatchResult> {
+    const fields = putFields(input.body);
+    const id = recordIdOf(input.url);
+    if ((input.method || "PUT").toUpperCase() !== "PUT" || !fields || !id) return this.larkCall(input);
+    this.countLabel(input.label || "update");
+    const pathKey = new URL(input.url).pathname;
+    const tableKey = pathKey.replace(/\/[^/]+$/, "");
+    return new Promise<SearchBatchResult>((resolve) => {
+      let state = this.recordWrites.get(pathKey);
+      if (!state) { state = { running: false, pending: null }; this.recordWrites.set(pathKey, state); }
+      if (state.pending) {                                    // newer write replaces the queued older one (fields merged, newest wins)
+        const job = state.pending;
+        job.fields = { ...job.fields, ...fields };
+        job.input = { ...input, requestStartedAt: earlier(job.input.requestStartedAt, input.requestStartedAt), expiresAt: Math.max(Number(job.input.expiresAt) || 0, Number(input.expiresAt) || 0) || undefined };
+        job.waiters.push(resolve);
+        this.s.writesSuperseded++;
+        return;
+      }
+      state.pending = { input, fields, waiters: [resolve] };
+      if (state.running) return;                              // an older write of this record is in flight: this one goes after it
+      let bucket = this.updateBuckets.get(tableKey);
+      if (!bucket) { bucket = { ready: new Set(), running: false }; this.updateBuckets.set(tableKey, bucket); }
+      bucket.ready.add(pathKey);
+      if (!bucket.running) void this.runUpdateBucket(tableKey);
+    });
+  }
+
+  private async runUpdateBucket(tableKey: string): Promise<void> {
+    const bucket = this.updateBuckets.get(tableKey);
+    if (!bucket) return;
+    bucket.running = true;
+    try {
+      await sleep(MIN_WINDOW_MS);                             // let concurrent submits join before a slot is taken
+      while (bucket.ready.size) {
+        let since = Infinity, timed = true;
+        for (const key of bucket.ready) {
+          const pending = this.recordWrites.get(key)?.pending;
+          if (!pending) continue;
+          const startedAt = Number(pending.input.requestStartedAt) || 0;
+          since = Math.min(since, startedAt || Date.now());
+          if (!startedAt) timed = false;
+        }
+        if (!Number.isFinite(since)) { bucket.ready.clear(); break; }
+        const grant = await this.acquireSlot("write", since, !timed).promise;
+        const taken: Array<{ key: string; id: string; job: PutJob }> = [];
+        for (const key of [...bucket.ready]) {
+          if (taken.length >= MAX_UPDATE_BATCH) break;
+          bucket.ready.delete(key);
+          const state = this.recordWrites.get(key);
+          if (!state || !state.pending || state.running) continue;
+          taken.push({ key, id: recordIdOf(state.pending.input.url), job: state.pending });
+          state.pending = null;
+          state.running = true;
+        }
+        if (!taken.length) { this.releaseSlot(false, 0, grant); continue; }
+        try { await this.executeUpdates(taken, grant, since, timed); }
+        catch (error) { const failed = failure(502, String((error as Error)?.message || error)); for (const t of taken) for (const w of t.job.waiters) w(failed); }
+        for (const { key } of taken) {
+          const state = this.recordWrites.get(key);
+          if (!state) continue;
+          state.running = false;
+          if (state.pending) bucket.ready.add(key); else this.recordWrites.delete(key);
+        }
+      }
+    } finally {
+      bucket.running = false;
+      if (!bucket.ready.size) this.updateBuckets.delete(tableKey);
+    }
+  }
+
+  private async executeUpdates(items: Array<{ id: string; job: PutJob }>, grant: Grant | null, since: number, timed: boolean): Promise<void> {
+    const single = (item: { id: string; job: PutJob }, held: Grant | null) =>
+      this.runLarkCall({ ...item.job.input, body: JSON.stringify({ fields: item.job.fields }) }, held);
+    if (items.length === 1) {                                 // a lone update stays an ordinary PUT
+      const result = await single(items[0], grant);
+      for (const w of items[0].job.waiters) w(result);
+      return;
+    }
+    this.s.updateBatches++;
+    const base = items[0].job.input;
+    const url = new URL(base.url);
+    url.pathname = url.pathname.replace(/\/records\/[^/]+$/, "/records/batch_update");
+    const deadline = Math.max(...items.map((i) => Number(i.job.input.expiresAt) || Date.now() + 90_000));
+    const input: SearchBatchInput = { ...base, url: url.toString(), method: "POST",
+      body: JSON.stringify({ records: items.map((i) => ({ record_id: i.id, fields: i.job.fields })) }) };
+    let result = await this.fetchPage(input, grant, since, deadline, "write", !timed, this.writeTimeoutMs);
+    if (upstreamFailures.has(result) && Date.now() < deadline - 1_000) {        // one retry of a transient failure, same body (updates are idempotent)
+      this.s.writeRetries++;
+      result = await this.fetchPage(input, null, since, deadline, "write", !timed, this.writeTimeoutMs);
+    }
+    let parsed: any = null;
+    try { parsed = JSON.parse(result.body); } catch { /* handled below */ }
+    if (result.status >= 200 && result.status < 300 && parsed && parsed.code === 0) {
+      // Match by record_id, never by position. A record missing from a success reply is not assumed written: it is re-sent alone.
+      const byId = new Map<string, any>();
+      for (const rec of Array.isArray(parsed.data?.records) ? parsed.data.records : []) if (rec?.record_id) byId.set(String(rec.record_id), rec);
+      const missed: Array<{ id: string; job: PutJob }> = [];
+      for (const item of items) {
+        const rec = byId.get(item.id);
+        if (!rec) { missed.push(item); continue; }
+        this.dropRecord(item.id);
+        this.s.updatedInBatches++;
+        const answer = okRecord(rec);
+        for (const w of item.job.waiters) w(answer);
+      }
+      this.s.updateMismatches += missed.length;
+      await Promise.all(missed.map(async (item) => { const r = await single(item, null); for (const w of item.job.waiters) w(r); }));
+      return;
+    }
+    const limited = result.status === 429 || Number(parsed?.code) === 1254290 || Number(parsed?.code) === 99991400;
+    if (upstreamFailures.has(result) || limited || items.length === 1) {       // transient (already retried once): every caller gets the error
+      for (const item of items) for (const w of item.job.waiters) w(result);
+      return;
+    }
+    // Not transient: one bad record must not fail the others. Split, and let each half find its own answer.
+    this.s.updateSplits++;
+    const mid = Math.ceil(items.length / 2);
+    await Promise.all([items.slice(0, mid), items.slice(mid)].map(async (half) => {
+      const g = await this.acquireSlot("write", since, !timed).promise;
+      return this.executeUpdates(half, g, since, timed);
+    }));
+  }
+
+  private async runLarkCall(input: SearchBatchInput, held: Grant | null = null): Promise<SearchBatchResult> {
+    const method = (input.method || "GET").toUpperCase();
+    const klass: Klass = method === "GET" ? "read" : "write";
+    const startedAt = Number(input.requestStartedAt) || 0;
+    const since = startedAt || Date.now();
+    const expiresAt = Number(input.expiresAt) || Date.now() + 40_000;
+    let result = await this.fetchPage(input, held, since, expiresAt, klass, !startedAt, this.writeTimeoutMs);
     if (method !== "DELETE" && upstreamFailures.has(result) && Date.now() < expiresAt - 1_000) {
       this.s.writeRetries++;
       result = await this.fetchPage(input, null, since, expiresAt, klass, !startedAt, this.writeTimeoutMs);

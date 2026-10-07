@@ -26,7 +26,11 @@
 	"observability": {
 		"enabled": true
 	},
-	"upload_source_maps": true
+	"upload_source_maps": true,
+	// Gate pace. The repo is the source of truth: a `wrangler deploy` sets these, so a value changed only in the dashboard would be
+	// reset by the next deploy (and keep_vars is NOT used). Change the pace here AND deploy, or change the dashboard AND this file.
+	// Non-secret numbers only -- never put secrets in this file.
+	"vars": { "GATE_CONCURRENCY": "4", "GATE_START_GAP_MS": "250" }
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

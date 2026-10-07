@@ -29,8 +29,8 @@ const mkTable = (n, rowsPer = 2) => {
     rows.push({ record_id: `r-${u}-${r}-${brand}`, created_time: 1, fields: { "Username/UID": [{ text: `u${u}`, type: "text" }], Brand: brand, Status: `s${u}-${r}` } });
   return { rows, schema: new Set(["Username/UID", "Brand", "Status", "Agent Name", "Inquiry"]) };
 };
-async function setup({ tables, quota = 1000, median = 20, gap = 20, conc = 4, longpoll, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0, env = {} }) {
-  const lark = createFakeLark({ tables, medianMs: median, sigma: 0, quota, limitStatus, shuffleBatch, dropFromBatch, hangAfterWrite });
+async function setup({ tables, quota = 1000, median = 20, gap = 20, conc = 4, longpoll, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0, batchUpdateAtomic = true, env = {} }) {
+  const lark = createFakeLark({ tables, medianMs: median, sigma: 0, quota, limitStatus, shuffleBatch, dropFromBatch, hangAfterWrite, batchUpdateAtomic });
   const real = globalThis.fetch; globalThis.fetch = lark.fetch;
   const d = new MyDurableObject({}, { GATE_START_GAP_MS: gap, GATE_CONCURRENCY: conc, ...(longpoll ? { GATE_LONGPOLL_MS: longpoll } : {}), ...env });
   return { lark, d, done: () => { globalThis.fetch = real; } };
@@ -935,7 +935,7 @@ import { handler as recordHandler } from "../../../functions/lark-record.js";
 import { runWithRequestStart as runWithRequestStartE2E } from "../../../functions/_lib/lark.js";
 
 const pagesStub = (d) => {
-  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "larkCall", "cachedCall", "forgetCreated"]
+  const stub = Object.fromEntries(["acquire", "release", "penalize", "searchBatch", "createBatch", "larkCall", "updateBatch", "cachedCall", "forgetCreated", "reportCounters"]
     .map((m) => [m, (...a) => d[m](...a)]));
   return { idFromName: () => "g", get: () => stub };
 };
@@ -946,14 +946,17 @@ const caSchema = new Set(["Username", "Brand", "Agent Name", "link", "Inquiry", 
 const fiftyRows = (agentFor = () => "Agent A") => Array.from({ length: 50 }, (_, i) => ({
   record_id: `rec${i}`, created_time: 1, fields: { Username: [{ text: `player${i}`, type: "text" }], Brand: "PP", "Agent Name": agentFor(i) } }));
 
-test("C: 50 ownership checks at once cost at most 3 Lark searches (merged by the queue), and every owner is right", async () => {
+test("C: 50 ownership checks at once cost at most 3 Lark searches (merged by the queue); rows that are mine are decided by the search, the others by a GET", async () => {
   const { lark, d, done } = await setup({ tables: { ca: { rows: fiftyRows((i) => (i % 5 === 0 ? "Agent B" : "Agent A")), schema: caSchema } }, gap: 20, conc: 3 });
   try {
     initPagesEnv(e2eEnv(d));
-    const out = await Promise.all(Array.from({ length: 50 }, (_, i) => runWithRequestStartE2E(() => readOwnershipMerged(`rec${i}`, `Player${i}`))));
-    out.forEach((r, i) => { assert.equal(r.via, "search", `rec${i}`); assert.equal(r.owner, i % 5 === 0 ? "Agent B" : "Agent A"); assert.equal(r.blank, true); });
+    const out = await Promise.all(Array.from({ length: 50 }, (_, i) => runWithRequestStartE2E(() => readOwnershipMerged(`rec${i}`, `Player${i}`, "Agent A"))));
+    out.forEach((r, i) => {
+      assert.equal(r.owner, i % 5 === 0 ? "Agent B" : "Agent A", `rec${i}`);
+      assert.equal(r.via, i % 5 === 0 ? "get" : "search", `rec${i}: only this agent's own rows are decided from the search`);
+    });
     assert.ok(lark.stats.search <= 3, `ownership searches: ${lark.stats.search}`);
-    assert.equal(lark.stats.get || 0, 0, "no single-record GET");
+    assert.equal(lark.stats.get, 10, "one GET for each of the 10 rows owned by someone else");
   } finally { done(); }
 });
 
@@ -968,7 +971,7 @@ test("A+B+C: 50 whole submits through the real handler -> 3 or fewer searches, 5
     results.forEach((res, i) => assert.equal(res.statusCode, i === 7 ? 409 : 200, `submit ${i}`));
     assert.ok(lark.stats.search <= 3, `searches: ${lark.stats.search}`);
     assert.equal(lark.stats.update, 49, "every owned row updated exactly once; the foreign row untouched");
-    assert.equal(lark.stats.get || 0, 0);
+    assert.equal(lark.stats.get, 1, "only the foreign row needed a GET to be refused");
     rows.forEach((row, i) => {
       if (i === 7) { assert.equal(row.fields.Status, undefined, "another agent's row is never written"); return; }
       assert.equal(row.fields.Status, i % 2 ? "Solved" : "Unsolved");
@@ -992,5 +995,356 @@ test("A: a Pages request stamps its start on all its steps, so an older submit f
     const run = [0, 1, 2, 3].map(async (i) => { await new Promise((r) => setTimeout(r, i * 5)); await submit(i); finished.push(i); });
     await Promise.all(run);
     assert.deepEqual(finished, [0, 1, 2, 3], "older submits complete first");
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Follow-up 2: writes to the same record run one at a time, newest wins
+// ======================================================================================
+const putCall = (id, fields, extra = {}) => ({ url: recordUrl(id), method: "PUT", headers: { authorization: "Bearer x", "content-type": "application/json" }, body: JSON.stringify({ fields }), ...extra });
+function spyOnPuts(id) {
+  const real = globalThis.fetch, puts = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (init.method === "PUT" && String(url).endsWith(`/records/${id}`)) puts.push(JSON.parse(init.body).fields);
+    return real(url, init);
+  };
+  return puts;
+}
+
+test("2: Unsolved then Solved for one record, both queued -> ONE Lark PUT, final value Solved, both callers get the answer", async () => {
+  const tables = { ca: caTableWith(caRow("r1")) };
+  const { lark, d, done } = await setup({ tables, conc: 1, gap: 20 });
+  try {
+    const hold = await d.acquire("read", "hold");                                // keep the gate busy so both writes queue
+    const puts = spyOnPuts("r1");
+    const first = d.larkCall(putCall("r1", { Status: "Unsolved", Inquiry: ["Others"] }));
+    const second = d.larkCall(putCall("r1", { Status: "Solved" }));
+    await new Promise((r) => setTimeout(r, 30));
+    await d.release(hold.ticket);
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(a.status, 200); assert.equal(b.status, 200);
+    assert.equal(JSON.parse(a.body).data.record.fields.Status, "Solved");
+    assert.equal(tables.ca.rows[0].fields.Status, "Solved", "latest submit wins");
+    assert.deepEqual(tables.ca.rows[0].fields.Inquiry, ["Others"], "fields only the older write had are kept (same as applying them in order)");
+    assert.equal(lark.stats.update, 1, "<= 2 PUTs, here exactly one");
+    assert.equal(puts.length, 1);
+    assert.equal(d.getStats().writesSuperseded, 1);
+  } finally { done(); }
+});
+
+test("2: an older write already IN FLIGHT is never cancelled: the newer one runs after it, so the newer is applied last", async () => {
+  const tables = { ca: caTableWith(caRow("r1")) };
+  const { lark, d, done } = await setup({ tables, conc: 4, gap: 5, median: 80 });
+  try {
+    const puts = spyOnPuts("r1");
+    const older = d.larkCall(putCall("r1", { Status: "Unsolved" }));
+    await new Promise((r) => setTimeout(r, 30));                                  // the older PUT is now on its way to Lark
+    const newer = d.larkCall(putCall("r1", { Status: "Solved" }));
+    await Promise.all([older, newer]);
+    assert.deepEqual(puts.map((p) => p.Status), ["Unsolved", "Solved"], "in order, newest last");
+    assert.equal(tables.ca.rows[0].fields.Status, "Solved");
+    assert.equal(lark.stats.update, 2);
+    assert.equal(d.getStats().writesSuperseded, 0);
+  } finally { done(); }
+});
+
+test("2: in flight + two newer queued -> the two newer merge into one write that runs after the in-flight one", async () => {
+  const tables = { ca: caTableWith(caRow("r1")) };
+  const { lark, d, done } = await setup({ tables, conc: 4, gap: 5, median: 80 });
+  try {
+    const puts = spyOnPuts("r1");
+    const a = d.larkCall(putCall("r1", { Status: "Unsolved" }));
+    await new Promise((r) => setTimeout(r, 30));
+    const b = d.larkCall(putCall("r1", { Status: "Given", "Claim Secret": true }));
+    const c = d.larkCall(putCall("r1", { Status: "Solved" }));
+    await Promise.all([a, b, c]);
+    assert.deepEqual(puts.map((p) => p.Status), ["Unsolved", "Solved"]);
+    assert.equal(tables.ca.rows[0].fields["Claim Secret"], true, "merged with the newer value winning per field");
+    assert.equal(lark.stats.update, 2);
+    assert.equal(d.getStats().writesSuperseded, 1);
+  } finally { done(); }
+});
+
+test("2: writes to DIFFERENT records are independent, and a failed write answers every waiter with the same error", async () => {
+  const tables = { ca: caTableWith(caRow("r1"), caRow("r2")) };
+  const { lark, d, done } = await setup({ tables, conc: 4, gap: 5 });
+  try {
+    await Promise.all([d.larkCall(putCall("r1", { Status: "Solved" })), d.larkCall(putCall("r2", { Status: "Solved" }))]);
+    assert.equal(lark.stats.update, 2);
+    assert.equal(d.getStats().writesSuperseded, 0);
+    const real = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => (init.method === "PUT" ? new Response(JSON.stringify({ code: 1254045, msg: "field not found" }), { status: 200 }) : real(url, init));
+    const [x, y] = await Promise.all([d.larkCall(putCall("r1", { Status: "A" })), d.larkCall(putCall("r1", { Status: "B" }))]);
+    assert.equal(JSON.parse(x.body).code, 1254045);
+    assert.equal(x.body, y.body);
+    assert.equal(d.getStats().active, 0);
+  } finally { done(); }
+});
+
+test("2: the 90 s write deadline is kept (a queued write is dropped only after its own deadline) and a merged write uses the longest one", async () => {
+  const { d, done } = await setup({ tables: { ca: caTableWith(caRow("r1")) }, conc: 1, gap: 5 });
+  try {
+    const hold = await d.acquire("read", "hold");
+    const short = d.larkCall(putCall("r1", { Status: "A" }, { expiresAt: Date.now() + 150 }));
+    const long = d.larkCall(putCall("r1", { Status: "B" }, { expiresAt: Date.now() + 90_000 }));
+    await new Promise((r) => setTimeout(r, 250));                                 // past the short deadline
+    await d.release(hold.ticket);
+    const [a, b] = await Promise.all([short, long]);
+    assert.equal(a.status, 200, "merged into the write that has the longer deadline");
+    assert.equal(b.status, 200);
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Follow-up 3: instrumentation
+// ======================================================================================
+test("3a: reportCounters adds up what Pages reports, rejects odd names, and bounds the set", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) } });
+  try {
+    await d.reportCounters({ queueCallFallback: 2, "ownershipFallback:missing": 3 });
+    await d.reportCounters({ queueCallFallback: 1, "bad name!": 5, neg: -1, nan: "x", zero: 0 });
+    assert.deepEqual(d.getStats().pagesCounters, { queueCallFallback: 3, "ownershipFallback:missing": 3 });
+    for (let i = 0; i < 100; i++) await d.reportCounters({ [`n${i}`]: 1 });
+    assert.ok(Object.keys(d.getStats().pagesCounters).length <= 66, "bounded (64 names + other)");
+    assert.ok(d.getStats().pagesCounters.other > 0);
+    await d.reportCounters(null);
+    await d.reportCounters("junk");
+  } finally { done(); }
+});
+
+test("3b: getStats reports when this queue instance started", async () => {
+  const before = Date.now();
+  const { d, done } = await setup({ tables: { t1: mkTable(1) } });
+  try {
+    const stats = d.getStats();
+    assert.ok(Date.parse(stats.startedAt) >= before - 5 && Date.parse(stats.startedAt) <= Date.now());
+    assert.ok(stats.uptimeSec >= 0);
+  } finally { done(); }
+});
+
+test("3c: per-minute history: starts, 429s, queue-wait p95 and peak queue per minute, kept for 24 h, columnar", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(2) }, conc: 1, gap: 5, median: 5 });
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const minute0 = Math.floor(Date.now() / 60_000);
+    await Promise.all(Array.from({ length: 6 }, (_, i) => d.acquire("read", `a${i}`).then((p) => d.release(p.ticket))));
+    offset += 60_000;                                                              // next minute
+    const first = await d.acquire("read", "b0"); await d.release(first.ticket, true, 1);   // one 429
+    offset += 3 * 60_000;
+    const last = await d.acquire("read", "c0"); await d.release(last.ticket);
+    const pm = d.getStats().perMinute;
+    assert.deepEqual(Object.keys(pm).sort(), ["limited", "minutes", "peakQueue", "starts", "waitP95"]);
+    assert.equal(pm.minutes.length, pm.starts.length);
+    const at = (m) => pm.minutes.indexOf(m);
+    assert.equal(pm.starts[at(minute0)], 6);
+    assert.ok(pm.waitP95[at(minute0)] > 0, "the queue wait of that minute was recorded");
+    assert.ok(pm.peakQueue[at(minute0)] >= 3, "and its peak queue");
+    assert.equal(pm.starts[at(minute0 + 1)], 1);
+    assert.equal(pm.limited[at(minute0 + 1)], 1, "the 429 was counted in the minute it happened");
+    assert.equal(pm.starts[at(minute0 + 4)], 1);
+    assert.equal(at(minute0 + 2), -1, "idle minutes are not stored");
+    // 24 h window: a day later the old minutes are gone, and the ring never grows past 1,440
+    offset += 25 * 3_600_000;
+    const later = await d.acquire("read", "d0"); await d.release(later.ticket);
+    const after = d.getStats().perMinute;
+    assert.ok(after.minutes.every((m) => m > Math.floor(Date.now() / 60_000) - 1440));
+    assert.equal(after.minutes.includes(minute0), false);
+    for (let i = 0; i < 1600; i++) { offset += 60_000; d.minuteNow().starts++; }      // 1,600 busy minutes in a row
+    assert.ok(d.getStats().perMinute.minutes.length <= 1440);
+  } finally { Date.now = realNow; done(); }
+});
+
+// ======================================================================================
+// Follow-up 4: batch_update (OFF unless Pages calls updateBatch)
+// ======================================================================================
+const manyRows = (n) => Array.from({ length: n }, (_, i) => caRow(`b${i}`, { Username: `p${i}` }));
+function spyOnBatchUpdates() {
+  const real = globalThis.fetch, bodies = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (init.method === "POST" && String(url).includes("/records/batch_update")) bodies.push(JSON.parse(init.body).records);
+    return real(url, init);
+  };
+  return bodies;
+}
+
+test("4: many updates for different records share ONE batch_update, and every caller gets its OWN record with its OWN values", async () => {
+  const tables = { ca: caTableWith(...manyRows(20)) };
+  const { lark, d, done } = await setup({ tables, gap: 20, conc: 2 });
+  try {
+    const bodies = spyOnBatchUpdates();
+    const out = await Promise.all(Array.from({ length: 20 }, (_, i) => d.updateBatch(putCall(`b${i}`, { Status: i % 2 ? "Solved" : "Unsolved", Inquiry: [`I${i}`] }, { requestStartedAt: Date.now() }))));
+    out.forEach((res, i) => {
+      assert.equal(res.status, 200);
+      const record = JSON.parse(res.body).data.record;
+      assert.equal(record.record_id, `b${i}`);
+      assert.equal(record.fields.Status, i % 2 ? "Solved" : "Unsolved");
+    });
+    tables.ca.rows.forEach((row, i) => assert.deepEqual(row.fields.Inquiry, [`I${i}`]));
+    assert.ok(lark.stats.batchUpdate <= 2, `batch_update calls: ${lark.stats.batchUpdate}`);
+    assert.equal(lark.stats.update || 0, 0, "no single PUTs");
+    assert.equal(bodies.flat().length, 20);
+    const stats = d.getStats();
+    assert.ok(stats.updateBatches >= 1 && stats.updatedInBatches === 20);
+    assert.equal(stats.lark.batchUpdate.n, lark.stats.batchUpdate);
+    assert.equal(stats.active, 0);
+  } finally { done(); }
+});
+
+test("4: results are matched by record_id, not position (Lark may answer in any order)", async () => {
+  const tables = { ca: caTableWith(...manyRows(6)) };
+  const { d, done } = await setup({ tables, gap: 20, conc: 2 });
+  try {
+    const real = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      const res = await real(url, init);
+      if (!String(url).includes("/records/batch_update")) return res;
+      const body = await res.json();
+      body.data.records.reverse();
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const out = await Promise.all(Array.from({ length: 6 }, (_, i) => d.updateBatch(putCall(`b${i}`, { Status: `S${i}` }, { requestStartedAt: Date.now() }))));
+    out.forEach((res, i) => assert.equal(JSON.parse(res.body).data.record.fields.Status, `S${i}`));
+  } finally { done(); }
+});
+
+test("4: two writes for ONE record inside a burst become one entry (newest wins); a write in flight is not cancelled and the newer goes in the next batch", async () => {
+  const tables = { ca: caTableWith(...manyRows(4)) };
+  const { lark, d, done } = await setup({ tables, gap: 20, conc: 2, median: 60 });
+  try {
+    const bodies = spyOnBatchUpdates();
+    const hold = await d.acquire("read", "hold");
+    const a1 = d.updateBatch(putCall("b0", { Status: "Unsolved" }, { requestStartedAt: Date.now() }));
+    const a2 = d.updateBatch(putCall("b0", { Status: "Solved" }, { requestStartedAt: Date.now() }));
+    const others = [1, 2, 3].map((i) => d.updateBatch(putCall(`b${i}`, { Status: "Given" }, { requestStartedAt: Date.now() })));
+    await new Promise((r) => setTimeout(r, 40));
+    await d.release(hold.ticket);
+    await Promise.all([a1, a2, ...others]);
+    assert.equal(bodies.flat().filter((r) => r.record_id === "b0").length, 1, "b0 appears once in the batch");
+    assert.equal(tables.ca.rows[0].fields.Status, "Solved");
+    assert.equal(d.getStats().writesSuperseded, 1);
+    // a newer write that arrives while that batch is in flight goes AFTER it
+    bodies.length = 0;
+    const first = d.updateBatch(putCall("b1", { Status: "X1" }, { requestStartedAt: Date.now() }));
+    const second = d.updateBatch(putCall("b2", { Status: "Y1" }, { requestStartedAt: Date.now() }));
+    await new Promise((r) => setTimeout(r, 40));                                // the batch holding b1 and b2 is now in flight
+    const later = d.updateBatch(putCall("b1", { Status: "X2" }, { requestStartedAt: Date.now() }));
+    await Promise.all([first, second, later]);
+    assert.equal(tables.ca.rows[1].fields.Status, "X2", "the newer write was applied last");
+    assert.equal(tables.ca.rows[2].fields.Status, "Y1");
+  } finally { done(); }
+});
+
+test("4: a transient failure is retried ONCE with the same body; a second failure goes to every caller (no endless retry)", async () => {
+  const tables = { ca: caTableWith(...manyRows(5)) };
+  const { d, done } = await setup({ tables, gap: 10, conc: 2 });
+  try {
+    const real = globalThis.fetch, seen = [];
+    let fails = 1;
+    globalThis.fetch = async (url, init = {}) => {
+      if (String(url).includes("/records/batch_update")) { seen.push(init.body); if (fails > 0) { fails--; return new Response("bad gateway", { status: 502 }); } }
+      return real(url, init);
+    };
+    const out = await Promise.all(Array.from({ length: 5 }, (_, i) => d.updateBatch(putCall(`b${i}`, { Status: "Solved" }, { requestStartedAt: Date.now() }))));
+    assert.ok(out.every((r) => r.status === 200));
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0], seen[1], "the retry sent the same batch");
+    seen.length = 0; fails = 5;
+    const failing = await Promise.all(Array.from({ length: 5 }, (_, i) => d.updateBatch(putCall(`b${i}`, { Status: "Again" }, { requestStartedAt: Date.now() }))));
+    assert.ok(failing.every((r) => r.status === 502));
+    assert.equal(seen.length, 2, "one attempt + one retry, then the error is returned");
+    assert.equal(d.getStats().active, 0);
+  } finally { done(); }
+});
+
+test("4: a NON-transient error splits the batch: the good records are updated, only the bad one gets the error (atomic Lark)", async () => {
+  const tables = { ca: caTableWith(...manyRows(8)) };
+  const { lark, d, done } = await setup({ tables, gap: 10, conc: 2, batchUpdateAtomic: true });
+  try {
+    const bodies = spyOnBatchUpdates();
+    const ids = [...Array.from({ length: 8 }, (_, i) => `b${i}`).slice(0, 4), "ghost", ...Array.from({ length: 8 }, (_, i) => `b${i}`).slice(4)];
+    const out = await Promise.all(ids.map((id) => d.updateBatch(putCall(id, { Status: "Solved" }, { requestStartedAt: Date.now() }))));
+    out.forEach((res, i) => {
+      if (ids[i] === "ghost") assert.equal(JSON.parse(res.body).code, 1254043, "the bad record gets Lark's error");
+      else { assert.equal(res.status, 200, ids[i]); assert.equal(JSON.parse(res.body).data.record.fields.Status, "Solved"); }
+    });
+    assert.ok(tables.ca.rows.every((row) => row.fields.Status === "Solved"), "every good record was written");
+    assert.ok(d.getStats().updateSplits >= 1);
+    assert.ok(bodies.length > 1, "the failing batch was split");
+  } finally { done(); }
+});
+
+test("4: if Lark instead applies the others and leaves the bad record out of its reply, that record is re-sent alone (never assumed written)", async () => {
+  const tables = { ca: caTableWith(...manyRows(5)) };
+  const { lark, d, done } = await setup({ tables, gap: 10, conc: 2, batchUpdateAtomic: false });
+  try {
+    const ids = ["b0", "b1", "ghost", "b3", "b4"];
+    const out = await Promise.all(ids.map((id) => d.updateBatch(putCall(id, { Status: "Solved" }, { requestStartedAt: Date.now() }))));
+    ids.forEach((id, i) => { if (id === "ghost") assert.equal(JSON.parse(out[i].body).code, 1254043); else assert.equal(out[i].status, 200); });
+    assert.equal(d.getStats().updateMismatches, 1);
+    assert.ok(lark.stats.update >= 1, "the missing record went out as a single PUT");
+    assert.equal(tables.ca.rows[0].fields.Status, "Solved");
+  } finally { done(); }
+});
+
+test("4: a lone update stays an ordinary PUT; anything that is not a plain field update (DELETE, odd body) takes the ordinary path", async () => {
+  const tables = { ca: caTableWith(...manyRows(3)) };
+  const { lark, d, done } = await setup({ tables, gap: 10 });
+  try {
+    const one = await d.updateBatch(putCall("b0", { Status: "Solved" }, { requestStartedAt: Date.now() }));
+    assert.equal(one.status, 200);
+    assert.equal(lark.stats.update, 1);
+    assert.equal(lark.stats.batchUpdate, 0);
+    const del = await d.updateBatch(call("DELETE", "b1"));
+    assert.equal(JSON.parse(del.body).code, 0);
+    assert.equal(lark.stats.delete, 1);
+    const odd = await d.updateBatch({ ...putCall("b2", {}), body: JSON.stringify({ fields: { Status: "x" }, extra: 1 }) });
+    assert.equal(odd.status, 200);
+    assert.equal(lark.stats.batchUpdate, 0);
+  } finally { done(); }
+});
+
+test("4: batches never exceed the size cap (100 records)", async () => {
+  const tables = { ca: caTableWith(...manyRows(230)) };
+  const { d, done } = await setup({ tables, gap: 5, conc: 3, median: 10 });
+  try {
+    const bodies = spyOnBatchUpdates();
+    await Promise.all(Array.from({ length: 230 }, (_, i) => d.updateBatch(putCall(`b${i}`, { Status: "Solved" }, { requestStartedAt: Date.now() }))));
+    assert.ok(bodies.every((records) => records.length <= 100), bodies.map((r) => r.length).join(","));
+    assert.equal(bodies.flat().length + (d.getStats().lark.update.n), 230);
+    assert.ok(tables.ca.rows.every((row) => row.fields.Status === "Solved"));
+  } finally { done(); }
+});
+
+test("4: the update memory rule still holds: a row updated through a batch is dropped from the create memory", async () => {
+  const tables = { ca: caTable() };
+  const { d, done } = await setup({ tables, gap: 10 });
+  try {
+    const made = await Promise.all([d.createBatch(createReq("ca", caFields(1))), d.createBatch(createReq("ca", caFields(2)))]);
+    const ids = made.map((r) => recordOf(r).record_id);
+    await Promise.all(ids.map((id) => d.updateBatch(putCall(id, { Status: "Solved" }, { requestStartedAt: Date.now() }))));
+    const again = await d.createBatch(createReq("ca", caFields(1)));
+    assert.notEqual(recordOf(again).record_id, ids[0], "an updated row is not handed out again");
+  } finally { done(); }
+});
+
+// Pages + real DO + fake Lark, flag on: 409s are decided BEFORE the batch
+test("4: end to end with the flag on: refused (409) rows never enter a batch; the rest share a few batch_update calls", async () => {
+  const rows = fiftyRows((i) => (i % 10 === 7 ? "Agent B" : "Agent A"));
+  const { lark, d, done } = await setup({ tables: { ca: { rows, schema: caSchema } }, gap: 20, conc: 3 });
+  try {
+    initPagesEnv({ ...e2eEnv(d), LARK_BATCH_UPDATE: "1" });
+    const bodies = spyOnBatchUpdates();
+    const results = await Promise.all(Array.from({ length: 50 }, (_, i) => recordHandler({ body: JSON.stringify({
+      recordId: `rec${i}`, username: `Player${i}`, agentName: "Agent A", brand: "PP", inquiry: ["Others"], status: "Solved",
+      chatLink: `https://my.livechatinc.com/chats/C${i}/T${i}`, telegram: false, claimSecret: false }) })));
+    results.forEach((res, i) => assert.equal(res.statusCode, i % 10 === 7 ? 409 : 200, `submit ${i}`));
+    const sent = bodies.flat().map((r) => r.record_id);
+    for (const i of [7, 17, 27, 37, 47]) { assert.ok(!sent.includes(`rec${i}`), `rec${i} (another agent's) was never sent`); assert.equal(rows[i].fields.Status, undefined); }
+    assert.equal(sent.length, 45);
+    assert.ok(lark.stats.batchUpdate <= 3, `batch_update calls: ${lark.stats.batchUpdate}`);
+    assert.equal(lark.stats.update || 0, 0);
+    rows.forEach((row, i) => { if (i % 10 !== 7) assert.equal(row.fields.Status, "Solved"); });
   } finally { done(); }
 });
