@@ -6,8 +6,22 @@ import { readFileSync } from 'node:fs';
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 
-test('the LiveChat login is OFF, and the department switches were left alone', () => {
-  assert.match(app, /const AGENT_LOGIN_LIVE = false;/);
+function loginFlag(embedded, search) {
+  const expr = app.match(/const AGENT_LOGIN_LIVE = ([^\n]+);/)[1];
+  return vm.runInContext(expr, vm.createContext({ IS_EMBEDDED_APP: embedded, location: { search }, URLSearchParams }));
+}
+
+test('the LiveChat login is OFF in the real widget; only the standalone preview can turn it on, with ?agentLogin=1', () => {
+  assert.equal(loginFlag(true, ''), false);
+  assert.equal(loginFlag(true, '?agentLogin=1'), false, 'the embedded widget ignores the switch');
+  assert.equal(loginFlag(true, '?account=lc1&agentLogin=1'), false);
+  assert.equal(loginFlag(false, ''), false, 'the preview is unchanged by default');
+  assert.equal(loginFlag(false, '?agentLogin=0'), false);
+  assert.equal(loginFlag(false, '?agentLogin=1'), true);
+  assert.equal(loginFlag(false, '?account=lc2&agentLogin=1'), true);
+});
+
+test('the department switches were left alone', () => {
   assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
   assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = false;/);
   assert.match(app, /const AUTOMATIC_DEPARTMENT_DETECTION = false;/);

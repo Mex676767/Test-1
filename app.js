@@ -13,9 +13,10 @@ const PREVIEW_LOGIN_GATE = false;
 const AUTOMATIC_DEPARTMENT_DETECTION = false;
 const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
 // LiveChat login decides the agent name (see requireAgentLogin and functions/agent-login.js): the first sign-in picks a
-// name once, Lark remembers it for that LiveChat login, and Settings can no longer change it. OFF until it is rolled out.
-// Independent of the department switches above, which stay as they are.
-const AGENT_LOGIN_LIVE = false;
+// name once, Lark remembers it for that LiveChat login, and Settings can no longer change it. OFF in the real LiveChat
+// widget until it is rolled out; the standalone admin preview can try it by opening it with ?agentLogin=1 (add
+// &account=lc1 or lc2 to sign in against one account only). Independent of the department switches above.
+const AGENT_LOGIN_LIVE = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("agentLogin") === "1";
 
 /* ============================================================
    THEME
