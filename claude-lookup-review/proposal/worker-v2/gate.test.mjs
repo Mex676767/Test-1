@@ -1135,7 +1135,7 @@ test("3c: per-minute history: starts, 429s, queue-wait p95 and peak queue per mi
     offset += 3 * 60_000;
     const last = await d.acquire("read", "c0"); await d.release(last.ticket);
     const pm = d.getStats().perMinute;
-    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "updateP95", "waitP95"]);
+    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "limitedOther", "limitedSearch", "limitedWrite", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "totalStarts", "updateP95", "waitP95"]);
     assert.equal(pm.minutes.length, pm.starts.length);
     const at = (m) => pm.minutes.indexOf(m);
     assert.equal(pm.starts[at(minute0)], 6);
@@ -1616,7 +1616,7 @@ test("MINUTE: search p95, update p95, token-lane starts and distinct Pages isola
     await d.reportCounters({}, "bad id with spaces");                               // ignored
     await d.reportCounters({}, 12345);                                              // ignored
     const pm = d.getStats().perMinute;
-    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "updateP95", "waitP95"]);
+    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "limitedOther", "limitedSearch", "limitedWrite", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "totalStarts", "updateP95", "waitP95"]);
     const last = pm.minutes.length - 1;
     assert.ok(pm.searchP95[last] >= 25, `search p95 ${pm.searchP95[last]}`);
     assert.ok(pm.updateP95[last] >= 25, `update p95 ${pm.updateP95[last]}`);
@@ -1647,5 +1647,112 @@ test("SECRETS: a token-shaped string in an upstream error is scrubbed from the r
     assert.doesNotMatch(stats, /SECRETSECRET|Bearer/);
     await d.acquire("token", "x", Date.now(), `t-${secret}`).then((p) => d.release(p.ticket));
     assert.doesNotMatch(JSON.stringify(d.getStats().labels), /SECRETSECRET/, "an odd label is grouped as 'other'");
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Throttle visibility: every 429 is counted by call label and by Lark code, logged with what Lark said, and the per-minute
+// history says which kind of call was throttled and how many requests really left for Lark (gate + token lane).
+// ======================================================================================
+function captureWarnings() {
+  const real = console.warn, lines = [];
+  console.warn = (...args) => { lines.push(args.map(String).join(" ")); };
+  return { lines, restore: () => { console.warn = real; } };
+}
+const throttleOnce = (matches, headers = {}) => {
+  const real = globalThis.fetch; let fired = false;
+  globalThis.fetch = async (url, init = {}) => {
+    if (!fired && matches(String(url), init)) {
+      fired = true;
+      return new Response(JSON.stringify({ code: 1254290, msg: "TooManyRequest" }), { status: 429, headers });
+    }
+    return real(url, init);
+  };
+};
+const lastOf = (column) => column.reduce((a, b) => a + b, 0);
+
+test("THROTTLE: a 429 on a search is counted by label and code, and the log line says label, code, status, Retry-After, x-ogw-ratelimit-* headers and table id (no token)", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(3) }, gap: 20 });
+  const warn = captureWarnings();
+  try {
+    throttleOnce((url) => url.includes("/records/search"), { "Retry-After": "2", "x-ogw-ratelimit-limit": "20", "x-ogw-ratelimit-remaining": "0", "x-ogw-ratelimit-reset": "1", "x-tt-logid": "LOG-ABC", "x-other": "ignore-me" });
+    const res = await d.searchBatch(req("t1", "u1"));
+    assert.equal(res.status, 200, "the throttled search was retried and succeeded");
+    const stats = d.getStats();
+    assert.equal(stats.limited, 1); assert.equal(stats.retries429, 1, "the DO retried the throttled search once (limited +1, retries429 +1)");
+    assert.deepEqual(stats.limitedByLabel, { search: 1 });
+    assert.deepEqual(stats.limitedByCode, { 1254290: 1 });
+    assert.equal(lastOf(stats.perMinute.limitedSearch), 1); assert.equal(lastOf(stats.perMinute.limitedWrite), 0); assert.equal(lastOf(stats.perMinute.limitedOther), 0);
+    const line = warn.lines.find((l) => l.startsWith("Lark rate limit"));
+    assert.ok(line, "the warning was logged");
+    const info = JSON.parse(line.slice("Lark rate limit ".length));
+    assert.equal(info.label, "search"); assert.equal(info.httpStatus, 429); assert.equal(info.code, 1254290); assert.equal(info.retryAfter, "2");
+    assert.deepEqual(info.ratelimit, { "retry-after": "2", "x-ogw-ratelimit-limit": "20", "x-ogw-ratelimit-remaining": "0", "x-ogw-ratelimit-reset": "1" }, "only Retry-After and x-ogw-ratelimit-* headers");
+    assert.equal(info.table, "t1"); assert.equal(info.logId, "LOG-ABC");
+    assert.equal(info.baseGapMs, 20); assert.equal(info.gapMs, 40, "the logged gap is the new, doubled one");
+    assert.ok("active" in info && "queued" in info && "startsLastSecond" in info);
+    assert.doesNotMatch(line, /Bearer|authorization/i);
+  } finally { warn.restore(); done(); }
+});
+
+test("THROTTLE: a 429 on a record update is a 'write' throttle, labelled update; on a batch_update, batchUpdate", async () => {
+  const tables = { ca: caTableWith(...manyRows(4)) };
+  const { d, done } = await setup({ tables, gap: 10 });
+  const warn = captureWarnings();
+  try {
+    throttleOnce((url, init) => init.method === "PUT");
+    assert.equal((await d.larkCall(putCall("b0", { Status: "Solved" }, { requestStartedAt: Date.now() }))).status, 200);
+    throttleOnce((url) => url.endsWith("/records/batch_update"));
+    const out = await Promise.all([1, 2, 3].map((i) => d.updateBatch(putCall(`b${i}`, { Status: "Solved" }, { requestStartedAt: Date.now() }))));
+    assert.ok(out.every((r) => r.status === 200));
+    const stats = d.getStats();
+    assert.deepEqual(stats.limitedByLabel, { update: 1, batchUpdate: 1 });
+    assert.equal(lastOf(stats.perMinute.limitedWrite), 2); assert.equal(lastOf(stats.perMinute.limitedSearch), 0);
+    const tables_ = warn.lines.filter((l) => l.startsWith("Lark rate limit")).map((l) => JSON.parse(l.slice(16)).table);
+    assert.deepEqual(tables_, ["ca", "ca"]);
+  } finally { warn.restore(); done(); }
+});
+
+test("THROTTLE: a token-lane throttle is counted under label 'token' (and tokenLimited), not in the main gate's `limited`, and lands in limitedOther", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 20 });
+  const warn = captureWarnings();
+  try {
+    const p = await d.acquire("token", "t1");
+    await d.release(p.ticket, true, 1000);
+    const stats = d.getStats();
+    assert.equal(stats.tokenLimited, 1); assert.equal(stats.limited, 0);
+    assert.deepEqual(stats.limitedByLabel, { token: 1 });
+    assert.equal(lastOf(stats.perMinute.limitedOther), 1);
+    assert.ok(warn.lines.some((l) => l.startsWith("Lark rate limit") && JSON.parse(l.slice(16)).label === "token"));
+  } finally { warn.restore(); done(); }
+});
+
+test("THROTTLE: stats and log are bounded and carry no secret: odd codes are grouped, the by-code table stays small", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 5 });
+  const warn = captureWarnings();
+  try {
+    const real = globalThis.fetch; let n = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      if (String(url).includes("/records/search") && n < 30) { n++; return new Response(JSON.stringify({ code: n === 1 ? "t-SECRETSECRETSECRETSECRET12345" : 1254000 + n, msg: "x" }), { status: 429, headers: { "x-ogw-ratelimit-note": "Bearer t-SECRETSECRETSECRETSECRET12345" } }); }
+      return real(url, init);
+    };
+    await d.searchBatch(req("t1", "u1", {}, null)).catch(() => {});
+    const stats = d.getStats();
+    assert.ok(Object.keys(stats.limitedByCode).length <= 17, JSON.stringify(stats.limitedByCode));
+    assert.doesNotMatch(JSON.stringify(stats), /SECRETSECRET/);
+    assert.doesNotMatch(warn.lines.join("\n"), /SECRETSECRET/);
+  } finally { warn.restore(); done(); }
+});
+
+test("MINUTE: totalStarts counts gate starts AND token-lane starts (the real request rate towards Lark)", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(5) }, gap: 5 });
+  try {
+    for (let i = 0; i < 3; i++) { const p = await d.acquire("token", `t${i}`); await d.release(p.ticket); }
+    await Promise.all([1, 2].map((i) => d.searchBatch(req("t1", `u${i}`))));
+    const pm = d.getStats().perMinute;
+    assert.equal(lastOf(pm.tokenStarts), 3);
+    assert.ok(lastOf(pm.starts) >= 1);
+    assert.equal(lastOf(pm.totalStarts), lastOf(pm.starts) + lastOf(pm.tokenStarts), "total = gate starts + token starts");
+    assert.ok(pm.totalStarts.every((v, i) => v === pm.starts[i] + pm.tokenStarts[i]));
   } finally { done(); }
 });
