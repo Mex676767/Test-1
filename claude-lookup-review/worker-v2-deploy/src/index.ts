@@ -63,6 +63,16 @@ const MINUTE_WAIT_SAMPLES = 200;
 const MAX_REPORT_NAMES = 64;
 const TOKEN_CONCURRENCY = 4;           // token lane (Env TOKEN_CONCURRENCY): fetching Lark's tenant token never competes with reads/writes
 const TOKEN_GAP_MS = 50;               // spacing between token-lane starts (Env TOKEN_GAP_MS)
+// Lark's error codes that blame ONE record of a batch_update (its id or one of its values), from the table on
+// https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/reference/bitable-v1/app-table-record/batch_update :
+// 1254006 WrongRecordId, 1254043 RecordIdNotFound, 1254044 FieldIdNotFound, 1254045 FieldNameNotFound, 1254015 field types do not match,
+// 1254060-1254069 the *FieldConvFail family (1254061 NumberFieldConvFail, ...), 1254072 InvalidPhoneNumber, 1254074 DuplexLinkFieldConvFail,
+// 1254130 TooLargeCell. Measured against real Lark: such an error rejects the WHOLE call (nothing applied) and, except 1254043, does not
+// name the record. ONLY these codes split a batch. Every other code (invalid token 99991663 and the other auth codes, 1254302/1254304
+// permission denied, 1254003/1254004/1254040/1254041 base or table wrong, 1254291 write conflict, 1254607/1254608, 1255xxx internal, ...)
+// is about the call, not a record: the same error would come back for every half, so it goes to every caller at once.
+const RECORD_LEVEL_UPDATE_CODES = new Set<number>([1254006, 1254015, 1254043, 1254044, 1254045, 1254060, 1254061, 1254062, 1254063, 1254064,
+  1254065, 1254066, 1254067, 1254068, 1254069, 1254072, 1254074, 1254130]);
 const MAX_UPDATE_BATCH = 100;          // Lark documents 1,000 per batch_update call; stay small so one bad batch is cheap
 const MAX_429_RETRIES = 2;
 const MAX_COOLDOWN_MS = 5_000;
@@ -202,7 +212,7 @@ export class MyDurableObject extends DurableObject<Env> {
   private s = {
     upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0, createMemoryHits: 0, createSharedInflight: 0, writeRetries: 0,
     cacheHits: 0, cacheShared: 0, cacheStaleServed: 0, larkCalls: 0, writesSuperseded: 0, tokenLimited: 0,
-    updateBatches: 0, updatedInBatches: 0, updateSplits: 0, updateMismatches: 0,
+    updateBatches: 0, updatedInBatches: 0, updateSplits: 0, updateMismatches: 0, updateRecordRejects: 0, updateWholeCallErrors: 0,
     noBatchTrips: 0, peakQueue: 0, truncatedFails: 0, heavyUsers: 0, peakStartsPerSec: 0,
     startsByClass: { token: 0, read: 0, write: 0 } as Record<Klass, number>,
     batchSizes: [] as number[], queueWaitMs: [] as number[],
@@ -796,7 +806,24 @@ export class MyDurableObject extends DurableObject<Env> {
       for (const item of items) for (const w of item.job.waiters) w(result);
       return;
     }
-    // Not transient: one bad record must not fail the others. Split, and let each half find its own answer.
+    const code = Number(parsed?.code);
+    if (!RECORD_LEVEL_UPDATE_CODES.has(code)) {                // about the call (auth, permission, table, conflict, unknown): no split, every caller gets it now
+      this.s.updateWholeCallErrors++;
+      for (const item of items) for (const w of item.job.waiters) w(result);
+      return;
+    }
+    if (code === 1254043) {                                    // Lark names the missing record: fail only it, send the rest again as ONE batch
+      const named = /id\s*=\s*([A-Za-z0-9_-]+)/.exec(String(parsed?.msg || ""))?.[1];
+      const at = named ? items.findIndex((i) => i.id === named) : -1;
+      if (at >= 0) {
+        this.s.updateRecordRejects++;
+        for (const w of items[at].job.waiters) w(result);
+        const rest = items.filter((_, i) => i !== at);
+        const g = await this.acquireSlot("write", since, !timed).promise;
+        return this.executeUpdates(rest, g, since, timed);
+      }
+    }
+    // A record-level rejection that does not name the record (a field value Lark could not convert): bisect to find it.
     this.s.updateSplits++;
     const mid = Math.ceil(items.length / 2);
     await Promise.all([items.slice(0, mid), items.slice(mid)].map(async (half) => {
