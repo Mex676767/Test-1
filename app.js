@@ -12,6 +12,10 @@ const PREVIEW_LOGIN_GATE = false;
 // been added to both LiveChat OAuth clients.
 const AUTOMATIC_DEPARTMENT_DETECTION = false;
 const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
+// LiveChat login decides the agent name (see requireAgentLogin and functions/agent-login.js): the first sign-in picks a
+// name once, Lark remembers it for that LiveChat login, and Settings can no longer change it. OFF until it is rolled out.
+// Independent of the department switches above, which stay as they are.
+const AGENT_LOGIN_LIVE = false;
 
 /* ============================================================
    THEME
@@ -42,7 +46,10 @@ const BLAST_LOCAL_STORAGE_KEY = "ca-livechat-engagement:local";
 const CONFIGURED_LIVECHAT_ACCOUNT = /^lc[12]$/.test(new URLSearchParams(location.search).get("account") || "")
   ? new URLSearchParams(location.search).get("account")
   : "";
-let selectedAgent = localStorage.getItem(AGENT_KEY) || "";
+// With the LiveChat login on, a name the agent chose in an older version is not trusted: the name comes from the login,
+// and until it arrives nothing can be recorded (every record path stops on "no agent name").
+let selectedAgent = AGENT_LOGIN_LIVE ? "" : (localStorage.getItem(AGENT_KEY) || "");
+let agentLocked = false; // true once the name came from the LiveChat login: Settings cannot change it
 // Dropdown option lists are cached in localStorage, and a fetch can only ever
 // REPLACE a list with a non-empty one. Before this, a slow/throttled Lark read
 // came back as an empty list that overwrote the working one -- Brand
@@ -204,8 +211,10 @@ function openSettingsPanel() {
       </div>
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
-        <p class="settings-hint">Choose the name recorded on every submitted case.</p>
-        ${agentOptions.length
+        <p class="settings-hint">${agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Choose the name recorded on every submitted case."}</p>
+        ${agentLocked
+          ? `<div class="input settings-text" id="agentLockedName">${escapeHtml(selectedAgent)}</div>`
+          : agentOptions.length
           ? `<select class="input settings-select" id="agentSelect">
                <option value="">Choose your name</option>
                ${agentOptions.map((a) => `<option value="${a}" ${a === selectedAgent ? "selected" : ""}>${a}</option>`).join("")}
@@ -248,6 +257,7 @@ function openSettingsPanel() {
   });
 
   document.getElementById("settingsSave").addEventListener("click", () => {
+    if (agentLocked) { overlay.remove(); return; }
     const val = document.getElementById("agentSelect").value.trim();
     if (!val) { setStatus("Choose your name before continuing.", "error"); return; }
     saveAgent(val);
@@ -524,6 +534,179 @@ async function requirePreviewLiveChatLogin() {
       startNextAttempt();
     });
   });
+}
+
+/* ============================================================
+   LIVECHAT LOGIN -> AGENT NAME (behind AGENT_LOGIN_LIVE)
+   Sign in with LiveChat. The server checks the token with LiveChat and looks the login up in the "Livechat App Agent
+   Logins" table: a known login gets its agent name back; a new one picks a name once (only names free on that
+   LiveChat account are offered) and it is locked. Nothing can be recorded until this finishes.
+   ============================================================ */
+function dropLiveChatToken(accountKey) {
+  try {
+    sessionStorage.removeItem(`ca-livechat-agent-token:${accountKey}`);
+    sessionStorage.removeItem(`ca-livechat-agent-token-expiry:${accountKey}`);
+  } catch (_) { /* non-fatal */ }
+}
+
+async function postAgentLogin(accountKey, token, name) {
+  const response = await fetch("/agent-login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accountKey, agentToken: token, ...(name ? { name } : {}) }),
+  });
+  return response.json();
+}
+
+// One blocking panel, replaced in place as the steps change.
+function agentLoginPanel(innerHtml) {
+  let overlay = document.getElementById("agentLoginOverlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "agentLoginOverlay";
+    overlay.className = "settings-overlay";
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `<div class="settings-panel login-panel"><div class="login-mark">◆</div>${innerHtml}</div>`;
+  return overlay;
+}
+
+// Opens LiveChat's login window for each account in turn and resolves with the first that signs in.
+function connectLiveChatLogin(clients, redirectUri, onProgress) {
+  return new Promise((resolve, reject) => {
+    let callbackOrigin = location.origin;
+    try { callbackOrigin = new URL(redirectUri).origin; } catch (_) { /* keep this origin */ }
+    let index = -1;
+    let pendingClient = null;
+    let pendingState = "";
+    const finish = (settle, value) => { window.removeEventListener("message", onMessage); settle(value); };
+    const next = () => {
+      index += 1;
+      pendingClient = clients[index] || null;
+      if (!pendingClient) return false;
+      pendingState = crypto.randomUUID();
+      onProgress(index ? "Checking your other LiveChat workspace…" : "Complete the login in the new window…");
+      const url = new URL("https://accounts.livechat.com/");
+      url.search = new URLSearchParams({ response_type: "token", client_id: pendingClient.clientId, redirect_uri: redirectUri, state: pendingState, prompt: "consent" }).toString();
+      return Boolean(window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720"));
+    };
+    const onMessage = (event) => {
+      if (event.origin !== callbackOrigin || event.data?.source !== "ca-livechat-oauth" || event.data.state !== pendingState) return;
+      if (event.data.type === "SUCCESS" && pendingClient) {
+        finish(resolve, { accountKey: pendingClient.key, token: event.data.token, expiresAt: event.data.expiresAt });
+        return;
+      }
+      if (!next()) finish(reject, new Error(event.data.error || "LiveChat login was not completed."));
+    };
+    window.addEventListener("message", onMessage);
+    if (!next()) finish(reject, new Error("Your browser blocked the LiveChat login window. Allow popups and try again."));
+  });
+}
+
+function applyBoundAgent(name, accountKey) {
+  const changed = selectedAgent !== name;
+  agentLocked = true;
+  saveAgent(name);
+  setCurrentLiveChatAccount(accountKey);
+  updateAgentBadge();
+  document.getElementById("agentLoginOverlay")?.remove();
+  if (changed) {
+    staleRecords = [];
+    fetchStaleRecords();
+    // A chat that loaded before the name was known skipped the Lark card restore -- run it again now.
+    if (liveWidget) applyProfile(liveWidget.getCustomerProfile());
+  }
+  logDiagnostic(`Signed in with LiveChat as ${name}.`, "success");
+}
+
+// First sign-in: pick the agent name once. Resolves when it is saved.
+function pickAgentName(accountKey, token, available) {
+  return new Promise((resolve) => {
+    const render = (names, error = "") => {
+      const overlay = agentLoginPanel(`
+        <div class="settings-head">Choose your agent name</div>
+        <p class="settings-hint">This is saved to your LiveChat login and <strong>can't be changed later</strong>. If you pick the wrong one, ask your admin.</p>
+        ${names.length
+          ? `<select class="input settings-select" id="agentLoginSelect"><option value="">Choose your name</option>${names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("")}</select>
+             <div class="login-actions"><button type="button" class="submit-btn" id="agentLoginConfirm">Save my name</button></div>`
+          : `<p class="settings-hint">No free agent names are left on this LiveChat account — ask your admin.</p>`}
+        <div class="login-status error" id="agentLoginStatus">${escapeHtml(error)}</div>`);
+      const confirmButton = overlay.querySelector("#agentLoginConfirm");
+      if (!confirmButton) return;
+      confirmButton.addEventListener("click", async () => {
+        const name = overlay.querySelector("#agentLoginSelect").value.trim();
+        const status = overlay.querySelector("#agentLoginStatus");
+        if (!name) { status.textContent = "Choose your name first."; return; }
+        if (!confirm(`Use "${name}" as your agent name?\n\nIt can't be changed afterwards.`)) return;
+        confirmButton.disabled = true;
+        status.textContent = "";
+        let data;
+        try { data = await postAgentLogin(accountKey, token, name); } catch (_) { data = { ok: false, error: "Couldn't reach the server — try again." }; }
+        if (data.ok && data.bound) { applyBoundAgent(data.name, accountKey); resolve(); return; }
+        render(Array.isArray(data.available) ? data.available : names, data.error || "Couldn't save your name — try again.");
+      });
+    };
+    render(available);
+  });
+}
+
+async function requireAgentLogin() {
+  let config = null;
+  try { config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json(); } catch (_) { /* handled below */ }
+  let clients = Array.isArray(config?.clients) ? config.clients : [];
+  // A widget installed in one LiveChat account only ever signs in against that account.
+  if (CONFIGURED_LIVECHAT_ACCOUNT) clients = clients.filter((client) => client.key === CONFIGURED_LIVECHAT_ACCOUNT);
+  if (!clients.length) {
+    agentLoginPanel(`<div class="settings-head">LiveChat login unavailable</div><p class="settings-hint">LiveChat login has not been configured for this widget.</p>`);
+    return new Promise(() => {}); // nothing can be recorded without a login, so this never continues
+  }
+  const redirectUri = config.redirectUri || `${location.origin}/blast/oauth.html`;
+  let failure = "";
+  for (;;) {
+    const tokens = liveChatAgentTokens();
+    const usable = clients.map((client) => client.key).filter((key) => tokens[key]);
+    for (const key of usable) {
+      let data;
+      try { data = await postAgentLogin(key, tokens[key]); } catch (_) { failure = "Couldn't reach the server — check your connection."; continue; }
+      if (data.loginExpired) { dropLiveChatToken(key); failure = data.error || ""; continue; }
+      if (data.ok && data.bound) { applyBoundAgent(data.name, key); return; }
+      if (data.ok) { await pickAgentName(key, tokens[key], Array.isArray(data.available) ? data.available : []); return; }
+      failure = data.error || "Agent login failed.";
+    }
+    // Needs a (re)connect, or a retry if the server could not be reached.
+    await new Promise((resolve) => {
+      // Retry only when a login is still stored (the server could not be reached); an expired one needs a new login.
+      const stored = liveChatAgentTokens();
+      const retry = Boolean(failure && clients.some((client) => stored[client.key]));
+      const overlay = agentLoginPanel(`
+        <div class="settings-head">Sign in with LiveChat</div>
+        <p class="settings-hint">Sign in with your own LiveChat account. Your agent name is set from it.</p>
+        <div class="login-actions"><button type="button" class="submit-btn" id="agentLoginConnect">${retry ? "Try again" : "Connect LiveChat"}</button></div>
+        <div class="login-status error" id="agentLoginStatus">${escapeHtml(failure)}</div>`);
+      const button = overlay.querySelector("#agentLoginConnect");
+      const status = overlay.querySelector("#agentLoginStatus");
+      button.addEventListener("click", async () => {
+        failure = "";
+        if (retry) { resolve(); return; }
+        button.disabled = true;
+        status.className = "login-status";
+        try {
+          const login = await connectLiveChatLogin(clients, redirectUri, (text) => { status.textContent = text; });
+          try {
+            sessionStorage.setItem(`ca-livechat-agent-token:${login.accountKey}`, login.token);
+            sessionStorage.setItem(`ca-livechat-agent-token-expiry:${login.accountKey}`, String(login.expiresAt));
+            sessionStorage.setItem("ca-livechat-selected-account", login.accountKey);
+          } catch (_) { /* without sessionStorage this login cannot be kept */ }
+          resolve();
+        } catch (error) {
+          failure = error.message;
+          status.className = "login-status error";
+          status.textContent = failure;
+          button.disabled = false;
+        }
+      });
+    });
+  }
 }
 
 // Agent, Brand, Inquiry and Status all come from the same Lark table. The
@@ -5235,6 +5418,8 @@ function runWhenIdle(task, timeout = 1500) {
   initLiveChatSdk();
 
   const optionsReady = refreshDropdownOptions();
+  // Off by default. When on, the agent name comes from the LiveChat login and nothing is recorded before it arrives.
+  if (AGENT_LOGIN_LIVE) await requireAgentLogin();
   if (PREVIEW_LOGIN_GATE) {
     try {
       await requirePreviewLiveChatLogin();
