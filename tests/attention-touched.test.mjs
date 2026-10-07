@@ -8,7 +8,7 @@ const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\
 
 function context(extra = {}) {
   const context = vm.createContext({ ...extra });
-  vm.runInContext(fn('agentTouchedChat'), context);
+  vm.runInContext(fn('agentActed') + '\n' + fn('agentTouchedChat'), context);
   return context;
 }
 const touched = (s) => vm.runInContext('agentTouchedChat(' + JSON.stringify(s) + ')', context());
@@ -39,14 +39,14 @@ test('Needs Attention lists only touched chats, so a stale flag from an older ve
     otherAgent:{ chatOpen: false, logged: false, autoRecordError: 'missing', agentName: 'Else', liveChatAccount: 'lc1', caRecordId: 'rec2' },
   };
   const c = vm.createContext({ IS_EMBEDDED_APP: true, currentLiveChatAccount: 'lc1', selectedAgent: 'Me', loadPersistedState: () => rows, archiveUrlFor: (id) => 'u/' + id });
-  vm.runInContext(fn('agentTouchedChat') + '\n' + fn('getIncompleteChats'), c);
+  vm.runInContext(fn('agentActed') + '\n' + fn('agentTouchedChat') + '\n' + fn('getIncompleteChats'), c);
   const ids = vm.runInContext('getIncompleteChats().map((x) => x.chatId).join(",")', c);
   assert.equal(ids, 'mine');
 });
 
 test('auto-record skips an untouched chat before it stamps the agent or sets an error; the manual button is not gated', () => {
   const submit = app.slice(app.indexOf('async function submitRecordOnce'));
-  const gate = submit.indexOf('if (auto && !agentTouchedChat(s)) return;');
+  const gate = submit.indexOf('if (auto && !agentActed(s)) {');
   assert.ok(gate > -1, 'the gate exists');
   assert.ok(gate < submit.indexOf('if (!selectedAgent)'), 'before any error is set');
   assert.ok(gate < submit.indexOf('s.agentName = selectedAgent'), 'before the chat is stamped with the agent');

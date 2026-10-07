@@ -709,6 +709,44 @@ async function requireAgentLogin() {
   }
 }
 
+// A chat closed with no action of this agent on its card (no Look up, inquiry, status ...): did they at least write to
+// the customer? Asked of LiveChat once per chat, using the agent's own LiveChat login, and remembered in the chat's
+// state. true = theirs, false = not theirs (e.g. only watched while supervising), and when LiveChat cannot be asked the
+// chat is kept as theirs ("unsure") so a real case is reminded about, not lost; it is asked again on the next attempt.
+// Only with the LiveChat login on: otherwise nothing identifies the agent to LiveChat and the answer is "not theirs".
+async function agentWroteInChat(chatId) {
+  const s = state[chatId];
+  if (!AGENT_LOGIN_LIVE || !s) return false;
+  if (s.agentWrote === true) return true;
+  if (s.agentWrote === false) return false;
+  const token = liveChatAgentTokens()[currentLiveChatAccount];
+  const link = String(s.chatUrl || "").match(/\/chats\/([^/]+)\/([^/]+)/);
+  let data = null;
+  if (token && link) {
+    try {
+      const response = await fetch("/livechat-agent-wrote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountKey: currentLiveChatAccount, agentToken: token, chatId: link[1], threadId: link[2] }),
+      });
+      data = await response.json();
+    } catch (_) { data = null; }
+  }
+  if (!data || !data.ok) {
+    if (s.agentWrote !== "unsure") {
+      logDiagnostic(`Couldn't check whether you wrote in this chat (${data?.error || (token ? "no chat link yet" : "LiveChat is not connected")}) — keeping it on your list.`, "warn");
+    }
+    s.agentWrote = "unsure";
+    return true;
+  }
+  s.agentWrote = !!data.wrote;
+  if (!data.wrote) {
+    // Shows both sides, so a mismatch in how LiveChat names agents is visible instead of silent.
+    logDiagnostic(`Not on your list: no message from you (${(data.me || []).join(" / ")}) in this chat. Agent messages by: ${(data.authors || []).join(", ") || "nobody"}.`, "info");
+  }
+  return s.agentWrote;
+}
+
 // Agent, Brand, Inquiry and Status all come from the same Lark table. The
 // combined endpoint reads that table once, instead of making four duplicate
 // field requests plus a separate bonus-config request during startup.
@@ -2196,10 +2234,15 @@ function ownsCaseRecord(s) {
 // or a chat that was only watched (supervising), has none of these: no Look up, no typed username, no inquiry or
 // status, no earlier case. Such a chat is never auto-recorded, never stamped with the agent's name and never put
 // on their Needs Attention list. The manual Record button still works on it.
-function agentTouchedChat(s) {
+function agentActed(s) {
   if (!s) return false;
   return !!(s.caRecordId || (s.inquiry && s.inquiry.length) || s.status || String(s.usernameDraft || "").trim()
     || (s.logs && s.logs.length) || Object.values(s.claimedPrograms || {}).some(Boolean));
+}
+// With the LiveChat login on, writing to the customer also makes a chat theirs (see agentWroteInChat): true = they wrote,
+// "unsure" = LiveChat could not be asked, so they are reminded rather than a case being lost.
+function agentTouchedChat(s) {
+  return agentActed(s) || (!!s && (s.agentWrote === true || s.agentWrote === "unsure"));
 }
 const addingCaseFor = new Set(); // chatIds with an add/edit in flight (not persisted, so it can never get stuck)
 
@@ -5153,7 +5196,14 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
   }
 
   // Not worked by this agent (see agentTouchedChat): nothing to record or chase, and nothing is stamped on it.
-  if (auto && !agentTouchedChat(s)) return;
+  // No action of theirs on the card -- with the LiveChat login on, LiveChat is asked whether they wrote in the chat.
+  if (auto && !agentActed(s)) {
+    if (!(await agentWroteInChat(chatId))) {
+      if (!s.logged && s.autoRecordError) s.autoRecordError = ""; // flagged earlier on an "unsure" answer
+      return;
+    }
+    if (s.logged) return;
+  }
 
   if (!selectedAgent) {
     if (auto) {
@@ -5582,7 +5632,8 @@ async function sweepPendingChats() {
       if (isLoggingPaused()) continue;
       // A chat this agent never worked has nothing to retry (submitRecord would skip it anyway).
       const idle = state[chatId] || saved;
-      if (!agentTouchedChat(idle)) {
+      // (With the LiveChat login on, a chat not yet checked goes to submitRecord, which asks LiveChat once.)
+      if (!agentTouchedChat(idle) && !(AGENT_LOGIN_LIVE && idle.agentWrote === undefined)) {
         if (idle.autoRecordError) idle.autoRecordError = ""; // flagged by an older version of this widget
         continue;
       }
