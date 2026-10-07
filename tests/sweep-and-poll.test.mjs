@@ -212,7 +212,7 @@ function saveHarness() {
     state, localStorage, JSON, Date: { now: () => clock.now }, Object, STATE_STORAGE_KEY: 'rc-chat-state', STATE_MAX_AGE_MS: 7 * 86400000,
     lastSyncedJson: new Map(), knownBrandFor: new Map(), renderNeedsAttentionPanel() {},
   });
-  vm.runInContext([fn('stateSnapshot'), fn('markStateSynced'), fn('keepBrand'), fn('hasLocalStateChanges'), fn('saveState')].join('\n')
+  vm.runInContext([fn('stateSnapshot'), fn('persistableState'), fn('markStateSynced'), fn('keepBrand'), fn('hasLocalStateChanges'), fn('saveState')].join('\n')
     .replace(/^/, 'let storageDirty = true; let lastFullStateSyncAt = 0; const FULL_STATE_SYNC_MS = 60000;\n'), context);
   return { clock, store, counts, state, context, save: () => vm.runInContext('saveState()', context) };
 }
@@ -413,4 +413,31 @@ test('refresh button with NO update pending behaves exactly as before (re-reads 
 
 test('the refresh listener is the named handler', () => {
   assert.match(app, /document\.getElementById\("refreshBtn"\)\.addEventListener\("click", handleRefreshClick\);/);
+});
+
+// ---- a request-in-flight flag must not survive a reload ---------------------------------------
+test('saved state never carries lookupInFlight/unclaimInFlight, and loading drops them', () => {
+  const storage = makeStorage();
+  const context = vm.createContext({
+    STATE_STORAGE_KEY: 'rc-chat-state', STATE_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000, JSON, Date, localStorage: storage,
+  });
+  vm.runInContext(fn('stateSnapshot') + fn('persistableState') + fn('loadPersistedState'), context);
+
+  const live = { username: '1763326', lookupInFlight: true, unclaimInFlight: true };
+  const saved = vm.runInContext('persistableState', context)(live, Date.now());
+  assert.equal('lookupInFlight' in saved, false);
+  assert.equal('unclaimInFlight' in saved, false);
+  assert.equal(saved.username, '1763326');
+  assert.equal(live.lookupInFlight, true, 'the live state keeps its flag');
+
+  // A blob written by an older version (or a tab that died mid-request) still has the flags.
+  storage.setItem('rc-chat-state', JSON.stringify({ c1: { username: 'x', lookupInFlight: true, unclaimInFlight: true, _savedAt: Date.now() } }));
+  const loaded = vm.runInContext('loadPersistedState()', context);
+  assert.equal(loaded.c1.username, 'x');
+  assert.equal(loaded.c1.lookupInFlight, undefined, 'a reloaded widget has no lookup running');
+  assert.equal(loaded.c1.unclaimInFlight, undefined);
+
+  // Toggling the flag is not a state change worth saving.
+  const snap = vm.runInContext('stateSnapshot', context);
+  assert.equal(snap({ a: 1, lookupInFlight: true }), snap({ a: 1 }));
 });
