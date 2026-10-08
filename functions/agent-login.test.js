@@ -138,3 +138,64 @@ test("rejects a bad token, another account's token, an unknown name and a missin
   assert.equal(noTable.notConfigured, true);
   assert.equal(w.log.created.length, 0);
 });
+
+// ---- the Livechat Email column: filled in once per login, never blocking a login ----------------------
+// (a login id of its own per test: the server remembers the email it found for a login for an hour)
+function emailWorld(t, { table = [], email = "Alice@X.com", fail = false, uuid = "uuid-email-0" } = {}) {
+  const log = { updated: [], created: [], accountCalls: 0 };
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (url, options = {}) => {
+    url = String(url);
+    if (url.includes("tenant_access_token")) return { json: async () => ({ code: 0, tenant_access_token: "t", expire: 3600 }) };
+    if (url.endsWith("/v2/info")) return { ok: true, json: async () => ({ account_id: uuid, client_id: "client-1" }) };
+    if (url.includes("accounts.livechat.com/v2/accounts/")) {
+      log.accountCalls += 1;
+      return fail ? { ok: false, json: async () => ({ error: { message: "missing scope" } }) } : { ok: true, json: async () => ({ email }) };
+    }
+    if (url.includes("/tables/ca-table/fields")) return { json: async () => ({ code: 0, data: { items: [{ field_name: "Agent Name", property: { options: NAMES.map((name) => ({ name })) } }] } }) };
+    if (url.includes("/tables/logins-table/records/") && options.method === "PUT") {
+      log.updated.push({ id: url.split("/").pop(), fields: JSON.parse(options.body).fields });
+      return { json: async () => ({ code: 0, data: { record: {} } }) };
+    }
+    if (url.includes("/tables/logins-table/records") && options.method === "POST") {
+      const fields = JSON.parse(options.body).fields;
+      log.created.push(fields);
+      const created = { record_id: "rec-new", fields };
+      table.push(created);
+      return { json: async () => ({ code: 0, data: { record: created } }) };
+    }
+    if (url.includes("/tables/logins-table/records")) return { json: async () => ({ code: 0, data: { items: table } }) };
+    throw new Error("unexpected " + url);
+  };
+  return log;
+}
+const emailRow = (id, login, email) => ({ record_id: id, fields: { "LiveChat Account": "lc1", "LiveChat Login": login, "Agent Name": "96 Teh", "Locked At": 1000, ...(email ? { "Livechat Email": email } : {}) } });
+const call2 = async (body) => { initLarkEnv(ENV); initLiveChatEnv({ LIVECHAT_PAT: "pat-1" }); return JSON.parse((await handler({ body: JSON.stringify(body), env: ENV })).body); };
+
+test("a login seen before the email column existed gets its email filled in, in lower case, once", async (t) => {
+  const log = emailWorld(t, { table: [emailRow("r1", "uuid-email-0")], email: "Alice@X.com" });
+  const first = await call2({ accountKey: "lc1", agentToken: "tok" });
+  assert.equal(first.name, "96 Teh");
+  assert.deepEqual(log.updated, [{ id: "r1", fields: { "Livechat Email": "alice@x.com" } }]);
+});
+
+test("a login that already has its email is not looked up again", async (t) => {
+  const log = emailWorld(t, { table: [emailRow("r1", "uuid-email-0", "alice@x.com")] });
+  assert.equal((await call2({ accountKey: "lc1", agentToken: "tok" })).name, "96 Teh");
+  assert.equal(log.accountCalls, 0);
+  assert.deepEqual(log.updated, []);
+});
+
+test("a first-time claim stores the email in the new row", async (t) => {
+  const log = emailWorld(t, { email: "Zed@X.com", uuid: "uuid-email-claim" });
+  const out = await call2({ accountKey: "lc1", agentToken: "tok", name: "96 Mexha" });
+  assert.equal(out.name, "96 Mexha");
+  assert.equal(log.created[0]["Livechat Email"], "zed@x.com");
+});
+
+test("if LiveChat will not give the email, the login still works and the row is simply left without one", async (t) => {
+  const log = emailWorld(t, { table: [emailRow("r1", "uuid-email-fail")], fail: true, uuid: "uuid-email-fail" });
+  assert.equal((await call2({ accountKey: "lc1", agentToken: "tok" })).name, "96 Teh");
+  assert.deepEqual(log.updated, []);
+});

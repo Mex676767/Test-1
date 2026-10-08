@@ -21,6 +21,7 @@ let TABLE_MOONCAKE;
 let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
 let TABLE_AGENT_LOGINS;
+let TABLE_UNRECORDED;
 import { AsyncLocalStorage } from "node:async_hooks";
 import { queueStubFrom } from "./queue-stub.js";
 let LARK_SEARCH_QUEUE;
@@ -67,6 +68,7 @@ export function initEnv(env) {
   TABLE_VS96_FEEDBACK = env.LARK_TABLE_VS96_FEEDBACK;
   TABLE_BONUS_CONFIG = env.LARK_TABLE_BONUS_CONFIG;
   TABLE_AGENT_LOGINS = env.LARK_TABLE_AGENT_LOGINS;
+  TABLE_UNRECORDED = env.LARK_TABLE_UNRECORDED;
 }
 
 // When the current request (lookup / submit) began, server-side. Every call this request makes to the shared queue carries it, so
@@ -843,6 +845,26 @@ async function searchAllRecordsWith(token, tableId, conditions, { maxPages = 5, 
   return all;
 }
 
+// ONE page of a table scan, with the cursor, for callers that spread a long scan over many small requests (the one-time
+// crosscheck): { items, next } where next is "" on the last page. conditions may be empty to read every row.
+export function searchPage(tableId, conditions, opts = {}) { return withToken((token) => searchPageWith(token, tableId, conditions, opts)); }
+async function searchPageWith(token, tableId, conditions, { pageSize = 500, pageToken = "", automaticFields = false, fieldNames } = {}) {
+  if (!tableId) throw new Error("Missing table ID — check env vars.");
+  const res = await larkFetch(
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/search?page_size=${pageSize}`
+      + (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""),
+    { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        filter: { conjunction: "and", conditions: conditions || [] },
+        ...(automaticFields ? { automatic_fields: true } : {}),
+        ...(fieldNames?.length ? { field_names: fieldNames } : {}),
+      }) }
+  );
+  const data = await res.json();
+  if (data.code !== 0) throw larkApiError(`Lark search failed on table ${tableId}: ${data.msg}`, res, data);
+  return { items: data.data.items || [], next: data.data.has_more && data.data.page_token ? String(data.data.page_token) : "" };
+}
+
 export function getRecord(...args) { return withToken((token) => getRecordWith(token, ...args)); }
 async function getRecordWith(token, tableId, recordId) {
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${BASE_APP_TOKEN}/tables/${tableId}/records/${recordId}`;
@@ -1106,4 +1128,5 @@ export {
   TABLE_VS96_FEEDBACK,
   TABLE_BONUS_CONFIG,
   TABLE_AGENT_LOGINS,
+  TABLE_UNRECORDED,
 };

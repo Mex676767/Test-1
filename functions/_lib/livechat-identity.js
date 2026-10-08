@@ -37,6 +37,9 @@ async function lookupEmail(login, agentToken, pat) {
   return { email: "", via: reasons.join("; ") };
 }
 
+// The agent's email for a login (see lookupEmail above), for callers that need it only sometimes.
+export { lookupEmail as findAgentEmail };
+
 // ok: login is LiveChat's account_id (the stable key); identities are every id LiveChat may stamp on this agent's
 // messages (account_id, plus the email when LiveChat returns one -- with { withEmail: true, pat } it is looked up).
 // emailLookup says how the email was found, or why not.
