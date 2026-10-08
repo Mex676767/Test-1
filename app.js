@@ -1401,7 +1401,29 @@ function startLookupResume() {
   resumePendingLookups();
 }
 
+// The archived chat a "restore from Lark" is currently being waited for, so a slow answer cannot open a card for a chat the
+// agent has already left.
+let archiveOpening = "";
+
+// An archived chat from the agent's unrecorded-chats list has no card anywhere (that is why it is on the list): no saved copy
+// in this browser and no Lark row under their name. Build a fresh, closed card for it so they can look the player up and
+// record it like any other chat, instead of finding an empty panel. Nothing is stamped on it until they record.
+function openFreshArchivedCard(threadId, entry, profile) {
+  if (!state[threadId]) {
+    ensureChatState({ chatId: threadId, customerName: (profile && profile.name) || entry.customer || "", link: "", isTelegram: false, groupName: "" });
+  }
+  const s = state[threadId];
+  s.chatOpen = false;
+  // The link every other row carries: /chats/{chat_id}/{thread_id} (the chat id is what "last username" matching uses).
+  if (!s.chatUrl && entry.chatId) s.chatUrl = `https://my.livechatinc.com/chats/${entry.chatId}/${threadId}`;
+  saveState();
+  resolveBrandFromGroupId(threadId, profile && profile.chat && profile.chat.groupID);
+  showTrackedArchivedChat(threadId, profile);
+  setStatus("Archived chat from your unrecorded list — look the player up and record it, or tick Unknown player.");
+}
+
 function applyProfile(profile) {
+  archiveOpening = "";
   if (!profile || !profile.chat || !profile.chat.id) {
     stopChatStatusPolling();
     activeChats = [];
@@ -1433,8 +1455,12 @@ function applyProfile(profile) {
     // No saved card in this browser (e.g. a new incognito window) -- look
     // for this agent's own Lark rows for this thread and rebuild it.
     const threadId = String(profile.chat.id);
+    archiveOpening = threadId;
     restoreCardFromLark(threadId, { archived: true, customerName: profile.name || "" }).then((restored) => {
-      if (restored && state[threadId]) showTrackedArchivedChat(threadId, profile);
+      if (restored && state[threadId]) { showTrackedArchivedChat(threadId, profile); return; }
+      if (archiveOpening !== threadId) return;
+      const entry = unrecordedChats.find((chat) => chat.threadId === threadId);
+      if (entry) openFreshArchivedCard(threadId, entry, profile);
     });
   }
   if (profile.source && profile.source !== "chats") {
@@ -6212,6 +6238,8 @@ function getUnrecordedChats() {
     if (s && s.logged && (s.inquiry || []).length && s.status) { resolveUnrecorded(chat.threadId, "Done"); return false; }
     // Ticked "Unknown player" in this browser: nothing is meant to be recorded for it, so it is written off.
     if (s && s.isUnknown) { resolveUnrecorded(chat.threadId, "Ignored"); return false; }
+    // Its card was opened here and is now flagged incomplete: it is already in the other part of the list.
+    if (s && s.chatOpen === false && !s.logged && s.autoRecordError && s.agentName === selectedAgent) return false;
     return !(s && s.attentionIgnored);
   });
 }
