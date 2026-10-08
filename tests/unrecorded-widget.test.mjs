@@ -12,12 +12,12 @@ function widget({ flag = true, account = 'lc1', tokens = { lc1: 'tok' }, persist
   const rendered = [];
   const logs = [];
   const context = vm.createContext({
-    JSON, Boolean, Set, AGENT_LOGIN_LIVE: flag, currentLiveChatAccount: account, state: live,
+    JSON, Boolean, Set, AGENT_LOGIN_LIVE: flag, currentLiveChatAccount: account, state: live, liveWidget: null, activeChats: [],
     liveChatAgentTokens: () => tokens, loadPersistedState: () => persisted,
     renderNeedsAttentionPanel: () => rendered.push(vm.runInContext('unrecordedChats.length', context)), logDiagnostic: (t, k) => logs.push([k, t]),
     fetch: async (url, options) => { posts.push({ url, body: JSON.parse(options.body) }); return { json: async () => replies.shift() || { ok: true } }; },
   });
-  vm.runInContext(['let unrecordedChats = [];', 'const unrecordedResolving = new Set();', fn('postUnrecorded'), fn('fetchUnrecordedChats'), fn('resolveUnrecorded'), fn('ignoreAllUnrecorded'), fn('getUnrecordedChats')].join(NEWLINE), context);
+  vm.runInContext(['let unrecordedChats = [];', 'let unrecordedLoaded = false;', 'const unrecordedResolving = new Set();', fn('reopenArchivedFromList'), fn('postUnrecorded'), fn('fetchUnrecordedChats'), fn('resolveUnrecorded'), fn('ignoreAllUnrecorded'), fn('getUnrecordedChats')].join(NEWLINE), context);
   return { posts, rendered, logs, list: () => vm.runInContext('unrecordedChats.map((c) => c.threadId).join(",")', context), shown: () => vm.runInContext('getUnrecordedChats().map((c) => c.threadId).join(",")', context), run: (code) => vm.runInContext(code, context) };
 }
 const chats = [{ threadId: 'T1', date: 1, customer: 'A' }, { threadId: 'T2', date: 2, customer: 'B' }];
@@ -138,10 +138,10 @@ test('the list says in the activity log how many chats it got, and ⟳ reads it 
 
 // ---- opening an archived chat from the unrecorded list gives a fresh card --------------------------
 function archivedHarness({ restored = false, entries = [{ threadId: 'T1', chatId: 'CH1', customer: 'Zimito', date: 1 }], source = 'archives', profileName = 'Zimito' } = {}) {
-  const calls = { shown: [], brand: [], status: [], saved: 0, ensured: [], restoreAsked: [] };
+  const calls = { shown: [], brand: [], status: [], saved: 0, ensured: [], restoreAsked: [], logs: [] };
   const st = {};
   const context = vm.createContext({
-    String, Promise, state: st, unrecordedChats: entries, activeChats: [], archiveOpening: '',
+    String, Promise, state: st, unrecordedChats: entries, activeChats: [], archiveOpening: '', logDiagnostic: (t) => calls.logs.push(t),
     findTrackedChatByThread: () => '', stopChatStatusPolling() {}, renderChats() {}, setStatus: (t) => calls.status.push(t),
     chatFromProfile: () => ({ chatId: 'LIVE' }), announceChatSwitch() {}, refreshBackgroundLookupPill() {}, bgLookupDone: null,
     ensureChatState: (chat) => { calls.ensured.push(chat); st[chat.chatId] = { chatOpen: true, chatUrl: '' }; },
@@ -150,7 +150,7 @@ function archivedHarness({ restored = false, entries = [{ threadId: 'T1', chatId
     showTrackedArchivedChat: (id) => calls.shown.push(id),
     restoreCardFromLark: async (id) => { calls.restoreAsked.push(id); if (restored) st[id] = { chatOpen: false }; return restored; },
   });
-  vm.runInContext(['let unrecordedChats = ' + JSON.stringify(entries) + ';', 'let archiveOpening = "";', fn('openFreshArchivedCard'), fn('applyProfile')].join(NEWLINE), context);
+  vm.runInContext(['let unrecordedChats = ' + JSON.stringify(entries) + ';', 'let unrecordedLoaded = true;', 'let archiveOpening = "";', fn('openFreshArchivedCard'), fn('applyProfile')].join(NEWLINE), context);
   const profile = { source, name: profileName, chat: { id: 'T1', groupID: '7' } };
   return { calls, st, context, open: async () => { vm.runInContext('applyProfile(' + JSON.stringify(profile) + ')', context); await new Promise((r) => setImmediate(r)); } };
 }
@@ -194,4 +194,47 @@ test('once its fresh card is flagged incomplete here, the same chat is not liste
   w.run("var selectedAgent = 'Me';");
   await w.run('fetchUnrecordedChats()');
   assert.equal(w.shown(), 'T2');
+});
+
+// ---- the archived chat arrives before the list (Open ↗ opens a new tab) ---------------------------
+test('an archived chat that arrived before the list was read gets its card as soon as the list arrives', () => {
+  const opened = [];
+  const profile = { source: 'archives', chat: { id: 'T1' } };
+  const context = vm.createContext({
+    String, activeChats: [], liveWidget: { getCustomerProfile: () => profile },
+    applyProfile: (p) => opened.push(p.chat.id),
+  });
+  vm.runInContext(['let unrecordedChats = [];', fn('reopenArchivedFromList')].join(NEWLINE), context);
+  vm.runInContext('reopenArchivedFromList()', context);
+  assert.deepEqual(opened, [], 'not on the list (yet): nothing');
+  vm.runInContext("unrecordedChats = [{ threadId: 'T1' }];", context);
+  vm.runInContext('reopenArchivedFromList()', context);
+  assert.deepEqual(opened, ['T1']);
+  context.activeChats = [{ chatId: 'T1' }];
+  vm.runInContext('reopenArchivedFromList()', context);
+  assert.deepEqual(opened, ['T1'], 'its card is already showing: not opened again');
+  profile.source = 'chats';
+  context.activeChats = [];
+  vm.runInContext('reopenArchivedFromList()', context);
+  assert.deepEqual(opened, ['T1'], 'a live chat is left alone');
+});
+
+test('reading the list re-checks the open archived chat, and the log says why a chat has no card', () => {
+  const read = app.slice(app.indexOf('async function fetchUnrecordedChats'), app.indexOf('// Marks one chat Done'));
+  assert.match(read, /unrecordedLoaded = true;\s*\n\s*reopenArchivedFromList\(\);/);
+  assert.match(app, /not on your unrecorded list, so no card is made for it/);
+  assert.match(app, /your unrecorded list is still loading/);
+});
+
+test('ticking Unknown on a chat that is on the list writes it off in Lark at once', () => {
+  const setUnknownCode = app.slice(app.indexOf('function setUnknown'), app.indexOf('function setUnknown') + 900);
+  assert.match(setUnknownCode, /if \(value && unrecordedChats\.some\(\(chat\) => chat\.threadId === chatId\)\) resolveUnrecorded\(chatId, "Ignored"\);/);
+  assert.ok(setUnknownCode.indexOf('resolveUnrecorded') < setUnknownCode.indexOf('if (!s.isUnknown || !s.caRecordId) return;'), 'before the early return, so it also works when no row exists');
+});
+
+test('a fresh archived card ticked Unknown never shows in Needs Attention: the local list skips Unknown cards', () => {
+  const incomplete = app.slice(app.indexOf('function getIncompleteChats'), app.indexOf('function getIncompleteChats') + 700);
+  assert.match(incomplete, /!s\.isUnknown/);
+  const gate = app.slice(app.indexOf('async function submitRecordOnce'), app.indexOf('async function submitRecordOnce') + 1200);
+  assert.match(gate, /if \(s\.isUnknown\) \{\s*\n\s*s\.logged = true;\s*\n\s*s\.autoRecordError = "";/);
 });
