@@ -36,13 +36,18 @@ export async function stepWithRetry(step, body, tries = 4, pauseMs = 2000) {
 // names (optional): { pairs: Set of "thread|agent name" in lower case, byEmail: Map email -> agent name }. A writer whose email is
 // known as an agent is judged on THEIR OWN record (a chat another agent recorded still counts as unrecorded for them); a
 // writer who is not known falls back to "does any row carry this chat".
-export function planEntries(chats, recorded, existing, account, names = null) {
+// onlyKnown (the default once any agent is known): the LiveChat accounts also hold the whole customer-service team and bots,
+// who never use this tool -- their chats are not meant to be recorded here and nobody's widget would show them. Only writers
+// whose email is in the Agent Logins table are listed; stats.unknownWriters counts the rest. Agents who have not opened
+// the widget since the email column was added are picked up by running the script again later.
+export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {} } = {}) {
   const seen = new Set();
   const entries = [];
   for (const chat of chats) {
     for (const writer of chat.writers) {
       const email = String(writer).trim().toLowerCase();
       const agent = names?.byEmail.get(email);
+      if (onlyKnown && names && names.byEmail.size && !agent) { stats.unknownWriters = (stats.unknownWriters || 0) + 1; continue; }
       const isRecorded = agent ? names.pairs.has(`${chat.threadId}|${agent.toLowerCase()}`) : recorded.has(chat.threadId);
       if (isRecorded) continue;
       const key = `${chat.threadId}|${email}`;
@@ -83,7 +88,7 @@ export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retr
   };
 }
 
-export async function run({ step, fromMs, toMs, windowMs, write, log = console.log, accounts = ["lc1", "lc2"] }) {
+export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = true, log = console.log, accounts = ["lc1", "lc2"] }) {
   const recorded = new Set();
   const pairs = new Set();
   let pageToken = "";
@@ -103,6 +108,8 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
   const byEmail = new Map((agents.agents || []).map((agent) => [String(agent.email).toLowerCase(), agent.name]));
   const names = { pairs, byEmail };
   log(`Agent Logins: ${byEmail.size} agents have their LiveChat email filled in (they are judged on their own records; the rest on "any row for the chat").`);
+  // With nobody known yet, "only agents who use the widget" would list nobody: say so instead of writing nothing quietly.
+  if (onlyKnown && byEmail.size === 0) throw new Error("No agent has their LiveChat email in the Agent Logins table yet, so there is nobody to list. Wait until agents have opened the widget, or add --all-writers to list every writer (customer service and bots included).");
 
   const existing = new Set();
   pageToken = "";
@@ -155,8 +162,9 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
   for (const result of await Promise.all(accounts.map(scanAccount))) {
     const { account, chats, fetchedAlone, unjudged, outreach } = result;
     if (!result.configured) { log(`${account}: not configured, skipped.`); continue; }
-    const entries = planEntries([...chats.values()], recorded, existing, account, names);
-    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded.${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
+    const stats = {};
+    const entries = planEntries([...chats.values()], recorded, existing, account, names, { onlyKnown, stats });
+    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded by an agent who uses the widget.${stats.unknownWriters ? ` ${stats.unknownWriters} chat/writer pairs left out: the writer is not in the Agent Logins table (customer service, bots, or an agent who has not opened the widget yet).` : ""}${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);
   }
 
@@ -194,7 +202,7 @@ async function main() {
     process.exit(2);
   }
   const windowMs = Number(args.get("window-hours") || 6) * 3_600_000;
-  await run({ step: createClient({ base, key }), fromMs, toMs: Date.now(), windowMs, write: args.has("write") });
+  await run({ step: createClient({ base, key }), fromMs, toMs: Date.now(), windowMs, write: args.has("write"), onlyKnown: !args.has("all-writers") });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
