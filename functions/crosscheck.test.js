@@ -61,8 +61,11 @@ test("only ended chats an agent wrote in are listed, with the agents (not bots o
     archived("T3", [msg("cust-1")]),
     archived("T4", [msg("cust-1"), msg("alice@x.com", { visibility: "agents" })]),
     archived("T5", [msg("cust-1"), msg("chatbot-id"), msg("alice@x.com")]),
+    archived("T6", [msg("alice@x.com"), { type: "file", author_id: "alice@x.com" }]),
   ] };
-  const chats = chatsWithWriters(archive);
+  const stats = {};
+  const chats = chatsWithWriters(archive, stats);
+  assert.equal(stats.outreach, 1, "T6: only the agent wrote (what a Blast looks like) -- left out and counted");
   assert.deepEqual(chats.map((c) => [c.threadId, c.writers.join("+")]), [["T1", "alice@x.com+bob@x.com"], ["T5", "alice@x.com"]]);
   assert.equal(chats[0].customer, "Abang Zimito");
   assert.equal(chats[0].chatId, "CHAT-T1");
@@ -103,6 +106,9 @@ test("archives: asks the account's own credential for the window, oldest first, 
   assert.equal(out.next, "P2");
   assert.equal(out.seen, 2);
   assert.deepEqual(w.log.archivesBodies, [{ auth: "Basic pat-2", body: { filters: { from: "2026-10-07T00:00:00.000000+00:00", to: "2026-10-08T00:00:00.000000+00:00" }, limit: 100, sort_order: "asc" } }]);
+  // A later page is asked for by its id ALONE: LiveChat refuses page_id together with filters, limit or sort_order.
+  await call({ step: "archives", account: "lc2", from: Date.UTC(2026, 9, 7), to: Date.UTC(2026, 9, 8), pageId: "P2" });
+  assert.deepEqual(w.log.archivesBodies[1], { auth: "Basic pat-2", body: { page_id: "P2" } });
   const unknown = await call({ step: "archives", account: "lc9", from: 1, to: 2 });
   assert.match(unknown.error, /not configured/);
 });
@@ -189,4 +195,14 @@ test("agents: which LiveChat email is which agent name, only for logins whose em
   assert.deepEqual(out.agents, [{ email: "mexha@x.com", name: "96 Mexha", account: "lc1" }, { email: "bob@x.com", name: "96 Bob", account: "lc2" }]);
   const none = await call({ step: "agents" }, { env: { ...ENV, LARK_TABLE_AGENT_LOGINS: "" } });
   assert.deepEqual(none.agents, []);
+});
+
+test("archives and chat report how many outreach-only threads (the customer never wrote, e.g. a Blast) they left out", async (t) => {
+  const blast = archived("TB", [msg("alice@x.com"), { type: "file", author_id: "alice@x.com" }]);
+  const real = archived("TR", [msg("cust-1"), msg("alice@x.com")]);
+  const w = world({ archivesReply: { chats: [blast, real] } });
+  t.after(w.restore);
+  const out = await call({ step: "archives", account: "lc1", from: 1, to: 2 });
+  assert.deepEqual(out.chats.map((c) => c.threadId), ["TR"]);
+  assert.equal(out.outreach, 1);
 });

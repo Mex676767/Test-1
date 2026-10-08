@@ -102,6 +102,7 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
     const chats = new Map();
     let fetchedAlone = 0;
     let unjudged = 0;
+    let outreach = 0;
     let configured = true;
     for (const [from, to] of windows(fromMs, toMs, windowMs)) {
       let pageId = "";
@@ -112,12 +113,14 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
           throw new Error(`archives (${account}): ${data.error}`);
         }
         data.chats.forEach((chat) => chats.set(chat.threadId, chat));
+        outreach += data.outreach || 0;
         // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
         for (const pending of data.pending || []) {
           if (chats.has(pending.threadId)) continue;
           const one = await step({ step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
           fetchedAlone += 1;
           if (!one.ok) { unjudged += 1; continue; }
+          outreach += one.outreach || 0;
           if (one.chat) chats.set(one.chat.threadId, one.chat);
         }
         pageId = data.next;
@@ -126,7 +129,7 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
     }
     if (!configured) { log(`${account}: not configured, skipped.`); continue; }
     const entries = planEntries([...chats.values()], recorded, existing, account, names);
-    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded.${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
+    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded.${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);
   }
 
