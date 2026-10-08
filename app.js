@@ -1461,6 +1461,7 @@ function applyProfile(profile) {
       if (archiveOpening !== threadId) return;
       const entry = unrecordedChats.find((chat) => chat.threadId === threadId);
       if (entry) openFreshArchivedCard(threadId, entry, profile);
+      else logDiagnostic(unrecordedLoaded ? `Archived chat ${threadId}: not on your unrecorded list, so no card is made for it.` : `Archived chat ${threadId}: your unrecorded list is still loading — its card opens when it arrives.`, "info");
     });
   }
   if (profile.source && profile.source !== "chats") {
@@ -5089,6 +5090,9 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   const s = state[chatId];
   if (!s) return;
   s.isUnknown = value;
+  // A chat on the agent's unrecorded list that they mark Unknown is written off in Lark right away, so it cannot come back
+  // from there (an incognito window forgets the tick, Lark does not).
+  if (value && unrecordedChats.some((chat) => chat.threadId === chatId)) resolveUnrecorded(chatId, "Ignored");
   if (!s.isUnknown || !s.caRecordId) return;
 
   if (previewMode) {
@@ -6181,6 +6185,7 @@ function formatAge(ms) {
 // Read once per widget start, after the LiveChat login, with one small request; the list lives in the Lark table
 // "Unrecorded Chats" and is matched to the agent by their LiveChat email, so there is nothing to poll.
 let unrecordedChats = [];
+let unrecordedLoaded = false;
 const UNRECORDED_SHOWN_MAX = 25;
 const unrecordedResolving = new Set(); // not persisted
 async function postUnrecorded(body) {
@@ -6193,12 +6198,26 @@ async function postUnrecorded(body) {
   });
   return response.json();
 }
+// Needs Attention's "Open" opens the chat in a NEW tab, where the widget starts at the same moment as the archive page: the
+// archived chat arrives before the list has been read, so it looked "not on the list" and showed nothing. When the list
+// arrives, look at the chat that is open now and give it its card.
+function reopenArchivedFromList() {
+  if (!liveWidget) return;
+  let profile = null;
+  try { profile = liveWidget.getCustomerProfile(); } catch (_) { return; }
+  if (!profile || profile.source !== "archives" || !profile.chat || !profile.chat.id) return;
+  const threadId = String(profile.chat.id);
+  if (activeChats[0] && activeChats[0].chatId === threadId) return; // its card is already showing
+  if (unrecordedChats.some((chat) => chat.threadId === threadId)) applyProfile(profile);
+}
 async function fetchUnrecordedChats() {
   if (!AGENT_LOGIN_LIVE || !currentLiveChatAccount) return;
   try {
     const data = await postUnrecorded({ action: "list" });
     if (data && data.ok && Array.isArray(data.chats)) {
       unrecordedChats = data.chats;
+      unrecordedLoaded = true;
+      reopenArchivedFromList();
       if (data.chats.length || data.notConfigured) logDiagnostic(data.notConfigured ? "Unrecorded-chats list: not set up on the server." : `Unrecorded-chats list: ${data.chats.length} from the crosscheck.`, "info");
       renderNeedsAttentionPanel();
     } else if (data && data.error) logDiagnostic(`Couldn't read your unrecorded-chats list: ${data.error}`, "warn");
