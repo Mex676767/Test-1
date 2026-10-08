@@ -1135,7 +1135,7 @@ test("3c: per-minute history: starts, 429s, queue-wait p95 and peak queue per mi
     offset += 3 * 60_000;
     const last = await d.acquire("read", "c0"); await d.release(last.ticket);
     const pm = d.getStats().perMinute;
-    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "limitedOther", "limitedSearch", "limitedWrite", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "totalStarts", "updateP95", "waitP95"]);
+    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "limitedOther", "limitedSearch", "limitedWrite", "maxStartsPerSec", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "totalStarts", "updateP95", "waitP95"]);
     assert.equal(pm.minutes.length, pm.starts.length);
     const at = (m) => pm.minutes.indexOf(m);
     assert.equal(pm.starts[at(minute0)], 6);
@@ -1616,7 +1616,7 @@ test("MINUTE: search p95, update p95, token-lane starts and distinct Pages isola
     await d.reportCounters({}, "bad id with spaces");                               // ignored
     await d.reportCounters({}, 12345);                                              // ignored
     const pm = d.getStats().perMinute;
-    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "limitedOther", "limitedSearch", "limitedWrite", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "totalStarts", "updateP95", "waitP95"]);
+    assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "limitedOther", "limitedSearch", "limitedWrite", "maxStartsPerSec", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "totalStarts", "updateP95", "waitP95"]);
     const last = pm.minutes.length - 1;
     assert.ok(pm.searchP95[last] >= 25, `search p95 ${pm.searchP95[last]}`);
     assert.ok(pm.updateP95[last] >= 25, `update p95 ${pm.updateP95[last]}`);
@@ -1754,5 +1754,127 @@ test("MINUTE: totalStarts counts gate starts AND token-lane starts (the real req
     assert.ok(lastOf(pm.starts) >= 1);
     assert.equal(lastOf(pm.totalStarts), lastOf(pm.starts) + lastOf(pm.tokenStarts), "total = gate starts + token starts");
     assert.ok(pm.totalStarts.every((v, i) => v === pm.starts[i] + pm.tokenStarts[i]));
+  } finally { done(); }
+});
+
+// ======================================================================================
+// Burst allowance (GATE_BURST): a token bucket on the start spacing. Off by default (1 = today's behaviour).
+// ======================================================================================
+async function grantTimes(d, n, kind = "read") {
+  const t0 = Date.now(), times = [], held = [];
+  await Promise.all(Array.from({ length: n }, (_, i) => d.acquire(kind, `w${i}`).then((p) => { times.push(Date.now() - t0); held.push(p); })));
+  return { times: times.sort((a, b) => a - b), held, t0 };
+}
+
+test("BURST: an idle gate with GATE_BURST=6 lets 6 starts go back to back, then one per gap", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 100, conc: 12, env: { GATE_BURST: 6 } });
+  try {
+    const { times, held } = await grantTimes(d, 12);
+    assert.ok(times[5] <= 60, `first 6 within ~50 ms, the 6th came at ${times[5]} ms`);
+    assert.ok(times[6] >= 80 && times[6] <= 200, `7th waits about one gap: ${times[6]} ms`);
+    assert.ok(times[11] >= 540 && times[11] <= 900, `12th at about 6 gaps: ${times[11]} ms`);
+    for (let i = 7; i < 12; i++) assert.ok(times[i] - times[i - 1] >= 70, `after the burst starts are one gap apart (${times[i] - times[i - 1]} ms)`);
+    const stats = d.getStats();
+    assert.ok(stats.bucketBursts >= 5, `bucketBursts ${stats.bucketBursts}`);
+    assert.equal(stats.burst.size, 6); assert.equal(stats.burst.effective, 6); assert.equal(stats.burst.offUntil, null);
+    assert.ok(Math.max(...stats.perMinute.maxStartsPerSec) >= 6, JSON.stringify(stats.perMinute.maxStartsPerSec));
+    for (const p of held) await d.release(p.ticket);
+  } finally { done(); }
+});
+
+test("BURST: default (GATE_BURST unset / 1) is exactly today's spacing: the 2nd start waits a full gap", async () => {
+  for (const env of [{}, { GATE_BURST: 1 }]) {
+    const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 100, conc: 12, env });
+    try {
+      const { times, held } = await grantTimes(d, 5);
+      assert.ok(times[0] <= 40); assert.ok(times[1] >= 80, `2nd start at ${times[1]} ms`);
+      assert.ok(times[4] >= 360, `5th at ${times[4]} ms`);
+      assert.equal(d.getStats().bucketBursts, 0); assert.equal(d.getStats().burst.effective, 1);
+      for (const p of held) await d.release(p.ticket);
+    } finally { done(); }
+  }
+});
+
+test("BURST: the long-run rate is unchanged: n starts never beat (n - burst + 1) gaps, whatever the burst", async () => {
+  for (const burst of [1, 6, 8]) {
+    const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 20, conc: 60, env: { GATE_BURST: burst } });
+    try {
+      const n = 50;
+      const { times, held } = await grantTimes(d, n);
+      times.forEach((t, i) => assert.ok(t >= (i - (burst - 1)) * 20 - 15, `burst ${burst}: start ${i} at ${t} ms is too early`));
+      assert.ok(times[n - 1] >= (n - burst) * 20 * 0.85, `burst ${burst}: all ${n} starts took ${times[n - 1]} ms`);
+      const inFirst = times.filter((t) => t <= 400).length;
+      assert.ok(inFirst <= burst + 400 / 20 + 2, `burst ${burst}: ${inFirst} starts in the first 400 ms`);
+      for (const p of held) await d.release(p.ticket);
+    } finally { done(); }
+  }
+});
+
+test("BURST: the concurrency limit is still respected during a burst", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 50, conc: 3, env: { GATE_BURST: 8 } });
+  try {
+    const held = [];
+    Array.from({ length: 8 }, (_, i) => d.acquire("read", `w${i}`).then((p) => { held.push(p); }));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(held.length, 3, "only 3 may be active although the bucket holds 8");
+    assert.equal(d.getStats().active, 3);
+    for (const p of [...held]) await d.release(p.ticket);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.ok(held.length >= 6, `freed slots are used at once (no extra gap while credit remains): ${held.length}`);
+    await Promise.all(held.slice(3).map((p) => d.release(p.ticket)));
+  } finally { done(); }
+});
+
+test("BURST: a Lark throttle empties the bucket and forces a bucket of 1 for 60 s (starts are one gap apart again)", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 100, conc: 12, env: { GATE_BURST: 6 } });
+  const warn = captureWarnings();
+  try {
+    const first = await grantTimes(d, 6);
+    assert.ok(first.times[5] <= 60, "burst allowed while healthy");
+    await d.release(first.held[0].ticket, true, 0);                               // Lark said 1254290
+    const stats = d.getStats();
+    assert.equal(stats.limited, 1); assert.equal(stats.throttlesWhileBursting, 1, "the throttle came right after a burst");
+    assert.equal(stats.burst.effective, 1);
+    const off = Date.parse(stats.burst.offUntil) - Date.now();
+    assert.ok(off > 58_000 && off <= 60_000, `bucket of 1 for about 60 s: ${off} ms left`);
+    const second = await grantTimes(d, 4);                                         // waits out the cooldown (>= 1 s), then one start per (doubled) gap
+    for (let i = 1; i < 4; i++) assert.ok(second.times[i] - second.times[i - 1] >= 150, `no back-to-back starts after a throttle: ${second.times[i] - second.times[i - 1]} ms`);
+    for (const p of [...first.held.slice(1), ...second.held]) await d.release(p.ticket);
+  } finally { warn.restore(); done(); }
+});
+
+test("BURST: GATE_BURST is bounded (junk and huge values fall back / cap)", async () => {
+  for (const [value, size] of [["abc", 1], [0, 1], [-3, 1], [100, 10], [4, 4]]) {
+    const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 50, env: { GATE_BURST: value } });
+    try { assert.equal(d.getStats().burst.size, size, String(value)); } finally { done(); }
+  }
+});
+
+test("LOCATE: the object finds out where it runs (colo + country only), once, and never exposes the rest of the trace", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 20 });
+  try {
+    const real = globalThis.fetch; let traces = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      if (String(url) === "https://www.cloudflare.com/cdn-cgi/trace") { traces++; return new Response("fl=123f45\nh=www.cloudflare.com\nip=203.0.113.9\nts=1.2\nvisit_scheme=https\nuag=x\ncolo=SIN\nsliver=none\nhttp=http/2\nloc=MY\ntls=TLSv1.3\n", { status: 200 }); }
+      return real(url, init);
+    };
+    assert.equal(d.getStats().location, null, "not known before locate()");
+    assert.deepEqual(await d.locate(), { colo: "SIN", loc: "MY" });
+    assert.deepEqual(await d.locate(), { colo: "SIN", loc: "MY" });
+    assert.equal(traces, 1, "cached after the first call");
+    assert.deepEqual(d.getStats().location, { colo: "SIN", loc: "MY" });
+    assert.doesNotMatch(JSON.stringify(d.getStats()), /203\.0\.113\.9/);
+  } finally { done(); }
+});
+
+test("LOCATE: a failing or odd trace answer leaves the location null and does not throw", async () => {
+  const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 20 });
+  try {
+    const real = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => { if (String(url).includes("cdn-cgi/trace")) throw new Error("offline"); return real(url, init); };
+    assert.equal(await d.locate(), null);
+    globalThis.fetch = async (url, init = {}) => (String(url).includes("cdn-cgi/trace") ? new Response("nothing useful", { status: 200 }) : real(url, init));
+    assert.equal(await d.locate(), null);
+    assert.equal(d.getStats().location, null);
   } finally { done(); }
 });

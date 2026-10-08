@@ -64,6 +64,8 @@ const RING_MINUTES = 24 * 60;          // per-minute history kept for the last 2
 const MINUTE_WAIT_SAMPLES = 200;
 const MAX_REPORT_NAMES = 64;
 const TOKEN_CONCURRENCY = 4;           // token lane (Env TOKEN_CONCURRENCY): fetching Lark's tenant token never competes with reads/writes
+const BURST_OFF_MS = 60_000;           // after a Lark throttle the burst allowance is off (bucket of 1) for this long
+const MAX_BURST = 10;                  // upper bound for GATE_BURST
 const TOKEN_GAP_MS = 50;               // spacing between token-lane starts (Env TOKEN_GAP_MS)
 // Lark's error codes that blame ONE record of a batch_update (its id or one of its values), from the table on
 // https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/reference/bitable-v1/app-table-record/batch_update :
@@ -129,9 +131,9 @@ const putFields = (body?: string): Record<string, unknown> | null => {
 const earlier = (a?: number, b?: number): number | undefined => (a && b ? Math.min(a, b) : a || b);
 type PutJob = { input: SearchBatchInput; fields: Record<string, unknown>; waiters: Array<(r: SearchBatchResult) => void> };
 type MinuteRow = { t: number; starts: number; limited: number; waitP95: number; peakQueue: number; searchP95: number; updateP95: number; tokenStarts: number; isolates: number;
-  totalStarts: number; limitedSearch: number; limitedWrite: number; limitedOther: number };
+  totalStarts: number; limitedSearch: number; limitedWrite: number; limitedOther: number; maxStartsPerSec: number };
 type Minute = { t: number; starts: number; limited: number; peakQueue: number; waits: number[]; searchMs: number[]; updateMs: number[]; tokenStarts: number; isolates: Set<string>;
-  limitedSearch: number; limitedWrite: number; limitedOther: number };
+  limitedSearch: number; limitedWrite: number; limitedOther: number; maxStartsPerSec: number };
 // What Lark answered when it throttled (nothing here may contain a token: only the code, status, label, table id and rate-limit headers).
 type Throttle = { label: string; httpStatus?: number; code?: unknown; retryAfter?: string | null; ratelimit?: Record<string, string>; table?: string; logId?: string };
 const THROTTLE_LABELS = new Set<string>([...CALL_TYPES, "token", "ticket"]);
@@ -184,7 +186,15 @@ export class MyDurableObject extends DurableObject<Env> {
   private gapMs: number;
   private longPollMs: number;
   private active = 0;
+  // Start spacing is a token bucket in its "theoretical arrival time" form: nextStartAt is when the NEXT start would be due if starts
+  // were exactly one gap apart; a start may go up to (burst - 1) gaps ahead of it, so an idle gate lets `burst` starts go back to back
+  // and then settles at one start per gap (the long-run rate is unchanged). burst = 1 is the old behaviour exactly.
   private nextStartAt = 0;
+  private burst = 1;                                   // GATE_BURST (1 = no burst allowance)
+  private burstOffUntil = 0;                           // a throttle forces a bucket of 1 until this time
+  private lastBurstAt = 0;
+  private location: { colo: string; loc: string } | null = null;   // where this object runs (see locate())
+  private locating: Promise<void> | null = null;
   private cooldownUntil = 0;
   private okStreak = 0;
   private waitq: SlotEntry[] = [];
@@ -232,6 +242,7 @@ export class MyDurableObject extends DurableObject<Env> {
     upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0, createMemoryHits: 0, createSharedInflight: 0, writeRetries: 0,
     cacheHits: 0, cacheShared: 0, cacheStaleServed: 0, larkCalls: 0, writesSuperseded: 0, tokenLimited: 0,
     updateBatches: 0, updatedInBatches: 0, updateSplits: 0, updateMismatches: 0, updateRecordRejects: 0, updateWholeCallErrors: 0,
+    bucketBursts: 0, throttlesWhileBursting: 0,        // starts that went ahead of the one-per-gap spacing; throttles within 5 s of such a start
     limitedByLabel: {} as Record<string, number>, limitedByCode: {} as Record<string, number>,   // every throttle Lark answered, main gate AND token lane
     noBatchTrips: 0, peakQueue: 0, truncatedFails: 0, heavyUsers: 0, peakStartsPerSec: 0,
     startsByClass: { token: 0, read: 0, write: 0 } as Record<Klass, number>,
@@ -245,10 +256,29 @@ export class MyDurableObject extends DurableObject<Env> {
     this.baseGapMs = this.gapMs = Number(env?.GATE_START_GAP_MS) || 250;   // ship at today's pace, then ramp down
     this.writeTimeoutMs = Number(env?.GATE_WRITE_TIMEOUT_MS) || WRITE_TIMEOUT_MS;
     this.createMemoryMs = env?.CREATE_MEMORY_MS !== undefined ? Number(env.CREATE_MEMORY_MS) : CREATE_MEMORY_MS;
+    this.burst = Math.max(1, Math.min(MAX_BURST, Math.floor(Number(env?.GATE_BURST)) || 1));
     this.tokenConcurrency = Number(env?.TOKEN_CONCURRENCY) || TOKEN_CONCURRENCY;
     this.tokenGapMs = env?.TOKEN_GAP_MS !== undefined && Number.isFinite(Number(env.TOKEN_GAP_MS)) ? Number(env.TOKEN_GAP_MS) : TOKEN_GAP_MS;
   }
 
+  // Where does this object run? One call to Cloudflare's trace page from inside the object, cached; only the data centre code (colo,
+  // e.g. "SIN") and the country (loc) are kept. Best effort: null if the call fails.
+  async locate(): Promise<{ colo: string; loc: string } | null> {
+    if (this.location) return this.location;
+    if (!this.locating) {
+      this.locating = (async () => {
+        try {
+          const res = await fetch("https://www.cloudflare.com/cdn-cgi/trace", { signal: AbortSignal.timeout(3_000) });
+          const text = await res.text();
+          const pick = (key: string) => new RegExp(`^${key}=([A-Za-z0-9-]{1,16})\\s*$`, "m").exec(text)?.[1];
+          const colo = pick("colo");
+          if (colo) this.location = { colo, loc: pick("loc") || "" };
+        } catch { /* best effort */ } finally { this.locating = null; }
+      })();
+    }
+    await this.locating;
+    return this.location;
+  }
   getMapSizes() { return { heavy: this.heavy.size, noBatch: this.noBatchUntil.size, orphanStrikes: this.orphanStrikes.size }; }
   getStats() {
     const { batchSizes, queueWaitMs, ...rest } = this.s;
@@ -260,6 +290,8 @@ export class MyDurableObject extends DurableObject<Env> {
       permits: Object.fromEntries((["token", "read", "write"] as Klass[]).map((k) => [k, { wait: summary(this.m.waitMs[k]), hold: summary(this.m.holdMs[k]) }])),
       lark: Object.fromEntries(CALL_TYPES.map((t) => [t, summary(this.m.larkMs[t])])),
       limitedByLabel: { ...this.s.limitedByLabel }, limitedByCode: { ...this.s.limitedByCode },
+      burst: { size: this.burst, effective: this.burstCapacity(Date.now()), offUntil: this.burstOffUntil > Date.now() ? new Date(this.burstOffUntil).toISOString() : null },
+      location: this.location,                                  // { colo, loc } once locate() has run (Pages' /queue-stats calls it)
       labels: { ...this.labels }, cacheEntries: this.cache.size,
       tokenLane: { concurrency: this.tokenConcurrency, gapMs: this.tokenGapMs, active: this.tokenActive, queued: this.tokenQ.length },
       startedAt: new Date(this.startedAt).toISOString(), uptimeSec: Math.round((Date.now() - this.startedAt) / 1000),
@@ -284,14 +316,14 @@ export class MyDurableObject extends DurableObject<Env> {
     const t = Math.floor(Date.now() / MINUTE_MS);
     if (!this.cur || this.cur.t !== t) {
       this.closeMinute();
-      this.cur = { t, starts: 0, limited: 0, peakQueue: 0, waits: [], searchMs: [], updateMs: [], tokenStarts: 0, isolates: new Set(), limitedSearch: 0, limitedWrite: 0, limitedOther: 0 };
+      this.cur = { t, starts: 0, limited: 0, peakQueue: 0, waits: [], searchMs: [], updateMs: [], tokenStarts: 0, isolates: new Set(), limitedSearch: 0, limitedWrite: 0, limitedOther: 0, maxStartsPerSec: 0 };
     }
     return this.cur;
   }
   private rowOf(m: Minute): MinuteRow {
     return { t: m.t, starts: m.starts, limited: m.limited, waitP95: p95Of(m.waits), peakQueue: m.peakQueue,
       searchP95: p95Of(m.searchMs), updateP95: p95Of(m.updateMs), tokenStarts: m.tokenStarts, isolates: m.isolates.size,
-      totalStarts: m.starts + m.tokenStarts, limitedSearch: m.limitedSearch, limitedWrite: m.limitedWrite, limitedOther: m.limitedOther };
+      totalStarts: m.starts + m.tokenStarts, limitedSearch: m.limitedSearch, limitedWrite: m.limitedWrite, limitedOther: m.limitedOther, maxStartsPerSec: m.maxStartsPerSec };
   }
   private closeMinute(): void {
     if (!this.cur) return;
@@ -322,7 +354,9 @@ export class MyDurableObject extends DurableObject<Env> {
       // limitedSearch / limitedWrite / limitedOther = throttles by kind of call (other: get, list, fields, token, ticketed calls); they
       // include token-lane throttles, which the plain `limited` column (main gate only) does not.
       totalStarts: rows.map((r) => r.totalStarts), limitedSearch: rows.map((r) => r.limitedSearch),
-      limitedWrite: rows.map((r) => r.limitedWrite), limitedOther: rows.map((r) => r.limitedOther) };
+      limitedWrite: rows.map((r) => r.limitedWrite), limitedOther: rows.map((r) => r.limitedOther),
+      // maxStartsPerSec = the most gate starts inside any 1 s window that minute (what a burst allowance would show).
+      maxStartsPerSec: rows.map((r) => r.maxStartsPerSec) };
   }
   private countLabel(label: unknown): void {
     const name = typeof label === "string" && /^[a-z0-9-]{1,24}$/.test(label) ? label : "other";
@@ -377,22 +411,27 @@ export class MyDurableObject extends DurableObject<Env> {
     return { promise, cancel: () => { entry.cancelled = true; } };
   }
 
+  // How many starts may go back to back right now: GATE_BURST, or 1 for BURST_OFF_MS after a Lark throttle.
+  private burstCapacity(now: number): number { return now < this.burstOffUntil ? 1 : this.burst; }
+
   private pump(): void {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     while (this.waitq.length && this.active < this.concurrency) {
       const head = this.waitq[0];
       if (head.cancelled) { this.waitq.shift(); continue; }
       const now = Date.now();
-      const at = Math.max(this.nextStartAt, this.cooldownUntil);
+      const capacity = this.burstCapacity(now);
+      const at = Math.max(this.nextStartAt - (capacity - 1) * this.gapMs, this.cooldownUntil);
       if (at > now) { this.timer = setTimeout(() => { this.timer = null; this.pump(); }, at - now); return; }
       this.waitq.shift();
       this.active++;
-      this.nextStartAt = now + this.gapMs;
+      if (now < this.nextStartAt) { this.s.bucketBursts++; this.lastBurstAt = now; }      // went ahead of the one-per-gap spacing
+      this.nextStartAt = Math.max(this.nextStartAt, now) + this.gapMs;                    // with capacity 1 this is exactly now + gapMs
       this.recentStarts.push(now);
       while (this.recentStarts.length && now - this.recentStarts[0] >= 1000) this.recentStarts.shift();
       this.s.peakStartsPerSec = Math.max(this.s.peakStartsPerSec, this.recentStarts.length);
       this.sample(this.m.waitMs[head.klass], now - head.requestedAt);
-      { const mm = this.minuteNow(); mm.starts++; if (mm.waits.length < MINUTE_WAIT_SAMPLES) mm.waits.push(now - head.requestedAt); }
+      { const mm = this.minuteNow(); mm.starts++; mm.maxStartsPerSec = Math.max(mm.maxStartsPerSec, this.recentStarts.length); if (mm.waits.length < MINUTE_WAIT_SAMPLES) mm.waits.push(now - head.requestedAt); }
       head.grant({ klass: head.klass, at: now });
     }
   }
@@ -426,6 +465,12 @@ export class MyDurableObject extends DurableObject<Env> {
     if (limited) {
       this.s.limited++;
       this.minuteNow().limited++;
+      if (this.burst > 1) {                                       // a throttle empties the bucket and switches the allowance off for a minute
+        const t = Date.now();
+        if (t - this.lastBurstAt < 5_000) this.s.throttlesWhileBursting++;
+        this.burstOffUntil = t + BURST_OFF_MS;
+        this.nextStartAt = Math.max(this.nextStartAt, t);
+      }
       this.okStreak = 0;
       this.gapMs = Math.min(500, this.gapMs * 2);
       this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs)));
