@@ -2404,6 +2404,7 @@ async function editCaseFlow(chatId, caseNo) {
   try {
     if (isCaseEmpty(s)) {
       if (s.caRecordId) {
+        rememberDeletedRecord(s.caRecordId);
         fetch("/lark-delete-record", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3991,6 +3992,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.matchedRow = row;
       s.otherBrandMatches = otherBrands;
       s.caRecordId = caRecordId;
+      if (previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId); // the server replaced it
       s.caOwner = selectedAgent;
       s.claimedPrograms = {};
       s.vs96FeedbackQuery1 = "";
@@ -4884,7 +4886,8 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   s.logged = false;
   s.loggedSnapshot = "";
   s.autoRecordError = "";
-  const restore = () => { if (!s.caRecordId) s.caRecordId = staleRecordId; }; // lets a re-tick retry
+  const restore = () => { forgetDeletedRecord(staleRecordId); if (!s.caRecordId) s.caRecordId = staleRecordId; }; // lets a re-tick retry
+  rememberDeletedRecord(staleRecordId);
   fetch("/lark-delete-record", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5776,6 +5779,39 @@ function markResolvedElsewhere(recordIds) {
    rows as its other cases. Only ever the selected agent's own rows. */
 const larkRestoreTried = new Set(); // not persisted -- a reload may try again
 
+// Records this browser just deleted (Unknown ticked, an empty case dropped, an empty row removed). Lark's search can keep
+// returning a deleted row for a few seconds, which rebuilt a "Logged" card from a row that no longer existed. They are
+// remembered in storage so a reload or another tab honours it too, and forgotten after an hour.
+const DELETED_RECORDS_KEY = "rc-deleted-records";
+const DELETED_RECORDS_TTL_MS = 60 * 60_000;
+function readDeletedRecords() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DELETED_RECORDS_KEY) || "{}") || {};
+    const now = Date.now();
+    const fresh = {};
+    for (const [id, at] of Object.entries(raw)) if (now - Number(at) < DELETED_RECORDS_TTL_MS) fresh[id] = at;
+    return fresh;
+  } catch (_) { return {}; }
+}
+function rememberDeletedRecord(recordId) {
+  if (!recordId) return;
+  try {
+    const all = readDeletedRecords();
+    all[recordId] = Date.now();
+    localStorage.setItem(DELETED_RECORDS_KEY, JSON.stringify(all));
+  } catch (_) { /* non-fatal */ }
+}
+function forgetDeletedRecord(recordId) {
+  try {
+    const all = readDeletedRecords();
+    delete all[recordId];
+    localStorage.setItem(DELETED_RECORDS_KEY, JSON.stringify(all));
+  } catch (_) { /* non-fatal */ }
+}
+function isDeletedRecord(recordId) {
+  return !!recordId && Object.prototype.hasOwnProperty.call(readDeletedRecords(), recordId);
+}
+
 function epochToDateInput(ms) {
   if (typeof ms !== "number") return "";
   const d = new Date(ms);
@@ -5822,7 +5858,7 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "lookup failed");
-    records = data.records || [];
+    records = (data.records || []).filter((r) => !isDeletedRecord(r.recordId));
   } catch (err) {
     larkRestoreTried.delete(threadId); // let a later visit try again
     logDiagnostic("Couldn't check Lark for this chat's saved case: " + err.message, "warn");
@@ -5946,6 +5982,7 @@ function getStaleLarkRecords() {
     .filter((r) => {
       if (currentLiveChatAccount && r.accountKey && r.accountKey !== currentLiveChatAccount) return false;
       if (shownLocally.has(r.recordId)) return false;
+      if (isDeletedRecord(r.recordId)) return false; // just removed here; Lark's search may not know yet
       const local = localByRecord.get(r.recordId);
       if (!local) return true;
       // Recorded since the last poll (a logged row is never blank in Lark), or still being worked on.
@@ -5972,6 +6009,7 @@ Only do this if the case doesn't need logging. It's only removed if Inquiry and 
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Remove failed");
+    rememberDeletedRecord(recordId);
     staleRecords = staleRecords.filter((r) => r.recordId !== recordId);
     setStatus(`Removed empty record for ${label}.`, "success");
   } catch (err) {
