@@ -190,6 +190,7 @@ async function fetchTicketConfig({ fresh = false } = {}) {
 function saveAgent(name) {
   selectedAgent = name.trim();
   localStorage.setItem(AGENT_KEY, selectedAgent);
+  if (typeof resumePendingLookups === "function") resumePendingLookups();   // an interrupted lookup was waiting for the agent name
 }
 
 // Settings panel — overlaid on top of the widget, blocking interaction
@@ -1147,13 +1148,263 @@ function showChatToast(text, kind) {
 // one customer's case under a different one's card.
 function announceChatSwitch(prevChatId, nextChat) {
   const prev = prevChatId ? state[prevChatId] : null;
-  const hadUnsaved = !!(prev && (prev.usernameDraft || prev.lookupInFlight));
   const nextLabel = nextChat.customerName || nextChat.chatId;
-  if (hadUnsaved) {
-    showChatToast(`⚠ Switched chats before "${prev.usernameDraft || "a lookup"}" was submitted — now viewing ${nextLabel}. Come back to the other chat to finish it.`, "warn");
+  if (prev && prev.usernameDraft) {
+    // Typed but never looked up: that one really can end up recorded under the wrong customer, so it stays a loud warning.
+    showChatToast(`⚠ Switched chats before "${prev.usernameDraft}" was submitted — now viewing ${nextLabel}. Come back to the other chat to finish it.`, "warn");
+  } else if (prev && prev.lookupInFlight && prevChatId !== nextChat.chatId) {
+    // A running lookup is not a problem: it writes into ITS chat and the result is waiting there.
+    showChatToast(`Lookup for ${prev.pendingLookup?.username || prev.username || "this player"} keeps running — results will be waiting when you come back.`, "info");
   } else if (prevChatId && prevChatId !== nextChat.chatId) {
     showChatToast(`Now viewing ${nextLabel}`, "info");
   }
+}
+
+// ---- A lookup keeps running when the agent switches chats ---------------------------------------------------------------------
+// The request itself never depended on which chat is in front (it writes into ITS chat's state); what used to go wrong was what it SAID:
+// its toast / status-bar text landed on whatever chat was focused by then, and a widget reload mid-lookup lost the result. Now:
+//  * every message a lookup produces is stored on THAT chat's state (s.lookupMessage, shown in that chat's card), and goes to the global
+//    status bar / toast only while that chat is still the focused one; otherwise ONE neutral toast says it finished elsewhere;
+//  * a small pill shows "1 lookup running in another chat", then "Lookup for X done" for a few seconds;
+//  * the running lookup is remembered (s.pendingLookup, no secrets) so a widget that is recreated mid-lookup can resume it once.
+const LOOKUP_RESUME_MAX_AGE_MS = 40_000;   // an unfinished lookup older than this is "interrupted", not resumed
+const LOOKUP_LOCK_MS = 10_000;             // lock lease; the running widget renews it every LOOKUP_LOCK_BEAT_MS
+const LOOKUP_LOCK_BEAT_MS = 3_000;
+const LOOKUP_DONE_PILL_MS = 10_000;
+const LOOKUP_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; // this copy of the widget
+let bgLookupDone = null;                   // { chatId, text, attention, until }: the "done" pill
+let bgLookupPillTimer = null;
+let lookupResumeTimer = null;
+let lookupResumeCandidates = null;         // chats that had an unfinished lookup when this widget loaded
+
+function isFocusedChat(chatId) {
+  return !!chatId && activeChats[0]?.chatId === chatId;
+}
+
+// What this lookup wants to say. Always remembered on its own chat; in the global status bar only while that chat is in front.
+// `attention` = it failed or something is unavailable (the neutral "finished" toast then says so).
+function lookupSay(chatId, text, kind, attention = false) {
+  const s = state[chatId];
+  if (s) s.lookupMessage = { text, kind: kind || "info", attention: !!attention, at: Date.now() };
+  if (isFocusedChat(chatId)) setStatus(text, kind);
+  else logDiagnostic(`(other chat) ${text}`, kind);
+}
+
+function renderLookupMessage(chatId) {
+  const m = state[chatId]?.lookupMessage;
+  if (!m || !m.text) return "";
+  return `<div class="lookup-message ${m.attention ? "attention" : m.kind === "error" ? "error" : "info"}">${escapeHtml(m.text)}</div>`;
+}
+
+function refreshBackgroundLookupPill() {
+  let el = document.getElementById("bgLookupPill");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "bgLookupPill";
+    const anchor = document.getElementById("statusBar");
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(el, anchor.nextSibling); else document.body.appendChild(el);
+  }
+  const focused = activeChats[0]?.chatId;
+  const running = Object.entries(state).filter(([id, s]) => id !== focused && s?.lookupInFlight).length;
+  const showDone = !running && bgLookupDone && bgLookupDone.until > Date.now();
+  let text = "", cls = "";
+  if (running) { text = running === 1 ? "1 lookup running in another chat" : `${running} lookups running in other chats`; cls = "running"; }
+  else if (showDone) { text = bgLookupDone.text; cls = bgLookupDone.attention ? "attention" : "done"; }
+  el.textContent = text;
+  el.className = `bg-lookup-pill ${cls}${text ? "" : " hidden"}`;
+  clearTimeout(bgLookupPillTimer);
+  if (showDone) bgLookupPillTimer = setTimeout(refreshBackgroundLookupPill, Math.max(50, bgLookupDone.until - Date.now() + 50));
+}
+
+// A lookup ended while its chat was not in front: one neutral toast, and the "done" pill.
+function announceLookupFinishedElsewhere(chatId, username) {
+  const s = state[chatId];
+  const who = username || s?.username || "a player";
+  const attention = !!s?.lookupMessage?.attention;
+  showChatToast(attention ? `⚠ Lookup for ${who} needs attention (other chat)` : `Lookup for ${who} finished (other chat)`, attention ? "warn" : "info");
+  bgLookupDone = { chatId, text: attention ? `⚠ Lookup for ${who} needs a retry` : `✓ Lookup for ${who} done`, attention, until: Date.now() + LOOKUP_DONE_PILL_MS };
+}
+
+// ---- who may (re)run a chat's lookup: one widget copy at a time --------------------------------------------------------------
+const lookupLockKey = (chatId) => `ca-lookup-lock:${chatId}`;
+function lookupLockHeldByOther(chatId) {
+  try {
+    const lock = JSON.parse(localStorage.getItem(lookupLockKey(chatId)) || "null");
+    return !!(lock && lock.instance !== LOOKUP_INSTANCE_ID && Number(lock.until) > Date.now());
+  } catch (_) { return false; }                // unusable storage: do not block
+}
+function takeLookupLock(chatId) {
+  try { localStorage.setItem(lookupLockKey(chatId), JSON.stringify({ instance: LOOKUP_INSTANCE_ID, until: Date.now() + LOOKUP_LOCK_MS })); } catch (_) { /* best effort */ }
+}
+function releaseLookupLock(chatId) {
+  try {
+    const lock = JSON.parse(localStorage.getItem(lookupLockKey(chatId)) || "null");
+    if (lock && lock.instance === LOOKUP_INSTANCE_ID) localStorage.removeItem(lookupLockKey(chatId));
+  } catch (_) { /* best effort */ }
+}
+
+// The lookup of one chat: the Look up button, and the resume after a widget reload, both end up here. `btn` is the clicked button (null
+// when resumed). Nothing here reads the DOM of the chat that is in front: everything it needs is passed in or lives in state[chatId].
+async function runLookup(chatId, { username, brand, telegramNow = false, link = "", previousRecordId = null, forcing = false, resumed = false, btn = null }) {
+  const s = state[chatId];
+  if (!s || s.lookupInFlight) return;
+  let needFullRender = forcing;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 45000);
+  lookupControllers.set(chatId, controller);
+  s.lookupInFlight = true;
+  s.lookupMessage = null;                                   // a new lookup replaces the previous message
+  s.pendingLookup = { username, brand, link, telegram: !!telegramNow, previousRecordId, forcing: !!forcing, agent: selectedAgent, startedAt: Date.now(), resumed: !!resumed };
+  takeLookupLock(chatId);
+  const lockBeat = setInterval(() => takeLookupLock(chatId), LOOKUP_LOCK_BEAT_MS);
+  if (btn) {
+    btn.dataset.action = "cancelLookup";
+    btn.classList.add("lookup-cancel-btn");
+    btn.title = "Cancel this lookup";
+    btn.disabled = false;
+    btn.textContent = "Cancel";
+  } else if (isFocusedChat(chatId)) {
+    renderChats(activeChats);                               // resumed: show the Cancel button
+  }
+  refreshBackgroundLookupPill();
+  saveState();                                              // a widget that is recreated now finds pendingLookup and can resume it
+  try {
+    // lark-search.js resolves every bonus's own source table directly now
+    // (no more Customer Approaching Lookup-column delay) — this response
+    // is already final, nothing left to poll for.
+    //
+    // One Customer Approaching row per chat, not one per Look Up click —
+    // a repeat lookup for this same chat passes back the record created
+    // last time so the backend deletes it first. Only sent if that
+    // record hasn't been logged (submitted) yet — a completed case is
+    // never deleted by a stray re-lookup (previousRecordId is decided by the caller).
+    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, notVip } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
+    s.caLinkSaved = !!link;
+    s.matchedRow = row;
+    s.otherBrandMatches = otherBrands;
+    s.caRecordId = caRecordId;
+    if (previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId); // the server replaced it
+    s.caOwner = selectedAgent;
+    s.claimedPrograms = {};
+    s.vs96FeedbackQuery1 = "";
+    s.vs96FeedbackQuery2 = "";
+    s.riskReloadAmount = "";
+    s.gracePeriodActivated = false;
+    s.releasedBonusAmount = "";
+    s.releasedAmountRaw = "";
+    s.claimSecret = false;
+    s.claimSecretManual = false;
+    const sameForced = !!s.forcedVipFor && s.forcedVipFor.toLowerCase() === username.toLowerCase();
+    if (isFocusedChat(chatId)) showChatToast(`✓ Looked up "${username}" — ${brand}`, "info");
+    if (notVip && !forcing && !sameForced) {
+      // CS only tracks VIP retention here — a confirmed non-VIP result
+      // is treated the same as Unknown player: nothing about this chat
+      // should end up in Customer Approaching (see setUnknown). The
+      // checkbox/username row lives outside the three targeted slots
+      // below, so this needs a full render -- done after the in-flight
+      // flag clears, so the button comes back as "Force lookup".
+      s.notVipResult = true;
+      s.forcedVipFor = "";
+      setUnknown(chatId, true, { silent: true });
+      needFullRender = true;
+      lookupSay(chatId, 'Not VVIP — marked Unknown player. Use "Force lookup" if they are VIP but not on the list yet.', "error");
+    } else if (notVip) {
+      s.notVipResult = false;
+      s.forcedVipFor = username;
+      lookupSay(chatId, `Force lookup: ${username} isn't on the VIP list yet — kept as a VIP.`);
+    } else {
+      s.notVipResult = false;
+      s.forcedVipFor = "";
+      lookupSay(chatId, row ? `Found ${username} under ${brand}.` : "No record found.");
+    }
+    if (lookupWarnings.length) {
+      lookupSay(chatId, `Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error", true);
+    }
+    // The bonus results above are valid; only the Lark case row was not saved. Warn, do not fail.
+    if (caseRowError) {
+      lookupSay(chatId, lookupWarnings.length ? `${caseRowError} Also unavailable: ${lookupWarnings.join(", ")}.` : caseRowError, "error", true);
+    }
+  } catch (err) {
+    if (forcing) s.isUnknown = true; // failed force lookup -- back to how it was
+    if (controller.signal.aborted) {
+      lookupSay(chatId, timedOut ? "Lookup timed out after 45 seconds. Try again." : "Lookup canceled.", timedOut ? "error" : "info", timedOut);
+    } else {
+      lookupSay(chatId, "Lookup failed: " + err.message, "error", true);
+    }
+  } finally {
+    clearTimeout(timeoutId);
+    clearInterval(lockBeat);
+    if (lookupControllers.get(chatId) === controller) lookupControllers.delete(chatId);
+    scheduleNeedsAttentionRefresh(1500); // a new case row may now belong in Needs Attention (the timer is slower now)
+    s.lookupInFlight = false;
+    s.pendingLookup = null;
+    releaseLookupLock(chatId);
+    if (isFocusedChat(chatId)) {
+      if (needFullRender) {
+        renderChats(activeChats);
+      } else {
+        const currentCard = Array.from(chatListEl.querySelectorAll(".chat-card")).find((item) => item.dataset.chatId === chatId);
+        if (currentCard) {
+          const currentButton = currentCard.querySelector('button[data-action="cancelLookup"], button[data-action="lookup"]');
+          if (currentButton) {
+            currentButton.dataset.action = "lookup";
+            currentButton.classList.toggle("lookup-cancel-btn", false);
+            currentButton.classList.toggle("force", !!s.notVipResult);
+            currentButton.title = s.notVipResult ? "Not on the VIP list — look up again anyway and keep them as a VIP" : "";
+            currentButton.disabled = s.isUnknown && !s.notVipResult;
+            currentButton.textContent = s.notVipResult ? "Force lookup" : "Look up";
+          }
+          const playerInfo = currentCard.querySelector(".player-info-slot");
+          const ticketSlot = currentCard.querySelector(".ticket-slot");
+          const autoFields = currentCard.querySelector(".auto-fields-slot");
+          if (playerInfo) playerInfo.innerHTML = renderPlayerInfo(chatId);
+          if (ticketSlot) ticketSlot.innerHTML = renderTickets(chatId);
+          if (autoFields) autoFields.innerHTML = renderAutoFields(chatId);
+        }
+      }
+    } else {
+      announceLookupFinishedElsewhere(chatId, username);      // its card is drawn fresh (with the message) when the agent comes back
+    }
+    refreshBackgroundLookupPill();
+    saveState();
+  }
+}
+
+// After the widget is (re)created: a lookup that was running when the old copy went away is re-run ONCE if it is recent. The server
+// reuses the chat's blank row (chat link + the queue's create memory), so no second row appears. Older, or already resumed once:
+// "interrupted". Never another agent's lookup, never one that another widget copy is (still) running or resuming.
+function resumePendingLookups() {
+  clearTimeout(lookupResumeTimer);
+  if (!selectedAgent || !lookupResumeCandidates) return;
+  let waiting = false;
+  for (const chatId of [...lookupResumeCandidates]) {
+    const s = state[chatId];
+    const p = s?.pendingLookup;
+    if (!p || s.lookupInFlight) { lookupResumeCandidates.delete(chatId); continue; }
+    const age = Date.now() - Number(p.startedAt || 0);
+    if (s.lookupMessage && Number(s.lookupMessage.at) >= Number(p.startedAt || 0)) { s.pendingLookup = null; lookupResumeCandidates.delete(chatId); continue; }   // it did finish
+    if (p.agent !== selectedAgent || (s.caOwner && s.caOwner !== selectedAgent)) { lookupResumeCandidates.delete(chatId); continue; }   // somebody else's: leave it alone
+    if (p.resumed || !(age >= 0 && age < LOOKUP_RESUME_MAX_AGE_MS)) {
+      s.pendingLookup = null;
+      lookupResumeCandidates.delete(chatId);
+      lookupSay(chatId, "Lookup was interrupted — click Look up.", "info", true);
+      saveState();
+      continue;
+    }
+    if (lookupLockHeldByOther(chatId)) { waiting = true; continue; }       // another copy is on it (or just died: its lock lapses within seconds)
+    lookupResumeCandidates.delete(chatId);
+    takeLookupLock(chatId);
+    void runLookup(chatId, { username: p.username, brand: p.brand, telegramNow: p.telegram, link: p.link || "", previousRecordId: p.previousRecordId || null, forcing: !!p.forcing, resumed: true });
+  }
+  if (waiting) lookupResumeTimer = setTimeout(resumePendingLookups, 2_000);
+}
+function startLookupResume() {
+  lookupResumeCandidates = new Set(Object.entries(state).filter(([, s]) => s?.pendingLookup).map(([chatId]) => chatId));
+  resumePendingLookups();
 }
 
 function applyProfile(profile) {
@@ -1206,6 +1457,8 @@ function applyProfile(profile) {
   const chat = chatFromProfile(profile);
   announceChatSwitch(activeChats[0]?.chatId, chat);
   activeChats = [chat];
+  if (bgLookupDone && bgLookupDone.chatId === chat.chatId) bgLookupDone = null;   // the agent is back: no need to say it again
+  refreshBackgroundLookupPill();
   // In live mode there's only ever one chat shown at a time, so a newly-
   // active chat should always render expanded — collapsing exists to save
   // space among several chats, which doesn't apply here.
@@ -2206,7 +2459,7 @@ function renderPlayerInfo(chatId) {
       parts.push(`<span><span class="pi-label">Note</span> Not on the VIP list yet — force looked up</span>`);
     }
   }
-  return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
+  return renderLookupMessage(chatId) + (parts.length ? `<div class="player-info">${parts.join("")}</div>` : "");
 }
 
 async function copyPlainText(value) {
@@ -3991,112 +4244,10 @@ chatListEl.addEventListener("click", async (e) => {
     // yet), so un-mark Unknown up front and don't auto-mark it again below.
     const forcing = !!s.notVipResult;
     if (forcing) s.isUnknown = false;
-    let needFullRender = forcing;
-    const controller = new AbortController();
-    let timedOut = false;
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, 45000);
-    lookupControllers.set(chatId, controller);
-    s.lookupInFlight = true;
-    btn.dataset.action = "cancelLookup";
-    btn.classList.add("lookup-cancel-btn");
-    btn.title = "Cancel this lookup";
-    btn.disabled = false;
-    btn.textContent = "Cancel";
-    try {
-      // lark-search.js resolves every bonus's own source table directly now
-      // (no more Customer Approaching Lookup-column delay) — this response
-      // is already final, nothing left to poll for.
-      //
-      // One Customer Approaching row per chat, not one per Look Up click —
-      // a repeat lookup for this same chat passes back the record created
-      // last time so the backend deletes it first. Only sent if that
-      // record hasn't been logged (submitted) yet — a completed case is
-      // never deleted by a stray re-lookup.
-      const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
-      const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, notVip } = await fetchBonusRow(username, brand, s.chatUrl || chatDef?.link || "", telegramNow, selectedAgent, previousRecordId, controller.signal);
-      s.caLinkSaved = !!(s.chatUrl || chatDef?.link);
-      s.matchedRow = row;
-      s.otherBrandMatches = otherBrands;
-      s.caRecordId = caRecordId;
-      if (previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId); // the server replaced it
-      s.caOwner = selectedAgent;
-      s.claimedPrograms = {};
-      s.vs96FeedbackQuery1 = "";
-      s.vs96FeedbackQuery2 = "";
-      s.riskReloadAmount = "";
-      s.gracePeriodActivated = false;
-      s.releasedBonusAmount = "";
-      s.releasedAmountRaw = "";
-      s.claimSecret = false;
-      s.claimSecretManual = false;
-      const sameForced = !!s.forcedVipFor && s.forcedVipFor.toLowerCase() === username.toLowerCase();
-      showChatToast(`✓ Looked up "${username}" — ${brand}`, "info");
-      if (notVip && !forcing && !sameForced) {
-        // CS only tracks VIP retention here — a confirmed non-VIP result
-        // is treated the same as Unknown player: nothing about this chat
-        // should end up in Customer Approaching (see setUnknown). The
-        // checkbox/username row lives outside the three targeted slots
-        // below, so this needs a full render -- done after the in-flight
-        // flag clears, so the button comes back as "Force lookup".
-        s.notVipResult = true;
-        s.forcedVipFor = "";
-        setUnknown(chatId, true, { silent: true });
-        needFullRender = true;
-        setStatus('Not VVIP — marked Unknown player. Use "Force lookup" if they are VIP but not on the list yet.', "error");
-      } else if (notVip) {
-        s.notVipResult = false;
-        s.forcedVipFor = username;
-        setStatus(`Force lookup: ${username} isn't on the VIP list yet — kept as a VIP.`);
-      } else {
-        s.notVipResult = false;
-        s.forcedVipFor = "";
-        setStatus(row ? `Found ${username} under ${brand}.` : "No record found.");
-      }
-      if (lookupWarnings.length) {
-        setStatus(`Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error");
-      }
-      // The bonus results above are valid; only the Lark case row was not saved. Warn, do not fail.
-      if (caseRowError) {
-        setStatus(lookupWarnings.length ? `${caseRowError} Also unavailable: ${lookupWarnings.join(", ")}.` : caseRowError, "error");
-      }
-    } catch (err) {
-      if (forcing) s.isUnknown = true; // failed force lookup -- back to how it was
-      if (controller.signal.aborted) {
-        setStatus(timedOut ? "Lookup timed out after 45 seconds. Try again." : "Lookup canceled.", timedOut ? "error" : "info");
-      } else {
-        setStatus("Lookup failed: " + err.message, "error");
-      }
-    } finally {
-      clearTimeout(timeoutId);
-      if (lookupControllers.get(chatId) === controller) lookupControllers.delete(chatId);
-      scheduleNeedsAttentionRefresh(1500); // a new case row may now belong in Needs Attention (the timer is slower now)
-      s.lookupInFlight = false;
-      if (needFullRender) {
-        renderChats(activeChats);
-      } else {
-        const currentCard = Array.from(chatListEl.querySelectorAll(".chat-card")).find((item) => item.dataset.chatId === chatId);
-        if (currentCard) {
-          const currentButton = currentCard.querySelector('button[data-action="cancelLookup"], button[data-action="lookup"]');
-          if (currentButton) {
-            currentButton.dataset.action = "lookup";
-            currentButton.classList.toggle("lookup-cancel-btn", false);
-            currentButton.classList.toggle("force", !!s.notVipResult);
-            currentButton.title = s.notVipResult ? "Not on the VIP list — look up again anyway and keep them as a VIP" : "";
-            currentButton.disabled = s.isUnknown && !s.notVipResult;
-            currentButton.textContent = s.notVipResult ? "Force lookup" : "Look up";
-          }
-          const playerInfo = currentCard.querySelector(".player-info-slot");
-          const ticketSlot = currentCard.querySelector(".ticket-slot");
-          const autoFields = currentCard.querySelector(".auto-fields-slot");
-          if (playerInfo) playerInfo.innerHTML = renderPlayerInfo(chatId);
-          if (ticketSlot) ticketSlot.innerHTML = renderTickets(chatId);
-          if (autoFields) autoFields.innerHTML = renderAutoFields(chatId);
-        }
-      }
-    }
+    // One Customer Approaching row per chat: a repeat lookup passes back the record created last time (only if it was not logged yet and is this
+    // agent's own), so the backend deletes it first.
+    const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
+    await runLookup(chatId, { username, brand, telegramNow, link: s.chatUrl || chatDef?.link || "", previousRecordId, forcing, btn });
   }
 
   if (btn.dataset.action === "claim") {
@@ -5536,6 +5687,7 @@ function runWhenIdle(task, timeout = 1500) {
     if (chatId && groupID && !state[chatId]?.brand) resolveBrandFromGroupId(chatId, groupID);
   });
 
+  setTimeout(startLookupResume, 1500);   // a lookup that was running when the previous copy of this widget went away
   runWhenIdle(() => {
     renderNeedsAttentionPanel();
     fetchStaleRecords();
