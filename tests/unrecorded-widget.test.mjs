@@ -135,3 +135,63 @@ test('the list says in the activity log how many chats it got, and ⟳ reads it 
   const deploy = refresh.indexOf('reloadForDeploymentUpdate');
   assert.ok(refresh.indexOf('fetchUnrecordedChats();') > deploy, 'after the update branch returns, so an update still just reloads');
 });
+
+// ---- opening an archived chat from the unrecorded list gives a fresh card --------------------------
+function archivedHarness({ restored = false, entries = [{ threadId: 'T1', chatId: 'CH1', customer: 'Zimito', date: 1 }], source = 'archives', profileName = 'Zimito' } = {}) {
+  const calls = { shown: [], brand: [], status: [], saved: 0, ensured: [], restoreAsked: [] };
+  const st = {};
+  const context = vm.createContext({
+    String, Promise, state: st, unrecordedChats: entries, activeChats: [], archiveOpening: '',
+    findTrackedChatByThread: () => '', stopChatStatusPolling() {}, renderChats() {}, setStatus: (t) => calls.status.push(t),
+    chatFromProfile: () => ({ chatId: 'LIVE' }), announceChatSwitch() {}, refreshBackgroundLookupPill() {}, bgLookupDone: null,
+    ensureChatState: (chat) => { calls.ensured.push(chat); st[chat.chatId] = { chatOpen: true, chatUrl: '' }; },
+    saveState: () => { calls.saved += 1; },
+    resolveBrandFromGroupId: (id, group) => calls.brand.push([id, group]),
+    showTrackedArchivedChat: (id) => calls.shown.push(id),
+    restoreCardFromLark: async (id) => { calls.restoreAsked.push(id); if (restored) st[id] = { chatOpen: false }; return restored; },
+  });
+  vm.runInContext(['let unrecordedChats = ' + JSON.stringify(entries) + ';', 'let archiveOpening = "";', fn('openFreshArchivedCard'), fn('applyProfile')].join(NEWLINE), context);
+  const profile = { source, name: profileName, chat: { id: 'T1', groupID: '7' } };
+  return { calls, st, context, open: async () => { vm.runInContext('applyProfile(' + JSON.stringify(profile) + ')', context); await new Promise((r) => setImmediate(r)); } };
+}
+
+test('an archived chat from the unrecorded list, with no saved card and no Lark row, gets a fresh closed card', async () => {
+  const h = archivedHarness();
+  await h.open();
+  assert.deepEqual(h.calls.restoreAsked, ['T1'], 'Lark is asked first, as before');
+  assert.equal(h.st.T1.chatOpen, false);
+  assert.equal(h.st.T1.chatUrl, 'https://my.livechatinc.com/chats/CH1/T1');
+  assert.equal(h.st.T1.agentName, undefined, 'nothing is stamped on it until the agent records');
+  assert.equal(JSON.stringify(h.calls.ensured[0]), JSON.stringify({ chatId: 'T1', customerName: 'Zimito', link: '', isTelegram: false, groupName: '' }));
+  assert.deepEqual(h.calls.brand, [['T1', '7']], 'the brand is looked for from the chat\'s group');
+  assert.deepEqual(h.calls.shown, ['T1']);
+  assert.match(h.calls.status.at(-1), /unrecorded list/);
+  assert.ok(h.calls.saved >= 1);
+});
+
+test('a card Lark could restore is shown as before, and an archived chat that is not on the list still shows nothing', async () => {
+  const restored = archivedHarness({ restored: true });
+  await restored.open();
+  assert.deepEqual(restored.calls.shown, ['T1']);
+  assert.deepEqual(restored.calls.ensured, [], 'no fresh card when there was a real one');
+  const notListed = archivedHarness({ entries: [{ threadId: 'OTHER', chatId: 'C' }] });
+  await notListed.open();
+  assert.deepEqual(notListed.calls.shown, []);
+  assert.match(notListed.calls.status.at(-1), /only tracks live chats/);
+});
+
+test('leaving the archived chat before Lark answers does not open its card afterwards', async () => {
+  const h = archivedHarness();
+  vm.runInContext('applyProfile(' + JSON.stringify({ source: 'archives', name: 'Z', chat: { id: 'T1' } }) + ')', h.context);
+  vm.runInContext('applyProfile(null)', h.context);   // the agent moved on at once
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(h.calls.shown, []);
+  assert.deepEqual(h.calls.ensured, []);
+});
+
+test('once its fresh card is flagged incomplete here, the same chat is not listed a second time', async () => {
+  const w = widget({ replies: [{ ok: true, chats }], live: { T1: { chatOpen: false, logged: false, autoRecordError: 'missing: inquiry', agentName: 'Me' } } });
+  w.run("var selectedAgent = 'Me';");
+  await w.run('fetchUnrecordedChats()');
+  assert.equal(w.shown(), 'T2');
+});
