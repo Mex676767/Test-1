@@ -91,5 +91,41 @@ test('every place the widget deletes a record remembers it, and the stale list s
   assert.match(remove, /rememberDeletedRecord\(recordId\)/);
   assert.match(app, /rememberDeletedRecord\(previousRecordId\)/, 'a repeat Look up replaces the previous row');
   const stale = app.slice(app.indexOf('function getStaleLarkRecords'), app.indexOf('async function removeStaleRecord'));
-  assert.match(stale, /isDeletedRecord\(r\.recordId\)/);
+  assert.match(stale, /deletedRecordAgeMs\(r\.recordId\) < DELETED_RECORD_HIDE_MS/);
+});
+
+const NEWLINE = String.fromCharCode(10);
+// ---- the Lark-side list: Lark says "no Inquiry/Status", so it shows unless a real reason hides it ------
+function staleList({ stale, local = {}, deletedAgoMs = null }) {
+  const clock = { now: 10_000_000 };
+  const context = vm.createContext({
+    JSON, Object, Number, Boolean, Map, Set, Date: { now: () => clock.now }, localStorage: storageFake(),
+    IS_EMBEDDED_APP: false, currentLiveChatAccount: '', staleRecords: stale, state: {},
+    loadPersistedState: () => ({ c1: local }), getIncompleteChats: () => [],
+  });
+  vm.runInContext([constLine('DELETED_RECORDS_KEY'), constLine('DELETED_RECORDS_TTL_MS'), constLine('DELETED_RECORD_HIDE_MS'),
+    fn('readDeletedRecords'), fn('rememberDeletedRecord'), fn('deletedRecordAgeMs'), fn('getStaleLarkRecords')].join(NEWLINE), context);
+  if (deletedAgoMs !== null) { clock.now -= deletedAgoMs; vm.runInContext("rememberDeletedRecord('rec1')", context); clock.now += deletedAgoMs; }
+  return vm.runInContext("getStaleLarkRecords().map((r) => r.recordId).join(',')", context);
+}
+const lark = [{ recordId: 'rec1', username: 'u', brand: 'EZ', createdAt: 1 }];
+
+test('an incomplete Lark row shows when this browser knows nothing about it', () => {
+  assert.equal(staleList({ stale: lark }), 'rec1');
+});
+
+test('an incomplete Lark row shows even when a card here is marked "logged" without inquiry and status (Unknown, ghost restore)', () => {
+  assert.equal(staleList({ stale: lark, local: { caRecordId: 'rec1', logged: true, chatOpen: false, inquiry: [], status: '' } }), 'rec1');
+  assert.equal(staleList({ stale: lark, local: { caRecordId: 'rec1', logged: false, chatOpen: false } }), 'rec1');
+});
+
+test('it stays hidden only for a real reason: completed here a moment ago, written off, or the chat is still open', () => {
+  assert.equal(staleList({ stale: lark, local: { caRecordId: 'rec1', logged: true, chatOpen: false, inquiry: ['WD/DP problem'], status: 'Solved' } }), '');
+  assert.equal(staleList({ stale: lark, local: { caRecordId: 'rec1', attentionIgnored: true, logged: true, chatOpen: false } }), '');
+  assert.equal(staleList({ stale: lark, local: { caRecordId: 'rec1', chatOpen: true } }), '');
+});
+
+test('a row deleted here is hidden only for the few seconds Lark takes to forget it', () => {
+  assert.equal(staleList({ stale: lark, deletedAgoMs: 60_000 }), '', 'a minute ago: Lark may still list it');
+  assert.equal(staleList({ stale: lark, deletedAgoMs: 10 * 60_000 }), 'rec1', 'ten minutes ago it is still there, so it is real');
 });

@@ -5992,6 +5992,13 @@ function forgetDeletedRecord(recordId) {
 function isDeletedRecord(recordId) {
   return !!recordId && Object.prototype.hasOwnProperty.call(readDeletedRecords(), recordId);
 }
+// How long ago this browser deleted the record (Infinity when it did not).
+function deletedRecordAgeMs(recordId) {
+  const at = recordId ? Number(readDeletedRecords()[recordId]) : 0;
+  return at ? Date.now() - at : Infinity;
+}
+// Lark's search lags a delete by seconds, not minutes: past this a row Lark still lists is real and must be shown.
+const DELETED_RECORD_HIDE_MS = 3 * 60_000;
 
 function epochToDateInput(ms) {
   if (typeof ms !== "number") return "";
@@ -6163,11 +6170,14 @@ function getStaleLarkRecords() {
     .filter((r) => {
       if (currentLiveChatAccount && r.accountKey && r.accountKey !== currentLiveChatAccount) return false;
       if (shownLocally.has(r.recordId)) return false;
-      if (isDeletedRecord(r.recordId)) return false; // just removed here; Lark's search may not know yet
+      if (deletedRecordAgeMs(r.recordId) < DELETED_RECORD_HIDE_MS) return false; // just removed here; Lark's search may not know yet
       const local = localByRecord.get(r.recordId);
       if (!local) return true;
-      // Recorded since the last poll (a logged row is never blank in Lark), or still being worked on.
-      return !local.logged && local.chatOpen === false;
+      // Lark says this row has no Inquiry/Status, and Lark is the truth. Only these keep it off the list:
+      if (local.attentionIgnored) return false;                                   // the agent wrote it off
+      if (local.logged && (local.inquiry || []).length && local.status) return false; // completed here a moment ago; the poll is older
+      return local.chatOpen === false;                                            // a chat still open is being worked on
+      // (A card marked "logged" WITHOUT inquiry and status -- Unknown, a ghost restore -- no longer hides an incomplete row.)
     })
     .map((r) => {
       const local = localByRecord.get(r.recordId);
