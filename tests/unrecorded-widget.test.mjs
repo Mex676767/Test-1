@@ -80,3 +80,20 @@ test('the panel counts and renders these chats with Open and Ignore, escaped, an
   assert.match(bound, /fetchUnrecordedChats\(\);/);
   assert.match(app, /button\[data-action='ignoreUnrecorded'\]/);
 });
+
+test('a chat ticked "Unknown player" in this browser is written off in Lark and leaves the list', async () => {
+  const w = widget({ replies: [{ ok: true, chats }], persisted: { T1: { isUnknown: true } } });
+  await w.run('fetchUnrecordedChats()');
+  assert.equal(w.shown(), 'T2');
+  const resolves = w.posts.filter((p) => p.body.action === 'resolve');
+  assert.deepEqual(resolves.map((p) => [p.body.threadId, p.body.status]), [['T1', 'Ignored']]);
+});
+
+test('only the newest 25 are listed, with a line saying how many older ones remain; the count in the header is the full number', () => {
+  const panel = app.slice(app.indexOf('function renderNeedsAttentionPanel'), app.indexOf('document.getElementById("needsAttentionList").addEventListener'));
+  assert.match(app, /const UNRECORDED_SHOWN_MAX = 25;/);
+  assert.match(panel, /\.sort\(\(a, b\) => b\.date - a\.date\)\.slice\(0, UNRECORDED_SHOWN_MAX\)/);
+  assert.match(panel, /unrecordedShown\.map\(/);
+  assert.match(panel, /unrecorded\.length - unrecordedShown\.length\} older chats/);
+  assert.match(panel, /incomplete\.length \+ stale\.length \+ unrecorded\.length \+ previewCount/);
+});

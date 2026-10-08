@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planEntries, windows, summarize, run, createClient, pool, stepWithRetry } from '../scripts/crosscheck-unrecorded.mjs';
+import { planEntries, windows, summarize, run, createClient, pool, stepWithRetry, histogram } from '../scripts/crosscheck-unrecorded.mjs';
 
 const chat = (threadId, writers, extra = {}) => ({ chatId: 'C-' + threadId, threadId, date: 5, customer: 'Zimito', writers, ...extra });
 
@@ -8,7 +8,7 @@ test('a chat is judged per writer: recorded chats and rows already written are s
   const chats = [chat('T1', ['a@x', 'b@x']), chat('T2', ['a@x']), chat('T3', ['a@x', 'A@X'])];
   const entries = planEntries(chats, new Set(['T2']), new Set(['T1|b@x']), 'lc1');
   assert.deepEqual(entries.map((e) => `${e.threadId}|${e.email}`), ['T1|a@x', 'T3|a@x']);
-  assert.deepEqual(entries[0], { threadId: 'T1', chatId: 'C-T1', account: 'lc1', email: 'a@x', date: 5, customer: 'Zimito' });
+  assert.deepEqual(entries[0], { threadId: 'T1', chatId: 'C-T1', account: 'lc1', email: 'a@x', date: 5, customer: 'Zimito', agentMessages: null, customerMessages: null });
 });
 
 test('the period is cut into equal windows and the last one ends exactly at the end', () => {
@@ -193,4 +193,35 @@ test('the run says how many chat/writer pairs were left out, and refuses to run 
   const nobody = fakeSite({ archives: { lc1: [[chat('A', ['a@x'])]] } });
   await assert.rejects(() => run({ step: nobody.step, ...period, write: false, log: () => {}, accounts: ['lc1'] }), /No agent has their LiveChat email/);
   assert.equal((await run({ step: nobody.step, ...period, write: false, onlyKnown: false, log: () => {}, accounts: ['lc1'] })).entries.length, 1);
+});
+
+const counted = (threadId, writer, agent, customer) => chat(threadId, [writer], { counts: { [writer]: agent }, customerMessages: customer });
+
+test('chats with fewer messages than the minimum are left out and counted; chats without counts are never filtered', () => {
+  const chats = [counted('T1', 'a@x', 1, 1), counted('T2', 'a@x', 3, 1), counted('T3', 'a@x', 4, 0 + 2), chat('T4', ['a@x'])];
+  const none = planEntries(chats, new Set(), new Set(), 'lc1', null);
+  assert.equal(none.length, 4, 'a minimum of 1 filters nothing');
+  const stats = {};
+  const some = planEntries(chats, new Set(), new Set(), 'lc1', null, { minAgentMessages: 3, minCustomerMessages: 2, stats });
+  assert.deepEqual(some.map((e) => e.threadId), ['T3', 'T4']);
+  assert.equal(stats.belowMinimum, 2);
+  assert.deepEqual([some[0].agentMessages, some[0].customerMessages], [4, 2]);
+});
+
+test('the message histogram buckets entries and skips those without counts', () => {
+  const entries = [1, 1, 2, 3, 5, 6, 40].map((n) => ({ agentMessages: n })).concat([{ agentMessages: null }]);
+  assert.equal(histogram(entries, 'agentMessages'), '1: 2, 2: 1, 3-5: 2, 6+: 2');
+});
+
+test('--show lists the newest chats of one agent with a link, the date and both message counts; the run prints the histograms', async () => {
+  const mk = (threadId, date, agent) => chat(threadId, ['a@x'], { date, counts: { 'a@x': agent }, customerMessages: 2, customer: 'Zimito ' + threadId });
+  const site = fakeSite({ archives: { lc1: [[mk('OLD', Date.UTC(2026, 9, 2), 1), mk('NEW', Date.UTC(2026, 9, 5, 10, 30), 4)]] }, knownAgents: [{ email: 'a@x', name: '96 Alice' }] });
+  const lines = [];
+  await run({ step: site.step, ...period, write: false, show: 'A@X', log: (l) => lines.push(l), accounts: ['lc1'] });
+  const text = lines.join('\n');
+  assert.match(text, /Messages the agent wrote per chat\s+-> 1: 1, 2: 0, 3-5: 1, 6\+: 0/);
+  assert.match(text, /Messages the customer wrote per chat -> 1: 0, 2: 2/);
+  const shown = lines.filter((l) => l.includes('https://my.livechatinc.com/archives/'));
+  assert.equal(shown.length, 2);
+  assert.match(shown[0], /archives\/NEW\s+2026-10-05 10:30\s+agent 4 \/ customer 2\s+Zimito NEW/, 'newest first');
 });

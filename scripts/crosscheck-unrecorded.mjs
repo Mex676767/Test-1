@@ -40,7 +40,9 @@ export async function stepWithRetry(step, body, tries = 4, pauseMs = 2000) {
 // who never use this tool -- their chats are not meant to be recorded here and nobody's widget would show them. Only writers
 // whose email is in the Agent Logins table are listed; stats.unknownWriters counts the rest. Agents who have not opened
 // the widget since the email column was added are picked up by running the script again later.
-export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {} } = {}) {
+// minAgentMessages / minCustomerMessages (default 1 = no filter) leave out chats with fewer messages, judged on the writer's own
+// messages and the customer's; stats.belowMinimum counts them. A chat that came without counts is never filtered out.
+export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {}, minAgentMessages = 1, minCustomerMessages = 1 } = {}) {
   const seen = new Set();
   const entries = [];
   for (const chat of chats) {
@@ -52,8 +54,11 @@ export function planEntries(chats, recorded, existing, account, names = null, { 
       if (isRecorded) continue;
       const key = `${chat.threadId}|${email}`;
       if (!email || existing.has(key) || seen.has(key)) continue;
+      const agentMessages = chat.counts ? (chat.counts[email] || 0) : null;
+      const customerMessages = chat.counts ? (chat.customerMessages || 0) : null;
+      if (chat.counts && (agentMessages < minAgentMessages || customerMessages < minCustomerMessages)) { stats.belowMinimum = (stats.belowMinimum || 0) + 1; continue; }
       seen.add(key);
-      entries.push({ threadId: chat.threadId, chatId: chat.chatId, account, email, date: chat.date, customer: chat.customer });
+      entries.push({ threadId: chat.threadId, chatId: chat.chatId, account, email, date: chat.date, customer: chat.customer, agentMessages, customerMessages });
     }
   }
   return entries;
@@ -63,6 +68,13 @@ export function windows(fromMs, toMs, stepMs) {
   const out = [];
   for (let start = fromMs; start < toMs; start += stepMs) out.push([start, Math.min(start + stepMs, toMs)]);
   return out;
+}
+
+// "1: 120, 2: 40, 3-5: 30, 6+: 10" -- how many entries have that many messages (entries without counts are skipped).
+export function histogram(entries, field) {
+  const buckets = [["1", (n) => n === 1], ["2", (n) => n === 2], ["3-5", (n) => n >= 3 && n <= 5], ["6+", (n) => n >= 6]];
+  const counted = entries.filter((entry) => typeof entry[field] === "number");
+  return buckets.map(([label, test]) => `${label}: ${counted.filter((entry) => test(entry[field])).length}`).join(", ");
 }
 
 export function summarize(entries) {
@@ -88,7 +100,7 @@ export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retr
   };
 }
 
-export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = true, log = console.log, accounts = ["lc1", "lc2"] }) {
+export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, show = "", log = console.log, accounts = ["lc1", "lc2"] }) {
   const recorded = new Set();
   const pairs = new Set();
   let pageToken = "";
@@ -163,14 +175,22 @@ export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = tru
     const { account, chats, fetchedAlone, unjudged, outreach } = result;
     if (!result.configured) { log(`${account}: not configured, skipped.`); continue; }
     const stats = {};
-    const entries = planEntries([...chats.values()], recorded, existing, account, names, { onlyKnown, stats });
-    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded by an agent who uses the widget.${stats.unknownWriters ? ` ${stats.unknownWriters} chat/writer pairs left out: the writer is not in the Agent Logins table (customer service, bots, or an agent who has not opened the widget yet).` : ""}${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
+    const entries = planEntries([...chats.values()], recorded, existing, account, names, { onlyKnown, stats, minAgentMessages, minCustomerMessages });
+    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded by an agent who uses the widget.${stats.unknownWriters ? ` ${stats.unknownWriters} chat/writer pairs left out: the writer is not in the Agent Logins table (customer service, bots, or an agent who has not opened the widget yet).` : ""}${stats.belowMinimum ? ` ${stats.belowMinimum} left out for having fewer messages than the minimum.` : ""}${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);
   }
 
   log("\nNever-recorded chats per agent email:");
   for (const [email, count] of summarize(all)) log(`  ${String(count).padStart(4)}  ${email}`);
   log(`  ${String(all.length).padStart(4)}  total`);
+  log(`\nMessages the agent wrote per chat  -> ${histogram(all, "agentMessages")}`);
+  log(`Messages the customer wrote per chat -> ${histogram(all, "customerMessages")}`);
+  if (show) {
+    const wanted = String(show).trim().toLowerCase();
+    const sample = all.filter((entry) => entry.email === wanted).sort((a, b) => b.date - a.date).slice(0, 15);
+    log(`\nThe 15 newest chats for ${wanted} (${all.filter((entry) => entry.email === wanted).length} in all) -- open a few and judge whether they needed recording:`);
+    for (const entry of sample) log(`  https://my.livechatinc.com/archives/${entry.threadId}  ${entry.date ? new Date(entry.date).toISOString().slice(0, 16).replace("T", " ") : "?"}  agent ${entry.agentMessages ?? "?"} / customer ${entry.customerMessages ?? "?"}  ${entry.customer || ""}`);
+  }
 
   if (!write) { log("\nDry run: nothing was written. Add --write to put these rows in the Unrecorded Chats table."); return { entries: all, created: 0 }; }
   let created = 0;
@@ -202,7 +222,11 @@ async function main() {
     process.exit(2);
   }
   const windowMs = Number(args.get("window-hours") || 6) * 3_600_000;
-  await run({ step: createClient({ base, key }), fromMs, toMs: Date.now(), windowMs, write: args.has("write"), onlyKnown: !args.has("all-writers") });
+  await run({
+    step: createClient({ base, key }), fromMs, toMs: Date.now(), windowMs, write: args.has("write"), onlyKnown: !args.has("all-writers"),
+    minAgentMessages: Number(args.get("min-agent-messages") || 1), minCustomerMessages: Number(args.get("min-customer-messages") || 1),
+    show: args.get("show") === true ? "" : String(args.get("show") || ""),
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
