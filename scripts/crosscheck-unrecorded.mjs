@@ -12,6 +12,25 @@
 import { pathToFileURL } from "node:url";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// How many time windows of one account are read at once.
+const WINDOW_CONCURRENCY = 3;
+
+// Runs fn(item) for every item, `limit` at a time; the first failure rejects.
+export async function pool(items, limit, fn) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const item = items[next]; next += 1; await fn(item); }
+  }));
+}
+
+// A step LiveChat refused only for now (rate limit, timeout, busy) is asked again after a pause, up to `tries` times.
+export async function stepWithRetry(step, body, tries = 4, pauseMs = 2000) {
+  for (let attempt = 1; ; attempt += 1) {
+    const data = await step(body);
+    if (data.ok || attempt >= tries || !/too many|rate.?limit|timeout|timed out|temporar|busy|unavailable|try again/i.test(data.error || "")) return data;
+    await sleep(pauseMs * attempt);
+  }
+}
 
 // chats: [{ chatId, threadId, date, customer, writers: [email] }]; recorded: Set of thread ids; existing: Set of "thread|email".
 // names (optional): { pairs: Set of "thread|agent name" in lower case, byEmail: Map email -> agent name }. A writer whose email is
@@ -97,37 +116,45 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
     log(`Unrecorded Chats table: ${existing.size} rows already there.`);
   }
 
-  const all = [];
-  for (const account of accounts) {
+  // Both LiveChat accounts are read at the same time (separate credentials, separate limits), and several time windows of
+  // one account at once, with a progress line per finished window.
+  async function scanAccount(account) {
     const chats = new Map();
-    let fetchedAlone = 0;
-    let unjudged = 0;
-    let outreach = 0;
-    let configured = true;
-    for (const [from, to] of windows(fromMs, toMs, windowMs)) {
+    const result = { account, chats, configured: true, fetchedAlone: 0, unjudged: 0, outreach: 0 };
+    const list = windows(fromMs, toMs, windowMs);
+    let done = 0;
+    await pool(list, WINDOW_CONCURRENCY, async ([from, to]) => {
+      if (!result.configured) return;
       let pageId = "";
       do {
-        const data = await step({ step: "archives", account, from, to, pageId });
+        const data = await stepWithRetry(step, { step: "archives", account, from, to, pageId });
         if (!data.ok) {
-          if (/not configured/i.test(data.error || "")) { configured = false; break; }
+          if (/not configured/i.test(data.error || "")) { result.configured = false; return; }
           throw new Error(`archives (${account}): ${data.error}`);
         }
         data.chats.forEach((chat) => chats.set(chat.threadId, chat));
-        outreach += data.outreach || 0;
+        result.outreach += data.outreach || 0;
         // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
         for (const pending of data.pending || []) {
           if (chats.has(pending.threadId)) continue;
-          const one = await step({ step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
-          fetchedAlone += 1;
-          if (!one.ok) { unjudged += 1; continue; }
-          outreach += one.outreach || 0;
+          const one = await stepWithRetry(step, { step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
+          result.fetchedAlone += 1;
+          if (!one.ok) { result.unjudged += 1; continue; }
+          result.outreach += one.outreach || 0;
           if (one.chat) chats.set(one.chat.threadId, one.chat);
         }
         pageId = data.next;
       } while (pageId);
-      if (!configured) break;
-    }
-    if (!configured) { log(`${account}: not configured, skipped.`); continue; }
+      done += 1;
+      log(`  [${account}] window ${done}/${list.length} done, ${chats.size} chats so far`);
+    });
+    return result;
+  }
+
+  const all = [];
+  for (const result of await Promise.all(accounts.map(scanAccount))) {
+    const { account, chats, fetchedAlone, unjudged, outreach } = result;
+    if (!result.configured) { log(`${account}: not configured, skipped.`); continue; }
     const entries = planEntries([...chats.values()], recorded, existing, account, names);
     log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded.${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);

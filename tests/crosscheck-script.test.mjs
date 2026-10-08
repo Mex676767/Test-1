@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planEntries, windows, summarize, run, createClient } from '../scripts/crosscheck-unrecorded.mjs';
+import { planEntries, windows, summarize, run, createClient, pool, stepWithRetry } from '../scripts/crosscheck-unrecorded.mjs';
 
 const chat = (threadId, writers, extra = {}) => ({ chatId: 'C-' + threadId, threadId, date: 5, customer: 'Zimito', writers, ...extra });
 
@@ -124,4 +124,51 @@ test('the run says how many outreach-only chats (e.g. Blast) were left out', asy
   const lines = [];
   await run({ step: site.step, ...period, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
   assert.match(lines.find((l) => l.startsWith('lc1:')), /7 outreach-only chats \(the customer never wrote, e\.g\. Blast\) were left out/);
+});
+
+test('pool runs the work a few at a time, never more than the limit, and rejects on the first failure', async () => {
+  let running = 0;
+  let peak = 0;
+  const seen = [];
+  await pool([1, 2, 3, 4, 5, 6, 7], 3, async (n) => { running += 1; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 5)); seen.push(n); running -= 1; });
+  assert.equal(peak, 3);
+  assert.deepEqual(seen.sort(), [1, 2, 3, 4, 5, 6, 7]);
+  await assert.rejects(() => pool([1, 2], 2, async (n) => { if (n === 2) throw new Error('boom'); }), /boom/);
+});
+
+test('a temporary LiveChat refusal is retried; a real error is not', async () => {
+  const replies = [{ ok: false, error: 'Too many requests' }, { ok: false, error: 'request timed out' }, { ok: true, chats: [] }];
+  let calls = 0;
+  assert.equal((await stepWithRetry(async () => { calls += 1; return replies.shift(); }, {}, 4, 0)).ok, true);
+  assert.equal(calls, 3);
+  let real = 0;
+  const out = await stepWithRetry(async () => { real += 1; return { ok: false, error: 'Chat not found' }; }, {}, 4, 0);
+  assert.equal(out.ok, false);
+  assert.equal(real, 1, 'no retry for an error that will not go away');
+  let stuck = 0;
+  await stepWithRetry(async () => { stuck += 1; return { ok: false, error: 'Too many requests' }; }, {}, 3, 0);
+  assert.equal(stuck, 3, 'gives up after the allowed tries');
+});
+
+test('both accounts are read at the same time, with a progress line per finished window', async () => {
+  const startedOrder = [];
+  let open = 0;
+  let peak = 0;
+  const site = fakeSite({ archives: { lc1: [[chat('A', ['a@x'])]], lc2: [[chat('B', ['b@x'])]] } });
+  const slow = async (body) => {
+    if (body.step === 'archives') {
+      startedOrder.push(body.account);
+      open += 1; peak = Math.max(peak, open);
+      await new Promise((r) => setTimeout(r, 10));
+      open -= 1;
+    }
+    return site.step(body);
+  };
+  const lines = [];
+  const out = await run({ step: slow, ...period, write: false, log: (l) => lines.push(l) });
+  assert.ok(peak >= 2, 'more than one archive request was in flight at once');
+  assert.deepEqual(out.entries.map((e) => e.account), ['lc1', 'lc2'], 'results stay in account order');
+  assert.ok(lines.some((l) => /^ {2}\[lc1\] window 2\/2 done, 1 chats so far/.test(l)));
+  assert.ok(lines.some((l) => /^ {2}\[lc2\] window 2\/2 done/.test(l)));
+  assert.ok(lines.some((l) => l.startsWith('lc1:')) && lines.some((l) => l.startsWith('lc2:')));
 });
