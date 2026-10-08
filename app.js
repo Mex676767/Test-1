@@ -3271,6 +3271,7 @@ function renderTicketCommentComposer(chatId) {
       <button type="button" data-action="removeTicketCommentFile" data-chat="${escapeHtml(chatId)}" data-index="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button>
     </div>`).join("");
   return `<div class="ticket-comment-composer" data-chat="${escapeHtml(chatId)}">
+    <div class="ticket-comment-as">Posts as <strong>${escapeHtml(selectedAgent || "— choose your name in Settings —")}</strong> via widget</div>
     ${replyTo ? `<div class="ticket-reply-target"><span>Replying to <strong>${escapeHtml(replyTo.name)}</strong></span><button type="button" data-action="cancelTicketReply" data-chat="${escapeHtml(chatId)}" aria-label="Cancel reply">×</button></div>` : ""}
     <textarea class="ticket-comment-input" data-chat="${escapeHtml(chatId)}" rows="2" placeholder="${replyTo ? "Write a reply…" : "Add a comment…"}" aria-label="Ticket comment" ${sending ? "disabled" : ""}>${escapeHtml(s.ticketCommentDraft || "")}</textarea>
     ${rows ? `<div class="ticket-attachment-list">${rows}</div>` : ""}
@@ -4282,6 +4283,12 @@ chatListEl.addEventListener("click", async (e) => {
     const text = String(s.ticketCommentDraft || "").trim();
     const files = ticketCommentFilesByChat.get(chatId) || [];
     if (!ref || ticketCommentInFlight.has(chatId)) return;
+    // Comments go out under one shared ticket account, so the agent's name is what says who wrote it.
+    if (!selectedAgent) {
+      s.ticketCommentError = "Choose your agent name in Settings first, so the comment says who wrote it.";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      return;
+    }
     if (!text && !files.length) {
       s.ticketCommentError = "Write a comment or attach a file.";
       card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
@@ -4292,7 +4299,7 @@ chatListEl.addEventListener("click", async (e) => {
     try {
       s.ticketCommentError = "";
       card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
-      const payload = { body: text };
+      const payload = { body: text, agent: selectedAgent };
       if (s.ticketReplyTo?.id) payload.parentId = s.ticketReplyTo.id;
       let requestBody;
       let headers;

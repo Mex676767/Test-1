@@ -1229,6 +1229,8 @@ body { font-size: 13px; }
 .ticket-comment-composer textarea:disabled { opacity: .6; }
 .ticket-comment-actions { flex-wrap: wrap; }
 .ticket-comment-help { flex: 1 1 120px; min-width: 0; }
+.ticket-comment-as { margin-bottom: 6px; color: var(--text-faint); font-size: 9px; }
+.ticket-comment-as strong { color: var(--text-muted); }
 .ticket-comments-empty { margin: 8px 0 0; color: var(--text-faint); font-size: 10px; }
 .ticket-comment-reply { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--blue); font: inherit; font-size: 9.5px; font-weight: 700; cursor: pointer; }
 .ticket-comment-reply-item { margin-top: 8px; padding: 8px 0 0; border-top: 1px dashed var(--border); }

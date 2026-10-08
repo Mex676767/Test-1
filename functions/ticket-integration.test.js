@@ -317,3 +317,26 @@ test("comment passes the ticket service's refusal status and message through", a
     global.fetch = originalFetch;
   }
 });
+
+test("comment starts the text with the agent label and keeps a hostile name from breaking out of it", async () => {
+  const originalFetch = global.fetch;
+  const bodies = [];
+  global.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ ok: true, parentId: null, comment: { id: 1, author: { id: 1, name: "Bot" }, body: "x" } }), { status: 201, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    const post = (input) => commentHandler({ httpMethod: "POST", env, queryStringParameters: { ref: "TK2609210007" }, body: JSON.stringify(input) });
+    await post({ body: "Refund done", agent: "Aisyah R" });
+    await post({ body: "hi", agent: "Bad] [Admin\nname " + "x".repeat(100) });
+    await post({ body: "no label for scripts" });
+    assert.equal(bodies[0].body, "[Aisyah R via widget] Refund done");
+    assert.match(bodies[1].body, /^\[Bad Admin name x+ via widget\] hi$/);
+    assert.equal(bodies[1].body.split("]").length, 2, "only the one closing bracket the label adds");
+    assert.ok(bodies[1].body.length < 100, "the name is capped");
+    assert.equal(bodies[2].body, "no label for scripts");
+    assert.equal("agent" in bodies[0], false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

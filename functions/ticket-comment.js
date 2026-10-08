@@ -1,12 +1,20 @@
 import { adapt } from "./_lib/adapt.js";
 import { cleanComment, json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
-// POST /ticket-comment?ref=TK... with JSON { body, parentId?, mentions? }, or multipart/form-data with the same object in a
+// POST /ticket-comment?ref=TK... with JSON { body, agent?, parentId?, mentions? }, or multipart/form-data with the same object in a
 // "comment" part plus up to 4 files. The API key stays on the server; the ticket service decides who may comment.
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
 const MAX_FILES = 4;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
+const MAX_AGENT_NAME = 60;
+
+// Every widget comment is posted by one shared service account, so the agent's own name goes at the start of the text.
+// Brackets and line breaks are removed so a name cannot break out of the label.
+function agentLabel(value) {
+  const name = String(value || "").replace(/[\r\n\[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_AGENT_NAME);
+  return name ? `[${name} via widget]` : "";
+}
 
 export async function handler(event) {
   if (event.httpMethod !== "POST") return json(405, { ok: false, error: "Method not allowed" });
@@ -41,7 +49,8 @@ export async function handler(event) {
     const body = typeof input.body === "string" ? input.body.trim() : "";
     if (!body && !files.length) return json(400, { ok: false, error: "Write a comment or attach a file" });
 
-    const payload = { body };
+    const label = agentLabel(input.agent);
+    const payload = { body: label ? `${label} ${body}`.trim() : body };
     if (input.parentId !== undefined && input.parentId !== null && input.parentId !== "") {
       const parentId = Number(input.parentId);
       if (!Number.isInteger(parentId) || parentId <= 0) return json(400, { ok: false, error: "That reply target is not valid" });

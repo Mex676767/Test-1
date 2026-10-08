@@ -34,6 +34,10 @@ needs the "Comment on tickets" access option; without them the widget shows the
 service's refusal. Each key is limited to 120 requests a minute; a refusal for
 that shows as "Rate limit exceeded".
 
+Until the ticket system can sign each agent in, every comment is posted by the
+key's owner, so the widget starts each one with `[Agent name via widget]` (the
+agent's name from the LiveChat login) and will not post without a name.
+
 The API has no update route, history or log entries, and no way to edit or
 delete a comment, add files to an existing ticket, or react. Those stay in the
 ticket system's own dashboard. The widget has no @mention picker yet: a name
