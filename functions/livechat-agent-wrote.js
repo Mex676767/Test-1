@@ -34,7 +34,8 @@ export async function handler(event) {
     if (!account || !String(agentToken || "").trim() || !chatId || !threadId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "accountKey, agentToken, chatId and threadId are required." }) };
     }
-    const who = await identifyAgent(event.env, accountKey, agentToken);
+    // A chat marks messages with the agent's email, so the email is needed to recognize this agent's own.
+    const who = await identifyAgent(event.env, accountKey, agentToken, { withEmail: true, pat: account.pat });
     if (!who.ok) return { statusCode: 200, body: JSON.stringify(who) };
 
     // get_chat with a thread id returns that thread's events (the chat itself may have later threads).
@@ -46,7 +47,12 @@ export async function handler(event) {
     const chat = await res.json();
     if (chat?.error) throw new Error(chat.error.message || JSON.stringify(chat.error));
     const { wrote, authors } = agentWroteIn(chat, who.identities);
-    return { statusCode: 200, body: JSON.stringify({ ok: true, wrote, authors, me: who.identities }) };
+    // Without an email there is nothing to compare the message authors with: "did not write" would be a guess, so say
+    // "unknown" (wrote: null) and why. The widget keeps such a chat on the agent's list rather than losing it.
+    if (!who.identities.some((id) => id.includes("@"))) {
+      return { statusCode: 200, body: JSON.stringify({ ok: true, wrote: null, authors, me: who.identities, error: `Could not read your LiveChat email (${who.emailLookup}).` }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ ok: true, wrote, authors, me: who.identities, ...(who.emailLookup ? { emailLookup: who.emailLookup } : {}) }) };
   } catch (err) {
     return { statusCode: 200, body: JSON.stringify({ ok: false, error: err.message }) };
   }

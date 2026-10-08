@@ -733,7 +733,7 @@ async function agentWroteInChat(chatId) {
       data = await response.json();
     } catch (_) { data = null; }
   }
-  if (!data || !data.ok) {
+  if (!data || !data.ok || data.wrote === null) {
     if (s.agentWrote !== "unsure") {
       logDiagnostic(`Couldn't check whether you wrote in this chat (${data?.error || (token ? "no chat link yet" : "LiveChat is not connected")}) — keeping it on your list.`, "warn");
     }

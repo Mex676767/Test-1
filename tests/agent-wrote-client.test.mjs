@@ -60,6 +60,14 @@ test('when LiveChat cannot be asked the chat stays theirs ("unsure"), the questi
   assert.equal(h.calls.fetched.length, 3);
 });
 
+test('"unknown" from the server (LiveChat email unreadable) keeps the chat on the list as "unsure" and says why', async () => {
+  const h = harness({ replies: [{ ok: true, wrote: null, authors: ['a@x'], me: ['uuid'], error: 'Could not read your LiveChat email (own token: missing scope).' }] });
+  assert.equal(await h.ask(), true);
+  assert.equal(h.st.c1.agentWrote, 'unsure');
+  assert.match(h.calls.logs[0][1], /Could not read your LiveChat email/);
+  assert.match(h.calls.logs[0][1], /keeping it on your list/);
+});
+
 test('no stored LiveChat login or no chat link yet is "unsure", without calling the server', async () => {
   const noLogin = harness({ tokens: {} });
   assert.equal(await noLogin.ask(), true);
