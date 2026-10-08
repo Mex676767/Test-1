@@ -3190,6 +3190,115 @@ const ticketCommentFilesByChat = new Map();
 const ticketCommentInFlight = new Set();
 const TICKET_COMMENT_MAX_FILES = 4;
 
+// Per-agent ticket account. The agent signs in to the ticket system once in a popup; the ticket site hands a token back
+// with postMessage and the server keeps it (encrypted) against their LiveChat login, so their tickets and comments are
+// made under their own name. Nothing here ever stores or shows the token: it goes straight to /ticket-connect.
+// The popup page itself belongs to the ticket system; its address and the message it sends are agreed with its developer.
+const TICKET_SITE_ORIGIN = "https://tickets.96ghq.com";
+const TICKET_CONNECT_URL = TICKET_SITE_ORIGIN + "/connect-widget";
+const TICKET_CONNECT_TIMEOUT_MS = 5 * 60_000;
+// status: unknown | checking | connected | disconnected | unavailable (server not set up) | nologin (no LiveChat login in this tab)
+let ticketConnection = { status: "unknown", error: "", busy: false };
+
+function ticketAgentHeaders() {
+  const token = liveChatAgentTokens()[currentLiveChatAccount];
+  return token ? { "X-LiveChat-Account": currentLiveChatAccount, "X-LiveChat-Agent-Token": token } : {};
+}
+
+// Every ticket call sends the agent's LiveChat login (so the server can use their own ticket account) and notices when
+// the server says their ticket connection no longer works.
+async function ticketFetch(url, init = {}) {
+  const res = await fetch(url, { ...init, headers: { ...ticketAgentHeaders(), ...(init.headers || {}) } });
+  if (res.status === 401) {
+    try {
+      const data = await res.clone().json();
+      if (data?.ticketReconnect) ticketConnection = { status: "disconnected", error: data.error || "", busy: false };
+    } catch (_) { /* not JSON: nothing to learn */ }
+  }
+  return res;
+}
+
+// A re-render would drop focus from a field being typed in, so those wait for the next one.
+function isTypingIn(container) {
+  const active = document.activeElement;
+  return Boolean(active && container.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
+}
+
+function rerenderTicketSlots() {
+  chatListEl.querySelectorAll(".chat-card").forEach((card) => {
+    const slot = card.querySelector(".escalation-slot");
+    if (slot && state[card.dataset.chatId] && !isTypingIn(slot)) slot.innerHTML = renderEscalationSection(card.dataset.chatId);
+  });
+}
+
+async function postTicketConnect(body) {
+  const res = await fetch("/ticket-connect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...ticketAgentHeaders() },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+async function refreshTicketConnection() {
+  if (!Object.keys(ticketAgentHeaders()).length) { ticketConnection = { status: "nologin", error: "", busy: false }; return; }
+  ticketConnection = { status: "checking", error: "", busy: false };
+  try {
+    const data = await postTicketConnect({ action: "status" });
+    ticketConnection = !data.ok ? { status: "disconnected", error: data.error || "", busy: false }
+      : data.available === false ? { status: "unavailable", error: "", busy: false }
+        : { status: data.connected ? "connected" : "disconnected", error: "", busy: false };
+  } catch (_) {
+    ticketConnection = { status: "disconnected", error: "Could not check your ticket account — try again.", busy: false };
+  }
+  rerenderTicketSlots();
+}
+
+// Opens the ticket site's sign-in page and waits for the token it sends back. Must be called straight from a click, or the
+// browser blocks the popup.
+function waitForTicketToken() {
+  const popup = window.open(`${TICKET_CONNECT_URL}?origin=${encodeURIComponent(location.origin)}`, "ticket-connect", "width=520,height=680");
+  if (!popup) return Promise.reject(new Error("The sign-in window was blocked — allow pop-ups for this widget and try again."));
+  return new Promise((resolve, reject) => {
+    let timer; let watch;
+    const finish = (settle, value) => {
+      clearTimeout(timer); clearInterval(watch);
+      window.removeEventListener("message", onMessage);
+      settle(value);
+    };
+    const onMessage = (event) => {
+      // Only the ticket site itself can hand a token over.
+      if (event.origin !== TICKET_SITE_ORIGIN) return;
+      const data = event.data;
+      if (!data || data.type !== "tickets-widget-token" || typeof data.token !== "string") return;
+      try { popup.close(); } catch (_) { /* already closed */ }
+      finish(resolve, data.token);
+    };
+    window.addEventListener("message", onMessage);
+    watch = setInterval(() => { if (popup.closed) finish(reject, new Error("The sign-in window was closed before it finished.")); }, 500);
+    timer = setTimeout(() => finish(reject, new Error("Sign-in timed out — try again.")), TICKET_CONNECT_TIMEOUT_MS);
+  });
+}
+
+function renderTicketConnectionBar(chatId) {
+  const { status, error, busy } = ticketConnection;
+  const id = escapeHtml(chatId);
+  const line = {
+    unknown: ["muted", "Checking your ticket account…"],
+    checking: ["muted", "Checking your ticket account…"],
+    connected: ["ok", "Your ticket account is connected — tickets and comments go out under your own name."],
+    disconnected: ["warn", error || "Not connected. Connect your ticket account so tickets and comments are under your own name and replies notify you."],
+    unavailable: ["muted", "Own-account sign-in is not set up on this site yet, so the shared ticket account is used."],
+    nologin: ["muted", "Open the widget inside LiveChat to connect your ticket account."],
+  }[status] || ["muted", ""];
+  const button = status === "connected"
+    ? `<button type="button" class="secondary-btn" data-action="disconnectTicketAccount" data-chat="${id}" ${busy ? "disabled" : ""}>Disconnect</button>`
+    : status === "disconnected"
+      ? `<button type="button" class="secondary-btn" data-action="connectTicketAccount" data-chat="${id}" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : "Connect ticket account"}</button>`
+      : "";
+  return `<div class="ticket-connection ticket-connection-${line[0]}"><span class="ticket-connection-dot" aria-hidden="true"></span><span class="ticket-connection-text">${escapeHtml(line[1])}</span>${button}</div>`;
+}
+
 function addTicketCommentFiles(chatId, addedFiles) {
   const s = state[chatId];
   if (!s) return false;
@@ -3271,7 +3380,9 @@ function renderTicketCommentComposer(chatId) {
       <button type="button" data-action="removeTicketCommentFile" data-chat="${escapeHtml(chatId)}" data-index="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button>
     </div>`).join("");
   return `<div class="ticket-comment-composer" data-chat="${escapeHtml(chatId)}">
-    <div class="ticket-comment-as">Posts as <strong>${escapeHtml(selectedAgent || "— choose your name in Settings —")}</strong> via widget</div>
+    <div class="ticket-comment-as">${ticketConnection.status === "connected"
+      ? `Posts as <strong>your own ticket account</strong>`
+      : `Posts as <strong>${escapeHtml(selectedAgent || "— choose your name in Settings —")}</strong> via widget (shared account)`}</div>
     ${replyTo ? `<div class="ticket-reply-target"><span>Replying to <strong>${escapeHtml(replyTo.name)}</strong></span><button type="button" data-action="cancelTicketReply" data-chat="${escapeHtml(chatId)}" aria-label="Cancel reply">×</button></div>` : ""}
     <textarea class="ticket-comment-input" data-chat="${escapeHtml(chatId)}" rows="2" placeholder="${replyTo ? "Write a reply…" : "Add a comment…"}" aria-label="Ticket comment" ${sending ? "disabled" : ""}>${escapeHtml(s.ticketCommentDraft || "")}</textarea>
     ${rows ? `<div class="ticket-attachment-list">${rows}</div>` : ""}
@@ -3612,7 +3723,7 @@ async function loadTicketStatus(chatId, ref, { silent = false } = {}) {
   const s = state[chatId];
   const normalized = String(ref || "").trim().toUpperCase();
   if (!normalized) throw new Error("Enter a ticket reference");
-  const res = await fetch(`/ticket-status?ref=${encodeURIComponent(normalized)}`);
+  const res = await ticketFetch(`/ticket-status?ref=${encodeURIComponent(normalized)}`);
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Ticket status lookup failed");
   s.ticketLookupRef = normalized;
@@ -3625,7 +3736,7 @@ async function loadTicketStatus(chatId, ref, { silent = false } = {}) {
 
 async function searchTickets(chatId, query, mode = "search") {
   ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [], mode });
-  const res = await fetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}`);
+  const res = await ticketFetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}`);
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Ticket search failed");
   ticketSearchResultsByChat.set(chatId, { loading: false, tickets: data.tickets || [], total: data.total || 0, mode });
@@ -3642,7 +3753,7 @@ async function pollTicketUpdates() {
       await loadTicketStatus(chatId, ref);
       const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .escalation-slot`);
       // A re-render would drop focus from a comment being typed; the state is already updated and the next poll redraws.
-      if (slot && !slot.contains(document.activeElement) && !ticketCommentInFlight.has(chatId)) slot.innerHTML = renderEscalationSection(chatId);
+      if (slot && !isTypingIn(slot) && !ticketCommentInFlight.has(chatId)) slot.innerHTML = renderEscalationSection(chatId);
     } catch (_) { /* a temporary poll failure should not interrupt the agent */ }
   }
 }
@@ -3653,6 +3764,7 @@ setInterval(pollTicketUpdates, 30000);
 // ticket's fields remains in the ticket system itself.
 function renderEscalationSection(chatId) {
   const s = state[chatId];
+  if (ticketConnection.status === "unknown") refreshTicketConnection();
   const departmentId = String(s.escalation.departmentId || "");
   const marketId = String(s.escalation.marketId || "");
   return `
@@ -3660,6 +3772,7 @@ function renderEscalationSection(chatId) {
       <label class="field-label">Ticket System</label>
       <span class="hint">Search, browse and create tickets</span>
     </div>
+    ${renderTicketConnectionBar(chatId)}
     <div class="ticket-search-row">
       <input type="search" class="input ticket-search-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(s.ticketSearchQuery || "")}" placeholder="Ticket ref, member ID, agent, or ticket fields" />
       <button type="button" class="secondary-btn" data-action="searchTickets" data-chat="${escapeHtml(chatId)}">Search</button>
@@ -4176,6 +4289,43 @@ chatListEl.addEventListener("click", async (e) => {
     return;
   }
 
+  if (btn.dataset.action === "connectTicketAccount") {
+    if (ticketConnection.busy) return;
+    ticketConnection = { ...ticketConnection, busy: true, error: "" };
+    // window.open runs inside this click, before any await, so the browser lets the popup through.
+    const tokenPromise = waitForTicketToken();
+    rerenderTicketSlots();
+    try {
+      const ticketToken = await tokenPromise;
+      const data = await postTicketConnect({ action: "save", ticketToken });
+      if (!data.ok) throw new Error(data.error || "Could not save the connection.");
+      ticketConnection = { status: "connected", error: "", busy: false };
+      setStatus("Ticket account connected.", "success");
+    } catch (err) {
+      ticketConnection = { status: "disconnected", error: "Could not connect: " + err.message, busy: false };
+    }
+    rerenderTicketSlots();
+    return;
+  }
+
+  if (btn.dataset.action === "disconnectTicketAccount") {
+    if (ticketConnection.busy) return;
+    if (!confirm("Disconnect your ticket account? Tickets and comments will stop going out under your name until you connect again.")) return;
+    ticketConnection = { ...ticketConnection, busy: true };
+    rerenderTicketSlots();
+    try {
+      const data = await postTicketConnect({ action: "disconnect" });
+      ticketConnection = data.ok ? { status: "disconnected", error: "", busy: false } : { status: "connected", error: "", busy: false };
+      if (!data.ok) setStatus(data.error || "Could not disconnect.", "error");
+    } catch (_) {
+      ticketConnection = { status: "connected", error: "", busy: false };
+      setStatus("Could not disconnect — try again.", "error");
+    }
+    rerenderTicketSlots();
+    return;
+  }
+
+
   if (btn.dataset.action === "toggleAttentionPreview") {
     if (!previewMode) return;
     showPreviewClosedChat = !showPreviewClosedChat;
@@ -4283,8 +4433,14 @@ chatListEl.addEventListener("click", async (e) => {
     const text = String(s.ticketCommentDraft || "").trim();
     const files = ticketCommentFilesByChat.get(chatId) || [];
     if (!ref || ticketCommentInFlight.has(chatId)) return;
-    // Comments go out under one shared ticket account, so the agent's name is what says who wrote it.
-    if (!selectedAgent) {
+    // Real agents must post as themselves; only the admin preview may fall back to the shared account.
+    if (ticketConnection.status !== "connected" && !previewMode) {
+      s.ticketCommentError = "Connect your ticket account first, so the comment goes out under your own name.";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      return;
+    }
+    // On the shared account the agent's name is what says who wrote it.
+    if (ticketConnection.status !== "connected" && !selectedAgent) {
       s.ticketCommentError = "Choose your agent name in Settings first, so the comment says who wrote it.";
       card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
       return;
@@ -4312,7 +4468,7 @@ chatListEl.addEventListener("click", async (e) => {
         headers = { "Content-Type": "application/json" };
         requestBody = JSON.stringify(payload);
       }
-      const res = await fetch(`/ticket-comment?ref=${encodeURIComponent(ref)}`, { method: "POST", headers, body: requestBody });
+      const res = await ticketFetch(`/ticket-comment?ref=${encodeURIComponent(ref)}`, { method: "POST", headers, body: requestBody });
       reachedService = true;
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "The comment was not posted");
@@ -4737,6 +4893,11 @@ chatListEl.addEventListener("click", async (e) => {
   }
 
   if (btn.dataset.action === "submitEscalation") {
+    if (ticketConnection.status !== "connected" && !previewMode) {
+      s.escalationError = "Connect your ticket account first, so the ticket is raised under your own name.";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      return;
+    }
     const e = s.escalation;
     if (!e.departmentId || !e.memberUserId || !e.brand || !e.queries) {
       s.escalationError = "Destination Department, Member/User ID, Brand, and Query type are required.";
@@ -4794,7 +4955,7 @@ chatListEl.addEventListener("click", async (e) => {
         headers = { "Content-Type": "application/json" };
         requestBody = JSON.stringify({ fields });
       }
-      const res = await fetch("/ticket-create", { method: "POST", headers, body: requestBody });
+      const res = await ticketFetch("/ticket-create", { method: "POST", headers, body: requestBody });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Submit failed");
       s.ticketRef = data.ref;

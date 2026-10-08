@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { personalFailure, ticketAccess } from "./_lib/ticket-connection.js";
 import { cleanComment, json, ticketError, ticketRequest } from "./_lib/tickets.js";
 
 export async function handler(event) {
@@ -9,7 +10,16 @@ export async function handler(event) {
   }
 
   try {
-    const data = await ticketRequest(event.env, `/tickets/${encodeURIComponent(ref)}`);
+    const access = await ticketAccess(event);
+    if (access.failure) return access.failure;
+    let data;
+    try {
+      data = await ticketRequest(access.env, `/tickets/${encodeURIComponent(ref)}`);
+    } catch (err) {
+      const failure = personalFailure(access, err);
+      if (failure) return failure;
+      throw err;
+    }
     // The current API wraps a single record as { ticket, fields }, where
     // top-level fields is the field catalog. Older deployments returned the
     // ticket directly. Support both shapes and never mistake the catalog

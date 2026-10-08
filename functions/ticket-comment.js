@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { personalFailure, ticketAccess } from "./_lib/ticket-connection.js";
 import { cleanComment, json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
 // POST /ticket-comment?ref=TK... with JSON { body, agent?, parentId?, mentions? }, or multipart/form-data with the same object in a
@@ -27,6 +28,9 @@ export async function handler(event) {
       return json(503, { ok: false, error: "Ticket integration is not configured" });
     }
 
+    const access = await ticketAccess(event);
+    if (access.failure) return access.failure;
+
     let input;
     const files = [];
     if (event.formData) {
@@ -49,7 +53,8 @@ export async function handler(event) {
     const body = typeof input.body === "string" ? input.body.trim() : "";
     if (!body && !files.length) return json(400, { ok: false, error: "Write a comment or attach a file" });
 
-    const label = agentLabel(input.agent);
+    // An agent with their own ticket account is the author already; only the shared account needs the name in the text.
+    const label = access.personal ? "" : agentLabel(input.agent);
     const payload = { body: label ? `${label} ${body}`.trim() : body };
     if (input.parentId !== undefined && input.parentId !== null && input.parentId !== "") {
       const parentId = Number(input.parentId);
@@ -82,9 +87,17 @@ export async function handler(event) {
       requestBody = JSON.stringify(payload);
     }
 
-    const data = await ticketRequest(event.env, `/tickets/${encodeURIComponent(ref)}/comments`, { method: "POST", body: requestBody });
+    let data;
+    try {
+      data = await ticketRequest(access.env, `/tickets/${encodeURIComponent(ref)}/comments`, { method: "POST", body: requestBody });
+    } catch (err) {
+      const failure = personalFailure(access, err);
+      if (failure) return failure;
+      throw err;
+    }
     return json(201, {
       ok: true,
+      postedAs: access.personal ? "own" : "shared",
       parentId: data.parentId ?? null,
       comment: data.comment ? cleanComment(data.comment) : null,
     });

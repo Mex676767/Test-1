@@ -42,3 +42,35 @@ The API has no update route, history or log entries, and no way to edit or
 delete a comment, add files to an existing ticket, or react. Those stay in the
 ticket system's own dashboard. The widget has no @mention picker yet: a name
 typed as `@Name` is plain text and notifies nobody.
+
+## Each agent's own ticket account (optional, off until set up)
+
+By default every ticket call uses the shared `TICKETS_API_KEY`, so comments are
+posted by that account and start with `[Agent name via widget]`. With the setup
+below an agent connects their own ticket account once and their tickets and
+comments are made as them, so the ticket system notifies them itself.
+
+How it works: the Connect button opens `https://tickets.96ghq.com/connect-widget`
+(the ticket system's page, still to be built by its developer) in a popup. When
+the agent is signed in there, that page sends the widget
+`{ type: "tickets-widget-token", token: "tmk_…" }` with `postMessage`, to our
+origin only; the widget accepts it only from `https://tickets.96ghq.com`. The
+server checks the token with the ticket system, encrypts it, and keeps it
+against the agent's verified LiveChat login (account + login id), in a
+Cloudflare KV namespace. It is not stored in Lark or next to any team's data,
+works for retention and customer-service agents alike, and is never sent back
+to the browser.
+
+Setup on the Pages project (Settings → Bindings / Variables):
+
+- KV namespace binding named `TICKET_CONNECTIONS` (create a namespace, then bind it).
+- Secret `TICKET_TOKEN_SECRET`: a long random string. Changing it makes every
+  stored token unreadable, and agents are asked to connect again.
+
+Until both exist, the widget says own-account sign-in is not set up and keeps
+using the shared account. Once the Tickets tab is shown to real agents (it is
+admin preview only today) they must connect before they can raise or comment;
+only the admin preview may use the shared account.
+
+Locally: `wrangler pages dev . --kv TICKET_CONNECTIONS` and set
+`TICKET_TOKEN_SECRET` in `.dev.vars`.

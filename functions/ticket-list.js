@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { personalFailure, ticketAccess } from "./_lib/ticket-connection.js";
 import { json, ticketError, ticketRequest } from "./_lib/tickets.js";
 
 function cleanTicket(ticket) {
@@ -24,9 +25,18 @@ export async function handler(event) {
   const q = String(event.queryStringParameters?.q || "").trim();
   if (q.length > 200) return json(400, { ok: false, error: "Search is too long" });
   try {
+    const access = await ticketAccess(event);
+    if (access.failure) return access.failure;
     const params = new URLSearchParams({ pageSize: "100", sort: "updatedAt:desc" });
     if (q) params.set("q", q);
-    const data = await ticketRequest(event.env, `/tickets?${params}`);
+    let data;
+    try {
+      data = await ticketRequest(access.env, `/tickets?${params}`);
+    } catch (err) {
+      const failure = personalFailure(access, err);
+      if (failure) return failure;
+      throw err;
+    }
     return json(200, {
       ok: true,
       total: Number(data.total || 0),

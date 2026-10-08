@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { personalFailure, ticketAccess } from "./_lib/ticket-connection.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
 export async function handler(event) {
@@ -8,6 +9,9 @@ export async function handler(event) {
     if (!settings.configured) {
       return json(503, { ok: false, error: "Ticket integration is not configured" });
     }
+
+    const access = await ticketAccess(event);
+    if (access.failure) return access.failure;
 
     let body;
     const attachments = [];
@@ -53,8 +57,15 @@ export async function handler(event) {
       requestBody = JSON.stringify({ fields: body.fields });
     }
 
-    const data = await ticketRequest(event.env, "/tickets", { method: "POST", body: requestBody });
-    return json(201, { ok: true, id: data.id, ref: data.ref, attachments: data.attachments || [] });
+    let data;
+    try {
+      data = await ticketRequest(access.env, "/tickets", { method: "POST", body: requestBody });
+    } catch (err) {
+      const failure = personalFailure(access, err);
+      if (failure) return failure;
+      throw err;
+    }
+    return json(201, { ok: true, id: data.id, ref: data.ref, attachments: data.attachments || [], createdAs: access.personal ? "own" : "shared" });
   } catch (err) {
     if (err instanceof SyntaxError) return json(400, { ok: false, error: "Malformed JSON" });
     return ticketError(err);
