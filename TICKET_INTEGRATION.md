@@ -25,7 +25,16 @@ creation. Opened tickets are watched every 30 seconds while the Tickets tab is
 active; the app reports status, comment-count, file-count, or updated-time
 changes in its notification panel.
 
-The ticket API currently supports list, read, and create. It does not expose an
-update route, comment contents, comment posting, history, or log entries. The
-app shows their counts and links to the dashboard, but those website features
-cannot be replicated until matching REST endpoints are added.
+The ticket API supports list, read (with the comment thread), create, and
+comment. The widget shows the thread (replies one level deep, mentions
+highlighted, files as links into the ticket system) and posts comments and
+replies through `/ticket-comment?ref=TK…`, with up to 4 PNG/JPG/WEBP/PDF files
+under 1MB each (paste works). The key's role needs `tickets:comment` and the key
+needs the "Comment on tickets" access option; without them the widget shows the
+service's refusal. Each key is limited to 120 requests a minute; a refusal for
+that shows as "Rate limit exceeded".
+
+The API has no update route, history or log entries, and no way to edit or
+delete a comment, add files to an existing ticket, or react. Those stay in the
+ticket system's own dashboard. The widget has no @mention picker yet: a name
+typed as `@Name` is plain text and notifies nobody.

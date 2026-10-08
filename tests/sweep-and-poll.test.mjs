@@ -282,7 +282,7 @@ function refreshGuard(over = {}) {
   const keys = over.sessionKeys || [];
   const context = vm.createContext({
     window: {}, blastRunInProgress: false, state: {}, recordSubmitInFlight: new Map(), linkSaveInFlight: new Set(),
-    ticketCreateInFlight: new Set(), claimWriteInFlight: new Set(), ticketAttachmentsByChat: new Map(),
+    ticketCreateInFlight: new Set(), claimWriteInFlight: new Set(), ticketAttachmentsByChat: new Map(), ticketCommentInFlight: new Set(), ticketCommentFilesByChat: new Map(),
     sessionStorage: { length: keys.length, key: (i) => keys[i] }, document: { activeElement: null },
     Object, String, ...over.context,
   });
@@ -340,6 +340,8 @@ test('the in-flight sets are added before the request and removed in a finally (
   assert.match(app, /\} finally \{\s*ticketCreateInFlight\.delete\(chatId\);\s*\}/);
   assert.match(app, /claimWriteInFlight\.add\(chatId\);\s*try \{/);
   assert.match(app, /\} finally \{\s*claimWriteInFlight\.delete\(chatId\);\s*\}/);
+  assert.match(app, /ticketCommentInFlight\.add\(chatId\);\s*try \{/);
+  assert.match(app, /\} finally \{\s*ticketCommentInFlight\.delete\(chatId\);\s*\}/);
 });
 
 // ---- the refresh button ---------------------------------------------------------------------------------------
@@ -354,7 +356,7 @@ function refreshButton(over = {}) {
     reloadForDeploymentUpdate: () => { log.reloads += 1; return over.reloadResult || 'reloaded'; } };
   const context = vm.createContext({
     window: win, blastRunInProgress: false, state: {}, recordSubmitInFlight: new Map(), linkSaveInFlight: new Set(),
-    ticketCreateInFlight: new Set(), claimWriteInFlight: new Set(), ticketAttachmentsByChat: new Map(),
+    ticketCreateInFlight: new Set(), claimWriteInFlight: new Set(), ticketAttachmentsByChat: new Map(), ticketCommentInFlight: new Set(), ticketCommentFilesByChat: new Map(),
     sessionStorage: { length: 0, key: () => null }, document: { activeElement: { tagName: 'BUTTON' } }, Object, String,
     showChatToast: (message, kind) => log.toasts.push([message, kind]),
     refreshDropdownOptions: (o) => log.dropdown.push(o),
@@ -383,6 +385,9 @@ test('refresh button with an update pending but BUSY (each blocker): no reload, 
     'ticket create in flight': { ticketCreateInFlight: new Set(['c1']) },
     'bonus claim in flight': { claimWriteInFlight: new Set(['c1']) },
     'unsent attachments': { ticketAttachmentsByChat: new Map([['c1', [{ name: 'a.png' }]]]) },
+    'ticket comment in flight': { ticketCommentInFlight: new Set(['c1']) },
+    'comment files chosen but not sent': { ticketCommentFilesByChat: new Map([['c1', [{ name: 'a.png' }]]]) },
+    'unsent ticket comment text': { state: { c1: { ticketCommentDraft: 'half typed' } } },
     'unsent ticket form': { state: { c1: { escalationSubmitted: false, escalation: { remarks: 'half typed' } } } },
     'typed username': { state: { c1: { logged: false, usernameDraft: 'player1' } } },
     'Blast running': { blastRunInProgress: true },

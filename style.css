@@ -1224,7 +1224,20 @@ body { font-size: 13px; }
 .ticket-comment-composer { margin-top: 10px; padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
 .ticket-comment-composer textarea { width: 100%; resize: vertical; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 10.5px; }
 .ticket-comment-composer > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; color: var(--text-faint); font-size: 8.5px; }
-.ticket-comment-composer button { min-height: 29px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--blue); color: #fff; font: inherit; font-size: 9.5px; font-weight: 700; opacity: .72; }
+.ticket-comment-composer button.ticket-comment-send { min-height: 29px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--blue); color: #fff; font: inherit; font-size: 9.5px; font-weight: 700; cursor: pointer; }
+.ticket-comment-composer button.ticket-comment-send:disabled { opacity: .55; cursor: default; }
+.ticket-comment-composer textarea:disabled { opacity: .6; }
+.ticket-comment-actions { flex-wrap: wrap; }
+.ticket-comment-help { flex: 1 1 120px; min-width: 0; }
+.ticket-comments-empty { margin: 8px 0 0; color: var(--text-faint); font-size: 10px; }
+.ticket-comment-reply { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--blue); font: inherit; font-size: 9.5px; font-weight: 700; cursor: pointer; }
+.ticket-comment-reply-item { margin-top: 8px; padding: 8px 0 0; border-top: 1px dashed var(--border); }
+.ticket-comment-deleted { font-style: italic; color: var(--text-faint) !important; }
+.ticket-comment-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; font-size: 9.5px; }
+.ticket-comment-files a, .ticket-comment-files span { padding: 2px 7px; border-radius: 6px; background: var(--surface-2); color: var(--blue); text-decoration: none; }
+.ticket-mention { color: var(--blue); font-weight: 700; }
+.ticket-reply-target { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; padding: 4px 7px; border-radius: 6px; background: color-mix(in srgb, var(--blue) 12%, var(--surface-2)); color: var(--text-muted); font-size: 9.5px; }
+.ticket-reply-target button { border: 0; background: none; color: var(--text-muted); font-size: 13px; line-height: 1; cursor: pointer; }
 
 @media (max-width: 340px) {
   .chat-list { padding: 8px; }

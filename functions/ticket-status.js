@@ -1,5 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
-import { json, ticketError, ticketRequest } from "./_lib/tickets.js";
+import { cleanComment, json, ticketError, ticketRequest } from "./_lib/tickets.js";
 
 export async function handler(event) {
   if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
@@ -32,6 +32,7 @@ export async function handler(event) {
         updatedAt: record.updatedAt || null,
         commentCount: Number(record.commentCount || 0),
         attachmentCount: Number(record.attachmentCount || 0),
+        comments: Array.isArray(record.comments) ? record.comments.map((comment) => cleanComment(comment)) : [],
       },
     });
   } catch (err) {

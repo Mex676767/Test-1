@@ -69,6 +69,28 @@ export async function ticketRequest(env, path, options = {}) {
   return data;
 }
 
+// One comment as the API returns it, cut down to what the widget shows (authors never include an email).
+// A deleted comment that kept its place has body null; replies are one level deep.
+export function cleanComment(comment, { withReplies = true } = {}) {
+  const clean = {
+    id: comment.id,
+    author: comment.author ? { id: comment.author.id, name: comment.author.name } : null,
+    body: comment.body === null || comment.body === undefined ? null : String(comment.body),
+    mentions: Array.isArray(comment.mentions) ? comment.mentions.map(({ userId, name }) => ({ userId, name })) : [],
+    createdAt: comment.createdAt || null,
+    deleted: Boolean(comment.deleted),
+    attachments: Array.isArray(comment.attachments)
+      ? comment.attachments.map(({ path, originalName, mimeType, sizeBytes }) => ({ path, originalName, mimeType, sizeBytes }))
+      : [],
+  };
+  if (withReplies) {
+    clean.replies = Array.isArray(comment.replies)
+      ? comment.replies.map((reply) => cleanComment(reply, { withReplies: false }))
+      : [];
+  }
+  return clean;
+}
+
 export function json(statusCode, body) {
   return { statusCode, body: JSON.stringify(body) };
 }

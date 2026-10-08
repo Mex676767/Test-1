@@ -3184,6 +3184,108 @@ let ticketNotifications = [];
 const TICKET_ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
 const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024;
 
+// Ticket comments. Files and the in-flight flag live in memory only (like ticket attachments); the draft text and the
+// reply target live on the chat's state so a re-render never loses what the agent typed.
+const ticketCommentFilesByChat = new Map();
+const ticketCommentInFlight = new Set();
+const TICKET_COMMENT_MAX_FILES = 4;
+
+function addTicketCommentFiles(chatId, addedFiles) {
+  const s = state[chatId];
+  if (!s) return false;
+  const existing = ticketCommentFilesByChat.get(chatId) || [];
+  const added = Array.from(addedFiles || []).filter(Boolean);
+  const combined = [...existing, ...added];
+  let error = "";
+  if (!added.length) error = "The clipboard did not contain an image, PDF, or file.";
+  else if (combined.length > TICKET_COMMENT_MAX_FILES) error = `A comment allows up to ${TICKET_COMMENT_MAX_FILES} files.`;
+  else {
+    const invalid = added.find((file) => !file.size || file.size >= TICKET_ATTACHMENT_MAX_BYTES || !TICKET_ATTACHMENT_TYPES.has(file.type));
+    if (invalid) {
+      error = !invalid.size
+        ? `${invalid.name || "Attachment"} is empty.`
+        : invalid.size >= TICKET_ATTACHMENT_MAX_BYTES
+          ? `${invalid.name || "Attachment"} must be under 1MB.`
+          : `${invalid.name || "Attachment"} must be PNG, JPG, WEBP, or PDF.`;
+    }
+  }
+  if (!error) ticketCommentFilesByChat.set(chatId, combined);
+  s.ticketCommentError = error;
+  return !error;
+}
+
+// Comment text is plain text with each mention written @Name. Escape first, then mark the mentioned names in one pass
+// (longest name first, so @Alice Tan is not split by a shorter @Alice).
+function formatTicketCommentBody(comment) {
+  const html = escapeHtml(comment.body || "");
+  const tags = (comment.mentions || []).map((mention) => String(mention?.name || "").trim()).filter(Boolean)
+    .map((name) => escapeHtml("@" + name)).sort((a, b) => b.length - a.length);
+  if (!tags.length) return html;
+  const pattern = new RegExp(tags.map((tag) => tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+  return html.replace(pattern, (match) => `<span class="ticket-mention">${match}</span>`);
+}
+
+function renderTicketCommentFiles(comment) {
+  const files = Array.isArray(comment.attachments) ? comment.attachments : [];
+  if (!files.length) return "";
+  return `<div class="ticket-comment-files">${files.map((file) => {
+    const path = String(file?.path || "");
+    const label = `📎 ${escapeHtml(file?.originalName || "Attached file")}`;
+    // Files open in the ticket system, where the agent is already signed in.
+    return path && !path.startsWith("/") && !path.includes("..")
+      ? `<a href="https://tickets.96ghq.com/api/attachments/${encodeURI(path)}" target="_blank" rel="noopener">${label}</a>`
+      : `<span>${label}</span>`;
+  }).join("")}</div>`;
+}
+
+function renderTicketComment(chatId, comment, { isReply = false } = {}) {
+  const authorName = comment.author?.name || "Unknown";
+  const time = comment.createdAt ? new Date(comment.createdAt).toLocaleString() : "";
+  const replies = !isReply && Array.isArray(comment.replies) ? comment.replies : [];
+  const content = comment.deleted
+    ? `<p class="ticket-comment-deleted">This comment was deleted.</p>`
+    : `<p>${formatTicketCommentBody(comment)}</p>${renderTicketCommentFiles(comment)}`;
+  const replyButton = !isReply && !comment.deleted
+    ? `<button type="button" class="ticket-comment-reply" data-action="replyTicketComment" data-chat="${escapeHtml(chatId)}" data-id="${escapeHtml(comment.id)}" data-name="${escapeHtml(authorName)}">Reply</button>`
+    : "";
+  return `<article class="ticket-comment ${isReply ? "ticket-comment-reply-item" : ""}">
+    <span class="ticket-comment-avatar">${escapeHtml(authorName.trim().charAt(0).toUpperCase() || "?")}</span>
+    <div>
+      <div class="ticket-comment-meta"><strong>${escapeHtml(authorName)}</strong><time>${escapeHtml(time)}</time></div>
+      ${content}
+      ${replyButton}
+      ${replies.map((reply) => renderTicketComment(chatId, reply, { isReply: true })).join("")}
+    </div>
+  </article>`;
+}
+
+function renderTicketCommentComposer(chatId) {
+  const s = state[chatId];
+  const files = ticketCommentFilesByChat.get(chatId) || [];
+  const sending = ticketCommentInFlight.has(chatId);
+  const replyTo = s.ticketReplyTo;
+  const rows = files.map((file, index) => `
+    <div class="ticket-attachment-item">
+      <span title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+      <small>${Math.max(1, Math.ceil(file.size / 1024))}KB</small>
+      <button type="button" data-action="removeTicketCommentFile" data-chat="${escapeHtml(chatId)}" data-index="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button>
+    </div>`).join("");
+  return `<div class="ticket-comment-composer" data-chat="${escapeHtml(chatId)}">
+    ${replyTo ? `<div class="ticket-reply-target"><span>Replying to <strong>${escapeHtml(replyTo.name)}</strong></span><button type="button" data-action="cancelTicketReply" data-chat="${escapeHtml(chatId)}" aria-label="Cancel reply">×</button></div>` : ""}
+    <textarea class="ticket-comment-input" data-chat="${escapeHtml(chatId)}" rows="2" placeholder="${replyTo ? "Write a reply…" : "Add a comment…"}" aria-label="Ticket comment" ${sending ? "disabled" : ""}>${escapeHtml(s.ticketCommentDraft || "")}</textarea>
+    ${rows ? `<div class="ticket-attachment-list">${rows}</div>` : ""}
+    ${s.ticketCommentError ? `<div class="ticket-attachment-error">${escapeHtml(s.ticketCommentError)}</div>` : ""}
+    <div class="ticket-comment-actions">
+      <label class="ticket-file-button">
+        <input type="file" class="ticket-comment-file-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple ${sending ? "disabled" : ""} />
+        <span>📎 Attach</span>
+      </label>
+      <span class="ticket-comment-help">PNG, JPG, WEBP or PDF · under 1MB · up to ${TICKET_COMMENT_MAX_FILES} files · paste works too</span>
+      <button type="button" class="ticket-comment-send" data-action="sendTicketComment" data-chat="${escapeHtml(chatId)}" ${sending ? "disabled" : ""}>${sending ? "Sending…" : replyTo ? "Send reply" : "Post comment"}</button>
+    </div>
+  </div>`;
+}
+
 function ticketAttachmentField() {
   return ticketFields.find((field) => field.type === "ATTACHMENT") || null;
 }
@@ -3480,16 +3582,9 @@ function renderTicketStatus(chatId) {
     ? `<div class="ticket-attachment-summary"><strong>Attachments:</strong> ${attachments.map((item) => escapeHtml(item?.name || "Attached file")).join(", ")}</div>`
     : "";
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
-  const commentThread = comments.length
-    ? `<div class="ticket-comments">${comments.map((comment, index) => `<article class="ticket-comment">
-        <span class="ticket-comment-avatar">${escapeHtml(String(comment.author || "?").trim().charAt(0).toUpperCase())}</span>
-        <div><div class="ticket-comment-meta"><strong>${escapeHtml(comment.author || "Unknown")}</strong><span>${escapeHtml(comment.role || "")}</span><time>${escapeHtml(comment.time || "")}</time></div><p>${escapeHtml(comment.body || "")}</p></div>
-      </article>`).join("")}</div>
-      <div class="ticket-comment-composer">
-        <textarea rows="2" placeholder="Write a reply…" aria-label="Future ticket reply preview"></textarea>
-        <div><span>Future ticket comments preview</span><button type="button" disabled>Send reply</button></div>
-      </div>`
-    : `<p>The current ticket API returns the comment count but not the comment thread or history. Reading and posting replies here will switch on once the ticket API adds comment endpoints.</p>`;
+  const commentThread = (comments.length
+    ? `<div class="ticket-comments">${comments.map((comment) => renderTicketComment(chatId, comment)).join("")}</div>`
+    : `<p class="ticket-comments-empty">No comments yet.</p>`) + renderTicketCommentComposer(chatId);
   const fieldRows = Object.entries(ticket.fields || {})
     .filter(([key]) => key !== "attachment")
     .map(([key, value]) => `<div class="ticket-detail-row"><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(ticketFieldDisplay(value))}</strong></div>`)
@@ -3545,15 +3640,16 @@ async function pollTicketUpdates() {
       const [chatId] = owner;
       await loadTicketStatus(chatId, ref);
       const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .escalation-slot`);
-      if (slot) slot.innerHTML = renderEscalationSection(chatId);
+      // A re-render would drop focus from a comment being typed; the state is already updated and the next poll redraws.
+      if (slot && !slot.contains(document.activeElement) && !ticketCommentInFlight.has(chatId)) slot.innerHTML = renderEscalationSection(chatId);
     } catch (_) { /* a temporary poll failure should not interrupt the agent */ }
   }
 }
 setInterval(pollTicketUpdates, 30000);
 
-// Creates tickets through the C9 Tickets REST API and reads their latest
-// status. The API currently has no update route, so editing remains in the
-// ticket system itself.
+// Creates tickets through the C9 Tickets REST API, reads their latest status and
+// conversation, and posts comments. The API has no update route, so changing a
+// ticket's fields remains in the ticket system itself.
 function renderEscalationSection(chatId) {
   const s = state[chatId];
   const departmentId = String(s.escalation.departmentId || "");
@@ -3583,7 +3679,7 @@ function renderEscalationSection(chatId) {
       </div>
       <div class="escalation-grid">${TICKET_FIELD_SPECS.map((spec) => renderTicketInput(chatId, spec)).join("")}</div>
       ${renderTicketAttachments(chatId)}
-      <div class="hint" style="margin:6px 0 10px">Attachments are uploaded with the new ticket. Existing tickets, comments and history cannot be changed through the current API.</div>
+      <div class="hint" style="margin:6px 0 10px">Attachments are uploaded with the new ticket and cannot be added to it later. Existing tickets' fields and history can only be changed in the ticket system; comments can be posted here.</div>
     `}
     ${s.escalationError ? `<div class="record-error-banner">⚠︎ ${escapeHtml(s.escalationError)}</div>` : ""}
     ${!ticketFields.length ? "" : s.escalationSubmitted
@@ -3659,9 +3755,9 @@ function applyPreviewSampleState(chat) {
         attachment: [{ name: "payment-receipt.png" }],
       },
       comments: [
-        { author: "R. Maxine", role: "CS agent", time: "29 Sep · 8:31 PM", body: "Customer reported that withdrawal 149251 was still pending after the expected processing time." },
-        { author: "Derin", role: "Payment team", time: "29 Sep · 8:47 PM", body: "Checked with the provider. The transaction was released and should appear in the customer account shortly." },
-        { author: "R. Maxine", role: "CS agent", time: "29 Sep · 9:03 PM", body: "Customer confirmed receipt. Marking this case as solved." },
+        { id: 1, author: { id: 1, name: "R. Maxine" }, body: "Customer reported that withdrawal 149251 was still pending after the expected processing time.", mentions: [], createdAt: "2026-09-29T12:31:00.000Z", deleted: false, attachments: [],
+          replies: [{ id: 2, author: { id: 2, name: "Derin" }, body: "Checked with the provider. The transaction was released and should appear in the customer account shortly.", mentions: [], createdAt: "2026-09-29T12:47:00.000Z", deleted: false, attachments: [] }] },
+        { id: 3, author: { id: 1, name: "R. Maxine" }, body: "@Derin customer confirmed receipt. Marking this case as solved.", mentions: [{ userId: 2, name: "Derin" }], createdAt: "2026-09-29T13:03:00.000Z", deleted: false, attachments: [], replies: [] },
       ],
     };
   }
@@ -4152,6 +4248,80 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "clearTicketNotifications") {
     ticketNotifications = [];
     renderChats(activeChats);
+    return;
+  }
+
+  if (btn.dataset.action === "replyTicketComment") {
+    s.ticketReplyTo = { id: Number(btn.dataset.id), name: btn.dataset.name || "" };
+    s.ticketCommentError = "";
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    card.querySelector(".ticket-comment-input")?.focus();
+    saveState();
+    return;
+  }
+
+  if (btn.dataset.action === "cancelTicketReply") {
+    s.ticketReplyTo = null;
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    saveState();
+    return;
+  }
+
+  if (btn.dataset.action === "removeTicketCommentFile") {
+    const files = [...(ticketCommentFilesByChat.get(chatId) || [])];
+    files.splice(Number(btn.dataset.index), 1);
+    if (files.length) ticketCommentFilesByChat.set(chatId, files);
+    else ticketCommentFilesByChat.delete(chatId);
+    s.ticketCommentError = "";
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "sendTicketComment") {
+    const ref = s.ticketRecord?.ref;
+    const text = String(s.ticketCommentDraft || "").trim();
+    const files = ticketCommentFilesByChat.get(chatId) || [];
+    if (!ref || ticketCommentInFlight.has(chatId)) return;
+    if (!text && !files.length) {
+      s.ticketCommentError = "Write a comment or attach a file.";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      return;
+    }
+    let reachedService = false;
+    ticketCommentInFlight.add(chatId);
+    try {
+      s.ticketCommentError = "";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      const payload = { body: text };
+      if (s.ticketReplyTo?.id) payload.parentId = s.ticketReplyTo.id;
+      let requestBody;
+      let headers;
+      if (files.length) {
+        const form = new FormData();
+        form.append("comment", JSON.stringify(payload));
+        for (const file of files) form.append("file", file, file.name);
+        requestBody = form;
+      } else {
+        headers = { "Content-Type": "application/json" };
+        requestBody = JSON.stringify(payload);
+      }
+      const res = await fetch(`/ticket-comment?ref=${encodeURIComponent(ref)}`, { method: "POST", headers, body: requestBody });
+      reachedService = true;
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "The comment was not posted");
+      s.ticketCommentDraft = "";
+      s.ticketReplyTo = null;
+      ticketCommentFilesByChat.delete(chatId);
+      try { await loadTicketStatus(chatId, ref, { silent: true }); } catch (_) { /* posted; the next refresh shows it */ }
+      setStatus(`Comment posted on ${ref}.`, "success");
+    } catch (err) {
+      // If the request never got an answer the comment may or may not have been posted, so do not invite a blind resend.
+      s.ticketCommentError = "Comment failed: " + err.message + (reachedService ? "" : " Check the conversation before sending again.");
+    } finally {
+      ticketCommentInFlight.delete(chatId);
+    }
+    saveState();
+    card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
 
@@ -4656,7 +4826,11 @@ chatListEl.addEventListener("click", async (e) => {
     s.ticketRecord = null;
     s.escalationError = "";
     s.ticketAttachmentError = "";
+    s.ticketCommentDraft = "";
+    s.ticketReplyTo = null;
+    s.ticketCommentError = "";
     ticketAttachmentsByChat.delete(chatId);
+    ticketCommentFilesByChat.delete(chatId);
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     saveState();
   }
@@ -4913,6 +5087,12 @@ chatListEl.addEventListener("input", (e) => {
     if (s) s.ticketLookupRef = ticketRefInput.value;
     return;
   }
+  const ticketCommentInput = e.target.closest(".ticket-comment-input");
+  if (ticketCommentInput) {
+    const s = state[ticketCommentInput.dataset.chat];
+    if (s) s.ticketCommentDraft = ticketCommentInput.value;
+    return;
+  }
   const ticketSearchInput = e.target.closest(".ticket-search-input");
   if (ticketSearchInput) {
     const s = state[ticketSearchInput.dataset.chat];
@@ -4969,6 +5149,14 @@ chatListEl.addEventListener("change", (e) => {
     if (s && allowed.has(explorerFilter.dataset.filter)) s[explorerFilter.dataset.filter] = explorerFilter.value;
     explorerFilter.closest(".escalation-slot").innerHTML = renderEscalationSection(explorerFilter.dataset.chat);
     saveState();
+    return;
+  }
+  const commentFileInput = e.target.closest(".ticket-comment-file-input");
+  if (commentFileInput) {
+    const chatId = commentFileInput.dataset.chat;
+    const slot = commentFileInput.closest(".escalation-slot");
+    addTicketCommentFiles(chatId, commentFileInput.files);
+    slot.innerHTML = renderEscalationSection(chatId);
     return;
   }
   const attachmentInput = e.target.closest(".ticket-attachment-input");
@@ -5726,6 +5914,21 @@ window.addEventListener("storage", (e) => {
 });
 
 chatListEl.addEventListener("paste", (event) => {
+  const commentBox = event.target.closest?.(".ticket-comment-composer");
+  if (commentBox) {
+    const pasted = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (!pasted.length) return; // plain text pastes into the box as usual
+    event.preventDefault();
+    const chatId = commentBox.dataset.chat;
+    const slot = commentBox.closest(".escalation-slot");
+    addTicketCommentFiles(chatId, pasted);
+    slot.innerHTML = renderEscalationSection(chatId);
+    slot.querySelector(".ticket-comment-input")?.focus();
+    return;
+  }
   const picker = event.target.closest?.(".ticket-attachment-picker");
   if (!picker) return;
   const files = Array.from(event.clipboardData?.items || [])
@@ -6421,8 +6624,10 @@ window.canRefreshForDeployment = () => {
   if (Object.values(state).some((s) => s && !s.logged && String(s.usernameDraft || "").trim())) return false;
   // A ticket being created, a bonus claim being written, ticket attachments chosen but not sent (they live in memory only
   // and would be lost), or a ticket form with typed input that has not been raised.
-  if (ticketCreateInFlight.size || claimWriteInFlight.size) return false;
+  if (ticketCreateInFlight.size || claimWriteInFlight.size || ticketCommentInFlight.size) return false;
   for (const files of ticketAttachmentsByChat.values()) if (files && files.length) return false;
+  for (const files of ticketCommentFilesByChat.values()) if (files && files.length) return false;
+  if (Object.values(state).some((s) => s && String(s.ticketCommentDraft || "").trim())) return false;
   if (Object.values(state).some((s) => s && s.escalation && !s.escalationSubmitted
     && ["queries", "transactionId", "paymentGateway", "remarks"].some((key) => String(s.escalation[key] || "").trim()))) return false;
   for (let i = 0; i < sessionStorage.length; i++) {
