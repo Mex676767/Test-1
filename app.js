@@ -619,6 +619,7 @@ function applyBoundAgent(name, accountKey) {
     if (liveWidget) applyProfile(liveWidget.getCustomerProfile());
   }
   logDiagnostic(`Signed in with LiveChat as ${name}.`, "success");
+  fetchUnrecordedChats();
 }
 
 // First sign-in: pick the agent name once. Resolves when it is saved.
@@ -6112,6 +6113,52 @@ function formatAge(ms) {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
+// The one-time crosscheck (functions/crosscheck.js): chats since 7 Oct that THIS agent wrote in and nobody ever recorded.
+// Read once per widget start, after the LiveChat login, with one small request; the list lives in the Lark table
+// "Unrecorded Chats" and is matched to the agent by their LiveChat email, so there is nothing to poll.
+let unrecordedChats = [];
+const unrecordedResolving = new Set(); // not persisted
+async function postUnrecorded(body) {
+  const token = liveChatAgentTokens()[currentLiveChatAccount];
+  if (!token) return null;
+  const response = await fetch("/livechat-unrecorded", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accountKey: currentLiveChatAccount, agentToken: token, ...body }),
+  });
+  return response.json();
+}
+async function fetchUnrecordedChats() {
+  if (!AGENT_LOGIN_LIVE || !currentLiveChatAccount) return;
+  try {
+    const data = await postUnrecorded({ action: "list" });
+    if (data && data.ok && Array.isArray(data.chats)) {
+      unrecordedChats = data.chats;
+      renderNeedsAttentionPanel();
+    } else if (data && data.error) logDiagnostic(`Couldn't read your unrecorded-chats list: ${data.error}`, "warn");
+  } catch (_) { /* non-fatal: the list simply stays as it was */ }
+}
+// Marks one chat Done (recorded here) or Ignored (written off) in Lark and takes it off the list.
+async function resolveUnrecorded(threadId, status) {
+  unrecordedChats = unrecordedChats.filter((chat) => chat.threadId !== threadId);
+  renderNeedsAttentionPanel();
+  if (unrecordedResolving.has(threadId)) return;
+  unrecordedResolving.add(threadId);
+  try { await postUnrecorded({ action: "resolve", threadId, status }); } catch (_) { /* the row stays Open and shows again next start */ }
+}
+// What is still left to show: not completed in this browser since, and a completed one is told to Lark once.
+function getUnrecordedChats() {
+  if (!unrecordedChats.length) return [];
+  let persisted = {};
+  try { persisted = loadPersistedState(); } catch (_) { /* non-fatal */ }
+  const local = (threadId) => state[threadId] || persisted[threadId];
+  return unrecordedChats.filter((chat) => {
+    const s = local(chat.threadId);
+    if (s && s.logged && (s.inquiry || []).length && s.status) { resolveUnrecorded(chat.threadId, "Done"); return false; }
+    return !(s && s.attentionIgnored);
+  });
+}
+
 async function fetchStaleRecords() {
   if (!selectedAgent) { staleRecords = []; renderNeedsAttentionPanel(); return; }
   // Do not briefly mix both accounts while the first chat is still being
@@ -6241,8 +6288,9 @@ function renderNeedsAttentionPanel() {
 
   const incomplete = getIncompleteChats();
   const stale = getStaleLarkRecords();
+  const unrecorded = getUnrecordedChats();
   const previewCount = previewMode && showPreviewClosedChat ? 1 : 0;
-  const total = incomplete.length + stale.length + previewCount;
+  const total = incomplete.length + stale.length + unrecorded.length + previewCount;
   if (!total) {
     panel.classList.add("hidden");
     return;
@@ -6276,12 +6324,23 @@ function renderNeedsAttentionPanel() {
         <button type="button" class="na-item-ignore" data-action="removeStale" data-record="${escapeHtml(r.recordId)}" title="Delete this empty row from Lark">Remove</button>
       </div>
     </div>
+  `).join("") + unrecorded.map((c) => `
+    <div class="na-item">
+      <div class="na-item-username">${escapeHtml(c.customer || "Customer")}${c.date ? ` · ${escapeHtml(new Date(c.date).toLocaleDateString())}` : ""}</div>
+      <div class="na-item-reason">You wrote in this chat but it was never recorded.</div>
+      <div class="na-item-actions">
+        <a class="na-item-link" href="${escapeHtml(archiveUrlFor(c.threadId))}" target="_blank">Open ↗</a>
+        <button type="button" class="na-item-ignore" data-action="ignoreUnrecorded" data-thread="${escapeHtml(c.threadId)}" title="Stop showing this chat here (for example it was not a player case)">Ignore</button>
+      </div>
+    </div>
   `).join("");
 }
 
 document.getElementById("needsAttentionList").addEventListener("click", (e) => {
   const staleBtn = e.target.closest("button[data-action='removeStale']");
   if (staleBtn) { removeStaleRecord(staleBtn.dataset.record, staleBtn); return; }
+  const unrecordedBtn = e.target.closest("button[data-action='ignoreUnrecorded']");
+  if (unrecordedBtn) { resolveUnrecorded(unrecordedBtn.dataset.thread, "Ignored"); return; }
   const btn = e.target.closest("button[data-action='ignoreAttention']");
   if (!btn) return;
   ignoreAttention(btn.dataset.chat);

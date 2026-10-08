@@ -87,7 +87,8 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
   const all = [];
   for (const account of accounts) {
     const chats = new Map();
-    let missingEvents = 0;
+    let fetchedAlone = 0;
+    let unjudged = 0;
     let configured = true;
     for (const [from, to] of windows(fromMs, toMs, windowMs)) {
       let pageId = "";
@@ -98,14 +99,21 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
           throw new Error(`archives (${account}): ${data.error}`);
         }
         data.chats.forEach((chat) => chats.set(chat.threadId, chat));
-        missingEvents += data.withoutEvents || 0;
+        // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
+        for (const pending of data.pending || []) {
+          if (chats.has(pending.threadId)) continue;
+          const one = await step({ step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
+          fetchedAlone += 1;
+          if (!one.ok) { unjudged += 1; continue; }
+          if (one.chat) chats.set(one.chat.threadId, one.chat);
+        }
         pageId = data.next;
       } while (pageId);
       if (!configured) break;
     }
     if (!configured) { log(`${account}: not configured, skipped.`); continue; }
     const entries = planEntries([...chats.values()], recorded, existing, account);
-    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded${missingEvents ? ` (${missingEvents} chats came without messages and could not be judged)` : ""}.`);
+    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded.${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);
   }
 

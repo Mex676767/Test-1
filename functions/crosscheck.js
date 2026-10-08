@@ -13,7 +13,9 @@ import { UNREC } from "./_lib/unrecorded.js";
 // Each call is one small step so it stays inside a Pages Function's limits and never hogs the shared Lark queue:
 //   recorded  one page of Customer Approaching -> the chat (thread) ids of rows created since `fromMs`
 //   existing  one page of the Unrecorded Chats table -> "thread|email" keys already written (so a re-run adds no twins)
-//   archives  one page of LiveChat's archive for one account and time window -> ended chats with who wrote in them
+//   archives  one page of LiveChat's archive for one account and time window -> ended chats with who wrote in them, plus the
+//             ended chats that came WITHOUT their messages (`pending`)
+//   chat      one such pending chat, fetched on its own -> who wrote in it (so nothing is left unjudged)
 //   write     up to 25 rows into the Unrecorded Chats table
 
 const reply = (statusCode, body) => ({ statusCode, body: JSON.stringify(body) });
@@ -92,8 +94,25 @@ export async function handler(event) {
       if (!account) return reply(200, { ok: false, error: `LiveChat account ${body.account} is not configured.` });
       const data = await listArchives(account, { from: Number(body.from), to: Number(body.to), pageId: clean(body.pageId) });
       const chats = chatsWithWriters(data);
-      const withoutEvents = (data.chats || []).filter((chat) => chat.thread && !Array.isArray(chat.thread.events)).length;
-      return reply(200, { ok: true, chats, next: clean(data.next_page_id), seen: (data.chats || []).length, found: data.found_chats ?? null, withoutEvents });
+      // An ended chat whose messages did not come with the page cannot be judged from it: hand it back to be fetched alone.
+      const pending = (data.chats || [])
+        .filter((chat) => chat.thread?.id && chat.thread.active === false && !Array.isArray(chat.thread.events))
+        .map((chat) => ({ chatId: clean(chat.id), threadId: clean(chat.thread.id) }));
+      return reply(200, { ok: true, chats, pending, next: clean(data.next_page_id), seen: (data.chats || []).length, found: data.found_chats ?? null });
+    }
+
+    if (body.step === "chat") {
+      const account = LIVECHAT_ACCOUNTS.find((item) => item.key === body.account);
+      if (!account || !clean(body.chatId) || !clean(body.threadId)) return reply(400, { ok: false, error: "account, chatId and threadId are required." });
+      const response = await fetch("https://api.livechatinc.com/v3.6/agent/action/get_chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Basic " + account.pat },
+        body: JSON.stringify({ chat_id: clean(body.chatId), thread_id: clean(body.threadId) }),
+      });
+      const data = await response.json();
+      if (data?.error) return reply(200, { ok: false, error: data.error.message || JSON.stringify(data.error) });
+      const [chat = null] = chatsWithWriters({ chats: [{ id: data.id || body.chatId, users: data.users, thread: data.thread }] });
+      return reply(200, { ok: true, chat });
     }
 
     if (body.step === "write") {
