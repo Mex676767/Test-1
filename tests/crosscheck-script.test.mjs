@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planEntries, windows, summarize, run, createClient } from '../scripts/crosscheck-unrecorded.mjs';
+import { planEntries, windows, summarize, run, createClient, pool, stepWithRetry, histogram } from '../scripts/crosscheck-unrecorded.mjs';
 
 const chat = (threadId, writers, extra = {}) => ({ chatId: 'C-' + threadId, threadId, date: 5, customer: 'Zimito', writers, ...extra });
 
@@ -8,7 +8,7 @@ test('a chat is judged per writer: recorded chats and rows already written are s
   const chats = [chat('T1', ['a@x', 'b@x']), chat('T2', ['a@x']), chat('T3', ['a@x', 'A@X'])];
   const entries = planEntries(chats, new Set(['T2']), new Set(['T1|b@x']), 'lc1');
   assert.deepEqual(entries.map((e) => `${e.threadId}|${e.email}`), ['T1|a@x', 'T3|a@x']);
-  assert.deepEqual(entries[0], { threadId: 'T1', chatId: 'C-T1', account: 'lc1', email: 'a@x', date: 5, customer: 'Zimito' });
+  assert.deepEqual(entries[0], { threadId: 'T1', chatId: 'C-T1', account: 'lc1', email: 'a@x', date: 5, customer: 'Zimito', agentMessages: null, customerMessages: null });
 });
 
 test('the period is cut into equal windows and the last one ends exactly at the end', () => {
@@ -47,7 +47,7 @@ const log = (line) => quiet.push(line);
 
 test('a dry run reads everything, writes nothing and says what it would write', async () => {
   const site = fakeSite({ recorded: ['T1'], archives: { lc1: [[chat('T1', ['a@x']), chat('T2', ['a@x', 'b@x'])]] } });
-  const out = await run({ step: site.step, ...period, write: false, log, accounts: ['lc1'] });
+  const out = await run({ step: site.step, ...period, onlyKnown: false, write: false, log, accounts: ['lc1'] });
   assert.deepEqual(out.entries.map((e) => `${e.threadId}|${e.email}`), ['T2|a@x', 'T2|b@x']);
   assert.equal(out.created, 0);
   assert.ok(!site.calls.includes('write') && !site.calls.includes('existing'));
@@ -58,7 +58,7 @@ test('a dry run reads everything, writes nothing and says what it would write', 
 test('--write skips what is already in the table and writes the rest in chunks of 25', async () => {
   const many = Array.from({ length: 30 }, (_, i) => chat('N' + i, ['a@x']));
   const site = fakeSite({ existing: ['N0|a@x'], archives: { lc1: [many] } });
-  const out = await run({ step: site.step, ...period, write: true, log, accounts: ['lc1'] });
+  const out = await run({ step: site.step, ...period, onlyKnown: false, write: true, log, accounts: ['lc1'] });
   assert.equal(out.entries.length, 29);
   assert.equal(out.created, 29);
   assert.equal(site.calls.filter((c) => c === 'write').length, 2, '25 + 4');
@@ -66,7 +66,7 @@ test('--write skips what is already in the table and writes the rest in chunks o
 
 test('every window and page of the archive is read, the same chat in two windows counts once, and an unconfigured account is skipped', async () => {
   const site = fakeSite({ archives: { lc1: [[chat('A', ['a@x'])], [chat('A', ['a@x']), chat('B', ['a@x'])]] }, notConfigured: ['lc2'] });
-  const out = await run({ step: site.step, ...period, write: false, log });
+  const out = await run({ step: site.step, ...period, onlyKnown: false, write: false, log });
   assert.deepEqual(out.entries.map((e) => e.threadId).sort(), ['A', 'B']);
   assert.equal(site.calls.filter((c) => c === 'archives:lc1').length, 4, '2 windows x 2 pages');
   assert.ok(site.calls.includes('archives:lc2'));
@@ -93,7 +93,7 @@ test('chats that came without their messages are fetched one by one and judged; 
     aloneReply: { P1: { ok: true, chat: chat('P1', ['b@x']) }, P2: { ok: true, chat: null } },
   });
   const lines = [];
-  const out = await run({ step: site.step, ...period, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
+  const out = await run({ step: site.step, ...period, onlyKnown: false, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
   assert.deepEqual(out.entries.map((e) => e.threadId).sort(), ['A', 'P1'], 'P2 had no agent message, P3 could not be judged');
   assert.equal(site.calls.filter((c) => c === 'chat:lc1').length, 3);
   const summary = lines.find((l) => l.startsWith('lc1:'));
@@ -113,7 +113,7 @@ test('a writer known as an agent is judged on their OWN record; an unknown write
 test('the run reads the agent list, uses it, and says how many agents it knows', async () => {
   const site = fakeSite({ recorded: ['T1'], archives: { lc1: [[chat('T1', ['a@x'])]] }, knownAgents: [{ email: 'A@X', name: '96 Alice' }] });
   const lines = [];
-  const out = await run({ step: site.step, ...period, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
+  const out = await run({ step: site.step, ...period, onlyKnown: false, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
   assert.deepEqual(out.entries.map((e) => e.email), ['a@x'], 'T1 has a row, but not one of Alice');
   assert.ok(site.calls.includes('agents'));
   assert.ok(lines.some((l) => /1 agents have their LiveChat email filled in/.test(l)));
@@ -122,6 +122,106 @@ test('the run reads the agent list, uses it, and says how many agents it knows',
 test('the run says how many outreach-only chats (e.g. Blast) were left out', async () => {
   const site = fakeSite({ archives: { lc1: [[chat('A', ['a@x'])]] }, outreachByAccount: { lc1: 7 } });
   const lines = [];
-  await run({ step: site.step, ...period, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
+  await run({ step: site.step, ...period, onlyKnown: false, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
   assert.match(lines.find((l) => l.startsWith('lc1:')), /7 outreach-only chats \(the customer never wrote, e\.g\. Blast\) were left out/);
+});
+
+test('pool runs the work a few at a time, never more than the limit, and rejects on the first failure', async () => {
+  let running = 0;
+  let peak = 0;
+  const seen = [];
+  await pool([1, 2, 3, 4, 5, 6, 7], 3, async (n) => { running += 1; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 5)); seen.push(n); running -= 1; });
+  assert.equal(peak, 3);
+  assert.deepEqual(seen.sort(), [1, 2, 3, 4, 5, 6, 7]);
+  await assert.rejects(() => pool([1, 2], 2, async (n) => { if (n === 2) throw new Error('boom'); }), /boom/);
+});
+
+test('a temporary LiveChat refusal is retried; a real error is not', async () => {
+  const replies = [{ ok: false, error: 'Too many requests' }, { ok: false, error: 'request timed out' }, { ok: true, chats: [] }];
+  let calls = 0;
+  assert.equal((await stepWithRetry(async () => { calls += 1; return replies.shift(); }, {}, 4, 0)).ok, true);
+  assert.equal(calls, 3);
+  let real = 0;
+  const out = await stepWithRetry(async () => { real += 1; return { ok: false, error: 'Chat not found' }; }, {}, 4, 0);
+  assert.equal(out.ok, false);
+  assert.equal(real, 1, 'no retry for an error that will not go away');
+  let stuck = 0;
+  await stepWithRetry(async () => { stuck += 1; return { ok: false, error: 'Too many requests' }; }, {}, 3, 0);
+  assert.equal(stuck, 3, 'gives up after the allowed tries');
+});
+
+test('both accounts are read at the same time, with a progress line per finished window', async () => {
+  const startedOrder = [];
+  let open = 0;
+  let peak = 0;
+  const site = fakeSite({ archives: { lc1: [[chat('A', ['a@x'])]], lc2: [[chat('B', ['b@x'])]] } });
+  const slow = async (body) => {
+    if (body.step === 'archives') {
+      startedOrder.push(body.account);
+      open += 1; peak = Math.max(peak, open);
+      await new Promise((r) => setTimeout(r, 10));
+      open -= 1;
+    }
+    return site.step(body);
+  };
+  const lines = [];
+  const out = await run({ step: slow, ...period, onlyKnown: false, write: false, log: (l) => lines.push(l) });
+  assert.ok(peak >= 2, 'more than one archive request was in flight at once');
+  assert.deepEqual(out.entries.map((e) => e.account), ['lc1', 'lc2'], 'results stay in account order');
+  assert.ok(lines.some((l) => /^ {2}\[lc1\] window 2\/2 done, 1 chats so far/.test(l)));
+  assert.ok(lines.some((l) => /^ {2}\[lc2\] window 2\/2 done/.test(l)));
+  assert.ok(lines.some((l) => l.startsWith('lc1:')) && lines.some((l) => l.startsWith('lc2:')));
+});
+
+test('only people who use the widget are listed: customer service, bots and agents not yet in the table are left out and counted', () => {
+  const chats = [chat('T1', ['a@x', 'cs@x']), chat('T2', ['hexid', 'cs@x'])];
+  const names = { pairs: new Set(), byEmail: new Map([['a@x', '96 Alice']]) };
+  const stats = {};
+  const entries = planEntries(chats, new Set(), new Set(), 'lc1', names, { stats });
+  assert.deepEqual(entries.map((e) => `${e.threadId}|${e.email}`), ['T1|a@x']);
+  assert.equal(stats.unknownWriters, 3);
+  const everyone = planEntries(chats, new Set(), new Set(), 'lc1', names, { onlyKnown: false });
+  assert.equal(everyone.length, 4, 'with --all-writers nobody is left out');
+});
+
+test('the run says how many chat/writer pairs were left out, and refuses to run with nobody known (instead of listing everyone)', async () => {
+  const withAgent = fakeSite({ archives: { lc1: [[chat('A', ['a@x', 'cs@x'])]] }, knownAgents: [{ email: 'a@x', name: '96 Alice' }] });
+  const lines = [];
+  const out = await run({ step: withAgent.step, ...period, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
+  assert.deepEqual(out.entries.map((e) => e.email), ['a@x']);
+  assert.match(lines.find((l) => l.startsWith('lc1:')), /1 chat\/writer pairs left out: the writer is not in the Agent Logins table/);
+  const nobody = fakeSite({ archives: { lc1: [[chat('A', ['a@x'])]] } });
+  await assert.rejects(() => run({ step: nobody.step, ...period, write: false, log: () => {}, accounts: ['lc1'] }), /No agent has their LiveChat email/);
+  assert.equal((await run({ step: nobody.step, ...period, write: false, onlyKnown: false, log: () => {}, accounts: ['lc1'] })).entries.length, 1);
+});
+
+const counted = (threadId, writer, agent, customer) => chat(threadId, [writer], { counts: { [writer]: agent }, customerMessages: customer });
+
+test('chats with fewer messages than the minimum are left out and counted; chats without counts are never filtered', () => {
+  const chats = [counted('T1', 'a@x', 1, 1), counted('T2', 'a@x', 3, 1), counted('T3', 'a@x', 4, 0 + 2), chat('T4', ['a@x'])];
+  const none = planEntries(chats, new Set(), new Set(), 'lc1', null);
+  assert.equal(none.length, 4, 'a minimum of 1 filters nothing');
+  const stats = {};
+  const some = planEntries(chats, new Set(), new Set(), 'lc1', null, { minAgentMessages: 3, minCustomerMessages: 2, stats });
+  assert.deepEqual(some.map((e) => e.threadId), ['T3', 'T4']);
+  assert.equal(stats.belowMinimum, 2);
+  assert.deepEqual([some[0].agentMessages, some[0].customerMessages], [4, 2]);
+});
+
+test('the message histogram buckets entries and skips those without counts', () => {
+  const entries = [1, 1, 2, 3, 5, 6, 40].map((n) => ({ agentMessages: n })).concat([{ agentMessages: null }]);
+  assert.equal(histogram(entries, 'agentMessages'), '1: 2, 2: 1, 3-5: 2, 6+: 2');
+});
+
+test('--show lists the newest chats of one agent with a link, the date and both message counts; the run prints the histograms', async () => {
+  const mk = (threadId, date, agent) => chat(threadId, ['a@x'], { date, counts: { 'a@x': agent }, customerMessages: 2, customer: 'Zimito ' + threadId });
+  const site = fakeSite({ archives: { lc1: [[mk('OLD', Date.UTC(2026, 9, 2), 1), mk('NEW', Date.UTC(2026, 9, 5, 10, 30), 4)]] }, knownAgents: [{ email: 'a@x', name: '96 Alice' }] });
+  const lines = [];
+  await run({ step: site.step, ...period, write: false, show: 'A@X', log: (l) => lines.push(l), accounts: ['lc1'] });
+  const text = lines.join('\n');
+  assert.match(text, /Messages the agent wrote per chat\s+-> 1: 1, 2: 0, 3-5: 1, 6\+: 0/);
+  assert.match(text, /Messages the customer wrote per chat -> 1: 0, 2: 2/);
+  const shown = lines.filter((l) => l.includes('https://my.livechatinc.com/archives/'));
+  assert.equal(shown.length, 2);
+  assert.match(shown[0], /archives\/NEW\s+2026-10-05 10:30\s+agent 4 \/ customer 2\s+Zimito NEW/, 'newest first');
 });

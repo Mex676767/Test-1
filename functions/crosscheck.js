@@ -37,9 +37,18 @@ export function larkTime(ms) {
 
 // A message, file or rich message the customer sent to the agents (not a note between agents).
 const CONVERSATION = new Set(["message", "file", "rich_message"]);
-function customerSpoke(chat) {
+// How many customer-facing messages each non-customer author and the customer wrote in the thread.
+function messageCounts(chat) {
   const customers = new Set((chat.users || []).filter((user) => user.type === "customer").map((user) => clean(user.id).toLowerCase()));
-  return (chat.thread?.events || []).some((event) => CONVERSATION.has(event.type) && event.visibility !== "agents" && customers.has(clean(event.author_id).toLowerCase()));
+  const perAuthor = {};
+  let customer = 0;
+  for (const event of chat.thread?.events || []) {
+    if (!CONVERSATION.has(event.type) || event.visibility === "agents") continue;
+    const author = clean(event.author_id).toLowerCase();
+    if (customers.has(author)) customer += 1;
+    else perAuthor[author] = (perAuthor[author] || 0) + 1;
+  }
+  return { perAuthor, customer };
 }
 
 // The ended chats of one list_archives page that an agent wrote in. Active chats are skipped (not over yet), and so is a
@@ -55,10 +64,14 @@ export function chatsWithWriters(archive, stats = {}) {
     // A chatbot or integration can also author messages; only people who joined the chat as agents count.
     const writers = authors.filter((author) => !agentIds.size || agentIds.has(author));
     if (!writers.length) continue;
-    if (!customerSpoke(chat)) { stats.outreach = (stats.outreach || 0) + 1; continue; }
+    const { perAuthor, customer: customerMessages } = messageCounts(chat);
+    if (!customerMessages) { stats.outreach = (stats.outreach || 0) + 1; continue; }
     const customer = (chat.users || []).find((user) => user.type === "customer");
     const when = Date.parse(thread.created_at || (thread.events || [])[0]?.created_at || "") || 0;
-    out.push({ chatId: clean(chat.id), threadId: clean(thread.id), date: when, customer: clean(customer?.name), writers });
+    out.push({
+      chatId: clean(chat.id), threadId: clean(thread.id), date: when, customer: clean(customer?.name), writers,
+      counts: Object.fromEntries(writers.map((writer) => [writer, perAuthor[writer] || 0])), customerMessages,
+    });
   }
   return out;
 }

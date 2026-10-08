@@ -206,3 +206,10 @@ test("archives and chat report how many outreach-only threads (the customer neve
   assert.deepEqual(out.chats.map((c) => c.threadId), ["TR"]);
   assert.equal(out.outreach, 1);
 });
+
+test("each chat comes with how many messages each writer and the customer wrote (notes between agents do not count)", () => {
+  const archive = { chats: [archived("TC", [msg("cust-1"), msg("alice@x.com"), msg("alice@x.com"), msg("bob@x.com"), msg("cust-1"), msg("alice@x.com", { visibility: "agents" })])] };
+  const [chat] = chatsWithWriters(archive);
+  assert.deepEqual(chat.counts, { "alice@x.com": 2, "bob@x.com": 1 });
+  assert.equal(chat.customerMessages, 2);
+});

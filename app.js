@@ -6124,6 +6124,7 @@ function formatAge(ms) {
 // Read once per widget start, after the LiveChat login, with one small request; the list lives in the Lark table
 // "Unrecorded Chats" and is matched to the agent by their LiveChat email, so there is nothing to poll.
 let unrecordedChats = [];
+const UNRECORDED_SHOWN_MAX = 25;
 const unrecordedResolving = new Set(); // not persisted
 async function postUnrecorded(body) {
   const token = liveChatAgentTokens()[currentLiveChatAccount];
@@ -6153,6 +6154,21 @@ async function resolveUnrecorded(threadId, status) {
   unrecordedResolving.add(threadId);
   try { await postUnrecorded({ action: "resolve", threadId, status }); } catch (_) { /* the row stays Open and shows again next start */ }
 }
+// Writes off the whole backlog in one go: gone from the list at once, then Lark is told in small chunks until none are left.
+async function ignoreAllUnrecorded() {
+  const count = unrecordedChats.length;
+  if (!count) return;
+  if (!confirm(`Ignore all ${count} of these chats?\n\nThey will not be shown again. Do this only after you have looked at the newest ones and the rest were not cases to record.`)) return;
+  unrecordedChats = [];
+  renderNeedsAttentionPanel();
+  try {
+    for (let round = 0; round < 40; round += 1) {
+      const data = await postUnrecorded({ action: "resolveAll" });
+      if (!data || !data.ok) { logDiagnostic(`Couldn't write off the whole list: ${data?.error || "no answer"} — the rest shows again next start.`, "warn"); return; }
+      if (!data.remaining) { logDiagnostic(`Ignored ${count} unrecorded chats.`, "success"); return; }
+    }
+  } catch (_) { /* the rows stay Open and show again next start */ }
+}
 // What is still left to show: not completed in this browser since, and a completed one is told to Lark once.
 function getUnrecordedChats() {
   if (!unrecordedChats.length) return [];
@@ -6162,6 +6178,8 @@ function getUnrecordedChats() {
   return unrecordedChats.filter((chat) => {
     const s = local(chat.threadId);
     if (s && s.logged && (s.inquiry || []).length && s.status) { resolveUnrecorded(chat.threadId, "Done"); return false; }
+    // Ticked "Unknown player" in this browser: nothing is meant to be recorded for it, so it is written off.
+    if (s && s.isUnknown) { resolveUnrecorded(chat.threadId, "Ignored"); return false; }
     return !(s && s.attentionIgnored);
   });
 }
@@ -6299,6 +6317,8 @@ function renderNeedsAttentionPanel() {
   const incomplete = getIncompleteChats();
   const stale = getStaleLarkRecords();
   const unrecorded = getUnrecordedChats();
+  // A long backlog is not poured into a narrow sidebar: the newest are listed, the rest counted.
+  const unrecordedShown = [...unrecorded].sort((a, b) => b.date - a.date).slice(0, UNRECORDED_SHOWN_MAX);
   const previewCount = previewMode && showPreviewClosedChat ? 1 : 0;
   const total = incomplete.length + stale.length + unrecorded.length + previewCount;
   if (!total) {
@@ -6334,7 +6354,7 @@ function renderNeedsAttentionPanel() {
         <button type="button" class="na-item-ignore" data-action="removeStale" data-record="${escapeHtml(r.recordId)}" title="Delete this empty row from Lark">Remove</button>
       </div>
     </div>
-  `).join("") + unrecorded.map((c) => `
+  `).join("") + unrecordedShown.map((c) => `
     <div class="na-item">
       <div class="na-item-username">${escapeHtml(c.customer || "Customer")}${c.date ? ` · ${escapeHtml(new Date(c.date).toLocaleDateString())}` : ""}</div>
       <div class="na-item-reason">You wrote in this chat but it was never recorded.</div>
@@ -6343,12 +6363,23 @@ function renderNeedsAttentionPanel() {
         <button type="button" class="na-item-ignore" data-action="ignoreUnrecorded" data-thread="${escapeHtml(c.threadId)}" title="Stop showing this chat here (for example it was not a player case)">Ignore</button>
       </div>
     </div>
-  `).join("");
+  `).join("") + (unrecorded.length > unrecordedShown.length ? `
+    <div class="na-item">
+      <div class="na-item-reason">…and ${unrecorded.length - unrecordedShown.length} older chats you wrote in that were never recorded. They appear here as you clear these.</div>
+    </div>
+  ` : "") + (unrecorded.length > 1 ? `
+    <div class="na-item">
+      <div class="na-item-actions">
+        <button type="button" class="na-item-ignore" data-action="ignoreAllUnrecorded" title="Clear all ${unrecorded.length} of these chats at once">Ignore all ${unrecorded.length}</button>
+      </div>
+    </div>
+  ` : "");
 }
 
 document.getElementById("needsAttentionList").addEventListener("click", (e) => {
   const staleBtn = e.target.closest("button[data-action='removeStale']");
   if (staleBtn) { removeStaleRecord(staleBtn.dataset.record, staleBtn); return; }
+  if (e.target.closest("button[data-action='ignoreAllUnrecorded']")) { ignoreAllUnrecorded(); return; }
   const unrecordedBtn = e.target.closest("button[data-action='ignoreUnrecorded']");
   if (unrecordedBtn) { resolveUnrecorded(unrecordedBtn.dataset.thread, "Ignored"); return; }
   const btn = e.target.closest("button[data-action='ignoreAttention']");
