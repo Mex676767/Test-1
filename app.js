@@ -1228,6 +1228,23 @@ function liveChatAgentTokens() {
   return tokens;
 }
 
+// One-time re-login. A LiveChat login made before the accounts scopes were added to the two LiveChat apps cannot read the
+// agent's email, so every login stored in this tab is dropped once and the agent signs in again (their agent name comes
+// straight back). To force another round later, change the epoch.
+const LIVECHAT_TOKEN_EPOCH = "2026-10-08-accounts-scopes";
+const LIVECHAT_TOKEN_EPOCH_KEY = "ca-livechat-token-epoch";
+function dropOldLiveChatTokens() {
+  try {
+    if (sessionStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH) return;
+    for (const accountKey of ["lc1", "lc2"]) {
+      sessionStorage.removeItem(`ca-livechat-agent-token:${accountKey}`);
+      sessionStorage.removeItem(`ca-livechat-agent-token-expiry:${accountKey}`);
+    }
+    sessionStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH);
+  } catch (_) { /* no sessionStorage: nothing is kept anyway */ }
+}
+dropOldLiveChatTokens();
+
 async function resolveBrandFromGroupId(chatId, groupID) {
   if (groupID) groupIdFor.set(chatId, groupID);
   if (!chatId) return;
