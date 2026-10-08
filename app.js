@@ -3246,7 +3246,7 @@ async function refreshTicketConnection() {
   try {
     const data = await postTicketConnect({ action: "status" });
     ticketConnection = !data.ok ? { status: "disconnected", error: data.error || "", busy: false }
-      : data.available === false ? { status: "unavailable", error: "", busy: false }
+      : data.available === false ? { status: "unavailable", error: data.error || "", busy: false }
         : { status: data.connected ? "connected" : "disconnected", error: "", busy: false };
   } catch (_) {
     ticketConnection = { status: "disconnected", error: "Could not check your ticket account — try again.", busy: false };
@@ -3288,7 +3288,7 @@ function renderTicketConnectionBar(chatId) {
     checking: ["muted", "Checking your ticket account…"],
     connected: ["ok", "Your ticket account is connected — tickets and comments go out under your own name."],
     disconnected: ["warn", error || "Not connected. Connect your ticket account so tickets and comments are under your own name and replies notify you."],
-    unavailable: ["muted", "Own-account sign-in is not set up on this site yet, so the shared ticket account is used."],
+    unavailable: ["muted", error || "Own-account sign-in is not set up on this site yet, so the shared ticket account is used."],
     nologin: ["muted", "Open the widget inside LiveChat to connect your ticket account."],
   }[status] || ["muted", ""];
   const button = status === "connected"
@@ -4298,7 +4298,7 @@ chatListEl.addEventListener("click", async (e) => {
     try {
       const ticketToken = await tokenPromise;
       const data = await postTicketConnect({ action: "save", ticketToken });
-      if (!data.ok) throw new Error(data.error || "Could not save the connection.");
+      if (!data.ok || !data.connected) throw new Error(data.error || "Could not save the connection.");
       ticketConnection = { status: "connected", error: "", busy: false };
       setStatus("Ticket account connected.", "success");
     } catch (err) {

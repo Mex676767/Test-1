@@ -57,20 +57,33 @@ the agent is signed in there, that page sends the widget
 origin only; the widget accepts it only from `https://tickets.96ghq.com`. The
 server checks the token with the ticket system, encrypts it, and keeps it
 against the agent's verified LiveChat login (account + login id), in a
-Cloudflare KV namespace. It is not stored in Lark or next to any team's data,
-works for retention and customer-service agents alike, and is never sent back
-to the browser.
+Cloudflare KV namespace. There is one namespace per team, because retention
+and customer service are different teams. The team comes from the agent's
+LiveChat groups, read on the server (the same check as
+`/livechat-agent-department`: `Priority 96` / `Priority TC` is retention,
+everyone else is customer service), never from anything the browser says.
+Nothing is stored in Lark or next to any team's data, and the token is never
+sent back to the browser.
 
 Setup on the Pages project (Settings → Bindings / Variables):
 
-- KV namespace binding named `TICKET_CONNECTIONS` (create a namespace, then bind it).
+- KV namespace binding `TICKET_CONNECTIONS_RTN` (retention) and another named
+  `TICKET_CONNECTIONS_CS` (customer service). Create two namespaces and bind
+  each one.
 - Secret `TICKET_TOKEN_SECRET`: a long random string. Changing it makes every
   stored token unreadable, and agents are asked to connect again.
+- Both LiveChat OAuth apps need the `agents--my:ro` scope (Read my agent
+  profile), and agents need a fresh LiveChat login after it is added (bump
+  `LIVECHAT_TOKEN_EPOCH` in `app.js` to make everyone sign in again).
 
-Until both exist, the widget says own-account sign-in is not set up and keeps
-using the shared account. Once the Tickets tab is shown to real agents (it is
-admin preview only today) they must connect before they can raise or comment;
-only the admin preview may use the shared account.
+It fails closed. Until both bindings and the secret exist the widget says
+own-account sign-in is not set up and keeps using the shared account. If an
+agent's team cannot be read (the scope is missing, or LiveChat is down) no
+token is stored or read for them: a missing scope shows "not available" and
+the shared account stays in use, and a LiveChat outage makes the ticket call
+fail with a retry message rather than guess a team. Once the Tickets tab is
+shown to real agents (it is admin preview only today) they must connect before
+they can raise or comment; only the admin preview may use the shared account.
 
-Locally: `wrangler pages dev . --kv TICKET_CONNECTIONS` and set
-`TICKET_TOKEN_SECRET` in `.dev.vars`.
+Locally: `wrangler pages dev . --kv TICKET_CONNECTIONS_RTN --kv TICKET_CONNECTIONS_CS`
+and set `TICKET_TOKEN_SECRET` in `.dev.vars`.

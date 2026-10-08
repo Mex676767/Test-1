@@ -16,11 +16,21 @@ function fakeKv() {
   const map = new Map();
   return { map, get: async (key) => map.get(key) ?? null, put: async (key, value) => { map.set(key, value); }, delete: async (key) => { map.delete(key); } };
 }
-const makeEnv = (kv = fakeKv()) => ({ TICKETS_API_KEY: SHARED, TICKET_TOKEN_SECRET: SECRET, TICKET_CONNECTIONS: kv });
+// Two stores, one per team: retention (rtn) and customer service (cs).
+const makeEnv = (rtn = fakeKv(), cs = fakeKv()) => ({ TICKETS_API_KEY: SHARED, TICKET_TOKEN_SECRET: SECRET, TICKET_CONNECTIONS_RTN: rtn, TICKET_CONNECTIONS_CS: cs });
 
 // A LiveChat token "a1" is the login "login-a1"; anything starting with "bad" is expired.
 const realIdentify = deps.identify;
 deps.identify = async (_env, _account, token) => (token.startsWith("bad") ? { ok: false, loginExpired: true, error: "LiveChat login expired or invalid — connect LiveChat again." } : { ok: true, login: `login-${token}` });
+
+// The team comes from LiveChat's groups: a token starting "cs" is customer service, "noscope" lacks LiveChat's permission,
+// "flaky" is a LiveChat outage, anything else is retention.
+const realDepartment = deps.department;
+deps.department = async (_env, _account, token) => {
+  if (token.startsWith("noscope")) throw new Error("Missing scope: agents--my:ro");
+  if (token.startsWith("flaky")) throw new Error("LiveChat request failed (500)");
+  return { department: token.startsWith("cs") ? "cs" : "rtn", groups: [] };
+};
 
 const headersFor = (token) => ({ "x-livechat-account": "lc1", "x-livechat-agent-token": token });
 
@@ -217,4 +227,64 @@ test("status, list and create also run as the connected agent", async () => {
   } finally { service.restore(); }
 });
 
-test.after(() => { deps.identify = realIdentify; });
+test("each team's tokens live in that team's own store and never touch the other", async () => {
+  const rtn = fakeKv();
+  const cs = fakeKv();
+  const env = makeEnv(rtn, cs);
+  const service = fakeTicketService();
+  try {
+    await connect(env, "r1", { action: "save", ticketToken: PERSONAL });
+    await connect(env, "cs1", { action: "save", ticketToken: PERSONAL });
+    assert.deepEqual([...rtn.map.keys()], ["ticket-token:lc1:login-r1"]);
+    assert.deepEqual([...cs.map.keys()], ["ticket-token:lc1:login-cs1"]);
+
+    // a store that is only ever read for its own team: break the other one and everything still works
+    const readsRtn = [];
+    const spyEnv = makeEnv({ ...rtn, get: async (key) => { readsRtn.push(key); return rtn.get(key); } }, { ...cs, get: async () => { throw new Error("the cs store must not be read for a retention agent"); } });
+    const result = await comment(spyEnv, "r1", { body: "hi" });
+    assert.equal(JSON.parse(result.body).postedAs, "own");
+    assert.deepEqual(readsRtn, ["ticket-token:lc1:login-r1"]);
+
+    // the cs agent's login id is not found in the rtn store, so a retention-shaped lookup finds nothing for them
+    assert.equal(rtn.map.has("ticket-token:lc1:login-cs1"), false);
+  } finally { service.restore(); }
+});
+
+test("without LiveChat's agent permission nobody can connect: status says unavailable, nothing is stored, the shared key keeps working", async () => {
+  const rtn = fakeKv();
+  const cs = fakeKv();
+  const env = makeEnv(rtn, cs);
+  const service = fakeTicketService();
+  try {
+    const status = JSON.parse((await connect(env, "noscope1", { action: "status" })).body);
+    assert.equal(status.available, false);
+    assert.match(status.error, /agents--my:ro/);
+    const saved = JSON.parse((await connect(env, "noscope1", { action: "save", ticketToken: PERSONAL })).body);
+    assert.equal(saved.connected, false);
+    assert.equal(rtn.map.size + cs.map.size, 0);
+    const result = await comment(env, "noscope1", { body: "hi", agent: "Aisyah" });
+    assert.equal(JSON.parse(result.body).postedAs, "shared");
+  } finally { service.restore(); }
+});
+
+test("when LiveChat cannot say which team an agent is on, nothing is guessed and the ticket call is not run as the shared account", async () => {
+  const rtn = fakeKv();
+  const cs = fakeKv();
+  const env = makeEnv(rtn, cs);
+  const service = fakeTicketService();
+  try {
+    const result = await comment(env, "flaky1", { body: "hi" });
+    assert.equal(result.statusCode, 503);
+    assert.equal(service.calls.length, 0);
+    const saved = JSON.parse((await connect(env, "flaky1", { action: "save", ticketToken: PERSONAL })).body);
+    assert.equal(saved.ok, false);
+    assert.equal(rtn.map.size + cs.map.size, 0);
+  } finally { service.restore(); }
+});
+
+test("with only one of the two stores bound the feature stays off", async () => {
+  const env = { TICKETS_API_KEY: SHARED, TICKET_TOKEN_SECRET: SECRET, TICKET_CONNECTIONS_RTN: fakeKv() };
+  assert.equal(JSON.parse((await connect(env, "r9", { action: "status" })).body).available, false);
+});
+
+test.after(() => { deps.identify = realIdentify; deps.department = realDepartment; });
