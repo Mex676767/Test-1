@@ -5605,6 +5605,7 @@ function handleRefreshClick() {
     return;
   }
   refreshDropdownOptions({ fresh: true });
+  fetchUnrecordedChats(); // the list is otherwise read only when the widget starts, so a list written since would not show
   if (liveWidget) {
     // Live mode — re-sync against the SDK on demand rather than just
     // re-rendering whatever we already had (which could be stale if a
@@ -6172,6 +6173,7 @@ async function fetchUnrecordedChats() {
     const data = await postUnrecorded({ action: "list" });
     if (data && data.ok && Array.isArray(data.chats)) {
       unrecordedChats = data.chats;
+      if (data.chats.length || data.notConfigured) logDiagnostic(data.notConfigured ? "Unrecorded-chats list: not set up on the server." : `Unrecorded-chats list: ${data.chats.length} from the crosscheck.`, "info");
       renderNeedsAttentionPanel();
     } else if (data && data.error) logDiagnostic(`Couldn't read your unrecorded-chats list: ${data.error}`, "warn");
   } catch (_) { /* non-fatal: the list simply stays as it was */ }
