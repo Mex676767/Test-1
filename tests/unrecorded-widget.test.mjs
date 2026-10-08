@@ -17,7 +17,7 @@ function widget({ flag = true, account = 'lc1', tokens = { lc1: 'tok' }, persist
     renderNeedsAttentionPanel: () => rendered.push(vm.runInContext('unrecordedChats.length', context)), logDiagnostic: (t, k) => logs.push([k, t]),
     fetch: async (url, options) => { posts.push({ url, body: JSON.parse(options.body) }); return { json: async () => replies.shift() || { ok: true } }; },
   });
-  vm.runInContext(['let unrecordedChats = [];', 'const unrecordedResolving = new Set();', fn('postUnrecorded'), fn('fetchUnrecordedChats'), fn('resolveUnrecorded'), fn('getUnrecordedChats')].join(NEWLINE), context);
+  vm.runInContext(['let unrecordedChats = [];', 'const unrecordedResolving = new Set();', fn('postUnrecorded'), fn('fetchUnrecordedChats'), fn('resolveUnrecorded'), fn('ignoreAllUnrecorded'), fn('getUnrecordedChats')].join(NEWLINE), context);
   return { posts, rendered, logs, list: () => vm.runInContext('unrecordedChats.map((c) => c.threadId).join(",")', context), shown: () => vm.runInContext('getUnrecordedChats().map((c) => c.threadId).join(",")', context), run: (code) => vm.runInContext(code, context) };
 }
 const chats = [{ threadId: 'T1', date: 1, customer: 'A' }, { threadId: 'T2', date: 2, customer: 'B' }];
@@ -96,4 +96,31 @@ test('only the newest 25 are listed, with a line saying how many older ones rema
   assert.match(panel, /unrecordedShown\.map\(/);
   assert.match(panel, /unrecorded\.length - unrecordedShown\.length\} older chats/);
   assert.match(panel, /incomplete\.length \+ stale\.length \+ unrecorded\.length \+ previewCount/);
+});
+
+test('Ignore all clears the list at once and tells Lark in rounds until none remain; asking is required; a failure is logged', async () => {
+  const w = widget({ replies: [{ ok: true, chats }, { ok: true, updated: 50, remaining: 50 }, { ok: true, updated: 50, remaining: 0 }] });
+  await w.run('fetchUnrecordedChats()');
+  w.run('var confirmAnswer = true; var confirm = () => confirmAnswer;');
+  await w.run('ignoreAllUnrecorded()');
+  assert.equal(w.list(), '');
+  assert.deepEqual(w.posts.filter((p) => p.body.action === 'resolveAll').length, 2);
+  assert.match(w.logs.at(-1)[1], /Ignored 2 unrecorded chats/);
+  const declined = widget({ replies: [{ ok: true, chats }] });
+  await declined.run('fetchUnrecordedChats()');
+  declined.run('var confirm = () => false;');
+  await declined.run('ignoreAllUnrecorded()');
+  assert.equal(declined.list(), 'T1,T2', 'nothing happens unless the agent confirms');
+  const failing = widget({ replies: [{ ok: true, chats }, { ok: false, error: 'boom' }] });
+  await failing.run('fetchUnrecordedChats()');
+  failing.run('var confirm = () => true;');
+  await failing.run('ignoreAllUnrecorded()');
+  assert.match(failing.logs.at(-1)[1], /Couldn't write off the whole list: boom/);
+});
+
+test('the panel offers Ignore all when there is more than one chat, and the click is wired', () => {
+  const panel = app.slice(app.indexOf('function renderNeedsAttentionPanel'), app.indexOf('document.getElementById("needsAttentionList").addEventListener'));
+  assert.match(panel, /unrecorded\.length > 1/);
+  assert.match(panel, /data-action="ignoreAllUnrecorded"/);
+  assert.match(app, /button\[data-action='ignoreAllUnrecorded'\]/);
 });

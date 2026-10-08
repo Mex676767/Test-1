@@ -10,7 +10,10 @@ import { UNREC } from "./_lib/unrecorded.js";
 //
 //   list     -> { ok, chats: [{ threadId, chatId, date, customer }] }   (rows still "Open", oldest first)
 //   resolve  -> marks one chat "Done" (recorded) or "Ignored" (the agent wrote it off)
+//   resolveAll -> marks up to 50 of the agent's Open chats "Ignored" and says how many are left ({ updated, remaining }), so the
+//                 widget clears a long backlog with a few small calls
 const THREAD_ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
+const RESOLVE_ALL_CHUNK = 50;
 const clean = (value) => String(value ?? "").trim();
 const reply = (statusCode, body) => ({ statusCode, body: JSON.stringify(body) });
 
@@ -27,6 +30,14 @@ export async function handler(event) {
     if (!email) return reply(200, { ok: false, error: `Could not read your LiveChat email (${who.emailLookup}).` });
 
     const mine = [{ field_name: UNREC.email, operator: "is", value: [email] }];
+    if (action === "resolveAll") {
+      const open = await searchRecords(TABLE_UNRECORDED, [...mine, { field_name: UNREC.status, operator: "is", value: ["Open"] }], undefined, { pageSize: 500 });
+      const chunk = open.slice(0, RESOLVE_ALL_CHUNK);
+      for (let i = 0; i < chunk.length; i += 5) {
+        await Promise.all(chunk.slice(i, i + 5).map((row) => updateRecord(TABLE_UNRECORDED, row.record_id, { [UNREC.status]: "Ignored" })));
+      }
+      return reply(200, { ok: true, updated: chunk.length, remaining: open.length - chunk.length });
+    }
     if (action === "resolve") {
       const thread = clean(threadId);
       const next = status === "Ignored" ? "Ignored" : "Done";

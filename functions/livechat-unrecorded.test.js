@@ -88,3 +88,16 @@ test("resolve rejects a thread id with odd characters before touching Lark", asy
   assert.equal(out.ok, false);
   assert.equal(w.log.searches.length, 0);
 });
+
+test("resolveAll: marks only this agent's Open chats Ignored, at most 50 per call, and says how many are left", async (t) => {
+  const many = Array.from({ length: 120 }, (_, i) => row("m" + i, "alice@x.com", "T-" + i, "Open", i));
+  const w = world({ rows: [...many, row("b1", "bob@x.com", "T-BOB", "Open"), row("d1", "alice@x.com", "T-DONE", "Done")], accounts: emailOk });
+  t.after(w.restore);
+  const first = await call({ ...base, action: "resolveAll" });
+  assert.deepEqual([first.updated, first.remaining], [50, 70]);
+  assert.equal(w.log.updates.length, 50);
+  assert.ok(w.log.updates.every((u) => u.fields.Status === "Ignored" && u.id.startsWith("m")), "only Alice's Open rows");
+  const few = world({ rows: [row("a1", "alice@x.com", "T-1", "Open"), row("a2", "alice@x.com", "T-2", "Open")], accounts: emailOk });
+  t.after(few.restore);
+  assert.deepEqual([(await call({ ...base, action: "resolveAll" })).updated, few.log.updates.length], [2, 2]);
+});
