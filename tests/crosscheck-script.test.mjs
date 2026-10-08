@@ -22,12 +22,13 @@ test('the summary counts rows per agent email, busiest first', () => {
 });
 
 // A fake of the site's /crosscheck steps.
-function fakeSite({ recorded = [], existing = [], archives = {}, notConfigured = [], pendingByAccount = {}, aloneReply = {} }) {
+function fakeSite({ recorded = [], existing = [], archives = {}, notConfigured = [], pendingByAccount = {}, aloneReply = {}, knownAgents = [] }) {
   const calls = [];
   const step = async (body) => {
     calls.push(body.step + (body.account ? ':' + body.account : ''));
     if (body.step === 'recorded') return body.pageToken ? { ok: true, threads: ['T9'], next: '', rows: 1 } : { ok: true, threads: recorded, next: 'p2', rows: 2 };
     if (body.step === 'existing') return { ok: true, keys: existing, next: '' };
+    if (body.step === 'agents') return { ok: true, agents: knownAgents };
     if (body.step === 'archives') {
       if (notConfigured.includes(body.account)) return { ok: false, error: `LiveChat account ${body.account} is not configured.` };
       const pages = archives[body.account] || [[]];
@@ -98,4 +99,22 @@ test('chats that came without their messages are fetched one by one and judged; 
   const summary = lines.find((l) => l.startsWith('lc1:'));
   assert.match(summary, /3 chats had to be fetched one by one/);
   assert.match(summary, /1 could NOT be judged/);
+});
+
+test('a writer known as an agent is judged on their OWN record; an unknown writer on "any row for the chat"', () => {
+  const chats = [chat('T1', ['a@x', 'b@x']), chat('T2', ['a@x', 'u@x'])];
+  const recorded = new Set(['T1', 'T2']);
+  const names = { pairs: new Set(['T1|96 alice', 'T2|96 bob']), byEmail: new Map([['a@x', '96 Alice'], ['b@x', '96 Bob']]) };
+  const entries = planEntries(chats, recorded, new Set(), 'lc1', names);
+  assert.deepEqual(entries.map((e) => `${e.threadId}|${e.email}`), ['T1|b@x', 'T2|a@x'],
+    'Bob did not record T1 and Alice did not record T2, although other rows exist; u@x is unknown so T2 counts as recorded for them');
+});
+
+test('the run reads the agent list, uses it, and says how many agents it knows', async () => {
+  const site = fakeSite({ recorded: ['T1'], archives: { lc1: [[chat('T1', ['a@x'])]] }, knownAgents: [{ email: 'A@X', name: '96 Alice' }] });
+  const lines = [];
+  const out = await run({ step: site.step, ...period, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
+  assert.deepEqual(out.entries.map((e) => e.email), ['a@x'], 'T1 has a row, but not one of Alice');
+  assert.ok(site.calls.includes('agents'));
+  assert.ok(lines.some((l) => /1 agents have their LiveChat email filled in/.test(l)));
 });

@@ -6,7 +6,7 @@ import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 
 const ENV = {
   LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base",
-  LARK_TABLE_CUSTOMER_APPROACHING: "ca-table", LARK_TABLE_UNRECORDED: "unrec-table", SCAN_KEY: "scan-secret",
+  LARK_TABLE_CUSTOMER_APPROACHING: "ca-table", LARK_TABLE_UNRECORDED: "unrec-table", LARK_TABLE_AGENT_LOGINS: "logins-table", SCAN_KEY: "scan-secret",
 };
 const customer = { id: "cust-1", type: "customer", name: "Abang Zimito" };
 const agents = [{ id: "alice@x.com", type: "agent" }, { id: "bob@x.com", type: "agent" }];
@@ -15,7 +15,7 @@ const archived = (threadId, events, { active = false, users = [customer, ...agen
   ({ id: "CHAT-" + threadId, users, thread: { id: threadId, active, created_at: "2026-10-08T00:55:00.000000Z", events } });
 
 // A tiny fake of Lark (CA table pages, the Unrecorded table, create) and LiveChat's list_archives.
-function world({ caPages = [[]], unrecItems = [], archivesReply = { chats: [] } } = {}) {
+function world({ caPages = [[]], unrecItems = [], loginItems = [], archivesReply = { chats: [] } } = {}) {
   const log = { created: [], archivesBodies: [], searches: [] };
   const original = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
@@ -27,6 +27,7 @@ function world({ caPages = [[]], unrecItems = [], archivesReply = { chats: [] } 
       log.searches.push({ table: "ca", body: JSON.parse(options.body) });
       return { json: async () => ({ code: 0, data: { items: caPages[index], has_more: index + 1 < caPages.length, page_token: String(index + 1) } }) };
     }
+    if (url.includes("/tables/logins-table/records/search")) return { json: async () => ({ code: 0, data: { items: loginItems, has_more: false } }) };
     if (url.includes("/tables/unrec-table/records/search")) return { json: async () => ({ code: 0, data: { items: unrecItems, has_more: false } }) };
     if (url.includes("/tables/unrec-table/records") && options.method === "POST") {
       const fields = JSON.parse(options.body).fields;
@@ -47,7 +48,7 @@ const call = async (body, { key = "scan-secret", env = ENV } = {}) => {
   const res = await handler({ body: JSON.stringify(body), env, headers: key === null ? {} : { "x-scan-key": key } });
   return { status: res.statusCode, ...JSON.parse(res.body) };
 };
-const caRow = (link, createdAt) => ({ record_id: "r" + createdAt, created_time: createdAt, fields: { link: link ? { link, text: "chat" } : undefined } });
+const caRow = (link, createdAt, agent) => ({ record_id: "r" + createdAt, created_time: createdAt, fields: { link: link ? { link, text: "chat" } : undefined, ...(agent ? { "Agent Name": agent } : {}) } });
 
 test("larkTime writes the microsecond format LiveChat asks for", () => {
   assert.equal(larkTime(Date.UTC(2026, 9, 7, 0, 0, 0)), "2026-10-07T00:00:00.000000+00:00");
@@ -170,4 +171,22 @@ test("the Unrecorded Chats table must be configured for every step except record
   const env = { ...ENV, LARK_TABLE_UNRECORDED: "" };
   assert.match((await call({ step: "existing" }, { env })).error, /LARK_TABLE_UNRECORDED/);
   assert.equal((await call({ step: "recorded", fromMs: 1 }, { env })).ok, true);
+});
+
+test("recorded: also gives 'thread|agent name' pairs (lower case), so a chat can be judged per agent", async (t) => {
+  const w = world({ caPages: [[caRow("https://my.livechatinc.com/chats/CHAT/T-A", 2000, "96 Mexha - VIP RTN"), caRow("https://my.livechatinc.com/chats/CHAT/T-B", 2100), caRow("https://my.livechatinc.com/chats/CHAT/T-OLD", 5, "Old Agent")]] });
+  t.after(w.restore);
+  const out = await call({ step: "recorded", fromMs: 1000 });
+  assert.deepEqual(out.pairs, ["T-A|96 mexha - vip rtn"]);
+  assert.deepEqual(out.threads.sort(), ["T-A", "T-B"], "a row without an agent still marks the chat recorded");
+});
+
+test("agents: which LiveChat email is which agent name, only for logins whose email is filled in", async (t) => {
+  const login = (email, name, account) => ({ record_id: "x" + name, fields: { "Livechat Email": email, "Agent Name": name, "LiveChat Account": account } });
+  const w = world({ loginItems: [login("Mexha@X.com", "96 Mexha", "lc1"), login("", "96 Teh", "lc1"), login("bob@x.com", "96 Bob", "lc2")] });
+  t.after(w.restore);
+  const out = await call({ step: "agents" });
+  assert.deepEqual(out.agents, [{ email: "mexha@x.com", name: "96 Mexha", account: "lc1" }, { email: "bob@x.com", name: "96 Bob", account: "lc2" }]);
+  const none = await call({ step: "agents" }, { env: { ...ENV, LARK_TABLE_AGENT_LOGINS: "" } });
+  assert.deepEqual(none.agents, []);
 });

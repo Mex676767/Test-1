@@ -1,6 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
-import { identifyAgent } from "./_lib/livechat-identity.js";
-import { listRecords, createRecord, deleteRecord, listFields, toDisplay, TABLE_AGENT_LOGINS, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
+import { identifyAgent, findAgentEmail } from "./_lib/livechat-identity.js";
+import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
+import { listRecords, createRecord, updateRecord, deleteRecord, listFields, toDisplay, TABLE_AGENT_LOGINS, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 
 // LiveChat login -> agent name. The first time an agent signs in with LiveChat they pick their agent name once; it is
 // stored in the Lark table "Livechat App Agent Logins" and every later sign-in with that LiveChat account gets the same
@@ -11,7 +12,9 @@ import { listRecords, createRecord, deleteRecord, listFields, toDisplay, TABLE_A
 //
 // Lark has no unique constraint, so a claim is: create the row, read the table again, and keep the earliest row for
 // that account + name. A later claimant deletes its own row and is told the name is taken.
-const F = { account: "LiveChat Account", login: "LiveChat Login", name: "Agent Name", lockedAt: "Locked At" };
+// "Livechat Email" (the spelling of the Lark column) is filled in automatically the first time a login is seen after it was
+// added: the one-time crosscheck uses it to tell which agent name a LiveChat email belongs to.
+const F = { account: "LiveChat Account", login: "LiveChat Login", email: "Livechat Email", name: "Agent Name", lockedAt: "Locked At" };
 const ACCOUNT_KEYS = ["lc1", "lc2"];
 
 function reply(statusCode, body) { return { statusCode, body: JSON.stringify(body) }; }
@@ -26,6 +29,7 @@ export function parseBindings(items) {
         recordId: item.record_id || item.id || "",
         account: clean(toDisplay(f[F.account])).toLowerCase(),
         login: clean(toDisplay(f[F.login])),
+        email: clean(toDisplay(f[F.email])).toLowerCase(),
         name: clean(toDisplay(f[F.name])),
         lockedAt: Number(f[F.lockedAt]) || 0,
       };
@@ -57,6 +61,14 @@ async function readBindings() {
   return parseBindings(await listRecords(TABLE_AGENT_LOGINS, 500, { force: true }));
 }
 
+// Best effort and never blocks a login: the email is only an extra for the crosscheck.
+async function emailFor(accountKey, login, agentToken) {
+  try {
+    const pat = LIVECHAT_ACCOUNTS.find((account) => account.key === accountKey)?.pat || "";
+    return clean((await findAgentEmail(login, agentToken, pat)).email).toLowerCase();
+  } catch (_) { return ""; }
+}
+
 async function readAgentNames() {
   const fields = await listFields(TABLE_CUSTOMER_APPROACHING, undefined, { force: true });
   const field = fields.find((item) => item.field_name === "Agent Name");
@@ -80,7 +92,14 @@ export async function handler(event) {
 
     let rows = await readBindings();
     const bound = bindingFor(rows, accountKey, login);
-    if (bound) return reply(200, { ok: true, bound: true, name: bound.name, login });
+    if (bound) {
+      // A login seen before the email column existed gets its email filled in once.
+      if (!bound.email) {
+        const email = await emailFor(accountKey, login, agentToken);
+        if (email) { try { await updateRecord(TABLE_AGENT_LOGINS, bound.recordId, { [F.email]: email }); } catch (_) { /* tried again at the next login */ } }
+      }
+      return reply(200, { ok: true, bound: true, name: bound.name, login });
+    }
 
     const allNames = await readAgentNames();
     const chosen = clean(name);
@@ -94,8 +113,9 @@ export async function handler(event) {
       return reply(200, { ok: false, taken: true, error: `${exact} is already taken on this LiveChat account.`, available: availableNames(allNames, rows, accountKey) });
     }
 
+    const email = await emailFor(accountKey, login, agentToken);
     const created = await createRecord(TABLE_AGENT_LOGINS, {
-      [F.account]: accountKey, [F.login]: login, [F.name]: exact, [F.lockedAt]: Date.now(),
+      [F.account]: accountKey, [F.login]: login, [F.name]: exact, [F.lockedAt]: Date.now(), ...(email ? { [F.email]: email } : {}),
     });
     const myRecordId = created?.record_id || created?.id || "";
 

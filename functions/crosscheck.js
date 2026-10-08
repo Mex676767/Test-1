@@ -1,6 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
-import { searchPage, createRecord, toDisplay, TABLE_CUSTOMER_APPROACHING, TABLE_UNRECORDED } from "./_lib/lark.js";
+import { searchPage, createRecord, toDisplay, TABLE_CUSTOMER_APPROACHING, TABLE_UNRECORDED, TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { CA, linkUrl, parseChatLink } from "./_lib/ca-row.js";
 import { agentWroteIn } from "./livechat-agent-wrote.js";
 import { UNREC } from "./_lib/unrecorded.js";
@@ -11,7 +11,9 @@ import { UNREC } from "./_lib/unrecorded.js";
 // caller that sends the key in the SCAN_KEY environment variable (header x-scan-key); with no key set it does not exist.
 //
 // Each call is one small step so it stays inside a Pages Function's limits and never hogs the shared Lark queue:
-//   recorded  one page of Customer Approaching -> the chat (thread) ids of rows created since `fromMs`
+//   recorded  one page of Customer Approaching -> the chat (thread) ids of rows created since `fromMs`, and "thread|agent name"
+//             pairs, so a chat can be judged per agent when the agent is known
+//   agents    the Agent Logins table -> which LiveChat email belongs to which agent name (only logins whose email is filled in)
 //   existing  one page of the Unrecorded Chats table -> "thread|email" keys already written (so a re-run adds no twins)
 //   archives  one page of LiveChat's archive for one account and time window -> ended chats with who wrote in them, plus the
 //             ended chats that came WITHOUT their messages (`pending`)
@@ -71,14 +73,34 @@ export async function handler(event) {
 
     if (body.step === "recorded") {
       const fromMs = Number(body.fromMs) || 0;
-      const page = await searchPage(TABLE_CUSTOMER_APPROACHING, [], { pageSize: 500, pageToken: clean(body.pageToken), automaticFields: true, fieldNames: [CA.link] });
+      const page = await searchPage(TABLE_CUSTOMER_APPROACHING, [], { pageSize: 500, pageToken: clean(body.pageToken), automaticFields: true, fieldNames: [CA.link, CA.agentName] });
       const threads = new Set();
+      const pairs = new Set();
       for (const item of page.items) {
         if (Number(item.created_time) < fromMs) continue;
         const threadId = parseChatLink(linkUrl(item.fields?.[CA.link])).threadId;
-        if (threadId) threads.add(threadId);
+        if (!threadId) continue;
+        threads.add(threadId);
+        const agent = clean(toDisplay(item.fields?.[CA.agentName])).toLowerCase();
+        if (agent) pairs.add(`${threadId}|${agent}`);
       }
-      return reply(200, { ok: true, threads: [...threads], next: page.next, rows: page.items.length });
+      return reply(200, { ok: true, threads: [...threads], pairs: [...pairs], next: page.next, rows: page.items.length });
+    }
+
+    if (body.step === "agents") {
+      if (!TABLE_AGENT_LOGINS) return reply(200, { ok: true, agents: [] });
+      const agents = [];
+      let pageToken = "";
+      do {
+        const page = await searchPage(TABLE_AGENT_LOGINS, [], { pageSize: 500, pageToken });
+        for (const item of page.items) {
+          const email = clean(toDisplay(item.fields?.["Livechat Email"])).toLowerCase();
+          const name = clean(toDisplay(item.fields?.["Agent Name"]));
+          if (email && name) agents.push({ email, name, account: clean(toDisplay(item.fields?.["LiveChat Account"])).toLowerCase() });
+        }
+        pageToken = page.next;
+      } while (pageToken);
+      return reply(200, { ok: true, agents });
     }
 
     if (!TABLE_UNRECORDED) return reply(200, { ok: false, error: "LARK_TABLE_UNRECORDED is not set." });

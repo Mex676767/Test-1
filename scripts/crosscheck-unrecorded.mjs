@@ -14,13 +14,18 @@ import { pathToFileURL } from "node:url";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // chats: [{ chatId, threadId, date, customer, writers: [email] }]; recorded: Set of thread ids; existing: Set of "thread|email".
-export function planEntries(chats, recorded, existing, account) {
+// names (optional): { pairs: Set of "thread|agent name" in lower case, byEmail: Map email -> agent name }. A writer whose email is
+// known as an agent is judged on THEIR OWN record (a chat another agent recorded still counts as unrecorded for them); a
+// writer who is not known falls back to "does any row carry this chat".
+export function planEntries(chats, recorded, existing, account, names = null) {
   const seen = new Set();
   const entries = [];
   for (const chat of chats) {
-    if (recorded.has(chat.threadId)) continue;
     for (const writer of chat.writers) {
       const email = String(writer).trim().toLowerCase();
+      const agent = names?.byEmail.get(email);
+      const isRecorded = agent ? names.pairs.has(`${chat.threadId}|${agent.toLowerCase()}`) : recorded.has(chat.threadId);
+      if (isRecorded) continue;
       const key = `${chat.threadId}|${email}`;
       if (!email || existing.has(key) || seen.has(key)) continue;
       seen.add(key);
@@ -61,16 +66,24 @@ export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retr
 
 export async function run({ step, fromMs, toMs, windowMs, write, log = console.log, accounts = ["lc1", "lc2"] }) {
   const recorded = new Set();
+  const pairs = new Set();
   let pageToken = "";
   let rows = 0;
   do {
     const data = await step({ step: "recorded", fromMs, pageToken });
     if (!data.ok) throw new Error(`recorded: ${data.error}`);
     data.threads.forEach((thread) => recorded.add(thread));
+    (data.pairs || []).forEach((pair) => pairs.add(pair));
     rows += data.rows;
     pageToken = data.next;
   } while (pageToken);
   log(`Customer Approaching: read ${rows} rows; ${recorded.size} chats since the start date have a record.`);
+
+  const agents = await step({ step: "agents" });
+  if (!agents.ok) throw new Error(`agents: ${agents.error}`);
+  const byEmail = new Map((agents.agents || []).map((agent) => [String(agent.email).toLowerCase(), agent.name]));
+  const names = { pairs, byEmail };
+  log(`Agent Logins: ${byEmail.size} agents have their LiveChat email filled in (they are judged on their own records; the rest on "any row for the chat").`);
 
   const existing = new Set();
   pageToken = "";
@@ -112,7 +125,7 @@ export async function run({ step, fromMs, toMs, windowMs, write, log = console.l
       if (!configured) break;
     }
     if (!configured) { log(`${account}: not configured, skipped.`); continue; }
-    const entries = planEntries([...chats.values()], recorded, existing, account);
+    const entries = planEntries([...chats.values()], recorded, existing, account, names);
     log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded.${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);
   }
