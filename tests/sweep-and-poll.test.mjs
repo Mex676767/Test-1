@@ -358,6 +358,7 @@ function refreshButton(over = {}) {
     sessionStorage: { length: 0, key: () => null }, document: { activeElement: { tagName: 'BUTTON' } }, Object, String,
     showChatToast: (message, kind) => log.toasts.push([message, kind]),
     refreshDropdownOptions: (o) => log.dropdown.push(o),
+    fetchUnrecordedChats: () => { log.unrecordedReads = (log.unrecordedReads || 0) + 1; },
     liveWidget: null, setStatus() {}, renderChats() { log.renders += 1; }, activeChats: [], applyProfile() {},
     ...over.context,
   });
@@ -393,6 +394,7 @@ test('refresh button with an update pending but BUSY (each blocker): no reload, 
     b.click();
     assert.equal(b.log.reloads, 0, name + ': no reload');
     assert.equal(b.log.prepared, 0, name + ': nothing saved or reloaded');
+    assert.equal(b.log.unrecordedReads || 0, 0, name + ': an update only reloads, no extra read');
     assert.deepEqual(b.log.toasts, [['Finish or cancel your current lookup / claim / ticket / Blast first, then click ⟳ again.', 'warn']], name + ': explained');
   }
 });
@@ -412,6 +414,7 @@ test('refresh button with NO update pending behaves exactly as before (re-reads 
   assert.equal(b.log.prepared, 0);
   assert.equal(b.log.toasts.length, 0);
   assert.equal(b.log.renders, 1, 'the preview-mode branch re-rendered the chats');
+  assert.equal(b.log.unrecordedReads, 1, 'the unrecorded-chats list is read again');
   // a busy widget with no update pending is not nagged either
   const busy = refreshButton({ pending: false, context: { state: { c1: { lookupInFlight: true } } } });
   busy.click();

@@ -40,7 +40,7 @@ test('a failed read keeps the list as it was and says why in the log', async () 
   await w.run('fetchUnrecordedChats()');
   await w.run('fetchUnrecordedChats()');
   assert.equal(w.list(), 'T1,T2');
-  assert.match(w.logs[0][1], /Could not read your LiveChat email/);
+  assert.match(w.logs.at(-1)[1], /Could not read your LiveChat email/);
 });
 
 test('Ignore takes the chat off the list at once and tells Lark once', async () => {
@@ -123,4 +123,15 @@ test('the panel offers Ignore all when there is more than one chat, and the clic
   assert.match(panel, /unrecorded\.length > 1/);
   assert.match(panel, /data-action="ignoreAllUnrecorded"/);
   assert.match(app, /button\[data-action='ignoreAllUnrecorded'\]/);
+});
+
+test('the list says in the activity log how many chats it got, and ⟳ reads it again (it was read only at start before)', async () => {
+  const w = widget({ replies: [{ ok: true, chats }, { ok: true, chats: [...chats, { threadId: 'T3', date: 3 }] }] });
+  await w.run('fetchUnrecordedChats()');
+  assert.match(w.logs.at(-1)[1], /Unrecorded-chats list: 2 from the crosscheck/);
+  await w.run('fetchUnrecordedChats()');
+  assert.equal(w.list(), 'T1,T2,T3', 'a list written after the widget started shows up on the next read');
+  const refresh = app.slice(app.indexOf('function handleRefreshClick'), app.indexOf('document.getElementById("refreshBtn")'));
+  const deploy = refresh.indexOf('reloadForDeploymentUpdate');
+  assert.ok(refresh.indexOf('fetchUnrecordedChats();') > deploy, 'after the update branch returns, so an update still just reloads');
 });
