@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
+// The saved-answer version stamp and the helper that decides whether a saved "did not write" is still trusted.
+const verdictCode = () => app.match(/const AGENT_WROTE_VERSION = .*;/)[0] + '\n' + fn('agentWroteVerdict');
 
 function harness({ flag = true, chat = {}, tokens = { lc1: 'tok' }, replies = [] } = {}) {
   const st = { c1: { chatUrl: 'https://my.livechatinc.com/chats/CHAT/THREAD', ...chat } };
@@ -20,7 +22,7 @@ function harness({ flag = true, chat = {}, tokens = { lc1: 'tok' }, replies = []
       return { json: async () => reply };
     },
   });
-  vm.runInContext(fn('agentWroteInChat'), context);
+  vm.runInContext(verdictCode() + '\n' + fn('agentWroteInChat'), context);
   return { st, calls, ask: () => vm.runInContext("agentWroteInChat('c1')", context) };
 }
 
@@ -95,11 +97,11 @@ function sweepWith({ flag, agentWrote }) {
     PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date, JSON, AGENT_LOGIN_LIVE: flag,
     activeChats: [], state: st, isLoggingPaused: () => false, currentLiveChatAccount: 'lc1', selectedAgent: 'Agent A',
     document: { hidden: false },
-    loadPersistedState: () => ({ c1: { chatOpen: false, logged: false, liveChatAccount: 'lc1', username: 'x', inquiry: [], status: '', agentWrote } }),
+    loadPersistedState: () => ({ c1: { chatOpen: false, logged: false, liveChatAccount: 'lc1', username: 'x', inquiry: [], status: '', agentWrote, agentWroteV: agentWrote === undefined ? undefined : 2 } }),
     markStateSynced() {}, renderNeedsAttentionPanel() {}, checkChatStatus: async () => {}, holdsSweepLease: () => true,
     submitRecord: async (chatId) => { submits.push(chatId); },
   });
-  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('agentActed'), fn('agentTouchedChat'), fn('sweepPendingChats')].join('\n'), context);
+  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('agentActed'), fn('agentTouchedChat'), verdictCode(), fn('sweepPendingChats')].join('\n'), context);
   return { submits, run: () => vm.runInContext('sweepPendingChats()', context) };
 }
 
