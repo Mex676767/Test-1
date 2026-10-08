@@ -545,10 +545,7 @@ async function requirePreviewLiveChatLogin() {
    LiveChat account are offered) and it is locked. Nothing can be recorded until this finishes.
    ============================================================ */
 function dropLiveChatToken(accountKey) {
-  try {
-    sessionStorage.removeItem(`ca-livechat-agent-token:${accountKey}`);
-    sessionStorage.removeItem(`ca-livechat-agent-token-expiry:${accountKey}`);
-  } catch (_) { /* non-fatal */ }
+  forgetLiveChatLogin(accountKey);
 }
 
 async function postAgentLogin(accountKey, token, name) {
@@ -695,11 +692,7 @@ async function requireAgentLogin() {
         status.className = "login-status";
         try {
           const login = await connectLiveChatLogin(clients, redirectUri, (text) => { status.textContent = text; });
-          try {
-            sessionStorage.setItem(`ca-livechat-agent-token:${login.accountKey}`, login.token);
-            sessionStorage.setItem(`ca-livechat-agent-token-expiry:${login.accountKey}`, String(login.expiresAt));
-            sessionStorage.setItem("ca-livechat-selected-account", login.accountKey);
-          } catch (_) { /* without sessionStorage this login cannot be kept */ }
+          saveLiveChatLogin(login.accountKey, login.token, login.expiresAt);
           resolve();
         } catch (error) {
           failure = error.message;
@@ -1494,22 +1487,59 @@ function liveChatAgentTokens() {
   return tokens;
 }
 
+// A new LiveChat tab starts with an empty sessionStorage, so the login used to be asked for again in every tab. The login is
+// also kept in localStorage -- shared by the tabs of one browser window, forgotten when an incognito window closes -- and a tab
+// copies it back into its own sessionStorage as it opens (the Blast page reads it from there). The expiry is the same as
+// LiveChat's, so nothing outlives the token.
+const LIVECHAT_LOGIN_BACKUP = "ca-livechat-login-backup";
+function saveLiveChatLogin(accountKey, token, expiresAt) {
+  try {
+    sessionStorage.setItem(`ca-livechat-agent-token:${accountKey}`, token);
+    sessionStorage.setItem(`ca-livechat-agent-token-expiry:${accountKey}`, String(expiresAt));
+    sessionStorage.setItem("ca-livechat-selected-account", accountKey);
+  } catch (_) { /* without sessionStorage this tab cannot keep the login */ }
+  try { localStorage.setItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`, JSON.stringify({ token, expiresAt: Number(expiresAt) })); } catch (_) { /* other tabs will ask */ }
+}
+function forgetLiveChatLogin(accountKey) {
+  try {
+    sessionStorage.removeItem(`ca-livechat-agent-token:${accountKey}`);
+    sessionStorage.removeItem(`ca-livechat-agent-token-expiry:${accountKey}`);
+  } catch (_) { /* non-fatal */ }
+  try { localStorage.removeItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`); } catch (_) { /* non-fatal */ }
+}
+// A tab without its own login takes the shared one, if it is still valid; an expired shared one is cleaned away.
+function restoreLiveChatLogins() {
+  for (const accountKey of ["lc1", "lc2"]) {
+    try {
+      const own = Number(sessionStorage.getItem(`ca-livechat-agent-token-expiry:${accountKey}`) || 0) > Date.now()
+        && sessionStorage.getItem(`ca-livechat-agent-token:${accountKey}`);
+      if (own) continue;
+      const shared = JSON.parse(localStorage.getItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`) || "null");
+      if (!shared || !shared.token) continue;
+      if (!(shared.expiresAt > Date.now())) { localStorage.removeItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`); continue; }
+      sessionStorage.setItem(`ca-livechat-agent-token:${accountKey}`, shared.token);
+      sessionStorage.setItem(`ca-livechat-agent-token-expiry:${accountKey}`, String(shared.expiresAt));
+      if (!sessionStorage.getItem("ca-livechat-selected-account")) sessionStorage.setItem("ca-livechat-selected-account", accountKey);
+    } catch (_) { /* no storage: the agent signs in as before */ }
+  }
+}
+
 // One-time re-login. A LiveChat login made before the accounts scopes were added to the two LiveChat apps cannot read the
-// agent's email, so every login stored in this tab is dropped once and the agent signs in again (their agent name comes
-// straight back). To force another round later, change the epoch.
+// agent's email, so every stored login is dropped once and the agent signs in again (their agent name comes straight back).
+// The mark that this was done lives in both storages, so a new tab does not repeat it. To force another round later, change
+// the epoch.
 const LIVECHAT_TOKEN_EPOCH = "2026-10-08-accounts-scopes";
 const LIVECHAT_TOKEN_EPOCH_KEY = "ca-livechat-token-epoch";
 function dropOldLiveChatTokens() {
-  try {
-    if (sessionStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH) return;
-    for (const accountKey of ["lc1", "lc2"]) {
-      sessionStorage.removeItem(`ca-livechat-agent-token:${accountKey}`);
-      sessionStorage.removeItem(`ca-livechat-agent-token-expiry:${accountKey}`);
-    }
-    sessionStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH);
-  } catch (_) { /* no sessionStorage: nothing is kept anyway */ }
+  let done = false;
+  try { done = sessionStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH; } catch (_) { /* non-fatal */ }
+  try { done = done || localStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH; } catch (_) { /* non-fatal */ }
+  if (!done) for (const accountKey of ["lc1", "lc2"]) forgetLiveChatLogin(accountKey);
+  try { sessionStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH); } catch (_) { /* non-fatal */ }
+  try { localStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH); } catch (_) { /* non-fatal */ }
 }
 dropOldLiveChatTokens();
+restoreLiveChatLogins();
 
 async function resolveBrandFromGroupId(chatId, groupID) {
   if (groupID) groupIdFor.set(chatId, groupID);

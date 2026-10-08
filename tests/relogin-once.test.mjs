@@ -10,8 +10,10 @@ const constLine = (name) => app.match(new RegExp(`const ${name} = [^\\n]*;`))[0]
 function tab(initial = {}) {
   const store = new Map(Object.entries(initial));
   const sessionStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
-  const context = vm.createContext({ sessionStorage, Number, Date });
-  vm.runInContext([constLine('LIVECHAT_TOKEN_EPOCH'), constLine('LIVECHAT_TOKEN_EPOCH_KEY'), fn('dropOldLiveChatTokens'), fn('liveChatAgentTokens')].join('\n'), context);
+  const shared = new Map();
+  const localStorage = { getItem: (k) => (shared.has(k) ? shared.get(k) : null), setItem: (k, v) => shared.set(k, String(v)), removeItem: (k) => shared.delete(k) };
+  const context = vm.createContext({ sessionStorage, localStorage, Number, Date, JSON });
+  vm.runInContext([constLine('LIVECHAT_TOKEN_EPOCH'), constLine('LIVECHAT_TOKEN_EPOCH_KEY'), constLine('LIVECHAT_LOGIN_BACKUP'), fn('forgetLiveChatLogin'), fn('dropOldLiveChatTokens'), fn('liveChatAgentTokens')].join('\n'), context);
   return { store, boot: () => vm.runInContext('dropOldLiveChatTokens()', context), tokens: () => JSON.stringify(vm.runInContext('liveChatAgentTokens()', context)) };
 }
 const future = String(Date.now() + 3600_000);
@@ -38,8 +40,9 @@ test('a fresh tab with no login is unaffected, and blocked storage does not thro
   const t = tab();
   t.boot();
   assert.equal(t.tokens(), '{}');
-  const broken = vm.createContext({ sessionStorage: { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }, removeItem() { throw new Error('blocked'); } } });
-  vm.runInContext([constLine('LIVECHAT_TOKEN_EPOCH'), constLine('LIVECHAT_TOKEN_EPOCH_KEY'), fn('dropOldLiveChatTokens')].join('\n') + '\ndropOldLiveChatTokens()', broken);
+  const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }, removeItem() { throw new Error('blocked'); } };
+  const broken = vm.createContext({ sessionStorage: blocked, localStorage: blocked });
+  vm.runInContext([constLine('LIVECHAT_TOKEN_EPOCH'), constLine('LIVECHAT_TOKEN_EPOCH_KEY'), constLine('LIVECHAT_LOGIN_BACKUP'), fn('forgetLiveChatLogin'), fn('dropOldLiveChatTokens')].join('\n') + '\ndropOldLiveChatTokens()', broken);
 });
 
 test('the drop runs at load, before anything reads the stored logins', () => {
