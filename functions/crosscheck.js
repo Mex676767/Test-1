@@ -35,8 +35,17 @@ export function larkTime(ms) {
   return new Date(ms).toISOString().replace(/\.(\d{3})Z$/, ".$1000+00:00");
 }
 
-// The ended chats of one list_archives page that an agent wrote in. Active chats are skipped (not over yet).
-export function chatsWithWriters(archive) {
+// A message, file or rich message the customer sent to the agents (not a note between agents).
+const CONVERSATION = new Set(["message", "file", "rich_message"]);
+function customerSpoke(chat) {
+  const customers = new Set((chat.users || []).filter((user) => user.type === "customer").map((user) => clean(user.id).toLowerCase()));
+  return (chat.thread?.events || []).some((event) => CONVERSATION.has(event.type) && event.visibility !== "agents" && customers.has(clean(event.author_id).toLowerCase()));
+}
+
+// The ended chats of one list_archives page that an agent wrote in. Active chats are skipped (not over yet), and so is a
+// thread where the customer never wrote: that is the agent reaching out (a Blast reopens old chats just to send one
+// message), not a conversation with something to record. stats.outreach counts those, so the run can say how many.
+export function chatsWithWriters(archive, stats = {}) {
   const out = [];
   for (const chat of archive?.chats || []) {
     const thread = chat.thread || {};
@@ -46,6 +55,7 @@ export function chatsWithWriters(archive) {
     // A chatbot or integration can also author messages; only people who joined the chat as agents count.
     const writers = authors.filter((author) => !agentIds.size || agentIds.has(author));
     if (!writers.length) continue;
+    if (!customerSpoke(chat)) { stats.outreach = (stats.outreach || 0) + 1; continue; }
     const customer = (chat.users || []).find((user) => user.type === "customer");
     const when = Date.parse(thread.created_at || (thread.events || [])[0]?.created_at || "") || 0;
     out.push({ chatId: clean(chat.id), threadId: clean(thread.id), date: when, customer: clean(customer?.name), writers });
@@ -57,7 +67,8 @@ async function listArchives(account, { from, to, pageId }) {
   const response = await fetch("https://api.livechatinc.com/v3.6/agent/action/list_archives", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Basic " + account.pat },
-    body: JSON.stringify({ filters: { from: larkTime(from), to: larkTime(to) }, limit: 100, sort_order: "asc", ...(pageId ? { page_id: pageId } : {}) }),
+    // LiveChat refuses filters, limit and sort_order together with page_id: a later page is asked for by its id alone.
+    body: JSON.stringify(pageId ? { page_id: pageId } : { filters: { from: larkTime(from), to: larkTime(to) }, limit: 100, sort_order: "asc" }),
   });
   const data = await response.json();
   if (data?.error) throw new Error(data.error.message || JSON.stringify(data.error));
@@ -115,12 +126,13 @@ export async function handler(event) {
       const account = LIVECHAT_ACCOUNTS.find((item) => item.key === body.account);
       if (!account) return reply(200, { ok: false, error: `LiveChat account ${body.account} is not configured.` });
       const data = await listArchives(account, { from: Number(body.from), to: Number(body.to), pageId: clean(body.pageId) });
-      const chats = chatsWithWriters(data);
+      const stats = {};
+      const chats = chatsWithWriters(data, stats);
       // An ended chat whose messages did not come with the page cannot be judged from it: hand it back to be fetched alone.
       const pending = (data.chats || [])
         .filter((chat) => chat.thread?.id && chat.thread.active === false && !Array.isArray(chat.thread.events))
         .map((chat) => ({ chatId: clean(chat.id), threadId: clean(chat.thread.id) }));
-      return reply(200, { ok: true, chats, pending, next: clean(data.next_page_id), seen: (data.chats || []).length, found: data.found_chats ?? null });
+      return reply(200, { ok: true, chats, pending, outreach: stats.outreach || 0, next: clean(data.next_page_id), seen: (data.chats || []).length, found: data.found_chats ?? null });
     }
 
     if (body.step === "chat") {
@@ -133,8 +145,9 @@ export async function handler(event) {
       });
       const data = await response.json();
       if (data?.error) return reply(200, { ok: false, error: data.error.message || JSON.stringify(data.error) });
-      const [chat = null] = chatsWithWriters({ chats: [{ id: data.id || body.chatId, users: data.users, thread: data.thread }] });
-      return reply(200, { ok: true, chat });
+      const stats = {};
+      const [chat = null] = chatsWithWriters({ chats: [{ id: data.id || body.chatId, users: data.users, thread: data.thread }] }, stats);
+      return reply(200, { ok: true, chat, outreach: stats.outreach || 0 });
     }
 
     if (body.step === "write") {

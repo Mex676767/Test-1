@@ -22,7 +22,7 @@ test('the summary counts rows per agent email, busiest first', () => {
 });
 
 // A fake of the site's /crosscheck steps.
-function fakeSite({ recorded = [], existing = [], archives = {}, notConfigured = [], pendingByAccount = {}, aloneReply = {}, knownAgents = [] }) {
+function fakeSite({ recorded = [], existing = [], archives = {}, notConfigured = [], pendingByAccount = {}, aloneReply = {}, knownAgents = [], outreachByAccount = {} }) {
   const calls = [];
   const step = async (body) => {
     calls.push(body.step + (body.account ? ':' + body.account : ''));
@@ -33,7 +33,7 @@ function fakeSite({ recorded = [], existing = [], archives = {}, notConfigured =
       if (notConfigured.includes(body.account)) return { ok: false, error: `LiveChat account ${body.account} is not configured.` };
       const pages = archives[body.account] || [[]];
       const index = body.pageId ? Number(body.pageId) : 0;
-      return { ok: true, chats: pages[index], pending: (pendingByAccount[body.account] || []).filter(() => index === 0 && body.from === 0), next: index + 1 < pages.length ? String(index + 1) : '' };
+      return { ok: true, outreach: outreachByAccount[body.account] && index === 0 && body.from === 0 ? outreachByAccount[body.account] : 0, chats: pages[index], pending: (pendingByAccount[body.account] || []).filter(() => index === 0 && body.from === 0), next: index + 1 < pages.length ? String(index + 1) : '' };
     }
     if (body.step === 'chat') return aloneReply[body.threadId] || { ok: false, error: 'LiveChat refused' };
     if (body.step === 'write') return { ok: true, created: body.entries.length, failed: [] };
@@ -117,4 +117,11 @@ test('the run reads the agent list, uses it, and says how many agents it knows',
   assert.deepEqual(out.entries.map((e) => e.email), ['a@x'], 'T1 has a row, but not one of Alice');
   assert.ok(site.calls.includes('agents'));
   assert.ok(lines.some((l) => /1 agents have their LiveChat email filled in/.test(l)));
+});
+
+test('the run says how many outreach-only chats (e.g. Blast) were left out', async () => {
+  const site = fakeSite({ archives: { lc1: [[chat('A', ['a@x'])]] }, outreachByAccount: { lc1: 7 } });
+  const lines = [];
+  await run({ step: site.step, ...period, write: false, log: (l) => lines.push(l), accounts: ['lc1'] });
+  assert.match(lines.find((l) => l.startsWith('lc1:')), /7 outreach-only chats \(the customer never wrote, e\.g\. Blast\) were left out/);
 });
