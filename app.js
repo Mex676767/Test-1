@@ -715,11 +715,22 @@ async function requireAgentLogin() {
 // state. true = theirs, false = not theirs (e.g. only watched while supervising), and when LiveChat cannot be asked the
 // chat is kept as theirs ("unsure") so a real case is reminded about, not lost; it is asked again on the next attempt.
 // Only with the LiveChat login on: otherwise nothing identifies the agent to LiveChat and the answer is "not theirs".
+//
+// "Did not write" answers saved before the email lookup compared the agent's login id with an email and were wrong, so an
+// answer without the current version stamp is not trusted and the chat is asked about again.
+const AGENT_WROTE_VERSION = 2;
+function agentWroteVerdict(s) {
+  if (!s) return undefined;
+  if (s.agentWrote === false && s.agentWroteV !== AGENT_WROTE_VERSION) return undefined;
+  return s.agentWrote;
+}
 async function agentWroteInChat(chatId) {
   const s = state[chatId];
   if (!AGENT_LOGIN_LIVE || !s) return false;
-  if (s.agentWrote === true) return true;
-  if (s.agentWrote === false) return false;
+  const known = agentWroteVerdict(s);
+  if (known === true) return true;
+  if (known === false) return false;
+  if (s.agentWrote === false) delete s.agentWrote; // an old, untrusted "did not write"
   const token = liveChatAgentTokens()[currentLiveChatAccount];
   const link = String(s.chatUrl || "").match(/\/chats\/([^/]+)\/([^/]+)/);
   let data = null;
@@ -741,6 +752,7 @@ async function agentWroteInChat(chatId) {
     return true;
   }
   s.agentWrote = !!data.wrote;
+  s.agentWroteV = AGENT_WROTE_VERSION;
   if (!data.wrote) {
     // Shows both sides, so a mismatch in how LiveChat names agents is visible instead of silent.
     logDiagnostic(`Not on your list: no message from you (${(data.me || []).join(" / ")}) in this chat. Agent messages by: ${(data.authors || []).join(", ") || "nobody"}.`, "info");
@@ -5654,7 +5666,7 @@ async function sweepPendingChats() {
       // A chat this agent never worked has nothing to retry (submitRecord would skip it anyway).
       const idle = state[chatId] || saved;
       // (With the LiveChat login on, a chat not yet checked goes to submitRecord, which asks LiveChat once.)
-      if (!agentTouchedChat(idle) && !(AGENT_LOGIN_LIVE && idle.agentWrote === undefined)) {
+      if (!agentTouchedChat(idle) && !(AGENT_LOGIN_LIVE && agentWroteVerdict(idle) === undefined)) {
         if (idle.autoRecordError) idle.autoRecordError = ""; // flagged by an older version of this widget
         continue;
       }

@@ -541,6 +541,7 @@
     return clients.some((client) => client.key === previous) ? previous : "";
   }
 
+  let connectionExpiryTimer = null;
   function renderConnection(config) {
     const banner = document.getElementById("bridgeBanner");
     if (!banner) return;
@@ -552,6 +553,17 @@
     const client = clients.find((item) => item.key === accountKey);
     const connected = Boolean(token(accountKey));
     const missingWorkspaceClient = workspaceAccount && !clients.some((item) => item.key === workspaceAccount);
+    // Signed in with the widget's own LiveChat login: there is nothing to connect, so the card is hidden. It comes back
+    // by itself when that login runs out, so a blast is never stuck without a way to sign in.
+    clearTimeout(connectionExpiryTimer);
+    if (connected) {
+      banner.innerHTML = "";
+      banner.style.display = "none";
+      const expiresAt = Number(sessionStorage.getItem(accountStorageKey(TOKEN_EXPIRY_KEY, accountKey)) || 0);
+      if (expiresAt > Date.now()) connectionExpiryTimer = setTimeout(() => renderConnection(oauthConfig), Math.min(expiresAt - Date.now() + 1000, 2 ** 31 - 1));
+      return;
+    }
+    banner.style.display = "";
     const accountLabel = workspaceAccount === "lc2" ? "LiveChat Account 2 (LC2)" : "LiveChat Account 1 (LC1)";
     const connectionNote = connected
       ? ""
