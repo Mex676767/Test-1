@@ -48,6 +48,7 @@ function harness({ configured = '', stored = {}, serverReplies }) {
   const context = vm.createContext({
     JSON, Date, Promise, Boolean, URL, location: { origin: 'https://app.test' }, CONFIGURED_LIVECHAT_ACCOUNT: configured,
     sessionStorage: { getItem: (k) => (session.has(k) ? session.get(k) : null), setItem: (k, v) => session.set(k, String(v)), removeItem: (k) => session.delete(k) },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     escapeHtml: (s) => String(s ?? ''),
     fetch: async (url, options) => {
       if (url === '/livechat-oauth-config') {
@@ -67,7 +68,7 @@ function harness({ configured = '', stored = {}, serverReplies }) {
     pickAgentName: async (key, token, available) => { calls.picked.push([key, token, available]); },
     connectLiveChatLogin: async () => ({ accountKey: 'lc1', token: 'fresh', expiresAt: Date.now() + 3600_000 }),
   });
-  vm.runInContext([fn('liveChatAgentTokens'), fn('dropLiveChatToken'), fn('postAgentLogin'), fn('requireAgentLogin')].join('\n'), context);
+  vm.runInContext(['const LIVECHAT_LOGIN_BACKUP = "x";', fn('liveChatAgentTokens'), fn('saveLiveChatLogin'), fn('forgetLiveChatLogin'), fn('dropLiveChatToken'), fn('postAgentLogin'), fn('requireAgentLogin')].join('\n'), context);
   return { context, calls, handlers, session, run: () => vm.runInContext('requireAgentLogin()', context) };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
