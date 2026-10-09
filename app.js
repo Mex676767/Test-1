@@ -1177,16 +1177,17 @@ function isFocusedChat(chatId) {
 
 // What this lookup wants to say. Always remembered on its own chat; in the global status bar only while that chat is in front.
 // `attention` = it failed or something is unavailable (the neutral "finished" toast then says so).
-function lookupSay(chatId, text, kind, attention = false) {
+// `quiet` = routine result: kept (a finished lookup is recognised by it) and logged in Diagnostics, but not drawn in the card.
+function lookupSay(chatId, text, kind, attention = false, quiet = false) {
   const s = state[chatId];
-  if (s) s.lookupMessage = { text, kind: kind || "info", attention: !!attention, at: Date.now() };
+  if (s) s.lookupMessage = { text, kind: kind || "info", attention: !!attention, quiet: !!quiet, at: Date.now() };
   if (isFocusedChat(chatId)) setStatus(text, kind);
   else logDiagnostic(`(other chat) ${text}`, kind);
 }
 
 function renderLookupMessage(chatId) {
   const m = state[chatId]?.lookupMessage;
-  if (!m || !m.text) return "";
+  if (!m || !m.text || m.quiet) return "";
   return `<div class="lookup-message ${m.attention ? "attention" : m.kind === "error" ? "error" : "info"}">${escapeHtml(m.text)}</div>`;
 }
 
@@ -1313,7 +1314,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     } else {
       s.notVipResult = false;
       s.forcedVipFor = "";
-      lookupSay(chatId, row ? `Found ${username} under ${brand}.` : "No record found.");
+      lookupSay(chatId, row ? `Found ${username} under ${brand}.` : "No record found.", undefined, false, !!row);
     }
     if (lookupWarnings.length) {
       lookupSay(chatId, `Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error", true);
