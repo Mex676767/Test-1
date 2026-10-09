@@ -1177,18 +1177,12 @@ function isFocusedChat(chatId) {
 
 // What this lookup wants to say. Always remembered on its own chat; in the global status bar only while that chat is in front.
 // `attention` = it failed or something is unavailable (the neutral "finished" toast then says so).
-// `quiet` = routine result: kept (a finished lookup is recognised by it) and logged in Diagnostics, but not drawn in the card.
-function lookupSay(chatId, text, kind, attention = false, quiet = false) {
+// The message is not drawn in the player card (only the status bar / Diagnostics); a finished lookup is recognised by it.
+function lookupSay(chatId, text, kind, attention = false) {
   const s = state[chatId];
-  if (s) s.lookupMessage = { text, kind: kind || "info", attention: !!attention, quiet: !!quiet, at: Date.now() };
+  if (s) s.lookupMessage = { text, kind: kind || "info", attention: !!attention, at: Date.now() };
   if (isFocusedChat(chatId)) setStatus(text, kind);
   else logDiagnostic(`(other chat) ${text}`, kind);
-}
-
-function renderLookupMessage(chatId) {
-  const m = state[chatId]?.lookupMessage;
-  if (!m || !m.text || m.quiet) return "";
-  return `<div class="lookup-message ${m.attention ? "attention" : m.kind === "error" ? "error" : "info"}">${escapeHtml(m.text)}</div>`;
 }
 
 function refreshBackgroundLookupPill() {
@@ -1314,7 +1308,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     } else {
       s.notVipResult = false;
       s.forcedVipFor = "";
-      lookupSay(chatId, row ? `Found ${username} under ${brand}.` : "No record found.", undefined, false, !!row);
+      lookupSay(chatId, row ? `Found ${username} under ${brand}.` : "No record found.");
     }
     if (lookupWarnings.length) {
       lookupSay(chatId, `Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error", true);
@@ -2518,7 +2512,7 @@ function renderPlayerInfo(chatId) {
       parts.push(`<span><span class="pi-label">Note</span> Not on the VIP list yet — force looked up</span>`);
     }
   }
-  return renderLookupMessage(chatId) + (parts.length ? `<div class="player-info">${parts.join("")}</div>` : "");
+  return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
 }
 
 async function copyPlainText(value) {
