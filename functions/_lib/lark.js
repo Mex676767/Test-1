@@ -74,9 +74,10 @@ export function initEnv(env) {
 // When the current request (lookup / submit) began, server-side. Every call this request makes to the shared queue carries it, so
 // the queue orders all of a request's steps by its age: an older request's next step runs before a newer request's first one.
 const requestContext = new AsyncLocalStorage();
+let requestSeq = 0;                                      // identifies a request inside this isolate (see searchRecordsOnce)
 export function runWithRequestStart(fn, startedAt = Date.now()) {
   if (requestContext.getStore()) return fn();            // already inside a request (adapt() started it): keep the earlier start
-  return requestContext.run({ startedAt }, fn);
+  return requestContext.run({ startedAt, id: ++requestSeq }, fn);
 }
 const currentRequestStart = () => requestContext.getStore()?.startedAt;
 // For calls that carry the start to the queue: a call with none keeps the old arrival-order priority, so it is counted.
@@ -500,7 +501,17 @@ const MAX_CONCURRENT_LARK_SEARCHES = 3;
 let activeLarkSearches = 0;
 let larkSearchQueue = [];
 let larkSearchCooldownUntil = 0;
+// Identical searches made at the same time by ONE request share a single call (a lookup's retry pass re-asks for a search that is
+// still running). A search is never shared between requests: when the agent cancels a lookup or switches chat, the runtime stops that
+// request's work and its pending search never settles -- anyone who joined it would hang until the server instance is recycled
+// (confirmed on the live site: cancel a lookup, look the same player up again -> 37 s and ten or more sources "unavailable", every time).
+// The shared queue already merges identical searches across requests, so nothing is lost by keeping them apart here.
 const inFlightLarkSearches = new Map();
+const ABANDONED_SEARCH_MS = 120_000;                     // only memory hygiene: a search that never settled is forgotten after this
+function forgetAbandonedSearches() {
+  const cutoff = Date.now() - ABANDONED_SEARCH_MS;
+  for (const [key, entry] of inFlightLarkSearches) if (entry.at < cutoff) inFlightLarkSearches.delete(key);
+}
 
 function abortError(signal) {
   return signal?.reason instanceof Error ? signal.reason : new Error("Lark request cancelled.");
@@ -635,15 +646,16 @@ function searchRecordsOnce(tableId, conditions, baseToken, opts = {}) {
     maxRows: opts.maxRows || null,
     automaticFields: !!opts.automaticFields,
     fieldNames: opts.fieldNames || null,
+    request: requestContext.getStore()?.id ?? 0,
   });
   const existing = inFlightLarkSearches.get(cacheKey);
-  if (existing) return existing;
+  if (existing) return existing.request;
+  forgetAbandonedSearches();
   const request = performSearchRecords(tableId, conditions, baseToken, opts);
-  inFlightLarkSearches.set(cacheKey, request);
-  request.then(
-    () => { if (inFlightLarkSearches.get(cacheKey) === request) inFlightLarkSearches.delete(cacheKey); },
-    () => { if (inFlightLarkSearches.get(cacheKey) === request) inFlightLarkSearches.delete(cacheKey); },
-  );
+  const entry = { request, at: Date.now() };
+  inFlightLarkSearches.set(cacheKey, entry);
+  const done = () => { if (inFlightLarkSearches.get(cacheKey) === entry) inFlightLarkSearches.delete(cacheKey); };
+  request.then(done, done);
   return request;
 }
 
