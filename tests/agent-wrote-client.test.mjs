@@ -70,11 +70,13 @@ test('"unknown" from the server (LiveChat email unreadable) keeps the chat on th
   assert.match(h.calls.logs[0][1], /keeping it on your list/);
 });
 
-test('no stored LiveChat login or no chat link yet is "unsure", without calling the server', async () => {
+test('no stored LiveChat login is "unsure"; no chat link yet is simply not theirs (and not remembered); neither calls the server', async () => {
   const noLogin = harness({ tokens: {} });
   assert.equal(await noLogin.ask(), true);
+  assert.equal(noLogin.st.c1.agentWrote, 'unsure');
   const noLink = harness({ chat: { chatUrl: '' } });
-  assert.equal(await noLink.ask(), true);
+  assert.equal(await noLink.ask(), false, 'a chat that closed before its first status check: nothing happened that needs recording');
+  assert.equal(noLink.st.c1.agentWrote, undefined, 'not remembered, so it is asked again once there is a link');
   assert.equal(noLogin.calls.fetched.length + noLink.calls.fetched.length, 0);
 });
 
@@ -97,7 +99,7 @@ function sweepWith({ flag, agentWrote }) {
     PENDING_SWEEP_MS: 8000, SWEEP_BACKOFF_CAP_MS: 300000, Date, JSON, AGENT_LOGIN_LIVE: flag,
     activeChats: [], state: st, isLoggingPaused: () => false, currentLiveChatAccount: 'lc1', selectedAgent: 'Agent A',
     document: { hidden: false },
-    loadPersistedState: () => ({ c1: { chatOpen: false, logged: false, liveChatAccount: 'lc1', username: 'x', inquiry: [], status: '', agentWrote, agentWroteV: agentWrote === undefined ? undefined : 2 } }),
+    loadPersistedState: () => ({ c1: { chatOpen: false, logged: false, liveChatAccount: 'lc1', username: 'x', inquiry: [], status: '', agentWrote, agentWroteV: agentWrote === undefined ? undefined : 3 } }),
     markStateSynced() {}, renderNeedsAttentionPanel() {}, checkChatStatus: async () => {}, holdsSweepLease: () => true,
     submitRecord: async (chatId) => { submits.push(chatId); },
   });
@@ -132,4 +134,28 @@ test('the record gate asks LiveChat only for a chat the agent did not act on, be
   assert.ok(submit.indexOf('await agentWroteInChat(chatId)', gate) > gate);
   assert.ok(gate < submit.indexOf('s.agentName = selectedAgent'));
   assert.ok(gate < submit.indexOf('if (!selectedAgent)'));
+});
+
+test('they wrote but the customer never did (the agent reached out): not theirs, remembered, and the log says why', async () => {
+  const h = harness({ replies: [{ ok: true, wrote: true, customerWrote: false, authors: ['a@x'], me: ['a@x'] }] });
+  assert.equal(await h.ask(), false);
+  assert.equal(h.st.c1.agentWrote, false);
+  assert.equal(h.st.c1.agentWroteV, 3);
+  assert.match(h.calls.logs.at(-1)[1], /the customer never wrote in this chat/);
+  assert.equal(await h.ask(), false);
+  assert.equal(h.calls.fetched.length, 1, 'asked once');
+});
+
+test('they wrote and the customer wrote too: theirs; an older server that does not say is taken as "the customer wrote"', async () => {
+  const both = harness({ replies: [{ ok: true, wrote: true, customerWrote: true, authors: [], me: [] }] });
+  assert.equal(await both.ask(), true);
+  const older = harness({ replies: [{ ok: true, wrote: true, authors: [], me: [] }] });
+  assert.equal(await older.ask(), true);
+});
+
+test('an earlier "wrote" (before this rule) is asked about again, so a chat flagged by mistake clears itself', async () => {
+  const h = harness({ chat: { agentWrote: true }, replies: [{ ok: true, wrote: true, customerWrote: false, authors: ['a@x'], me: ['a@x'] }] });
+  assert.equal(await h.ask(), false);
+  assert.equal(h.st.c1.agentWrote, false);
+  assert.equal(h.calls.fetched.length, 1);
 });

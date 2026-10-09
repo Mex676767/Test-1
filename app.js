@@ -711,12 +711,13 @@ async function requireAgentLogin() {
 // chat is kept as theirs ("unsure") so a real case is reminded about, not lost; it is asked again on the next attempt.
 // Only with the LiveChat login on: otherwise nothing identifies the agent to LiveChat and the answer is "not theirs".
 //
-// "Did not write" answers saved before the email lookup compared the agent's login id with an email and were wrong, so an
-// answer without the current version stamp is not trusted and the chat is asked about again.
-const AGENT_WROTE_VERSION = 2;
+// An answer saved by an older version of this check is not trusted and the chat is asked about again: version 2 fixed
+// "did not write" answers that compared the login id with an email, version 3 made "the customer never wrote" (the agent
+// reached out) count as not theirs, so a "wrote" from before is re-checked too. "unsure" is always asked again anyway.
+const AGENT_WROTE_VERSION = 3;
 function agentWroteVerdict(s) {
   if (!s) return undefined;
-  if (s.agentWrote === false && s.agentWroteV !== AGENT_WROTE_VERSION) return undefined;
+  if ((s.agentWrote === false || s.agentWrote === true) && s.agentWroteV !== AGENT_WROTE_VERSION) return undefined;
   return s.agentWrote;
 }
 async function agentWroteInChat(chatId) {
@@ -725,9 +726,12 @@ async function agentWroteInChat(chatId) {
   const known = agentWroteVerdict(s);
   if (known === true) return true;
   if (known === false) return false;
-  if (s.agentWrote === false) delete s.agentWrote; // an old, untrusted "did not write"
+  if (s.agentWrote === false || s.agentWrote === true) delete s.agentWrote; // an old, untrusted answer
   const token = liveChatAgentTokens()[currentLiveChatAccount];
   const link = String(s.chatUrl || "").match(/\/chats\/([^/]+)\/([^/]+)/);
+  // No link yet means the chat closed before LiveChat's first status check resolved it (a chat opened and shut within
+  // seconds): nothing happened that could need recording, and it is asked again once there is a link, not put on the list.
+  if (token && !link) return false;
   let data = null;
   if (token && link) {
     try {
@@ -746,11 +750,16 @@ async function agentWroteInChat(chatId) {
     s.agentWrote = "unsure";
     return true;
   }
-  s.agentWrote = !!data.wrote;
+  // Theirs only if they wrote AND the customer wrote too: a thread where the customer never said anything is the agent
+  // reaching out, with nothing to record. (An older server that does not say is taken as "the customer wrote".)
+  const theirs = !!data.wrote && data.customerWrote !== false;
+  s.agentWrote = theirs;
   s.agentWroteV = AGENT_WROTE_VERSION;
-  if (!data.wrote) {
+  if (!theirs) {
     // Shows both sides, so a mismatch in how LiveChat names agents is visible instead of silent.
-    logDiagnostic(`Not on your list: no message from you (${(data.me || []).join(" / ")}) in this chat. Agent messages by: ${(data.authors || []).join(", ") || "nobody"}.`, "info");
+    logDiagnostic(data.wrote
+      ? "Not on your list: the customer never wrote in this chat (you reached out), so there is nothing to record."
+      : `Not on your list: no message from you (${(data.me || []).join(" / ")}) in this chat. Agent messages by: ${(data.authors || []).join(", ") || "nobody"}.`, "info");
   }
   return s.agentWrote;
 }
