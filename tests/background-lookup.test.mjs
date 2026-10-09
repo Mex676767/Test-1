@@ -67,8 +67,9 @@ test('look up in chat A, switch to B before it finishes: the result is saved in 
   assert.equal(w.state.B.lookupMessage, undefined, "nothing was written onto B");
   assert.deepEqual(w.calls.toast.slice(1).map((t) => [t.kind, t.text]), [['info', 'Lookup for alice finished (other chat)']], 'exactly one neutral toast');
   assert.equal(w.pill().textContent, '✓ Lookup for alice done'); assert.match(w.pill().className, /done/);
-  // back in A: the card shows the result
-  assert.match(w.run("renderLookupMessage('A')"), /Found alice under PP\./);
+  // back in A: the routine "Found" line is not drawn in the card, only logged in Diagnostics
+  assert.equal(w.run("renderLookupMessage('A')"), '');
+  assert.ok(w.calls.diag.some((x) => x.text.includes('Found alice under PP.')), 'Found line is in the diagnostics log');
   assert.match(app, /return renderLookupMessage\(chatId\) \+ \(parts\.length/, "renderPlayerInfo puts the chat's message into its card");
   assert.equal(w.run("renderLookupMessage('B')"), '');
 });
