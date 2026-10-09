@@ -67,11 +67,9 @@ test('look up in chat A, switch to B before it finishes: the result is saved in 
   assert.equal(w.state.B.lookupMessage, undefined, "nothing was written onto B");
   assert.deepEqual(w.calls.toast.slice(1).map((t) => [t.kind, t.text]), [['info', 'Lookup for alice finished (other chat)']], 'exactly one neutral toast');
   assert.equal(w.pill().textContent, '✓ Lookup for alice done'); assert.match(w.pill().className, /done/);
-  // back in A: the routine "Found" line is not drawn in the card, only logged in Diagnostics
-  assert.equal(w.run("renderLookupMessage('A')"), '');
+  // the "Found" line is only logged in Diagnostics; lookup messages are no longer drawn in the card
   assert.ok(w.calls.diag.some((x) => x.text.includes('Found alice under PP.')), 'Found line is in the diagnostics log');
-  assert.match(app, /return renderLookupMessage\(chatId\) \+ \(parts\.length/, "renderPlayerInfo puts the chat's message into its card");
-  assert.equal(w.run("renderLookupMessage('B')"), '');
+  assert.doesNotMatch(app, /renderLookupMessage|lookup-message/, 'the card has no lookup message block');
 });
 
 test('the "done" pill goes away after ~10 s, and while another lookup is still running that one is shown instead', async () => {
@@ -101,7 +99,6 @@ test("a lookup that fails or has warnings while another chat is focused: nothing
     assert.equal(w.state.A.lookupMessage.text, expectText, label); assert.equal(w.state.A.lookupMessage.attention, true);
     assert.deepEqual(w.calls.toast.map((t) => [t.kind, t.text]), [['warn', '⚠ Lookup for alice needs attention (other chat)']], label);
     assert.equal(w.pill().textContent, '⚠ Lookup for alice needs a retry'); assert.match(w.pill().className, /attention/);
-    assert.match(w.run("renderLookupMessage('A')"), /class="lookup-message attention"/);
     assert.ok(w.calls.diag.some((x) => x.text.includes('(other chat)')), 'still in the diagnostics log');
   }
 });
@@ -113,7 +110,6 @@ test("Not VVIP result for a chat that is not in front: stored on its card as an 
   assert.match(w.state.A.lookupMessage.text, /^Not VVIP — marked Unknown player\./); assert.equal(w.state.A.lookupMessage.kind, 'error'); assert.equal(w.state.A.lookupMessage.attention, false);
   assert.equal(w.state.A.isUnknown, true); assert.equal(w.state.B.isUnknown, undefined);
   assert.deepEqual(w.calls.toast.map((t) => [t.kind, t.text]), [['info', 'Lookup for alice finished (other chat)']]);
-  assert.match(w.run("renderLookupMessage('A')"), /class="lookup-message error"/);
 });
 
 test('a lookup in the chat that IS in front behaves as before: toast + status bar text, and its own card message', async () => {
@@ -184,7 +180,6 @@ test('older than 40 s: not re-run, cleared, and the card says "Lookup was interr
   assert.equal(second.calls.fetch.length, 0);
   assert.equal(second.state.A.pendingLookup, null);
   assert.equal(second.state.A.lookupMessage.text, 'Lookup was interrupted — click Look up.');
-  assert.match(second.run("renderLookupMessage('A')"), /Lookup was interrupted — click Look up\./);
   assert.deepEqual(second.calls.status, [{ text: 'Lookup was interrupted — click Look up.', kind: 'info' }], 'shown in the status area only because chat A is in front');
 });
 

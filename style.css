@@ -1301,6 +1301,3 @@ body { font-size: 13px; }
 .bg-lookup-pill.running { border-color: var(--blue); }
 .bg-lookup-pill.done { border-color: var(--teal); color: var(--teal); }
 .bg-lookup-pill.attention { border-color: var(--gold); color: var(--gold); }
-.lookup-message { margin: 6px 0; padding: 6px 8px; border-radius: 6px; border-left: 3px solid var(--blue); font-size: 12px; background: var(--surface-2); color: var(--text); }
-.lookup-message.error { border-left-color: var(--danger); }
-.lookup-message.attention { border-left-color: var(--gold); }
