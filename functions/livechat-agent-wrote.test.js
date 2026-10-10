@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handler, agentWroteIn } from "./livechat-agent-wrote.js";
+import { handler, agentWroteIn, customerWroteIn } from "./livechat-agent-wrote.js";
 import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 
 const users = [{ id: "cust-1", type: "customer" }, { id: "alice@x.com", type: "agent" }, { id: "bob@x.com", type: "agent" }];
@@ -62,7 +62,7 @@ const call = async (body, env = { LIVECHAT_CLIENT_ID: "client-1" }) => JSON.pars
 test("asks LiveChat for that exact thread with the account's own credential and answers wrote/authors", async (t) => {
   const calls = fakeLiveChat(t, { chat: { users, thread: { events: [msg("cust-1"), msg("alice@x.com")] } } });
   const out = await call({ accountKey: "lc1", agentToken: "tok", chatId: "CHAT", threadId: "THREAD" });
-  assert.deepEqual(out, { ok: true, wrote: true, authors: ["alice@x.com"], me: ["alice@x.com"] });
+  assert.deepEqual(out, { ok: true, wrote: true, customerWrote: true, authors: ["alice@x.com"], me: ["alice@x.com"] });
   assert.deepEqual([...calls], [{ auth: "Basic pat-1", body: { chat_id: "CHAT", thread_id: "THREAD" } }]);
   const lc2 = await call({ accountKey: "lc2", agentToken: "tok", chatId: "CHAT", threadId: "THREAD" }, { LIVECHAT_CLIENT_ID_2: "client-1" });
   assert.equal(calls.at(-1).auth, "Basic pat-2");
@@ -123,4 +123,19 @@ test("with no way to read the email the answer is unknown (null), never 'did not
   assert.equal(out.wrote, null);
   assert.deepEqual(out.authors, ["alice@x.com"]);
   assert.match(out.error, /Could not read your LiveChat email \(own token: missing scope; PAT: missing scope\)/);
+});
+
+test("customerWroteIn: true only when the customer sent a message, file or rich message to the agents (not a note, not only agents)", () => {
+  assert.equal(customerWroteIn({ users, thread: { events: [msg("cust-1"), msg("alice@x.com")] } }), true);
+  assert.equal(customerWroteIn({ users, thread: { events: [msg("alice@x.com"), { type: "file", author_id: "alice@x.com" }] } }), false, "agents only: the agent reached out");
+  assert.equal(customerWroteIn({ users, thread: { events: [{ type: "file", author_id: "cust-1" }] } }), true);
+  assert.equal(customerWroteIn({ users, thread: { events: [{ type: "system_message", author_id: "cust-1" }, msg("cust-1", { visibility: "agents" })] } }), false);
+  assert.equal(customerWroteIn({}), false);
+});
+
+test("the answer says whether the customer wrote, so an agent-only thread can be told apart", async (t) => {
+  fakeLiveChat(t, { chat: { users, thread: { events: [msg("alice@x.com"), { type: "file", author_id: "alice@x.com" }] } } });
+  const out = await call({ accountKey: "lc1", agentToken: "tok", chatId: "CHAT", threadId: "THREAD" });
+  assert.equal(out.wrote, true);
+  assert.equal(out.customerWrote, false);
 });

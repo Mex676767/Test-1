@@ -27,6 +27,13 @@ export function agentWroteIn(chat, identities) {
   return { wrote, authors: [...authors] };
 }
 
+// Did the customer write anything to the agents in this thread? A thread where only agents wrote is the agent reaching out
+// (a chat they reopened, a Blast), with nothing from the customer to record. Read from the messages the check already fetched.
+export function customerWroteIn(chat) {
+  const customers = new Set((chat?.users || []).filter((user) => user.type === "customer").map((user) => lower(user.id)));
+  return (chat?.thread?.events || []).some((event) => CONVERSATION_EVENTS.has(event.type) && event.visibility !== "agents" && customers.has(lower(event.author_id)));
+}
+
 export async function handler(event) {
   try {
     const { accountKey, agentToken, chatId, threadId } = JSON.parse(event.body || "{}");
@@ -52,7 +59,7 @@ export async function handler(event) {
     if (!who.identities.some((id) => id.includes("@"))) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, wrote: null, authors, me: who.identities, error: `Could not read your LiveChat email (${who.emailLookup}).` }) };
     }
-    return { statusCode: 200, body: JSON.stringify({ ok: true, wrote, authors, me: who.identities, ...(who.emailLookup ? { emailLookup: who.emailLookup } : {}) }) };
+    return { statusCode: 200, body: JSON.stringify({ ok: true, wrote, customerWrote: customerWroteIn(chat), authors, me: who.identities, ...(who.emailLookup ? { emailLookup: who.emailLookup } : {}) }) };
   } catch (err) {
     return { statusCode: 200, body: JSON.stringify({ ok: false, error: err.message }) };
   }

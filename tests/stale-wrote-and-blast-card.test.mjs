@@ -26,14 +26,15 @@ test('a "did not write" saved without the current version is asked again, and th
   assert.equal(await h.ask(), true, 'the chat is theirs after all');
   assert.equal(h.fetched.length, 1);
   assert.equal(h.st.c1.agentWrote, true);
-  assert.equal(h.st.c1.agentWroteV, 2);
+  assert.equal(h.st.c1.agentWroteV, 3);
 });
 
 test('a current "did not write" is still remembered, and a saved "wrote" or "unsure" is never discarded', async () => {
-  const current = wroteHarness({ agentWrote: false, agentWroteV: 2 }, { ok: true, wrote: true });
+  const current = wroteHarness({ agentWrote: false, agentWroteV: 3 }, { ok: true, wrote: true });
   assert.equal(await current.ask(), false);
   assert.equal(current.fetched.length, 0);
-  assert.equal(wroteHarness({ agentWrote: true }, {}).verdict(), true);
+  assert.equal(wroteHarness({ agentWrote: true, agentWroteV: 3 }, {}).verdict(), true);
+  assert.equal(wroteHarness({ agentWrote: true }, {}).verdict(), undefined, 'a "wrote" from before the customer rule is asked again');
   assert.equal(wroteHarness({ agentWrote: 'unsure' }, {}).verdict(), 'unsure');
   assert.equal(wroteHarness({}, {}).verdict(), undefined);
 });
@@ -41,7 +42,7 @@ test('a current "did not write" is still remembered, and a saved "wrote" or "uns
 test('a fresh "did not write" is stamped with the version so it is trusted next time', async () => {
   const h = wroteHarness({}, { ok: true, wrote: false, authors: ['b@x'], me: ['a@x'] });
   assert.equal(await h.ask(), false);
-  assert.equal(h.st.c1.agentWroteV, 2);
+  assert.equal(h.st.c1.agentWroteV, 3);
   await h.ask();
   assert.equal(h.fetched.length, 1);
 });
