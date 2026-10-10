@@ -199,3 +199,26 @@ test("if LiveChat will not give the email, the login still works and the row is 
   assert.equal((await call2({ accountKey: "lc1", agentToken: "tok" })).name, "96 Teh");
   assert.deepEqual(log.updated, []);
 });
+
+// ---- a known login is recognised from a shared copy of the table; anything else reads the table as it is now ----
+test("a login already in the table is found from the shared copy (one read); a new login re-reads the table fresh", async (t) => {
+  const reads = [];
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const table = [{ record_id: "r1", fields: { "LiveChat Account": "lc1", "LiveChat Login": "uuid-known", "Agent Name": "96 Teh", "Locked At": 1000, "Livechat Email": "teh@x.com" } }];
+  globalThis.fetch = async (url, options = {}) => {
+    url = String(url);
+    if (url.includes("tenant_access_token")) return { json: async () => ({ code: 0, tenant_access_token: "t", expire: 3600 }) };
+    if (url.endsWith("/v2/info")) return { ok: true, json: async () => ({ account_id: options.headers.Authorization.includes("known") ? "uuid-known" : "uuid-new", client_id: "client-1" }) };
+    if (url.includes("/tables/ca-table/fields")) return { json: async () => ({ code: 0, data: { items: [{ field_name: "Agent Name", property: { options: NAMES.map((name) => ({ name })) } }] } }) };
+    if (url.includes("/tables/logins-table/records") && !options.method) { reads.push(url); return { json: async () => ({ code: 0, data: { items: table, has_more: false } }) }; }
+    throw new Error("unexpected " + url);
+  };
+  const call3 = async (token) => { initLarkEnv(ENV); initLiveChatEnv({ LIVECHAT_PAT: "pat-1" }); return JSON.parse((await handler({ body: JSON.stringify({ accountKey: "lc1", agentToken: token }), env: ENV })).body); };
+  const known = await call3("known-token");
+  assert.equal(known.name, "96 Teh");
+  assert.equal(reads.length, 1, "one read for a login that is already bound");
+  const fresh = await call3("new-token");
+  assert.equal(fresh.bound, false);
+  assert.equal(reads.length, 3, "a login not in the shared copy: that read plus one fresh read of the table");
+});

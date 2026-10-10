@@ -213,9 +213,9 @@ function openSettingsPanel() {
       </div>
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
-        <p class="settings-hint">${agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Choose the name recorded on every submitted case."}</p>
-        ${agentLocked
-          ? `<div class="input settings-text" id="agentLockedName">${escapeHtml(selectedAgent)}</div>`
+        <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
+        ${AGENT_LOGIN_LIVE
+          ? `<div class="input settings-text" id="agentLockedName">${agentLocked ? escapeHtml(selectedAgent) : "Signing in with LiveChat…"}</div>${agentLocked ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}`
           : agentOptions.length
           ? `<select class="input settings-select" id="agentSelect">
                <option value="">Choose your name</option>
@@ -251,6 +251,8 @@ function openSettingsPanel() {
   `;
   document.body.appendChild(overlay);
 
+  document.getElementById("settingsSignOut")?.addEventListener("click", () => { signOutLiveChat(); });
+
   document.getElementById("settingsClearFailures")?.addEventListener("click", () => {
     const current = readBlastStorage(BLAST_LOCAL_STORAGE_KEY);
     delete current.failureLog;
@@ -259,7 +261,7 @@ function openSettingsPanel() {
   });
 
   document.getElementById("settingsSave").addEventListener("click", () => {
-    if (agentLocked) { overlay.remove(); return; }
+    if (AGENT_LOGIN_LIVE) { overlay.remove(); return; }
     const val = document.getElementById("agentSelect").value.trim();
     if (!val) { setStatus("Choose your name before continuing.", "error"); return; }
     saveAgent(val);
@@ -287,10 +289,14 @@ function renderDiagnosticsLog() {
     </div>`).join("");
 }
 
+// True while the LiveChat sign-in is waiting for the server (a few seconds at start): the badge says so instead of "No agent
+// set", which looked like a failure.
+let agentSigningIn = false;
 function updateAgentBadge() {
   const badge = document.getElementById("agentBadge");
-  if (badge) badge.textContent = selectedAgent ? `◉ ${selectedAgent}` : "⚠︎ No agent set";
-  if (badge) badge.className = `agent-badge ${selectedAgent ? "set" : "unset"}`;
+  const signingIn = !selectedAgent && agentSigningIn;
+  if (badge) badge.textContent = selectedAgent ? `◉ ${selectedAgent}` : signingIn ? "◌ Signing in with LiveChat…" : "⚠︎ No agent set";
+  if (badge) badge.className = `agent-badge ${selectedAgent ? "set" : signingIn ? "" : "unset"}`;
 }
 
 /* ============================================================
@@ -549,10 +555,12 @@ function dropLiveChatToken(accountKey) {
 }
 
 async function postAgentLogin(accountKey, token, name) {
+  // A server that does not answer in 25 s gives up, so the agent gets "Try again" instead of waiting for ever.
   const response = await fetch("/agent-login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ accountKey, agentToken: token, ...(name ? { name } : {}) }),
+    ...(typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(25_000) } : {}),
   });
   return response.json();
 }
@@ -566,6 +574,8 @@ function agentLoginPanel(innerHtml) {
     overlay.className = "settings-overlay agent-login-overlay";
     document.body.appendChild(overlay);
   }
+  agentSigningIn = false; // a panel is asking the agent for something: the badge goes back to "No agent set" until they answer
+  updateAgentBadge();
   overlay.innerHTML = `<div class="agent-login-card"><div class="login-mark">◆</div><div class="agent-login-app">Console</div>${innerHtml}</div>`;
   return overlay;
 }
@@ -605,6 +615,7 @@ function connectLiveChatLogin(clients, redirectUri, onProgress) {
 function applyBoundAgent(name, accountKey) {
   const changed = selectedAgent !== name;
   agentLocked = true;
+  agentSigningIn = false;
   saveAgent(name);
   setCurrentLiveChatAccount(accountKey);
   updateAgentBadge();
@@ -617,6 +628,26 @@ function applyBoundAgent(name, accountKey) {
   }
   logDiagnostic(`Signed in with LiveChat as ${name}.`, "success");
   fetchUnrecordedChats();
+}
+
+// Signs this window out of the widget, so another agent can sign in in it: the stored LiveChat login and the agent name that
+// came from it are forgotten here, nothing can be recorded until someone signs in again, and the sign-in panel comes back.
+// LiveChat's own session in the browser is not touched (to switch to another LiveChat user, sign out of LiveChat itself too).
+async function signOutLiveChat() {
+  if (!confirm("Sign out of LiveChat in this widget? Nothing can be recorded until you sign in again.")) return;
+  for (const accountKey of ["lc1", "lc2"]) forgetLiveChatLogin(accountKey);
+  try { localStorage.removeItem(AGENT_KEY); } catch (_) { /* non-fatal */ }
+  selectedAgent = "";
+  agentLocked = false;
+  staleRecords = [];
+  unrecordedChats = [];
+  unrecordedLoaded = false;
+  document.getElementById("settingsOverlay")?.remove();
+  updateAgentBadge();
+  renderNeedsAttentionPanel();
+  renderChats(activeChats);
+  logDiagnostic("Signed out of LiveChat in this widget.", "info");
+  await requireAgentLogin();
 }
 
 // First sign-in: pick the agent name once. Resolves when it is saved.
@@ -651,6 +682,8 @@ function pickAgentName(accountKey, token, available) {
 }
 
 async function requireAgentLogin() {
+  agentSigningIn = true;
+  updateAgentBadge();
   let config = null;
   try { config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json(); } catch (_) { /* handled below */ }
   let clients = Array.isArray(config?.clients) ? config.clients : [];
