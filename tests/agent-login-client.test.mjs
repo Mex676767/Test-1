@@ -36,8 +36,8 @@ test('with the login on, an older self-chosen name is not trusted and the boot w
 
 test('once the name comes from the login, Settings shows it read-only and the Save button cannot change it', () => {
   const panel = app.slice(app.indexOf('function openSettingsPanel'), app.indexOf('function renderDiagnosticsLog'));
-  assert.match(panel, /agentLocked\s*\n?\s*\? `<div class="input settings-text" id="agentLockedName">/);
-  assert.match(panel, /if \(agentLocked\) \{ overlay\.remove\(\); return; \}/);
+  assert.match(panel, /id="agentLockedName">\$\{agentLocked \? escapeHtml\(selectedAgent\) : "Signing in with LiveChat…"\}/);
+  assert.match(panel, /if \(AGENT_LOGIN_LIVE\) \{ overlay\.remove\(\); return; \}/);
 });
 
 // ---- requireAgentLogin, driven with fakes ---------------------------------------------------------
@@ -50,6 +50,7 @@ function harness({ configured = '', stored = {}, serverReplies }) {
     sessionStorage: { getItem: (k) => (session.has(k) ? session.get(k) : null), setItem: (k, v) => session.set(k, String(v)), removeItem: (k) => session.delete(k) },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     escapeHtml: (s) => String(s ?? ''),
+    updateAgentBadge() {},
     fetch: async (url, options) => {
       if (url === '/livechat-oauth-config') {
         return { json: async () => ({ clients: [{ key: 'lc1', clientId: 'c1' }, { key: 'lc2', clientId: 'c2' }], redirectUri: 'https://app.test/blast/oauth.html' }) };
@@ -117,4 +118,79 @@ test('an unreachable server offers Try again without throwing the stored login a
   await h.handlers['#agentLoginConnect']();
   await done;
   assert.deepEqual(h.calls.bound, [['X', 'lc1']]);
+});
+
+// ---- the sign-in no longer looks like a failure while it waits, and cannot be bypassed by hand -----------
+test('while the sign-in waits, the badge says so instead of "No agent set"; once a name is known it shows the name', () => {
+  const badge = { textContent: '', className: '' };
+  const context = vm.createContext({ document: { getElementById: () => badge }, selectedAgent: '' });
+  vm.runInContext(['let agentSigningIn = false;', fn('updateAgentBadge')].join(String.fromCharCode(10)), context);
+  vm.runInContext('updateAgentBadge()', context);
+  assert.match(badge.textContent, /No agent set/);
+  assert.match(badge.className, /unset/);
+  vm.runInContext('agentSigningIn = true; updateAgentBadge()', context);
+  assert.match(badge.textContent, /Signing in with LiveChat/);
+  assert.doesNotMatch(badge.className, /unset/);
+  vm.runInContext("selectedAgent = '96 Mexha'; updateAgentBadge()", context);
+  assert.match(badge.textContent, /96 Mexha/);
+  assert.match(badge.className, /set/);
+});
+
+test('the sign-in request gives up after 25 s, and the waiting state starts and ends in the right places', () => {
+  assert.match(fn('postAgentLogin'), /AbortSignal\.timeout\(25_000\)/);
+  assert.match(fn('requireAgentLogin'), /agentSigningIn = true;\s*\n\s*updateAgentBadge\(\);/);
+  assert.match(fn('applyBoundAgent'), /agentSigningIn = false;/);
+  assert.match(fn('agentLoginPanel'), /agentSigningIn = false;/);
+});
+
+test('with the LiveChat login on, Settings never offers the name list, not even before the sign-in finishes', () => {
+  const panel = app.slice(app.indexOf('function openSettingsPanel'), app.indexOf('function renderDiagnosticsLog'));
+  assert.match(panel, /\$\{AGENT_LOGIN_LIVE\s*\n\s*\? `<div class="input settings-text" id="agentLockedName">/);
+  assert.match(panel, /Signing in with LiveChat…/);
+  assert.match(panel, /if \(AGENT_LOGIN_LIVE\) \{ overlay\.remove\(\); return; \}/);
+});
+
+// ---- sign out ---------------------------------------------------------------------------------------
+function signOutHarness({ confirmed = true } = {}) {
+  const calls = { forgotten: [], removed: [], logs: [], login: 0, rendered: 0 };
+  const context = vm.createContext({
+    AGENT_KEY: 'rc-agent-name', selectedAgent: '96 Mexha', agentLocked: true, staleRecords: [1], activeChats: [],
+    confirm: () => confirmed,
+    forgetLiveChatLogin: (key) => calls.forgotten.push(key),
+    localStorage: { removeItem: (k) => calls.removed.push(k) },
+    document: { getElementById: () => ({ remove() { calls.settingsClosed = true; } }) },
+    updateAgentBadge() { calls.badge = true; }, renderNeedsAttentionPanel() { calls.rendered += 1; }, renderChats() { calls.rendered += 1; },
+    logDiagnostic: (t) => calls.logs.push(t), requireAgentLogin: async () => { calls.login += 1; },
+  });
+  vm.runInContext(['let unrecordedChats = [1, 2]; let unrecordedLoaded = true;', fn('signOutLiveChat')].join(String.fromCharCode(10)), context);
+  return { calls, context, run: () => vm.runInContext('signOutLiveChat()', context), read: (code) => vm.runInContext(code, context) };
+}
+
+test('sign out forgets the login and the name, clears the lists, and brings the sign-in panel back', async () => {
+  const h = signOutHarness();
+  await h.run();
+  assert.deepEqual(h.calls.forgotten, ['lc1', 'lc2']);
+  assert.deepEqual(h.calls.removed, ['rc-agent-name']);
+  assert.equal(h.read('selectedAgent'), '');
+  assert.equal(h.read('agentLocked'), false);
+  assert.equal(h.read('unrecordedChats.length'), 0);
+  assert.equal(h.read('staleRecords.length'), 0);
+  assert.equal(h.calls.settingsClosed, true);
+  assert.equal(h.calls.login, 1, 'the sign-in panel is asked for again');
+  assert.ok(h.calls.rendered >= 2 && h.calls.badge);
+  assert.match(h.calls.logs[0], /Signed out of LiveChat/);
+});
+
+test('declining the confirmation changes nothing', async () => {
+  const h = signOutHarness({ confirmed: false });
+  await h.run();
+  assert.deepEqual(h.calls.forgotten, []);
+  assert.equal(h.read('selectedAgent'), '96 Mexha');
+  assert.equal(h.calls.login, 0);
+});
+
+test('Settings offers Sign out only once the name came from the login, and the button is wired', () => {
+  const panel = app.slice(app.indexOf('function openSettingsPanel'), app.indexOf('function renderDiagnosticsLog'));
+  assert.match(panel, /\$\{agentLocked \? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat<\/button>` : ""\}/);
+  assert.match(panel, /getElementById\("settingsSignOut"\)\?\.addEventListener\("click", \(\) => \{ signOutLiveChat\(\); \}\);/);
 });

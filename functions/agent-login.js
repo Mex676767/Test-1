@@ -56,9 +56,10 @@ export function claimWinner(rows, account, name) {
   return rows.filter((row) => row.account === account && row.name.toLowerCase() === name.toLowerCase()).sort(claimOrder)[0] || null;
 }
 
-async function readBindings() {
-  // force: this is the read that decides who owns a name, so it must never be a cached copy.
-  return parseBindings(await listRecords(TABLE_AGENT_LOGINS, 500, { force: true }));
+// cached: a copy up to a minute old, shared by every request -- enough to recognise a login that is already in the table, which
+// is nearly every sign-in, without a Lark read each time. Anything that decides who owns a name reads the table as it is now.
+async function readBindings({ cached = false } = {}) {
+  return parseBindings(await listRecords(TABLE_AGENT_LOGINS, 500, cached ? { sharedCacheMs: 60_000 } : { force: true }));
 }
 
 // Best effort and never blocks a login: the email is only an extra for the crosscheck.
@@ -90,8 +91,13 @@ export async function handler(event) {
     if (!who.ok) return reply(200, who);
     const login = who.login;
 
-    let rows = await readBindings();
-    const bound = bindingFor(rows, accountKey, login);
+    let rows = await readBindings({ cached: true });
+    let bound = bindingFor(rows, accountKey, login);
+    if (!bound) {
+      // Not in the shared copy: the table as it is now decides (a name just claimed, or a row an admin just fixed).
+      rows = await readBindings();
+      bound = bindingFor(rows, accountKey, login);
+    }
     if (bound) {
       // A login seen before the email column existed gets its email filled in once.
       if (!bound.email) {
