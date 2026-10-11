@@ -117,6 +117,31 @@
     return String(data.account_id);
   }
 
+  // A chat lists an agent by EMAIL, not by the login id (a UUID): add_user_to_chat with the UUID answers "`user_id` not found"
+  // and the open chat gets nothing. Ask the server for the email (it knows how to look it up); fall back to the login id alone.
+  const AGENT_EMAIL_KEY = "ca-livechat-agent-email";
+  async function currentAgentIds() {
+    const accountKey = selectedAccount();
+    const login = await currentAgentAccountId();
+    const emailKey = accountStorageKey(AGENT_EMAIL_KEY, accountKey);
+    let email = sessionStorage.getItem(emailKey) || "";
+    if (!email) {
+      try {
+        const response = await fetch("/livechat-agent-identity", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accountKey, agentToken: token(accountKey) }),
+        });
+        const data = await response.json();
+        if (data?.ok && String(data.email || "").includes("@")) {
+          email = String(data.email).trim();
+          sessionStorage.setItem(emailKey, email);
+        }
+      } catch (_) { /* the login id is still tried below */ }
+    }
+    return [...new Set([email, login].filter(Boolean))];
+  }
+
   function extractIds(url) {
     try {
       const path = new URL(url).pathname.split("/").filter(Boolean);
@@ -180,12 +205,27 @@
       await waitForActionSlot();
       if (unloading) throw new Error("Widget reloading");
       beforeDispatch?.();
-      const response = await fetch(`https://api.livechatinc.com/v3.6/agent/action/${name}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}`, ...(formData ? {} : { "Content-Type": "application/json" }) },
-        body: formData || JSON.stringify(body || {}),
-      });
-      const text = await response.text();
+      let response;
+      let text;
+      try {
+        response = await fetch(`https://api.livechatinc.com/v3.6/agent/action/${name}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}`, ...(formData ? {} : { "Content-Type": "application/json" }) },
+          body: formData || JSON.stringify(body || {}),
+        });
+        text = await response.text();
+      } catch (error) {
+        // The connection failed (or LiveChat's answer carried no CORS headers, as a rate-limit reply can). Try again.
+        if (unloading) throw new Error("Widget reloading");
+        if (attempt >= maxAttempts) throw error;
+        await sleep(Math.min(8000, 1000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 400));
+        // A send may have reached LiveChat before the answer was lost: look for its custom id before sending it again.
+        if (name === "send_event" && body?.event?.custom_id) {
+          const chat = await action("get_chat", { chat_id: body.chat_id });
+          if ((chat.thread?.events || []).some((item) => item.custom_id === body.event.custom_id)) return {};
+        }
+        continue;
+      }
       let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (_) {}
       const errorType = String(data.error?.type || data.error?.code || "").toLowerCase();
       const isTransient = response.status === 429 || response.status >= 500 || ["too_many_requests", "request_timeout", "service_unavailable", "internal"].includes(errorType);
@@ -301,6 +341,11 @@
     checkpoint();
   }
 
+  // Worth another try: the connection dropped, or LiveChat / the server was busy. Anything else (chat not found, wrong
+  // workspace, no access, a delivery that could not be confirmed) would fail the same way again.
+  const retryableError = (error) => error?.name === "TypeError"
+    || /failed to fetch|network|load failed|rate limited|timed? ?out|temporar|unavailable|busy|too many|\(5\d\d\)|\(429\)/i.test(String(error?.message || ""));
+
   async function runJob(job, index, total, delay, runId) {
     const progress = journal.progress[index] ||= { events: {} };
     if (progress.done) return;
@@ -308,56 +353,80 @@
     let temporarilyAddedAgent = Boolean(progress.added);
     let agentAccountId = progress.agentAccountId || "";
     let chatId = progress.chatId || "";
+    let enteredChat = false;   // this call has resumed the chat or put the agent in it (a retry does not do it again)
     try {
-      // Fail BEFORE anything is sent if this job's image reference cannot be resolved (never send the text and then drop the image).
-      if (job.imageId && !jobImageDataUrl(job)) throw new Error("The image for this queue is missing (it was not saved). Start the run again.");
-      emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
-      const chat = await resolveChat(job.url);
-      if (runWasStopped(runId)) throw new Error("Stopped by user");
-      chatId = chat.chatId;
-      progress.chatId = chatId;
-      checkpoint();
-      if (progress.delivered || progress.deliveryFinished) {
-        // Closing the last chat can itself replace the widget. Never reopen
-        // that chat just to discover its messages were already sent.
-        return;
-      }
-      if (chat.isActive !== true) {
+      // A chat that fails part-way (a lost connection, a busy moment) is tried again from where it stopped: every send is
+      // checkpointed, so a message that arrived is never sent twice. Only then is the failure reported.
+      for (let attempt = 1; ; attempt += 1) {
         try {
-          progress.resumed = true;
-          resumed = true;
+          // Fail BEFORE anything is sent if this job's image reference cannot be resolved (never send the text and then drop the image).
+          if (job.imageId && !jobImageDataUrl(job)) throw new Error("The image for this queue is missing (it was not saved). Start the run again.");
+          emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
+          const chat = await resolveChat(job.url);
+          if (runWasStopped(runId)) throw new Error("Stopped by user");
+          chatId = chat.chatId;
+          progress.chatId = chatId;
           checkpoint();
-          await action("resume_chat", { chat: { id: chat.chatId } });
-          resumed = true;
+          if (progress.delivered || progress.deliveryFinished) {
+            // Closing the last chat can itself replace the widget. Never reopen
+            // that chat just to discover its messages were already sent.
+            return;
+          }
+          if (enteredChat) {
+            // A retry of this chat: the agent is already in it from the first try.
+          } else if (chat.isActive !== true) {
+            try {
+              progress.resumed = true;
+              resumed = true;
+              checkpoint();
+              await action("resume_chat", { chat: { id: chat.chatId } });
+              resumed = true;
+            } catch (error) {
+              if (!/already.+active|active.+already/i.test(error.message)) throw error;
+            }
+            enteredChat = true;
+          } else {
+            const agentIds = await currentAgentIds();
+            const present = new Set((chat.users || []).map((user) => String(user?.id || "").toLowerCase()));
+            if (!agentIds.some((id) => present.has(id.toLowerCase()))) {
+              // The email is tried first (what a chat lists an agent by), then the login id.
+              let added = "";
+              let lastError = null;
+              for (const id of agentIds) {
+                try {
+                  progress.added = true;
+                  progress.agentAccountId = id;
+                  checkpoint();
+                  await action("add_user_to_chat", { chat_id: chat.chatId, user_id: id, user_type: "agent", visibility: "all", ignore_requester_presence: true });
+                  added = id;
+                  break;
+                } catch (error) {
+                  lastError = error;
+                  if (/already/i.test(error.message)) { added = ""; break; }   // already in the chat: nothing to add, nothing to remove
+                  if (!/user_id|not found/i.test(error.message)) throw error;
+                }
+              }
+              if (!added && lastError && !/already/i.test(lastError.message)) { progress.added = false; throw lastError; }
+              if (added) { agentAccountId = added; temporarilyAddedAgent = true; } else progress.added = false;
+            }
+            enteredChat = true;
+          }
+          for (let i = 0; i < job.messages.length; i += 1) {
+            if (runWasStopped(runId)) throw new Error("Stopped by user");
+            await sendCheckpointed({ chat_id: chat.chatId, event: { type: "message", text: job.messages[i], visibility: "all" } }, progress, `message:${i}`);
+            if (i < job.messages.length - 1) await sleep(delay);
+          }
+          if (runWasStopped(runId)) throw new Error("Stopped by user");
+          if (!progress.events.image?.done) await sendImage(chat.chatId, job, (_name, body) => sendCheckpointed(body, progress, "image"));
+          progress.delivered = true;
+          checkpoint();
+          break;
         } catch (error) {
-          if (!/already.+active|active.+already/i.test(error.message)) throw error;
-        }
-      } else {
-        agentAccountId = await currentAgentAccountId();
-        const alreadyPresent = (chat.users || []).some((user) => String(user?.id || "") === agentAccountId);
-        if (!alreadyPresent) {
-          progress.added = true;
-          progress.agentAccountId = agentAccountId;
-          checkpoint();
-          await action("add_user_to_chat", {
-            chat_id: chat.chatId,
-            user_id: agentAccountId,
-            user_type: "agent",
-            visibility: "all",
-            ignore_requester_presence: true,
-          });
-          temporarilyAddedAgent = true;
+          if (runWasStopped(runId) || unloading || attempt >= 3 || !retryableError(error)) throw error;
+          emit({ type: "PROGRESS", text: `Chat ${index + 1}: retrying…`, progress: `${index + 1}/${total}`, log: `↻ Chat ${index + 1}: ${error.message}. Trying again (${attempt + 1}/3)`, logType: "info" });
+          await sleep(2000 * attempt);
         }
       }
-      for (let i = 0; i < job.messages.length; i += 1) {
-        if (runWasStopped(runId)) throw new Error("Stopped by user");
-        await sendCheckpointed({ chat_id: chat.chatId, event: { type: "message", text: job.messages[i], visibility: "all" } }, progress, `message:${i}`);
-        if (i < job.messages.length - 1) await sleep(delay);
-      }
-      if (runWasStopped(runId)) throw new Error("Stopped by user");
-      if (!progress.events.image?.done) await sendImage(chat.chatId, job, (_name, body) => sendCheckpointed(body, progress, "image"));
-      progress.delivered = true;
-      checkpoint();
     } catch (error) {
       if (unloading) return;
       const stopped = runWasStopped(runId) || error.message === "Stopped by user";
