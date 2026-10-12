@@ -3266,7 +3266,9 @@ const ticketSearchResultsByChat = new Map();
 const watchedTicketSnapshots = new Map();
 let ticketNotifications = [];
 const TICKET_ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
-const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024;
+const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024; // PDFs: they are attached to the ticket, whose service sets this limit
+const TICKET_IMAGE_MAX_BYTES = 5 * 1024 * 1024; // images: stored in R2, only a link goes to the ticket
+const ticketMaxBytes = (file) => (/^image\//.test(file.type) ? TICKET_IMAGE_MAX_BYTES : TICKET_ATTACHMENT_MAX_BYTES);
 
 function ticketAttachmentField() {
   return ticketFields.find((field) => field.type === "ATTACHMENT") || null;
@@ -3290,7 +3292,7 @@ function renderTicketAttachments(chatId) {
         <input type="file" class="ticket-attachment-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple />
         <span>${files.length ? "+ Add more files" : "Choose files"}</span>
       </label>
-      <div class="ticket-attachment-help">PNG, JPG, WEBP or PDF · under 1MB each · up to 6 files · click here and press Ctrl+V to paste</div>
+      <div class="ticket-attachment-help">PNG, JPG or WEBP under 5MB · PDF under 1MB · up to 6 files · click here and press Ctrl+V to paste</div>
       ${rows ? `<div class="ticket-attachment-list">${rows}</div>` : ""}
       ${s?.ticketAttachmentError ? `<div class="ticket-attachment-error">${escapeHtml(s.ticketAttachmentError)}</div>` : ""}
     </div>`;
@@ -3306,12 +3308,12 @@ function addTicketAttachments(chatId, addedFiles) {
   if (!added.length) error = "The clipboard did not contain an image, PDF, or file.";
   else if (combined.length > 6) error = "You can attach up to 6 files.";
   else {
-    const invalid = added.find((file) => !file.size || file.size >= TICKET_ATTACHMENT_MAX_BYTES || !TICKET_ATTACHMENT_TYPES.has(file.type));
+    const invalid = added.find((file) => !file.size || file.size >= ticketMaxBytes(file) || !TICKET_ATTACHMENT_TYPES.has(file.type));
     if (invalid) {
       error = !invalid.size
         ? `${invalid.name || "Attachment"} is empty.`
-        : invalid.size >= TICKET_ATTACHMENT_MAX_BYTES
-          ? `${invalid.name || "Attachment"} must be under 1MB.`
+        : invalid.size >= ticketMaxBytes(invalid)
+          ? `${invalid.name || "Attachment"} must be under ${ticketMaxBytes(invalid) / (1024 * 1024)}MB.`
           : `${invalid.name || "Attachment"} must be PNG, JPG, WEBP, or PDF.`;
     }
   }

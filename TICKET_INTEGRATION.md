@@ -40,7 +40,7 @@ cannot be replicated until matching REST endpoints are added.
 ## Images in R2 and the ticket author
 
 **Images.** Bind an R2 bucket to the Pages project as `TICKET_IMAGES` (Settings → Bindings → R2 bucket). PNG, JPG and WEBP
-files are then stored in the bucket and the ticket gets their links (appended to the remarks, or to the field named by
+files (up to 5MB each, PDFs stay under 1MB) are then stored in the bucket and the ticket gets their links (appended to the remarks, or to the field named by
 `TICKETS_IMAGE_LINKS_FIELD`) instead of the files; PDFs are still attached. A link is `TICKET_IMAGES_PUBLIC_URL/<key>` if the
 bucket has a public address, otherwise `/ticket-image?k=<key>` on this site. The key contains a random UUID, so a link cannot be
 guessed, but anyone holding it can open the image. Add an R2 lifecycle rule if old images should expire. Without the binding
