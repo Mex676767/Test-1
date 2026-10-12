@@ -1,0 +1,115 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
+
+const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
+const fn = name => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
+function widget() {
+  const state = { chat: { escalation: {}, ticketView: 'list' } };
+  const requests = [];
+  const context = vm.createContext({
+    state, Map, Set, Date, Number, String,
+    previewMode: true, ticketConfigError: '', ticketDepartments: [], ticketMarkets: [], ticketNotifications: [],
+    ticketFields: [{ key: 'member_id' }],
+    TICKET_FIELD_SPECS: [{ stateKey: 'memberUserId' }, { stateKey: 'remarks' }, { stateKey: 'amount' }],
+    ticketCreateInFlight: new Set(), ticketDetailInFlight: new Set(), ticketSearchResultsByChat: new Map(),
+    ticketPeople: t => [t.raisedBy?.name, ...(t.assignees || []).map(p => p.name)].filter(Boolean),
+    ticketStatusValue: t => String(t.fields?.status || ''),
+    ticketChoiceDisplayLabel: (_key, value) => value,
+    ticketFieldDisplay: value => String(value),
+    ticketFieldFor: () => ({}),
+    renderTicketInput: (_id, spec) => `<input data-field="${spec.stateKey}">`,
+    renderTicketChoice: () => '<button>Choice</button>',
+    renderTicketAttachments: () => '<div>Attachments</div>',
+    renderTicketNotifications: () => '',
+    escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
+    fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },
+  });
+  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
+  context.renderTicketSlot = () => {};
+  return { state, context, requests, run: code => vm.runInContext(code, context) };
+}
+
+test('Tickets remain admin-only; the installed agent widget does not gain a new tab', () => {
+  const context = vm.createContext({ previewMode: false, BLAST_LIVE: true });
+  vm.runInContext(fn('mainTabAvailability'), context);
+  assert.equal(vm.runInContext('mainTabAvailability().tickets', context), false);
+  assert.equal(vm.runInContext('mainTabAvailability().knowledge', context), false);
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
+});
+
+test('Active includes unsolved tickets; solved, closed and completed tickets are separated', () => {
+  const w = widget();
+  for (const status of ['UNSOLVED_TICKET', 'PENDING_CUSTOMER', 'OPEN']) {
+    w.context.ticket = { fields: { status } };
+    assert.equal(w.run('ticketStatusTone(ticket)'), 'active');
+  }
+  for (const status of ['PYM_SOLVED', 'Closed', 'ONSITE_TEAM_DONE', 'X_VOID_TICKET']) {
+    w.context.ticket = { fields: { status } };
+    assert.equal(w.run('ticketStatusTone(ticket)'), 'solved');
+  }
+});
+
+test('list filters apply to searched results too and escape ticket content', () => {
+  const w = widget();
+  w.context.ticketSearchResultsByChat.set('chat', { mode: 'search', total: 3, tickets: [
+    { ref: 'TK1', raisedBy: { name: 'Alya' }, fields: { status: 'UNSOLVED_TICKET', query_type: '<script>bad</script>' } },
+    { ref: 'TK2', raisedBy: { name: 'Alya' }, fields: { status: 'PYM_SOLVED' } },
+    { ref: 'TK3', raisedBy: { name: 'Other' }, fields: { status: 'OPEN' } },
+  ] });
+  w.state.chat.ticketInboxFilter = 'active';
+  w.state.chat.ticketExplorerAgent = 'Alya';
+  const html = w.run('renderTicketExplorer("chat")');
+  assert.match(html, /data-ref="TK1"/);
+  assert.doesNotMatch(html, /data-ref="TK2"|data-ref="TK3"|<script>/);
+  assert.match(html, /&lt;script>/);
+});
+
+test('one main view is shown at a time and drafts survive switching back to the inbox', () => {
+  const w = widget();
+  w.state.chat.escalation.remarks = 'Keep this draft';
+  assert.doesNotMatch(w.run('renderEscalationSection("chat")'), /data-action="submitEscalation"/);
+  w.state.chat.ticketView = 'create';
+  const create = w.run('renderEscalationSection("chat")');
+  assert.match(create, /data-action="submitEscalation"/);
+  assert.match(create, /data-field="amount"/);
+  assert.doesNotMatch(create, /ticket-inbox-rows|ticket-search-input/);
+  w.state.chat.ticketView = 'list';
+  w.run('renderEscalationSection("chat")');
+  assert.equal(w.state.chat.escalation.remarks, 'Keep this draft');
+  w.state.chat.ticketView = 'create';
+  w.context.ticketCreateInFlight.add('chat');
+  assert.match(w.run('renderEscalationSection("chat")'), /disabled>Creating…/);
+});
+
+test('an inbox refresh in flight is shared, and a failure clears the loading state', async () => {
+  const w = widget();
+  let resolve;
+  w.context.fetch = () => new Promise(done => { resolve = done; });
+  const first = w.run('refreshTicketInbox("chat")');
+  await w.run('refreshTicketInbox("chat")');
+  assert.equal(w.context.ticketSearchResultsByChat.get('chat').loading, true);
+  resolve({ json: async () => ({ ok: false, error: 'Service unavailable' }) });
+  await first;
+  assert.equal(w.context.ticketSearchResultsByChat.get('chat').loading, false);
+  assert.equal(w.context.ticketSearchResultsByChat.get('chat').error, 'Service unavailable');
+});
+
+test('ticket polling updates an open ticket without replacing a creation form', async () => {
+  const w = widget();
+  let rendered = 0;
+  w.state.chat.ticketRecord = { ref: 'TK1' };
+  Object.assign(w.context, {
+    activeMainTab: 'tickets', watchedTicketSnapshots: new Map([['TK1', {}]]),
+    loadTicketStatus: async () => {}, chatListEl: { querySelector: () => ({}) },
+    renderTicketSlot: () => { rendered++; },
+  });
+  vm.runInContext(fn('pollTicketUpdates'), w.context);
+  w.state.chat.ticketView = 'create';
+  await w.run('pollTicketUpdates()');
+  assert.equal(rendered, 0);
+  w.state.chat.ticketView = 'detail';
+  await w.run('pollTicketUpdates()');
+  assert.equal(rendered, 1);
+});

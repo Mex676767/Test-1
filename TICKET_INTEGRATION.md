@@ -25,6 +25,13 @@ creation. Opened tickets are watched every 30 seconds while the Tickets tab is
 active; the app reports status, comment-count, file-count, or updated-time
 changes in its notification panel.
 
+The admin preview opens with a compact inbox. All, Active and Solved filters
+share one list; the filter button exposes agent, status, department and market
+filters. Opening a ticket and creating a new ticket each use their own view.
+Additional form fields and ticket details are collapsible, and form drafts and
+chosen attachments remain available when returning to the inbox. Tickets stay
+hidden in the installed LiveChat widget (`DEPARTMENT_TABS_LIVE = false`).
+
 The ticket API currently supports list, read, and create. It does not expose an
 update route, comment contents, comment posting, history, or log entries. The
 app shows their counts and links to the dashboard, but those website features
