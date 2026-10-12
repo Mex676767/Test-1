@@ -18,6 +18,7 @@ function widget() {
     ticketStatusValue: t => String(t.fields?.status || ''),
     ticketChoiceDisplayLabel: (_key, value) => value,
     ticketFieldDisplay: value => String(value),
+    ticketValueDisplay: (_key, value) => String(value),
     ticketFieldFor: () => ({}),
     renderTicketInput: (_id, spec) => `<input data-field="${spec.stateKey}">`,
     renderTicketChoice: () => '<button>Choice</button>',
@@ -112,4 +113,23 @@ test('ticket polling updates an open ticket without replacing a creation form', 
   w.state.chat.ticketView = 'detail';
   await w.run('pollTicketUpdates()');
   assert.equal(rendered, 1);
+});
+
+test('every ticket value the widget prints reads as the ticket system shows it, not as the backend stores it', () => {
+  const fallback = app.match(/const TICKET_FALLBACK_OPTIONS = \{[\s\S]*?\n\};/)[0];
+  const context = vm.createContext({ Array, String, Boolean, ticketFields: [{ key: 'new_choice', type: 'SELECT' }, { key: 'remarks', type: 'LONGTEXT' }, { key: 'amount', type: 'NUMBER' }] });
+  vm.runInContext([fallback, ...['ticketChoiceSlug', 'ticketChoiceDisplayLabel', 'ticketFieldDisplay', 'ticketValueDisplay'].map(fn)].join('\n'), context);
+  const show = (key, value) => vm.runInContext(`ticketValueDisplay(${JSON.stringify(key)}, ${JSON.stringify(value)})`, context);
+  assert.equal(show('query_type', 'vvip_ltv_70_bonus'), 'VVIP LTV 70 BONUS');
+  assert.equal(show('query_type', 'dp_not_credited'), 'DP NOT CREDITED');
+  assert.equal(show('status', 'PYM_SOLVED'), 'PYM TEAM SOLVED');
+  assert.equal(show('member_platform', 'pp96'), 'PP96');
+  assert.equal(show('brand', 'rm68'), 'RM68');
+  assert.equal(show('payment_gateway', 'KAAZPAY'), 'KAAZPAY');
+  assert.equal(show('level', '9_and_above'), '9 and above');
+  assert.equal(show('new_choice', 'some_new_choice'), 'SOME NEW CHOICE');
+  assert.equal(show('query_type', ['vvip_ltv_70_bonus', 'wd_delay']), 'VVIP LTV 70 BONUS, WD DELAY');
+  assert.equal(show('remarks', 'keep_this_text'), 'keep_this_text');
+  assert.equal(show('amount', 150), '150');
+  assert.equal(show('query_type', ''), '—');
 });

@@ -3345,7 +3345,7 @@ function rememberTicketSnapshot(ticket, notify = true) {
   watchedTicketSnapshots.set(ticket.ref, next);
   if (!notify || !previous || JSON.stringify(previous) === JSON.stringify(next)) return;
   const changes = [];
-  if (previous.status !== next.status) changes.push(`status changed to ${next.status || "blank"}`);
+  if (previous.status !== next.status) changes.push(`status changed to ${next.status ? ticketChoiceDisplayLabel("status", next.status) : "blank"}`);
   if (next.commentCount > previous.commentCount) changes.push(`${next.commentCount - previous.commentCount} new comment${next.commentCount - previous.commentCount === 1 ? "" : "s"}`);
   if (next.attachmentCount > previous.attachmentCount) changes.push(`${next.attachmentCount - previous.attachmentCount} new file${next.attachmentCount - previous.attachmentCount === 1 ? "" : "s"}`);
   if (!changes.length) changes.push("ticket details were updated");
@@ -3485,6 +3485,17 @@ function ticketFieldDisplay(value) {
   return String(value);
 }
 
+// A ticket's SELECT values come from the API as stored codes (vvip_ltv_70_bonus, PYM_SOLVED, pp96). The ticket system's own screen shows
+// the label (VVIP LTV 70 BONUS, PYM TEAM SOLVED, PP96); everything the widget prints for a ticket field goes through here so it reads the same.
+function ticketValueDisplay(key, value) {
+  const choiceKey = ({ brand: "member_platform", level: "member_level", vip_level: "member_level" })[key] || key;
+  const field = ticketFields.find((item) => item.key === key);
+  const isChoice = Boolean(TICKET_FALLBACK_OPTIONS[choiceKey]) || field?.type === "SELECT" || field?.type === "MULTISELECT";
+  if (!isChoice) return ticketFieldDisplay(value);
+  const label = (item) => (typeof item === "string" && item.trim() ? ticketChoiceDisplayLabel(choiceKey, item) : ticketFieldDisplay(item));
+  return Array.isArray(value) ? (value.length ? value.map(label).join(", ") : "—") : label(value);
+}
+
 function renderTicketSearchResults(chatId) {
   return renderTicketExplorer(chatId);
 }
@@ -3513,7 +3524,7 @@ function ticketStatusLabel(ticket) {
 }
 
 function ticketTitle(ticket) {
-  return ticketFieldDisplay(ticket.fields?.query_type || ticket.fields?.title || "Ticket");
+  return ticket.fields?.query_type ? ticketValueDisplay("query_type", ticket.fields.query_type) : ticketFieldDisplay(ticket.fields?.title || "Ticket");
 }
 
 function ticketUpdatedLabel(ticket) {
@@ -3575,7 +3586,7 @@ function renderTicketExplorer(chatId) {
     && matches(ticketStatusValue(ticket), s.ticketExplorerStatus)
     && matches(ticket.currentDepartment?.name || ticket.currentDepartment?.code, s.ticketExplorerDepartment)
     && matches(ticket.market?.label || ticket.market?.code, s.ticketExplorerMarket));
-  const options = (values, selected) => values.map(value => `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
+  const options = (values, selected, label = value => value) => values.map(value => `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label(value))}</option>`).join("");
   const activeFilters = [s.ticketExplorerAgent, s.ticketExplorerStatus, s.ticketExplorerDepartment, s.ticketExplorerMarket].filter(value => value && value !== "all").length;
   const counts = { all: tickets.length, active: tickets.filter(ticket => ticketStatusTone(ticket) !== "solved").length, solved: tickets.filter(ticket => ticketStatusTone(ticket) === "solved").length };
   return `<section class="ticket-inbox-list">
@@ -3584,7 +3595,7 @@ function renderTicketExplorer(chatId) {
     </div>
     ${s.ticketFiltersOpen ? `<div class="ticket-explorer-filters">
       <label><span>Agent</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerAgent"><option value="all">All agents</option>${options(agents, s.ticketExplorerAgent)}</select></label>
-      <label><span>Status</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerStatus"><option value="all">All statuses</option>${options(statuses, s.ticketExplorerStatus)}</select></label>
+      <label><span>Status</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerStatus"><option value="all">All statuses</option>${options(statuses, s.ticketExplorerStatus, value => ticketChoiceDisplayLabel("status", value))}</select></label>
       <label><span>Department</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerDepartment"><option value="all">All departments</option>${options(departments, s.ticketExplorerDepartment)}</select></label>
       <label><span>Market</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerMarket"><option value="all">All markets</option>${options(markets, s.ticketExplorerMarket)}</select></label>
       <button type="button" class="ticket-inbox-text-button" data-action="clearTicketFilters" data-chat="${escapeHtml(chatId)}">Clear filters</button>
@@ -3594,7 +3605,7 @@ function renderTicketExplorer(chatId) {
     <div class="ticket-inbox-rows">${filtered.length ? filtered.map(ticket => `<button type="button" class="ticket-inbox-row" data-action="openTicketResult" data-chat="${escapeHtml(chatId)}" data-ref="${escapeHtml(ticket.ref)}">
       <span class="ticket-inbox-row-top"><span class="ticket-inbox-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-inbox-status ${ticketStatusTone(ticket)}">${escapeHtml(ticketStatusLabel(ticket))}</span></span>
       <strong class="ticket-inbox-row-title">${escapeHtml(ticketTitle(ticket))}</strong>
-      <span class="ticket-inbox-row-meta"><span>${escapeHtml(ticket.fields?.member_id || "No player ID")}${ticket.fields?.member_platform || ticket.fields?.brand ? ` · ${escapeHtml(ticket.fields.member_platform || ticket.fields.brand)}` : ""}</span><span>${escapeHtml(ticket.currentDepartment?.name || ticket.currentDepartment?.code || "Unassigned")}</span></span>
+      <span class="ticket-inbox-row-meta"><span>${escapeHtml(ticket.fields?.member_id || "No player ID")}${ticket.fields?.member_platform || ticket.fields?.brand ? ` · ${escapeHtml(ticketValueDisplay("member_platform", ticket.fields.member_platform || ticket.fields.brand))}` : ""}</span><span>${escapeHtml(ticket.currentDepartment?.name || ticket.currentDepartment?.code || "Unassigned")}</span></span>
       <span class="ticket-inbox-row-bottom"><span>${Number(ticket.commentCount || 0)} comment${Number(ticket.commentCount || 0) === 1 ? "" : "s"}</span><span>${escapeHtml(ticketUpdatedLabel(ticket))}</span></span>
     </button>`).join("") : '<div class="ticket-inbox-empty">No tickets match. Try another search or clear the filters.</div>'}</div>
     ${Number(result.total) > tickets.length ? `<p class="ticket-inbox-limit">Loaded ${tickets.length} of ${Number(result.total)} tickets. Search to narrow the results.</p>` : ""}`}
@@ -3615,11 +3626,11 @@ function renderTicketStatus(chatId) {
   const attachments = Array.isArray(ticket.fields?.attachment) ? ticket.fields.attachment : [];
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   const rows = Object.entries(ticket.fields || {}).filter(([key]) => key !== "attachment")
-    .map(([key, value]) => `<div><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(ticketFieldDisplay(value))}</strong></div>`).join("");
+    .map(([key, value]) => `<div><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(ticketValueDisplay(key, value))}</strong></div>`).join("");
   return `<article class="ticket-inbox-detail">
     <div class="ticket-inbox-row-top"><span class="ticket-inbox-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-inbox-status ${ticketStatusTone(ticket)}">${escapeHtml(ticketStatusLabel(ticket))}</span></div>
     <h3>${escapeHtml(ticketTitle(ticket))}</h3>
-    <p class="ticket-inbox-player">${escapeHtml(ticket.fields?.member_id || "No player ID")} · ${escapeHtml(ticket.fields?.member_platform || ticket.fields?.brand || "—")} · ${escapeHtml(market)}</p>
+    <p class="ticket-inbox-player">${escapeHtml(ticket.fields?.member_id || "No player ID")} · ${escapeHtml(ticketValueDisplay("member_platform", ticket.fields?.member_platform || ticket.fields?.brand || ""))} · ${escapeHtml(market)}</p>
     <div class="ticket-inbox-summary"><div><span>Department</span><strong>${escapeHtml(department)}</strong></div><div><span>Assigned to</span><strong>${escapeHtml(assignees)}</strong></div></div>
     <details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketDetailsOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketDetailsOpen ? "open" : ""}><summary>Ticket details</summary><div class="ticket-inbox-data">
       <div><span>Created</span><strong>${escapeHtml(created)}</strong></div><div><span>Updated</span><strong>${escapeHtml(updated)}</strong></div><div><span>Raised by</span><strong>${escapeHtml(raisedBy)}</strong></div>${rows}
