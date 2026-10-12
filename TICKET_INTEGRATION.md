@@ -29,3 +29,21 @@ The ticket API currently supports list, read, and create. It does not expose an
 update route, comment contents, comment posting, history, or log entries. The
 app shows their counts and links to the dashboard, but those website features
 cannot be replicated until matching REST endpoints are added.
+
+## Images in R2 and the ticket author
+
+**Images.** Bind an R2 bucket to the Pages project as `TICKET_IMAGES` (Settings → Bindings → R2 bucket). PNG, JPG and WEBP
+files are then stored in the bucket and the ticket gets their links (appended to the remarks, or to the field named by
+`TICKETS_IMAGE_LINKS_FIELD`) instead of the files; PDFs are still attached. A link is `TICKET_IMAGES_PUBLIC_URL/<key>` if the
+bucket has a public address, otherwise `/ticket-image?k=<key>` on this site. The key contains a random UUID, so a link cannot be
+guessed, but anyone holding it can open the image. Add an R2 lifecycle rule if old images should expire. Without the binding
+nothing changes: images are attached as before.
+
+**Author.** The ticket API records the API key's owner as the author, so the widget also sends the signed-in agent's LiveChat id
+(the account_id UUID) and email in ticket fields. Set `TICKETS_AUTHOR_ID_FIELD` and `TICKETS_AUTHOR_EMAIL_FIELD` to the field keys
+the ticket team created. The server asks LiveChat who the agent's token belongs to, so the browser cannot choose the author. Once a
+field is set, a ticket without a valid LiveChat login is refused.
+
+**All LiveChat users.** `GET /livechat-agents` with header `x-agents-key: <LIVECHAT_AGENTS_KEY>` lists every agent of both
+LiveChat accounts (`account`, `email`, `name`, `role`) and, for agents who have signed in to the widget, their `login` (the
+account_id UUID) and `agentName`. The accounts' Personal Access Tokens need the `agents--all:ro` scope. Unset key = 404.
