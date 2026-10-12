@@ -32,12 +32,20 @@ function widget() {
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
 
-test('Tickets remain admin-only; the installed agent widget does not gain a new tab', () => {
-  const context = vm.createContext({ previewMode: false, BLAST_LIVE: true });
-  vm.runInContext(fn('mainTabAvailability'), context);
-  assert.equal(vm.runInContext('mainTabAvailability().tickets', context), false);
-  assert.equal(vm.runInContext('mainTabAvailability().knowledge', context), false);
-  assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
+test('the installed widget: Retention keeps all four tabs, Customer Service gets Tickets and Knowledge, an unknown department hides nothing', () => {
+  const tabs = (settings) => {
+    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: true, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
+    vm.runInContext(fn('mainTabAvailability'), context);
+    return JSON.parse(JSON.stringify(vm.runInContext('mainTabAvailability()', context)));
+  };
+  const all = { customer: true, tickets: true, blast: true, knowledge: true };
+  assert.deepEqual(tabs({ currentDepartment: 'rtn', departmentKnown: true }), all);
+  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: true });
+  assert.deepEqual(tabs({ departmentKnown: false }), all, 'until LiveChat says, nothing is hidden');
+  assert.equal(tabs({ currentDepartment: 'rtn', departmentKnown: true, BLAST_LIVE: false }).blast, false, 'the Blast switch still wins');
+  assert.deepEqual(tabs({ DEPARTMENT_TABS_LIVE: false }), { customer: true, tickets: false, blast: true, knowledge: false }, 'with the rollout switch off the installed widget is as before');
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
+  assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = true;/);
 });
 
 test('Active includes unsolved tickets; solved, closed and completed tickets are separated', () => {
