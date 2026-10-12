@@ -4741,18 +4741,21 @@ chatListEl.addEventListener("click", async (e) => {
     ticketCreateInFlight.add(chatId);
     try {
       const files = ticketAttachmentsByChat.get(chatId) || [];
+      // The server asks LiveChat who this token belongs to and sends that agent's LiveChat id and email with the ticket.
+      const agentToken = liveChatAgentTokens()[currentLiveChatAccount];
+      const author = agentToken && currentLiveChatAccount ? { accountKey: currentLiveChatAccount, agentToken } : undefined;
       let requestBody;
       let headers;
       if (files.length) {
         const form = new FormData();
-        form.append("ticket", JSON.stringify({ fields }));
+        form.append("ticket", JSON.stringify({ fields, author }));
         const attachmentField = ticketAttachmentField();
         const partName = attachmentField?.key || attachmentField?.label || "Attachment";
         for (const file of files) form.append(partName, file, file.name);
         requestBody = form;
       } else {
         headers = { "Content-Type": "application/json" };
-        requestBody = JSON.stringify({ fields });
+        requestBody = JSON.stringify({ fields, author });
       }
       const res = await fetch("/ticket-create", { method: "POST", headers, body: requestBody });
       const data = await res.json();

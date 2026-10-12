@@ -21,13 +21,14 @@ Set in Cloudflare → Pages → test-1 → Settings → Variables and Secrets (P
 
 - Lark: `LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_BASE_APP_TOKEN`, `LARK_TABLE_CUSTOMER_APPROACHING`, `LARK_TABLE_PNL`, `LARK_TABLE_REDEEM_CODE`, `LARK_TABLE_GRACE_PERIOD`, `LARK_TABLE_TOP_PNL_NIGHT`, `LARK_TABLE_LTV_DAY`, `LARK_TABLE_RISK_PLAYER`, `LARK_TABLE_SPECIAL_RELOAD`, `LARK_TABLE_VIP_BOOSTER`, `LARK_TABLE_TELEGRAM28`, `LARK_TABLE_MOONCAKE`, `LARK_TABLE_VS96_FEEDBACK`, `LARK_TABLE_BONUS_CONFIG`, `LARK_ESCALATION_BASE_TOKEN`, `LARK_ESCALATION_TABLE`
 - LiveChat: `LIVECHAT_PAT`, `LIVECHAT_PAT_2`, `LIVECHAT_CLIENT_ID`, `LIVECHAT_CLIENT_ID2` (alias `LIVECHAT_CLIENT_ID_2`), `LIVECHAT_REDIRECT_URI`
-- Tickets: `TICKETS_API_BASE_URL`, `TICKETS_API_KEY`, `TICKETS_MARKET_ID`, `TICKETS_TO_DEPARTMENT_ID`
+- Tickets: `TICKETS_API_BASE_URL`, `TICKETS_API_KEY`, `TICKETS_MARKET_ID`, `TICKETS_TO_DEPARTMENT_ID`. Optional, off until set: `TICKETS_AUTHOR_ID_FIELD` / `TICKETS_AUTHOR_EMAIL_FIELD` (ticket field keys that receive the raising agent's LiveChat id and email; once either is set, a ticket without a valid LiveChat login is refused), `TICKETS_IMAGE_LINKS_FIELD` (field that gets the image links, default `remarks`), `TICKET_IMAGES_PUBLIC_URL` (public address of the image bucket; unset = links point at `/ticket-image` on this site). See TICKET_INTEGRATION.md.
+- `LIVECHAT_AGENTS_KEY` — enables `GET /livechat-agents` (every LiveChat agent of both accounts; header `x-agents-key: <value>`). Unset = the endpoint returns 404.
 - Queue behaviour flags:
   - `LARK_QUEUE_PROTOCOL=v2` — use the v2 long-poll protocol (required; currently set).
   - `LARK_BATCH_CREATE=1` — coalesce row creates into Lark `batch_create` (needs `LARK_QUEUE_PROTOCOL=v2` and a Durable Object that has `createBatch`). Remove the variable to go back to single creates.
   - `LARK_QUEUE_NAME` / `LARK_QUEUE_LOCATION_HINT` — OPTIONAL, unset today: name of the queue object (default `lark-api-global`) and the region to create a NEW object in (`apac` etc.). Only for moving the queue closer to Lark, see section 13. Remove them to go back.
   - `QUEUE_STATS_KEY` — enables `GET /queue-stats` (header `x-stats-key: <value>`). Unset = the endpoint returns 404.
-- Binding (not a variable): `LARK_SEARCH_QUEUE` → Durable Object `MyDurableObject` of worker `rtn-lark-rate-queue`.
+- Bindings (not variables): `LARK_SEARCH_QUEUE` → Durable Object `MyDurableObject` of worker `rtn-lark-rate-queue`; `TICKET_IMAGES` → the R2 bucket for ticket images (optional: without it images are attached to the ticket as before).
 
 ## 3. Deploying
 
