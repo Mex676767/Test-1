@@ -42,7 +42,9 @@ export async function handler(event) {
       totalSize += Number(file.size) || 0;
       if (counts.get(field) > 6) return json(400, { ok: false, error: `${field} allows at most 6 files` });
       if (!file.size) return json(400, { ok: false, error: `${file.name || "Attachment"} is empty` });
-      if (file.size >= 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under 1MB` });
+      // An image goes to R2 and may be larger; anything attached to the ticket stays within the ticket service's 1MB.
+      const limitMb = event.env?.TICKET_IMAGES && isStoredImage(file) ? 5 : 1;
+      if (file.size >= limitMb * 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under ${limitMb}MB` });
       if (!allowedTypes.has(file.type)) return json(400, { ok: false, error: `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF` });
     }
     if (totalSize > 10 * 1024 * 1024) return json(413, { ok: false, error: "The complete ticket request must be under 10MB" });

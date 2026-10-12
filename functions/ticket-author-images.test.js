@@ -159,3 +159,20 @@ test("the image endpoint serves only keys this site wrote, as an image", async (
   const post = await imageOnRequest({ env: { TICKET_IMAGES: bucket }, request: new Request(`https://x.test/ticket-image?k=${key}`, { method: "POST" }) });
   assert.equal(post.status, 405);
 });
+
+test("with the bucket an image may be up to 5MB; a PDF, or an image without the bucket, stays under 1MB", async () => {
+  const net = fakeNetwork();
+  const big = (type, name) => new File([new Uint8Array(3 * 1024 * 1024)], name, { type });
+  const huge = new File([new Uint8Array(5 * 1024 * 1024)], "huge.png", { type: "image/png" });
+  try {
+    const withBucket = { ...baseEnv, TICKET_IMAGES: fakeBucket() };
+    assert.equal((await call(withBucket, multipart({ toDepartment: "PYM_MYR" }, [big("image/png", "ok.png")]))).statusCode, 201);
+    const tooBig = await call(withBucket, multipart({ toDepartment: "PYM_MYR" }, [huge]));
+    assert.equal(tooBig.statusCode, 400);
+    assert.match(JSON.parse(tooBig.body).error, /under 5MB/);
+    const pdfBig = await call(withBucket, multipart({ toDepartment: "PYM_MYR" }, [big("application/pdf", "a.pdf")]));
+    assert.match(JSON.parse(pdfBig.body).error, /under 1MB/);
+    const noBucket = await call(baseEnv, multipart({ toDepartment: "PYM_MYR" }, [big("image/png", "ok.png")]));
+    assert.match(JSON.parse(noBucket.body).error, /under 1MB/);
+  } finally { net.restore(); }
+});
