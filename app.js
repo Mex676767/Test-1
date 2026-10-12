@@ -2,9 +2,9 @@
 // Pages environment; the browser only receives the fields it needs.
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
-// Department-based sections: Retention agents see Retention, Blast, Tickets and Knowledge; Customer Service agents see Tickets and Knowledge.
-// The department comes from the agent's LiveChat groups (see detectDepartment); an agent whose department cannot be found keeps the full view.
-const DEPARTMENT_TABS_LIVE = true;
+// Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge) are on in the admin
+// preview only. DEPARTMENT_TABS_LIVE puts them in the installed LiveChat widget too; keep it off until rollout is approved.
+const DEPARTMENT_TABS_LIVE = false;
 const BLAST_LIVE = true;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
@@ -196,6 +196,7 @@ function saveAgent(name) {
 // Settings panel — overlaid on top of the widget, blocking interaction
 // until an agent is chosen.
 function openSettingsPanel() {
+  const customerService = isCustomerServiceView();
   document.getElementById("settingsOverlay")?.remove();
   const blastFailures = readBlastStorage(BLAST_LOCAL_STORAGE_KEY).failureLog;
   const failureLog = Array.isArray(blastFailures) ? blastFailures : [];
@@ -209,8 +210,9 @@ function openSettingsPanel() {
           <span>Settings</span>
           <small>Agent preferences and diagnostics</small>
         </div>
-        ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
+        ${selectedAgent || customerService ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
+      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you.</p>${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
@@ -224,6 +226,7 @@ function openSettingsPanel() {
           : `<input type="text" class="input settings-text" id="agentSelect" placeholder="Type your name (e.g. 96 Edwin)" value="${selectedAgent}" />`
         }
       </div>
+      `}
 
       <div class="settings-card">
         <div class="settings-section-title"><span class="settings-section-icon">↗</span><span>Blast history</span></div>
@@ -252,6 +255,10 @@ function openSettingsPanel() {
   document.body.appendChild(overlay);
 
   document.getElementById("settingsSignOut")?.addEventListener("click", () => { signOutLiveChat(); });
+  if (customerService) { // no Blast history and nothing to save
+    overlay.querySelector(".settings-failures")?.closest(".settings-card")?.remove();
+    document.getElementById("settingsSave")?.remove();
+  }
 
   document.getElementById("settingsClearFailures")?.addEventListener("click", () => {
     const current = readBlastStorage(BLAST_LOCAL_STORAGE_KEY);
@@ -260,7 +267,7 @@ function openSettingsPanel() {
     document.getElementById("settingsClearFailures")?.closest(".settings-failures")?.remove();
   });
 
-  document.getElementById("settingsSave").addEventListener("click", () => {
+  document.getElementById("settingsSave")?.addEventListener("click", () => {
     if (AGENT_LOGIN_LIVE) { overlay.remove(); return; }
     const val = document.getElementById("agentSelect").value.trim();
     if (!val) { setStatus("Choose your name before continuing.", "error"); return; }
@@ -371,7 +378,7 @@ function applyDepartmentChrome() {
   const rtn = !departmentKnown || currentDepartment === "rtn";
   const settingsButton = document.getElementById("settingsBtn");
   const agentBadge = document.getElementById("agentBadge");
-  if (settingsButton) settingsButton.hidden = !rtn;
+  if (settingsButton) settingsButton.hidden = false; // Customer Service keeps Settings: Diagnostics and Sign out
   if (agentBadge) agentBadge.hidden = !rtn;
 }
 
@@ -685,7 +692,10 @@ function pickAgentName(accountKey, token, available) {
 // Which department is this signed-in agent in? The server asks LiveChat for their groups (Priority 96 / Priority TC = Retention).
 // If LiveChat cannot say, nothing is hidden: the agent keeps the full Retention view.
 async function detectDepartment(accountKey, token) {
-  if (!DEPARTMENT_TABS_LIVE || !DEPARTMENT_SEPARATION_ENABLED) return "";
+  if (!DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE)) return "";
+  // Admin preview only: ?department=cs or ?department=rtn shows that department's view, so both can be tested without a second LiveChat account.
+  const forced = previewMode ? new URLSearchParams(location.search).get("department") : "";
+  if (forced === "cs" || forced === "rtn") { setDepartmentFromGroups(forced === "rtn" ? ["Priority 96"] : []); return forced; }
   try { return (await resolveLoggedInDepartment(accountKey, token)).department; }
   catch (error) { logDiagnostic(`Department check failed, full view kept: ${error.message}`, "warn"); return ""; }
 }
@@ -1045,6 +1055,11 @@ try {
 function departmentFromGroups(groups) {
   const names = Array.isArray(groups) ? groups.map((name) => String(name || "").trim()) : [];
   return names.some((name) => /^priority\s+(?:96|tc)$/i.test(name)) ? "rtn" : "cs";
+}
+
+// Is this window showing the Customer Service view (a known department that is not Retention, with the department views on)?
+function isCustomerServiceView() {
+  return DEPARTMENT_SEPARATION_ENABLED && (previewMode || DEPARTMENT_TABS_LIVE) && departmentKnown && currentDepartment === "cs";
 }
 
 function setDepartmentFromGroups(groups) {

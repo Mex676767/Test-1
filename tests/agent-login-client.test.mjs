@@ -20,8 +20,8 @@ test('the LiveChat login is ON for everyone; adding agentLogin=0 to the address 
   assert.equal(loginFlag(false, '?agentLogin=0'), false);
 });
 
-test('the department switches are on; the old manual choice stays off', () => {
-  assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
+test('the department views are on in the admin preview only; the installed widget switch and the old manual choice stay off', () => {
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
   assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = true;/);
   assert.match(app, /const AUTOMATIC_DEPARTMENT_DETECTION = false;/);
 });
