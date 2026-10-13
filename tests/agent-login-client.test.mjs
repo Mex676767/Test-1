@@ -20,9 +20,9 @@ test('the LiveChat login is ON for everyone; adding agentLogin=0 to the address 
   assert.equal(loginFlag(false, '?agentLogin=0'), false);
 });
 
-test('the department switches were left alone', () => {
+test('the department views are on in the admin preview only; the installed widget switch and the old manual choice stay off', () => {
   assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
-  assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = false;/);
+  assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = true;/);
   assert.match(app, /const AUTOMATIC_DEPARTMENT_DETECTION = false;/);
 });
 
@@ -41,9 +41,9 @@ test('once the name comes from the login, Settings shows it read-only and the Sa
 });
 
 // ---- requireAgentLogin, driven with fakes ---------------------------------------------------------
-function harness({ configured = '', stored = {}, serverReplies }) {
+function harness({ configured = '', stored = {}, serverReplies, department = '' }) {
   const session = new Map(Object.entries(stored));
-  const calls = { posted: [], panels: [], bound: [], picked: [], dropped: [] };
+  const calls = { posted: [], panels: [], bound: [], picked: [], dropped: [], detected: [], cs: [] };
   const handlers = {};
   const context = vm.createContext({
     JSON, Date, Promise, Boolean, URL, location: { origin: 'https://app.test' }, CONFIGURED_LIVECHAT_ACCOUNT: configured,
@@ -66,6 +66,8 @@ function harness({ configured = '', stored = {}, serverReplies }) {
       return { querySelector: (sel) => ({ addEventListener: (ev, fnc) => { handlers[sel] = fnc; }, disabled: false, className: '', textContent: '' }) };
     },
     applyBoundAgent: (name, key) => calls.bound.push([name, key]),
+    detectDepartment: async (key, token) => { calls.detected.push([key, token]); return department; },
+    applyCustomerServiceAgent: (key) => calls.cs.push(key),
     pickAgentName: async (key, token, available) => { calls.picked.push([key, token, available]); },
     connectLiveChatLogin: async () => ({ accountKey: 'lc1', token: 'fresh', expiresAt: Date.now() + 3600_000 }),
   });
@@ -193,4 +195,24 @@ test('Settings offers Sign out only once the name came from the login, and the b
   const panel = app.slice(app.indexOf('function openSettingsPanel'), app.indexOf('function renderDiagnosticsLog'));
   assert.match(panel, /\$\{agentLocked \? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat<\/button>` : ""\}/);
   assert.match(panel, /getElementById\("settingsSignOut"\)\?\.addEventListener\("click", \(\) => \{ signOutLiveChat\(\); \}\);/);
+});
+
+test('a Customer Service agent skips the agent-name step: no login request, no panel, straight to Tickets and Knowledge', async () => {
+  const h = harness({ department: 'cs', stored: { 'ca-livechat-agent-token:lc1': 'tok', 'ca-livechat-agent-token-expiry:lc1': future }, serverReplies: [] });
+  await h.run();
+  assert.deepEqual(h.calls.detected, [['lc1', 'tok']]);
+  assert.deepEqual(h.calls.cs, ['lc1']);
+  assert.deepEqual(h.calls.posted, []);
+  assert.deepEqual(h.calls.bound, []);
+  assert.equal(h.calls.panels.length, 0);
+});
+
+test('a Retention agent, or one whose department could not be found, goes through the agent name as before', async () => {
+  for (const department of ['rtn', '']) {
+    const h = harness({ department, stored: { 'ca-livechat-agent-token:lc1': 'tok', 'ca-livechat-agent-token-expiry:lc1': future }, serverReplies: [{ ok: true, bound: true, name: '96 Teh' }] });
+    await h.run();
+    assert.deepEqual(h.calls.detected, [['lc1', 'tok']]);
+    assert.deepEqual(h.calls.cs, []);
+    assert.deepEqual(h.calls.bound, [['96 Teh', 'lc1']]);
+  }
 });

@@ -2,11 +2,11 @@
 // Pages environment; the browser only receives the fields it needs.
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
-// Department-based sections are being tested in the standalone preview.
-// Keep them out of the installed LiveChat widget until rollout is approved.
+// Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge) are on in the admin
+// preview only. DEPARTMENT_TABS_LIVE puts them in the installed LiveChat widget too; keep it off until rollout is approved.
 const DEPARTMENT_TABS_LIVE = false;
 const BLAST_LIVE = true;
-const DEPARTMENT_SEPARATION_ENABLED = false;
+const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
 // Temporary preview fallback. Turn this back on after agents--my:ro has
 // been added to both LiveChat OAuth clients.
@@ -196,6 +196,7 @@ function saveAgent(name) {
 // Settings panel — overlaid on top of the widget, blocking interaction
 // until an agent is chosen.
 function openSettingsPanel() {
+  const customerService = isCustomerServiceView();
   document.getElementById("settingsOverlay")?.remove();
   const blastFailures = readBlastStorage(BLAST_LOCAL_STORAGE_KEY).failureLog;
   const failureLog = Array.isArray(blastFailures) ? blastFailures : [];
@@ -209,8 +210,9 @@ function openSettingsPanel() {
           <span>Settings</span>
           <small>Agent preferences and diagnostics</small>
         </div>
-        ${selectedAgent ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
+        ${selectedAgent || customerService ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
+      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you.</p>${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
@@ -224,6 +226,7 @@ function openSettingsPanel() {
           : `<input type="text" class="input settings-text" id="agentSelect" placeholder="Type your name (e.g. 96 Edwin)" value="${selectedAgent}" />`
         }
       </div>
+      `}
 
       <div class="settings-card">
         <div class="settings-section-title"><span class="settings-section-icon">↗</span><span>Blast history</span></div>
@@ -252,6 +255,10 @@ function openSettingsPanel() {
   document.body.appendChild(overlay);
 
   document.getElementById("settingsSignOut")?.addEventListener("click", () => { signOutLiveChat(); });
+  if (customerService) { // no Blast history and nothing to save
+    overlay.querySelector(".settings-failures")?.closest(".settings-card")?.remove();
+    document.getElementById("settingsSave")?.remove();
+  }
 
   document.getElementById("settingsClearFailures")?.addEventListener("click", () => {
     const current = readBlastStorage(BLAST_LOCAL_STORAGE_KEY);
@@ -260,7 +267,7 @@ function openSettingsPanel() {
     document.getElementById("settingsClearFailures")?.closest(".settings-failures")?.remove();
   });
 
-  document.getElementById("settingsSave").addEventListener("click", () => {
+  document.getElementById("settingsSave")?.addEventListener("click", () => {
     if (AGENT_LOGIN_LIVE) { overlay.remove(); return; }
     const val = document.getElementById("agentSelect").value.trim();
     if (!val) { setStatus("Choose your name before continuing.", "error"); return; }
@@ -368,10 +375,10 @@ function applyDepartmentChrome() {
     document.getElementById("agentBadge")?.removeAttribute("hidden");
     return;
   }
-  const rtn = currentDepartment === "rtn";
+  const rtn = !departmentKnown || currentDepartment === "rtn";
   const settingsButton = document.getElementById("settingsBtn");
   const agentBadge = document.getElementById("agentBadge");
-  if (settingsButton) settingsButton.hidden = !rtn;
+  if (settingsButton) settingsButton.hidden = false; // Customer Service keeps Settings: Diagnostics and Sign out
   if (agentBadge) agentBadge.hidden = !rtn;
 }
 
@@ -380,12 +387,12 @@ async function resolveLoggedInDepartment(accountKey, token) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ accountKey, agentToken: token }),
+    ...(typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(10_000) } : {}),
   });
   const data = await response.json();
   if (!data.ok) throw new Error(data.error || "Could not identify this LiveChat agent.");
   setCurrentLiveChatAccount(accountKey);
   setDepartmentFromGroups(data.groups || []);
-  activeMainTab = data.department === "rtn" ? "customer" : "tickets";
   applyDepartmentChrome();
   syncMainTabs();
   renderChats(activeChats);
@@ -395,6 +402,7 @@ async function resolveLoggedInDepartment(accountKey, token) {
 function applyManualDepartment(accountKey, department) {
   setCurrentLiveChatAccount(accountKey);
   currentDepartment = department === "rtn" ? "rtn" : "cs";
+  departmentKnown = true;
   try { sessionStorage.setItem(DEPARTMENT_SESSION_KEY, currentDepartment); } catch (_) {}
   try { sessionStorage.setItem(MANUAL_DEPARTMENT_SESSION_KEY, currentDepartment); } catch (_) {}
   activeMainTab = currentDepartment === "rtn" ? "customer" : "tickets";
@@ -681,6 +689,26 @@ function pickAgentName(accountKey, token, available) {
   });
 }
 
+// Which department is this signed-in agent in? The server asks LiveChat for their groups (Priority 96 / Priority TC = Retention).
+// If LiveChat cannot say, nothing is hidden: the agent keeps the full Retention view.
+async function detectDepartment(accountKey, token) {
+  if (!DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE)) return "";
+  // Admin preview only: ?department=cs or ?department=rtn shows that department's view, so both can be tested without a second LiveChat account.
+  const forced = previewMode ? new URLSearchParams(location.search).get("department") : "";
+  if (forced === "cs" || forced === "rtn") { setDepartmentFromGroups(forced === "rtn" ? ["Priority 96"] : []); return forced; }
+  try { return (await resolveLoggedInDepartment(accountKey, token)).department; }
+  catch (error) { logDiagnostic(`Department check failed, full view kept: ${error.message}`, "warn"); return ""; }
+}
+
+// A Customer Service agent records no cases, so there is no agent name to pick: straight to Tickets and Knowledge.
+function applyCustomerServiceAgent(accountKey) {
+  agentSigningIn = false;
+  setCurrentLiveChatAccount(accountKey);
+  updateAgentBadge();
+  document.getElementById("agentLoginOverlay")?.remove();
+  logDiagnostic("Signed in with LiveChat as Customer Service (Tickets and Knowledge).", "success");
+}
+
 async function requireAgentLogin() {
   agentSigningIn = true;
   updateAgentBadge();
@@ -699,6 +727,7 @@ async function requireAgentLogin() {
     const tokens = liveChatAgentTokens();
     const usable = clients.map((client) => client.key).filter((key) => tokens[key]);
     for (const key of usable) {
+      if (await detectDepartment(key, tokens[key]) === "cs") { applyCustomerServiceAgent(key); return; }
       let data;
       try { data = await postAgentLogin(key, tokens[key]); } catch (_) { failure = "Couldn't reach the server — check your connection."; continue; }
       if (data.loginExpired) { dropLiveChatToken(key); failure = data.error || ""; continue; }
@@ -1017,9 +1046,10 @@ try { if (sessionStorage.getItem(MAIN_TAB_SESSION_KEY) === "blast") activeMainTa
 // LiveChat group response arrives, use the smaller CS view.
 const DEPARTMENT_SESSION_KEY = "rc-agent-department";
 let currentDepartment = "cs";
+let departmentKnown = false; // false until LiveChat has said which department this agent is in: nothing is hidden before that
 try {
   const savedDepartment = sessionStorage.getItem(DEPARTMENT_SESSION_KEY);
-  if (savedDepartment === "rtn" || savedDepartment === "cs") currentDepartment = savedDepartment;
+  if (savedDepartment === "rtn" || savedDepartment === "cs") { currentDepartment = savedDepartment; departmentKnown = true; }
 } catch (_) { /* sessionStorage may be unavailable in a hardened iframe */ }
 
 function departmentFromGroups(groups) {
@@ -1027,27 +1057,34 @@ function departmentFromGroups(groups) {
   return names.some((name) => /^priority\s+(?:96|tc)$/i.test(name)) ? "rtn" : "cs";
 }
 
+// Is this window showing the Customer Service view (a known department that is not Retention, with the department views on)?
+function isCustomerServiceView() {
+  return DEPARTMENT_SEPARATION_ENABLED && (previewMode || DEPARTMENT_TABS_LIVE) && departmentKnown && currentDepartment === "cs";
+}
+
 function setDepartmentFromGroups(groups) {
   if (!Array.isArray(groups)) return;
   const previousTab = activeMainTab;
   currentDepartment = departmentFromGroups(groups);
+  departmentKnown = true;
   try { sessionStorage.setItem(DEPARTMENT_SESSION_KEY, currentDepartment); } catch (_) {}
   syncMainTabs();
   if (activeMainTab !== previousTab) renderChats(activeChats);
 }
 
 function mainTabAvailability() {
-  if (!previewMode) {
+  if (!previewMode && !DEPARTMENT_TABS_LIVE) {
     return { customer: true, tickets: false, blast: BLAST_LIVE, knowledge: false };
   }
   if (!DEPARTMENT_SEPARATION_ENABLED) {
-    return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: true, knowledge: true };
+    return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: previewMode || BLAST_LIVE, knowledge: true };
   }
-  const rtn = currentDepartment === "rtn";
+  // Retention keeps everything; Customer Service gets Tickets and Knowledge. Until the department is known nothing is hidden.
+  const rtn = !departmentKnown || currentDepartment === "rtn";
   return {
     customer: rtn,
     tickets: ESCALATION_TICKET_ENABLED,
-    blast: rtn,
+    blast: rtn && (previewMode || BLAST_LIVE),
     knowledge: true,
   };
 }
@@ -5827,7 +5864,7 @@ function runWhenIdle(task, timeout = 1500) {
     }
   }
   const originalAgentSetup = !DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE);
-  if ((originalAgentSetup || currentDepartment === "rtn") && !selectedAgent) {
+  if ((originalAgentSetup || !departmentKnown || currentDepartment === "rtn") && !selectedAgent) {
     // Give the agent-name list a short chance to arrive, while never holding
     // the LiveChat connection or the first paint behind the network.
     await Promise.race([

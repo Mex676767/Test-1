@@ -32,12 +32,20 @@ function widget() {
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
 
-test('Tickets remain admin-only; the installed agent widget does not gain a new tab', () => {
-  const context = vm.createContext({ previewMode: false, BLAST_LIVE: true });
-  vm.runInContext(fn('mainTabAvailability'), context);
-  assert.equal(vm.runInContext('mainTabAvailability().tickets', context), false);
-  assert.equal(vm.runInContext('mainTabAvailability().knowledge', context), false);
+test('the installed widget: Retention keeps all four tabs, Customer Service gets Tickets and Knowledge, an unknown department hides nothing', () => {
+  const tabs = (settings) => {
+    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: true, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
+    vm.runInContext(fn('mainTabAvailability'), context);
+    return JSON.parse(JSON.stringify(vm.runInContext('mainTabAvailability()', context)));
+  };
+  const all = { customer: true, tickets: true, blast: true, knowledge: true };
+  assert.deepEqual(tabs({ currentDepartment: 'rtn', departmentKnown: true }), all);
+  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: true });
+  assert.deepEqual(tabs({ departmentKnown: false }), all, 'until LiveChat says, nothing is hidden');
+  assert.equal(tabs({ currentDepartment: 'rtn', departmentKnown: true, BLAST_LIVE: false }).blast, false, 'the Blast switch still wins');
+  assert.deepEqual(tabs({ DEPARTMENT_TABS_LIVE: false }), { customer: true, tickets: false, blast: true, knowledge: false }, 'with the rollout switch off the installed widget is as before');
   assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
+  assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = true;/);
 });
 
 test('Active includes unsolved tickets; solved, closed and completed tickets are separated', () => {
@@ -132,4 +140,62 @@ test('every ticket value the widget prints reads as the ticket system shows it, 
   assert.equal(show('remarks', 'keep_this_text'), 'keep_this_text');
   assert.equal(show('amount', 150), '150');
   assert.equal(show('query_type', ''), '—');
+});
+
+test('admin preview: the department views apply, the installed widget is untouched while the rollout switch is off', () => {
+  const tabs = (settings) => {
+    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: false, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
+    vm.runInContext(fn('mainTabAvailability'), context);
+    return JSON.parse(JSON.stringify(vm.runInContext('mainTabAvailability()', context)));
+  };
+  assert.deepEqual(tabs({ previewMode: false, currentDepartment: 'cs', departmentKnown: true }), { customer: true, tickets: false, blast: true, knowledge: false }, 'installed widget: as before');
+  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: true });
+  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'rtn', departmentKnown: true }), { customer: true, tickets: true, blast: true, knowledge: true });
+});
+
+test('detectDepartment: the installed widget is never asked; the preview can force a department with ?department=', async () => {
+  const run = async (settings) => {
+    const log = { resolved: [], applied: [] };
+    const context = vm.createContext({
+      URLSearchParams, previewMode: true, DEPARTMENT_TABS_LIVE: false, DEPARTMENT_SEPARATION_ENABLED: true, location: { search: '' },
+      resolveLoggedInDepartment: async () => { log.resolved.push(1); return { department: 'rtn' }; },
+      setDepartmentFromGroups: (groups) => log.applied.push(Array.from(groups)),
+      logDiagnostic() {}, ...settings,
+    });
+    vm.runInContext(fn('detectDepartment'), context);
+    const department = await vm.runInContext('detectDepartment("lc1", "tok")', context);
+    return { department, ...log };
+  };
+  assert.deepEqual(await run({ previewMode: false }), { department: '', resolved: [], applied: [] }, 'installed widget, switch off');
+  assert.equal((await run({ previewMode: false, DEPARTMENT_TABS_LIVE: true })).department, 'rtn', 'installed widget once the rollout switch is on');
+  assert.equal((await run({})).department, 'rtn', 'preview: asked of LiveChat');
+  const forcedCs = await run({ location: { search: '?department=cs' } });
+  assert.deepEqual([forcedCs.department, forcedCs.resolved.length, forcedCs.applied], ['cs', 0, [[]]]);
+  const forcedRtn = await run({ location: { search: '?department=rtn' } });
+  assert.deepEqual([forcedRtn.department, forcedRtn.applied], ['rtn', [['Priority 96']]]);
+  assert.equal((await run({ previewMode: false, DEPARTMENT_TABS_LIVE: true, location: { search: '?department=cs' } })).department, 'rtn', 'the override only exists in the preview');
+  const failing = await run({ resolveLoggedInDepartment: async () => { throw new Error('boom'); } });
+  assert.equal(failing.department, '', 'a failed check hides nothing');
+});
+
+test('Customer Service keeps Settings with Diagnostics and Sign out, and can close the panel without an agent name', () => {
+  const view = (settings) => {
+    const context = vm.createContext({ DEPARTMENT_SEPARATION_ENABLED: true, previewMode: true, DEPARTMENT_TABS_LIVE: false, departmentKnown: true, currentDepartment: 'cs', ...settings });
+    vm.runInContext(fn('isCustomerServiceView'), context);
+    return vm.runInContext('isCustomerServiceView()', context);
+  };
+  assert.equal(view({}), true);
+  assert.equal(view({ currentDepartment: 'rtn' }), false);
+  assert.equal(view({ departmentKnown: false }), false, 'an unknown department is not treated as Customer Service');
+  assert.equal(view({ previewMode: false }), false, 'the installed widget while the rollout switch is off');
+  assert.equal(view({ previewMode: false, DEPARTMENT_TABS_LIVE: true }), true);
+
+  const chrome = app.slice(app.indexOf('function applyDepartmentChrome'), app.indexOf('async function resolveLoggedInDepartment'));
+  assert.match(chrome, /settingsButton\.hidden = false;/);
+  assert.match(chrome, /agentBadge\) agentBadge\.hidden = !rtn;/);
+  const panel = app.slice(app.indexOf('function openSettingsPanel'), app.indexOf('function renderDiagnosticsLog'));
+  assert.match(panel, /selectedAgent \|\| customerService \?[^\n]*id="settingsClose"/);
+  assert.match(panel, /customerService \? `<div class="settings-card">[^\n]*id="settingsSignOut"/);
+  assert.match(panel, /<summary>Diagnostics<\/summary>/);
+  assert.match(panel, /getElementById\("settingsSave"\)\?\.addEventListener/);
 });
