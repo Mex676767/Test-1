@@ -4,3 +4,4 @@
 
 # simulator scratch output
 claude-lookup-review/proposal/sim/.build/
+unrecorded-chats-*.csv

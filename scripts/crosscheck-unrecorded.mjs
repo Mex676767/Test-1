@@ -6,9 +6,13 @@
 //   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-07            (dry run: only prints)
 //   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-07 --write    (writes the rows)
 //
+// A sheet for QA (who has the most never-recorded chats, with a link per chat), leaving out the admin's own logins:
+//   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-01 --exclude a@x.com,b@y.com --csv qa.csv
+//
 // It only talks to the site's /crosscheck endpoint (small steps, one at a time, with a pause between them), so the credentials
 // stay in Cloudflare. A chat counts as recorded when ANY Customer Approaching row created since the start date carries its
 // thread id in the link. Run it again later and it adds only what is missing (rows already written are skipped).
+import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,12 +46,14 @@ export async function stepWithRetry(step, body, tries = 4, pauseMs = 2000) {
 // the widget since the email column was added are picked up by running the script again later.
 // minAgentMessages / minCustomerMessages (default 1 = no filter) leave out chats with fewer messages, judged on the writer's own
 // messages and the customer's; stats.belowMinimum counts them. A chat that came without counts is never filtered out.
-export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {}, minAgentMessages = 1, minCustomerMessages = 1 } = {}) {
+// exclude: a Set of lower-case emails that are left out entirely (e.g. the admin's own logins); stats.excluded counts them.
+export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {}, minAgentMessages = 1, minCustomerMessages = 1, exclude = new Set() } = {}) {
   const seen = new Set();
   const entries = [];
   for (const chat of chats) {
     for (const writer of chat.writers) {
       const email = String(writer).trim().toLowerCase();
+      if (exclude.has(email)) { stats.excluded = (stats.excluded || 0) + 1; continue; }
       const agent = names?.byEmail.get(email);
       if (onlyKnown && names && names.byEmail.size && !agent) { stats.unknownWriters = (stats.unknownWriters || 0) + 1; continue; }
       const isRecorded = agent ? names.pairs.has(`${chat.threadId}|${agent.toLowerCase()}`) : recorded.has(chat.threadId);
@@ -83,6 +89,28 @@ export function summarize(entries) {
   return [...perWriter.entries()].sort((a, b) => b[1] - a[1]);
 }
 
+// A cell that starts with = + - @ would run as a formula when the file is opened in Excel / Sheets: customer names are typed by
+// customers, so they get a leading apostrophe. Everything with a comma, quote or line break is quoted.
+function csvCell(value) {
+  let text = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+// The sheet for QA: agents with the most never-recorded chats first, each agent's newest chats first, one row per chat, with
+// empty "QA verdict" / "QA note" columns to fill in. Dates are Malaysian time (UTC+8), like the --from date.
+export function toCsv(entries, byEmail = new Map()) {
+  const perAgent = new Map(summarize(entries));
+  const rows = [...entries].sort((a, b) => perAgent.get(b.email) - perAgent.get(a.email) || a.email.localeCompare(b.email) || b.date - a.date);
+  const header = ["Agent", "Agent email", "Agent's unrecorded chats", "Date (MYT)", "Chat link", "Customer", "Agent messages", "Customer messages", "LiveChat account", "QA verdict", "QA note"];
+  const lines = [header, ...rows.map((entry) => [
+    byEmail.get(entry.email) || "", entry.email, perAgent.get(entry.email),
+    entry.date ? new Date(entry.date + 8 * 3_600_000).toISOString().slice(0, 16).replace("T", " ") : "",
+    `https://my.livechatinc.com/archives/${entry.threadId}`, entry.customer, entry.agentMessages ?? "", entry.customerMessages ?? "", entry.account, "", "",
+  ])];
+  return "﻿" + lines.map((line) => line.map(csvCell).join(",")).join("\r\n") + "\r\n";
+}
+
 export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retries = 3 }) {
   return async function step(body) {
     for (let attempt = 1; ; attempt += 1) {
@@ -100,7 +128,8 @@ export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retr
   };
 }
 
-export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, show = "", log = console.log, accounts = ["lc1", "lc2"] }) {
+export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, show = "", exclude = [], csvPath = "", log = console.log, accounts = ["lc1", "lc2"] }) {
+  const excluded = new Set(exclude.map((email) => String(email).trim().toLowerCase()).filter(Boolean));
   const recorded = new Set();
   const pairs = new Set();
   let pageToken = "";
@@ -175,8 +204,8 @@ export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = tru
     const { account, chats, fetchedAlone, unjudged, outreach } = result;
     if (!result.configured) { log(`${account}: not configured, skipped.`); continue; }
     const stats = {};
-    const entries = planEntries([...chats.values()], recorded, existing, account, names, { onlyKnown, stats, minAgentMessages, minCustomerMessages });
-    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded by an agent who uses the widget.${stats.unknownWriters ? ` ${stats.unknownWriters} chat/writer pairs left out: the writer is not in the Agent Logins table (customer service, bots, or an agent who has not opened the widget yet).` : ""}${stats.belowMinimum ? ` ${stats.belowMinimum} left out for having fewer messages than the minimum.` : ""}${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
+    const entries = planEntries([...chats.values()], recorded, existing, account, names, { onlyKnown, stats, minAgentMessages, minCustomerMessages, exclude: excluded });
+    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded by an agent who uses the widget.${stats.excluded ? ` ${stats.excluded} chat/writer pairs left out: excluded emails.` : ""}${stats.unknownWriters ? ` ${stats.unknownWriters} chat/writer pairs left out: the writer is not in the Agent Logins table (customer service, bots, or an agent who has not opened the widget yet).` : ""}${stats.belowMinimum ? ` ${stats.belowMinimum} left out for having fewer messages than the minimum.` : ""}${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);
   }
 
@@ -190,6 +219,11 @@ export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = tru
     const sample = all.filter((entry) => entry.email === wanted).sort((a, b) => b.date - a.date).slice(0, 15);
     log(`\nThe 15 newest chats for ${wanted} (${all.filter((entry) => entry.email === wanted).length} in all) -- open a few and judge whether they needed recording:`);
     for (const entry of sample) log(`  https://my.livechatinc.com/archives/${entry.threadId}  ${entry.date ? new Date(entry.date).toISOString().slice(0, 16).replace("T", " ") : "?"}  agent ${entry.agentMessages ?? "?"} / customer ${entry.customerMessages ?? "?"}  ${entry.customer || ""}`);
+  }
+
+  if (csvPath) {
+    await writeFile(csvPath, toCsv(all, byEmail), "utf8");
+    log(`\nQA sheet written: ${csvPath} (${all.length} chats, ${summarize(all).length} agents, busiest agent first).`);
   }
 
   if (!write) { log("\nDry run: nothing was written. Add --write to put these rows in the Unrecorded Chats table."); return { entries: all, created: 0 }; }
@@ -226,6 +260,8 @@ async function main() {
     step: createClient({ base, key }), fromMs, toMs: Date.now(), windowMs, write: args.has("write"), onlyKnown: !args.has("all-writers"),
     minAgentMessages: Number(args.get("min-agent-messages") || 1), minCustomerMessages: Number(args.get("min-customer-messages") || 1),
     show: args.get("show") === true ? "" : String(args.get("show") || ""),
+    exclude: args.get("exclude") === true ? [] : String(args.get("exclude") || "").split(","),
+    csvPath: args.get("csv") === true ? `unrecorded-chats-${new Date().toISOString().slice(0, 10)}.csv` : String(args.get("csv") || ""),
   });
 }
 
