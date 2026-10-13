@@ -59,6 +59,12 @@ if (!hello) await fail(`no healthy answer from /hello within ${STARTUP_MS / 1000
 // A path that must stay hidden: the middleware has to load too and answer 404.
 const hidden = await fetch(`${BASE}/HANDOVER.md`);
 if (hidden.status !== 404) await fail(`/HANDOVER.md should be hidden (404) but answered ${hidden.status}`);
+// The update notice reads widget-release.json through the assets binding while the middleware hides it from browsers.
+const release = await fetch(`${BASE}/widget-release.json`);
+if (release.status !== 404) await fail(`/widget-release.json should be hidden (404) but answered ${release.status}`);
+const version = await fetch(`${BASE}/widget-version`);
+const versionText = await version.text();
+if (version.status !== 200 || !/"version":"[a-f0-9]{40}"/.test(versionText)) await fail(`/widget-version should answer a 40-hex version but answered ${version.status}: ${versionText.slice(0, 200)}`);
 if (/Disallowed operation|Uncaught|Error: /.test(log.replace(/\[wrangler:[^\]]*\][^\n]*\n/g, ""))) await fail("the runtime logged an error while loading");
 
 console.log(`runtime smoke ok: /hello -> ${hello.slice(0, 80)}...; /HANDOVER.md -> 404`);

@@ -7,6 +7,8 @@
 const HIDDEN_PREFIXES = [
   "/claude-lookup-review", "/tests", "/scripts", "/mockups", "/output", "/functions", "/node_modules",
   "/.claude", "/.git", "/.wrangler", "/.playwright-cli",
+  // Read by /widget-version through the internal assets binding, which does not go through this middleware; nobody needs it in a browser.
+  "/widget-release.json",
 ];
 const HIDDEN_ROOT_FILE = /^\/[^/]+\.(md|ps1|zip|log)$/;
 // Any top-level dot-file or dot-folder (.github, .gitattributes, .claude, ...).

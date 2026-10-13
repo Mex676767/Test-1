@@ -11,7 +11,7 @@ const WIDGET_AND_API = [
   "/robots.txt", "/favicon.ico", "/release.json",
 ];
 const HIDDEN = [
-  "/claude-lookup-review/worker-v2-deploy/wrangler.jsonc", "/claude-lookup-review", "/tests/deployment-refresh.test.mjs", "/scripts/deploy.ps1",
+  "/claude-lookup-review/worker-v2-deploy/wrangler.jsonc", "/widget-release.json", "/claude-lookup-review", "/tests/deployment-refresh.test.mjs", "/scripts/deploy.ps1",
   "/DEPLOYMENT.md", "/BLAST_INTEGRATION.md", "/TICKET_INTEGRATION.md", "/notes.md", "/something.zip", "/mockups/console-ui-concepts.html",
   "/functions/lark-search.js", "/.claude/launch.json", "/.github/workflows/ci.yml", "/.gitattributes", "/.git/config", "/.wrangler/state", "/node_modules/x/index.js", "/output/playwright/a.png",
 ];
