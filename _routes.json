@@ -10,6 +10,7 @@
     "/vendor/*",
     "/blast/*",
     "/knowledge/*",
+    "/unknown-chats/*",
     "/bonus-admin.html",
     "/bonus-admin.css",
     "/bonus-admin.js"

@@ -1,0 +1,57 @@
+:root {
+  --bg: #f6f7fb; --card: #fff; --text: #1d2433; --muted: #5d667a; --line: #dfe3ee; --accent: #4f46e5; --accent-text: #fff; --bar: #c7d2fe; --warn: #b42318;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #11141c; --card: #1a1f2b; --text: #e8ebf3; --muted: #9aa3b8; --line: #2c3344; --accent: #818cf8; --accent-text: #11141c; --bar: #3b4372; --warn: #ff8a80; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.uc { max-width: 980px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+.uc-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.uc-head h1 { margin: 0 0 4px; font-size: 20px; }
+.uc-head p { margin: 0; color: var(--muted); max-width: 720px; }
+.uc-badge { font-size: 11px; font-weight: 700; letter-spacing: .06em; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
+.uc-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.uc-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
+.uc-grid label { display: grid; gap: 4px; font-weight: 600; align-content: start; }
+.uc-wide { grid-column: 1 / -1; }
+.uc-opt { font-weight: 400; color: var(--muted); }
+small { font-weight: 400; color: var(--muted); }
+input, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+textarea { resize: vertical; }
+.uc-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+button { font: inherit; cursor: pointer; }
+.uc-primary, .uc-secondary { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent); }
+.uc-primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.uc-secondary { background: transparent; color: var(--accent); }
+.uc-primary:disabled { opacity: .55; cursor: default; }
+.uc-link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: inherit; }
+.uc-status { color: var(--muted); }
+.uc-status.error { color: var(--warn); }
+.uc-bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 12px; overflow: hidden; }
+.uc-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.uc-results-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
+.uc-results-head h2 { margin: 0; font-size: 16px; }
+.uc-hint { color: var(--muted); margin: 6px 0 12px; }
+.uc-agents { display: grid; gap: 6px; }
+.uc-agent { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.uc-agent > button { width: 100%; display: grid; grid-template-columns: 28px minmax(120px, 1.2fr) minmax(80px, 2fr) 56px; gap: 10px; align-items: center; text-align: left; padding: 9px 12px; background: transparent; border: 0; color: var(--text); }
+.uc-agent > button:hover { background: var(--bg); }
+.uc-rank { color: var(--muted); }
+.uc-name b { display: block; }
+.uc-name span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.uc-meter { height: 8px; background: var(--bar); border-radius: 4px; }
+.uc-count { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.uc-chats { border-top: 1px solid var(--line); overflow-x: auto; }
+.uc-chats table { width: 100%; border-collapse: collapse; }
+.uc-chats th, .uc-chats td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.uc-chats th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.uc-chats a { color: var(--accent); }
+.uc-notes { color: var(--muted); }
+.uc-notes pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 260px; overflow: auto; }
+[hidden] { display: none !important; }
+@media (max-width: 640px) {
+  .uc-grid { grid-template-columns: 1fr; }
+  .uc-head { flex-direction: column; }
+}
