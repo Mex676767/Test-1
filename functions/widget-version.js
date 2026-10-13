@@ -2,11 +2,15 @@ import { adapt } from "./_lib/adapt.js";
 
 // "Which version of the widget is deployed right now?" for the widget's update nudge (deployment-refresh.js).
 //
-// Pages auto-deploys every push, and a static Pages build cannot stamp a commit id into index.html (that only
-// happens with scripts/deploy.ps1). Instead the version is a SHA-1 of the deployed client files themselves, so it
-// changes exactly when any of them changes -- no build step and nobody has to remember to bump anything. It is an
-// explicit release id (40 hex characters), not an ETag or a file length.
-const ASSET_PATHS = ["/", "/app.js", "/style.css", "/deployment-refresh.js", "/blast/index.html", "/blast/popup.js", "/blast/web-adapter.js"];
+// Pages auto-deploys every push, and a static Pages build cannot stamp a commit id into index.html (that only happens with
+// scripts/deploy.ps1). So the version is a SHA-1 of a few deployed files. It is an explicit release id (40 hex characters), not an
+// ETag or a file length.
+//
+// The agents' nudge must not fire for changes they cannot see (an admin-preview-only feature, a backend fix): app.js, style.css and
+// index.html change with every such release, so they are NOT hashed. widget-release.json stands in for them -- bump its "release"
+// in a commit only when that commit changes what agents in the installed LiveChat widget see or do. The Blast files and the refresh
+// script itself are only ever shipped to agents, so they are still hashed as they are.
+const ASSET_PATHS = ["/widget-release.json", "/deployment-refresh.js", "/blast/index.html", "/blast/popup.js", "/blast/web-adapter.js"];
 const TTL_MS = 30_000;
 let cached = null; // { at, version }
 export function resetWidgetVersionCache() { cached = null; }

@@ -113,7 +113,7 @@ Lark does not document the order or atomicity of `batch_create`, so the Durable 
 - `functions/lark-search.js` — the lookup; time budgets near the top (first pass 22 s, retry ≤14 s, total ≈36 s; widget aborts at 45 s).
 - `functions/_lib/lark.js` — Lark client, paging, rate-limit handling, queue calls.
 - `functions/_middleware.js`, `_routes.json`, `_headers` — hiding, routing, caching.
-- `functions/widget-version.js` — release id used by the update notice. `functions/queue-stats.js` — queue metrics.
+- `functions/widget-version.js` — release id used by the update notice: a hash of `widget-release.json` (bumped by hand, only for changes agents can see) and the Blast files. `app.js`, `style.css` and `index.html` are deliberately not hashed. `functions/queue-stats.js` — queue metrics.
 
 ## 10. Lark access tokens: the token lane and invalid-token handling
 

@@ -16,7 +16,7 @@ function assets(files, { failPath } = {}) {
   };
 }
 const FILES = {
-  "/": "<html>index</html>", "/app.js": "console.log('app')", "/style.css": "body{}", "/deployment-refresh.js": "// refresh",
+  "/widget-release.json": "{\"release\":\"1\"}", "/deployment-refresh.js": "// refresh",
   "/blast/index.html": "<html>blast</html>", "/blast/popup.js": "// popup", "/blast/web-adapter.js": "// adapter",
 };
 const get = async (env) => { const r = await handler({ httpMethod: "GET", env }); return { ...r, body: JSON.parse(r.body) }; };
@@ -29,7 +29,7 @@ test("reports a 40-hex release id, never cached by the browser", async () => {
   assert.equal(r.headers["Cache-Control"], "no-store");
 });
 
-test("the version is stable for identical files and changes when ANY client file changes", async () => {
+test("the version is stable for identical files and changes when a file agents receive changes", async () => {
   resetWidgetVersionCache();
   const base = (await get({ ASSETS: assets(FILES) })).body.version;
   resetWidgetVersionCache();
@@ -43,9 +43,9 @@ test("the version is stable for identical files and changes when ANY client file
 
 test("moving content between files does not collide (paths are part of the hash)", async () => {
   resetWidgetVersionCache();
-  const a = (await get({ ASSETS: assets({ ...FILES, "/app.js": "AB", "/style.css": "C" }) })).body.version;
+  const a = (await get({ ASSETS: assets({ ...FILES, "/blast/popup.js": "AB", "/blast/web-adapter.js": "C" }) })).body.version;
   resetWidgetVersionCache();
-  const b = (await get({ ASSETS: assets({ ...FILES, "/app.js": "A", "/style.css": "BC" }) })).body.version;
+  const b = (await get({ ASSETS: assets({ ...FILES, "/blast/popup.js": "A", "/blast/web-adapter.js": "BC" }) })).body.version;
   assert.notEqual(a, b);
 });
 
@@ -53,12 +53,12 @@ test("the hash is computed once per 30 s per isolate, not on every poll from eve
   resetWidgetVersionCache();
   const binding = assets(FILES);
   await get({ ASSETS: binding }); await get({ ASSETS: binding }); await get({ ASSETS: binding });
-  assert.equal(binding.served.length, 7, "one read of each of the seven files in total");
+  assert.equal(binding.served.length, 5, "one read of each of the five files in total");
 });
 
 test("an unreadable asset or a missing binding is a 503, never a made-up version", async () => {
   resetWidgetVersionCache();
-  const broken = await get({ ASSETS: assets(FILES, { failPath: "/app.js" }) });
+  const broken = await get({ ASSETS: assets(FILES, { failPath: "/blast/popup.js" }) });
   assert.equal(broken.statusCode, 503);
   assert.equal(broken.body.ok, false);
   assert.equal(broken.body.version, undefined);
@@ -72,4 +72,17 @@ test("an unreadable asset or a missing binding is a 503, never a made-up version
 test("only GET is allowed", async () => {
   const r = await handler({ httpMethod: "POST", env: { ASSETS: assets(FILES) } });
   assert.equal(r.statusCode, 405);
+});
+
+test("a release that agents cannot see does not announce itself: app.js, style.css and index.html are not part of the version", async () => {
+  resetWidgetVersionCache();
+  const base = (await get({ ASSETS: assets(FILES) })).body.version;
+  for (const path of ["/", "/app.js", "/style.css"]) {
+    resetWidgetVersionCache();
+    const withPreviewOnlyChange = { ...FILES, [path]: "a different admin-preview-only release" };
+    assert.equal((await get({ ASSETS: assets(withPreviewOnlyChange) })).body.version, base, `changing ${path} alone does not change the version`);
+  }
+  resetWidgetVersionCache();
+  const bumped = (await get({ ASSETS: assets({ ...FILES, "/widget-release.json": "{\"release\":\"2\"}" }) })).body.version;
+  assert.notEqual(bumped, base, "bumping widget-release.json announces an update");
 });
