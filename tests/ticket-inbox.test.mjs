@@ -160,7 +160,7 @@ test('detectDepartment: the installed widget is never asked; the preview can for
       URLSearchParams, previewMode: true, DEPARTMENT_TABS_LIVE: false, DEPARTMENT_SEPARATION_ENABLED: true, location: { search: '' },
       resolveLoggedInDepartment: async () => { log.resolved.push(1); return { department: 'rtn' }; },
       setDepartmentFromGroups: (groups) => log.applied.push(Array.from(groups)),
-      logDiagnostic() {}, ...settings,
+      logDiagnostic() {}, forgetDepartment() { log.forgotten = (log.forgotten || 0) + 1; }, ...settings,
     });
     vm.runInContext(fn('detectDepartment'), context);
     const department = await vm.runInContext('detectDepartment("lc1", "tok")', context);
@@ -198,4 +198,26 @@ test('Customer Service keeps Settings with Diagnostics and Sign out, and can clo
   assert.match(panel, /customerService \? `<div class="settings-card">[^\n]*id="settingsSignOut"/);
   assert.match(panel, /<summary>Diagnostics<\/summary>/);
   assert.match(panel, /getElementById\("settingsSave"\)\?\.addEventListener/);
+});
+
+test('a stale remembered department never outlives a failed check, and the chrome follows every department change', async () => {
+  const log = [];
+  const store = new Map([['rc-agent-department', 'cs']]);
+  const context = vm.createContext({
+    URLSearchParams, previewMode: true, DEPARTMENT_TABS_LIVE: false, DEPARTMENT_SEPARATION_ENABLED: true, location: { search: '' },
+    DEPARTMENT_SESSION_KEY: 'rc-agent-department', currentDepartment: 'cs', departmentKnown: true, activeMainTab: 'tickets', activeChats: [],
+    sessionStorage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) },
+    applyDepartmentChrome: () => log.push('chrome'), syncMainTabs: () => log.push('tabs'), renderChats: () => log.push('render'),
+    resolveLoggedInDepartment: async () => { throw new Error('LiveChat down'); }, logDiagnostic() {},
+  });
+  vm.runInContext(['forgetDepartment', 'detectDepartment', 'departmentFromGroups', 'setDepartmentFromGroups'].map(fn).join('\n'), context);
+  assert.equal(await vm.runInContext('detectDepartment("lc1", "tok")', context), '');
+  assert.equal(vm.runInContext('departmentKnown', context), false, 'the remembered department no longer counts');
+  assert.equal(store.has('rc-agent-department'), false);
+  assert.deepEqual(log.slice(0, 2), ['chrome', 'tabs']);
+  log.length = 0;
+  vm.runInContext('setDepartmentFromGroups(["Priority 96"])', context);
+  assert.equal(vm.runInContext('currentDepartment', context), 'rtn');
+  assert.ok(log.includes('chrome') && log.includes('tabs'), 'Settings and the badge follow a department change');
+  assert.equal(store.get('rc-agent-department'), 'rtn');
 });

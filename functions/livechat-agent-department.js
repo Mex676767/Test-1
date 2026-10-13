@@ -6,9 +6,9 @@ import { identifyAgent } from "./_lib/livechat-identity.js";
 const RTN_GROUP = /^priority\s+(?:96|tc)$/i;
 
 // The group list is the same for every agent and the groups an agent belongs to rarely change, but every widget load asks:
-// remember each for a few minutes per isolate (the agent's own answer is kept per LiveChat account + login).
+// remember each briefly per isolate (the agent's own answer is kept per LiveChat account + login).
 const GROUPS_TTL_MS = 10 * 60_000;
-const AGENT_TTL_MS = 5 * 60_000;
+const AGENT_TTL_MS = 30_000; // short: a group change must show up on the next load
 const groupListCache = new Map(); // account key -> { at, groups }
 const agentGroupCache = new Map(); // `${account key}|${login}` -> { at, ids }
 export function resetDepartmentCache() { groupListCache.clear(); agentGroupCache.clear(); }
