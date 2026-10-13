@@ -697,7 +697,7 @@ async function detectDepartment(accountKey, token) {
   const forced = previewMode ? new URLSearchParams(location.search).get("department") : "";
   if (forced === "cs" || forced === "rtn") { setDepartmentFromGroups(forced === "rtn" ? ["Priority 96"] : []); return forced; }
   try { return (await resolveLoggedInDepartment(accountKey, token)).department; }
-  catch (error) { logDiagnostic(`Department check failed, full view kept: ${error.message}`, "warn"); return ""; }
+  catch (error) { logDiagnostic(`Department check failed, full view kept: ${error.message}`, "warn"); forgetDepartment(); return ""; }
 }
 
 // A Customer Service agent records no cases, so there is no agent name to pick: straight to Tickets and Knowledge.
@@ -1062,6 +1062,15 @@ function isCustomerServiceView() {
   return DEPARTMENT_SEPARATION_ENABLED && (previewMode || DEPARTMENT_TABS_LIVE) && departmentKnown && currentDepartment === "cs";
 }
 
+// LiveChat could not say which department this agent is in: whatever an earlier session remembered no longer counts, and nothing is hidden.
+function forgetDepartment() {
+  departmentKnown = false;
+  try { sessionStorage.removeItem(DEPARTMENT_SESSION_KEY); } catch (_) {}
+  applyDepartmentChrome();
+  syncMainTabs();
+  renderChats(activeChats);
+}
+
 function setDepartmentFromGroups(groups) {
   if (!Array.isArray(groups)) return;
   const previousTab = activeMainTab;
@@ -1069,6 +1078,7 @@ function setDepartmentFromGroups(groups) {
   departmentKnown = true;
   try { sessionStorage.setItem(DEPARTMENT_SESSION_KEY, currentDepartment); } catch (_) {}
   syncMainTabs();
+  applyDepartmentChrome();
   if (activeMainTab !== previousTab) renderChats(activeChats);
 }
 
