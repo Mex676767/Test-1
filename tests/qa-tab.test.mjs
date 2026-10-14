@@ -492,3 +492,25 @@ test('the widget tells the QA page which chat is open, remembers it for a page t
   open({ source: 'chats', chat: { id: 'THREAD4' } });
   assert.equal(sent.length, 0, 'an agent who is not QA is never sent anything');
 });
+
+test('the admin preview stays the full admin view for a QA login, and shows the QA view only with ?department=qa; the installed widget follows the login', () => {
+  const flag = (embedded, search) => vm.runInContext(app.match(/let qaView = ([^\n]+);/)[1], vm.createContext({ IS_EMBEDDED_APP: embedded, URLSearchParams, location: { search } }));
+  assert.equal(flag(false, ''), false, 'preview: nothing forced');
+  assert.equal(flag(false, '?department=rtn'), false);
+  assert.equal(flag(false, '?department=qa'), true, 'preview: asked for the QA view');
+  assert.equal(flag(true, '?department=qa'), false, 'the installed widget ignores the preview switch: only the login decides');
+  assert.equal(flag(true, ''), false);
+  assert.match(app, /if \(!QA_VIEW_LIVE \|\| !IS_EMBEDDED_APP\) return false;/, 'a QA login in the preview is not looked up');
+  // The preview with ?department=qa shows the QA tab only, like the department views it sits beside.
+  const forced = tabs({ previewMode: true, activeMainTab: 'customer', qaView: true });
+  assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab', 'ticketsTab', 'knowledgeTab'].map((id) => forced.els[id].hidden), [false, true, true, true, true]);
+  assert.equal(forced.context.activeMainTab, 'unknownChats');
+  const normal = tabs({ previewMode: true, activeMainTab: 'customer', qaView: false });
+  assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab'].map((id) => normal.els[id].hidden), [false, false, false], 'the preview shows everything, QA included');
+});
+
+test('the chat card shows the Claim Secret tick like the Retention card, read-only, and has no "open this chat" link', () => {
+  const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
+  assert.match(script, /Claim Secret<\/div>\s*\n\s*<label class="rc-unknown"><input type="checkbox" disabled \$\{row\.claimSecret \? "checked" : ""\} \/><span>\$\{row\.claimSecret \? "✓ Ticked" : "— Not ticked"\}/);
+  assert.doesNotMatch(script, /Open this chat in LiveChat/, 'QA is already in the chat');
+});

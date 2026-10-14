@@ -166,7 +166,7 @@ function signOutHarness({ confirmed = true } = {}) {
     document: { getElementById: () => ({ remove() { calls.settingsClosed = true; } }) },
     updateAgentBadge() { calls.badge = true; }, renderNeedsAttentionPanel() { calls.rendered += 1; }, renderChats() { calls.rendered += 1; },
     logDiagnostic: (t) => calls.logs.push(t), requireAgentLogin: async () => { calls.login += 1; },
-    qaView: false, syncMainTabs() { calls.tabs = (calls.tabs || 0) + 1; },
+    qaView: false, IS_EMBEDDED_APP: true, syncMainTabs() { calls.tabs = (calls.tabs || 0) + 1; },
   });
   vm.runInContext(['let unrecordedChats = [1, 2]; let unrecordedLoaded = true;', fn('signOutLiveChat')].join(String.fromCharCode(10)), context);
   return { calls, context, run: () => vm.runInContext('signOutLiveChat()', context), read: (code) => vm.runInContext(code, context) };
@@ -243,8 +243,8 @@ test('an ordinary agent is unaffected by the QA check, even when it fails to ans
 
 test('the QA check itself never throws or blocks: no answer, a refusal or a switched-off view all mean "not QA"', async () => {
   const code = [app.match(/const QA_VIEW_LIVE = [^\n]+;/)[0], fn('detectQaRole')].join(String.fromCharCode(10));
-  const run = async (fetchImpl, search = '') => {
-    const context = vm.createContext({ URLSearchParams, location: { search }, AbortSignal, JSON, Boolean, fetch: fetchImpl });
+  const run = async (fetchImpl, search = '', embedded = true) => {
+    const context = vm.createContext({ URLSearchParams, location: { search }, AbortSignal, JSON, Boolean, fetch: fetchImpl, IS_EMBEDDED_APP: embedded });
     vm.runInContext(code, context);
     return vm.runInContext("detectQaRole('lc1', 'tok')", context);
   };
@@ -257,6 +257,8 @@ test('the QA check itself never throws or blocks: no answer, a refusal or a swit
   assert.equal(await run(async () => ({ json: async () => { throw new Error('not json'); } })), false);
   let asked = 0;
   assert.equal(await run(async () => { asked += 1; return { json: async () => ({ ok: true, qa: true }) }; }, '?qaView=0'), false, 'the off switch');
+  assert.equal(asked, 0, 'and it does not even ask');
+  assert.equal(await run(async () => { asked += 1; return { json: async () => ({ ok: true, qa: true }) }; }, '', false), false, 'the admin preview is never turned into the QA view by a login');
   assert.equal(asked, 0, 'and it does not even ask');
 });
 

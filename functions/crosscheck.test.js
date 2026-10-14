@@ -193,7 +193,7 @@ test("lastusername: the player a chat's customer was last recorded under, found 
   assert.deepEqual([noTable.ok, noTable.found], [true, false], "without the P&L table nothing is known, not an error");
 });
 
-test("chatlog: every agent's rows for ONE chat (exact thread id, oldest first) and every Unknown tick on it, without date of birth or claim secret", async (t) => {
+test("chatlog: every agent's rows for ONE chat (exact thread id, oldest first) and every Unknown tick on it, without the date of birth", async (t) => {
   const row = (createdAt, link, fields = {}) => ({ record_id: "r" + createdAt, created_time: createdAt, fields: { link: { link, text: "chat" }, "Claim Secret": true, "Player D.O.B": 946684800000, ...fields } });
   const w = world({ caPages: [[
     row(3000, "https://my.livechatinc.com/archives/THREADX", { Username: "player1", Brand: "VS96", "Agent Name": "96 Bob", Inquiry: ["Free Spin"], Status: "Done", "Released amount": 5 }),
@@ -211,10 +211,10 @@ test("chatlog: every agent's rows for ONE chat (exact thread id, oldest first) a
   const found = await call({ step: "chatlog", threadId: "THREADX" }, { env });
   assert.equal(found.ok, true);
   assert.deepEqual(found.rows.map((r) => [r.agent, r.username, r.createdAt]), [["96 Alice", "player1", 1000], ["96 Bob", "player1", 3000]], "only THREADX (not THREADXY), oldest first");
-  assert.deepEqual(found.rows[1], { recordId: "r3000", createdAt: 3000, agent: "96 Bob", username: "player1", brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 5, telegram: false, link: "https://my.livechatinc.com/archives/THREADX", threadId: "THREADX" });
+  assert.deepEqual(found.rows[1], { recordId: "r3000", createdAt: 3000, agent: "96 Bob", username: "player1", brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 5, claimSecret: true, telegram: false, link: "https://my.livechatinc.com/archives/THREADX", threadId: "THREADX" });
   assert.deepEqual(found.ticks.map((x) => x.agent), ["96 Carl"], "only the ticks of this chat");
   assert.deepEqual(found.tracking, { configured: true, since: 777 });
-  assert.ok(!/946684800000|claimSecret|dob/i.test(JSON.stringify(found)));
+  assert.ok(!/946684800000|dob/i.test(JSON.stringify(found)), "the date of birth is never sent");
   const none = await call({ step: "chatlog", threadId: "NOTHINGHERE" }, { env });
   assert.deepEqual([none.ok, none.rows, none.ticks], [true, [], []]);
   const unbound = await call({ step: "chatlog", threadId: "THREADX" });
