@@ -13,7 +13,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 sys
 .uc-head p { margin: 0; color: var(--muted); max-width: 720px; }
 .uc-badge { font-size: 11px; font-weight: 700; letter-spacing: .06em; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
 .uc-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-.uc-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
+.uc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .uc-grid label { display: grid; gap: 4px; font-weight: 600; align-content: start; }
 .uc-wide { grid-column: 1 / -1; }
 .uc-opt { font-weight: 400; color: var(--muted); }
@@ -28,6 +28,9 @@ button { font: inherit; cursor: pointer; }
 .uc-primary:disabled { opacity: .55; cursor: default; }
 .uc-link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: inherit; }
 .uc-status { color: var(--muted); }
+.uc-signin { margin-top: 0; }
+.uc-admin { margin-top: 12px; color: var(--muted); }
+.uc-admin input { margin-top: 8px; max-width: 360px; }
 .uc-status.error { color: var(--warn); }
 .uc-bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 12px; overflow: hidden; }
 .uc-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }

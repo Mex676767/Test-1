@@ -7,8 +7,6 @@ const store = {
   get(key) { try { return localStorage.getItem(key) || ""; } catch (_) { return ""; } },
   set(key, value) { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch (_) { /* private window: simply not remembered */ } },
 };
-const KEY = "qa-key";
-
 const FROM = "qa-from";
 const WINDOW_MS = 6 * 3_600_000;
 const MYT = "+08:00";
@@ -24,6 +22,111 @@ function setStatus(text, isError = false) {
   $("status").textContent = text;
   $("status").classList.toggle("error", isError);
 }
+
+// ---- Sign in with LiveChat ----------------------------------------------------------------------------------------------
+// The same popup login the widget uses (see /livechat-oauth-config and blast/oauth.html); the token is kept per browser tab under
+// the widget's own keys. The server decides who may read: a login marked QA in the Agent Logins table, or the admin's scan key.
+const TOKEN = (account) => `ca-livechat-agent-token:${account}`;
+const EXPIRY = (account) => `ca-livechat-agent-token-expiry:${account}`;
+const PREFERRED = "qa-account";
+let login = null; // { account, token } once the server has accepted a LiveChat sign-in
+
+const session = {
+  get(key) { try { return sessionStorage.getItem(key) || ""; } catch (_) { return ""; } },
+  set(key, value) { try { sessionStorage.setItem(key, value); } catch (_) { /* not remembered */ } },
+  remove(key) { try { sessionStorage.removeItem(key); } catch (_) { /* nothing to forget */ } },
+};
+const storedToken = (account) => (Number(session.get(EXPIRY(account))) > Date.now() ? session.get(TOKEN(account)) : "");
+const forgetToken = (account) => { session.remove(TOKEN(account)); session.remove(EXPIRY(account)); };
+
+// Asks the server to accept this sign-in: a cheap read-only step. Throws the site's own refusal (401 = not this account or expired,
+// 403 = signed in but not marked QA).
+async function acceptLogin(candidate) {
+  await createClient({ base: "", login: candidate, pauseMs: 0, retries: 1 })({ step: "agents" });
+  login = candidate;
+  session.set(PREFERRED, candidate.account);
+  showSignedIn(true);
+}
+
+function showSignedIn(on) {
+  $("signInBtn").hidden = on;
+  $("signOutBtn").hidden = !on;
+  $("who").textContent = on ? `Signed in with LiveChat (account ${login.account.replace("lc", "")}).` : "Sign in with the LiveChat account you use for QA. Only people marked QA get in.";
+  $("who").classList.remove("error");
+}
+
+function authorize(client, redirectUri) {
+  return new Promise((resolve, reject) => {
+    const state = crypto.randomUUID();
+    let origin = location.origin;
+    try { origin = new URL(redirectUri).origin; } catch (_) { /* same site */ }
+    const url = new URL("https://accounts.livechat.com/");
+    url.search = new URLSearchParams({ response_type: "token", client_id: client.clientId, redirect_uri: redirectUri, state, prompt: "consent" }).toString();
+    const popup = window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
+    if (!popup) return reject(Object.assign(new Error("Your browser blocked the LiveChat login window. Allow popups and click Sign in again."), { blocked: true }));
+    const finish = (settle) => { window.removeEventListener("message", onMessage); clearInterval(watch); settle(); };
+    const onMessage = (event) => {
+      if (event.origin !== origin || event.data?.source !== "ca-livechat-oauth" || event.data.state !== state) return;
+      if (event.data.type === "SUCCESS") finish(() => resolve({ token: event.data.token, expiresAt: event.data.expiresAt }));
+      else finish(() => reject(new Error(event.data.error || "LiveChat login was not completed.")));
+    };
+    // The window was closed without finishing: stop waiting, and do not open another one.
+    const watch = setInterval(() => { if (popup.closed) finish(() => reject(Object.assign(new Error("The LiveChat window was closed before signing in."), { closed: true }))); }, 700);
+    window.addEventListener("message", onMessage);
+  });
+}
+
+async function signIn() {
+  $("signInBtn").disabled = true;
+  setStatus("Complete the login in the new window…");
+  try {
+    const config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json();
+    const clients = Array.isArray(config.clients) ? config.clients : [];
+    if (!clients.length) throw new Error("LiveChat login is not configured on this site.");
+    const preferred = session.get(PREFERRED);
+    const ordered = [...clients].sort((a, b) => Number(b.key === preferred) - Number(a.key === preferred));
+    const redirectUri = config.redirectUri || `${location.origin}/blast/oauth.html`;
+    let lastError = null;
+    for (const client of ordered) {
+      try {
+        const { token, expiresAt } = await authorize(client, redirectUri);
+        session.set(TOKEN(client.key), token);
+        session.set(EXPIRY(client.key), String(expiresAt));
+        await acceptLogin({ account: client.key, token });
+        setStatus("");
+        return;
+      } catch (error) {
+        forgetToken(client.key);
+        if (error.closed || error.blocked || error.status === 403) throw error; // not a wrong-account problem: do not try the other one
+        lastError = error; // the other LiveChat account may be this person's
+        session.set(PREFERRED, ordered.find((other) => other.key !== client.key)?.key || client.key);
+      }
+    }
+    throw lastError || new Error("LiveChat login was not completed.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    $("signInBtn").disabled = false;
+  }
+}
+
+function signOut() {
+  if (login) forgetToken(login.account);
+  login = null;
+  showSignedIn(false);
+  setStatus("");
+}
+
+// A sign-in still valid in this tab (from the widget or an earlier visit) is accepted quietly; a refusal just leaves the button.
+async function resumeSignIn() {
+  for (const account of ["lc1", "lc2"]) {
+    const token = storedToken(account);
+    if (!token) continue;
+    try { await acceptLogin({ account, token }); return; } catch (_) { /* wrong account, expired, or not QA: the button stays */ }
+  }
+}
+
+// ---- Scan ----
 
 function render() {
   const { entries, byEmail } = result;
@@ -76,9 +179,8 @@ async function find(event) {
   const to = $("to").value;
   const fromMs = Date.parse(`${from}T00:00:00${MYT}`);
   const toMs = to ? Math.min(Date.parse(`${to}T23:59:59.999${MYT}`), Date.now()) : Date.now();
-  if (!key) return setStatus("Enter the access key first.", true);
+  if (!login && !key) return setStatus("Sign in with LiveChat first.", true);
   if (!Number.isFinite(fromMs) || fromMs >= toMs) return setStatus("Pick a start date that is before the end date.", true);
-  store.set(KEY, key);
   store.set(FROM, from);
 
   setRunning(true);
@@ -104,7 +206,7 @@ async function find(event) {
     }
   };
   try {
-    const step = createClient({ base: "", key });
+    const step = createClient({ base: "", ...(login ? { login } : { key }) });
     const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => stopRequested });
     const entries = planAll(scan, { onlyKnown: true, log: note });
     result = { entries, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs) };
@@ -112,8 +214,11 @@ async function find(event) {
     setStatus(`Done. ${entries.length} chat${entries.length === 1 ? "" : "s"} found.`);
   } catch (error) {
     if (error.cancelled) setStatus("Stopped.");
-    else if (error.status === 404) setStatus("This page is not switched on yet (the site has no key set). Ask the admin.", true);
-    else if (error.status === 401) setStatus("Wrong access key.", true);
+    else if (error.status === 404) setStatus("This page is not switched on yet. Ask the admin.", true);
+    else if (error.status === 401 || error.status === 403) {
+      if (login && error.loginExpired) signOut();
+      setStatus(error.message, true);
+    }
     else setStatus(error.message, true);
   } finally {
     setRunning(false);
@@ -132,9 +237,10 @@ function download() {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
-$("key").value = store.get(KEY);
 $("from").value = store.get(FROM) || dayInMyt(Date.now() - 7 * 86_400_000);
 $("form").addEventListener("submit", find);
 $("stop").addEventListener("click", () => { stopRequested = true; setStatus("Stopping…"); });
 $("download").addEventListener("click", download);
-$("forgetKey").addEventListener("click", () => { store.set(KEY, ""); $("key").value = ""; setStatus("Key forgotten."); });
+$("signInBtn").addEventListener("click", signIn);
+$("signOutBtn").addEventListener("click", signOut);
+resumeSignIn();

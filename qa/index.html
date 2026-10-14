@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex" />
   <title>QA</title>
-  <link rel="stylesheet" href="qa.css?v=20261014-2" />
+  <link rel="stylesheet" href="qa.css?v=20261014-3" />
 </head>
 <body>
   <main class="uc">
@@ -16,12 +16,20 @@
       </div>
     </header>
 
+    <section id="signin" class="uc-card">
+      <div class="uc-actions uc-signin">
+        <button type="button" id="signInBtn" class="uc-primary">Sign in with LiveChat</button>
+        <span id="who" class="uc-status">Sign in with the LiveChat account you use for QA. Only people marked QA get in.</span>
+        <button type="button" id="signOutBtn" class="uc-link" hidden>Sign out</button>
+      </div>
+      <details class="uc-admin">
+        <summary>Admin: use the scan key instead</summary>
+        <input id="key" type="password" placeholder="SCAN_KEY" spellcheck="false" autocomplete="off" />
+      </details>
+    </section>
+
     <form id="form" class="uc-card" autocomplete="off">
       <div class="uc-grid">
-        <label>Access key
-          <input id="key" type="password" placeholder="The key you were given" spellcheck="false" />
-          <small>Asked once; kept in this browser. <button type="button" id="forgetKey" class="uc-link">Forget it</button></small>
-        </label>
         <label>From
           <input id="from" type="date" required />
         </label>
@@ -51,6 +59,6 @@
       <pre id="log"></pre>
     </details>
   </main>
-  <script type="module" src="qa.js?v=20261014-2"></script>
+  <script type="module" src="qa.js?v=20261014-3"></script>
 </body>
 </html>

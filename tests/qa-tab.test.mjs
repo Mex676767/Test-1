@@ -49,6 +49,8 @@ test('the tab and its page are wired in index.html', () => {
   assert.match(html, /id="unknownChatsView"[\s\S]*?data-src="\/qa\/index\.html"/);
   const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
   assert.match(page, /src="qa\.js[^"]*"/);
+  assert.match(page, /id="signInBtn"/, 'QA signs in with LiveChat');
+  assert.doesNotMatch(page, /Access key|QA_KEY/);
 });
 
 test('scan.js runs in a browser: it imports nothing', () => {

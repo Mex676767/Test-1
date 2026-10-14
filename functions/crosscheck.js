@@ -1,5 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
+import { identifyAgent } from "./_lib/livechat-identity.js";
 import { searchPage, createRecord, toDisplay, TABLE_CUSTOMER_APPROACHING, TABLE_UNRECORDED, TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { CA, linkUrl, parseChatLink } from "./_lib/ca-row.js";
 import { agentWroteIn } from "./livechat-agent-wrote.js";
@@ -9,7 +10,7 @@ import { UNREC } from "./_lib/unrecorded.js";
 // but nobody ever recorded? The result goes into the Lark table "Unrecorded Chats" (one row per chat and writer), and each
 // agent's widget then lists their own rows. Not authentication for agents: this is an ADMIN endpoint, answered only to a
 // caller that sends the key in the SCAN_KEY environment variable (header x-scan-key); with no key set it does not exist.
-// QA_KEY (optional) is a second, read-only key for the QA page (qa/index.html).
+// The QA page (qa/index.html) gets in with a LiveChat sign-in instead, read-only (see checkQaLogin).
 //
 // Each call is one small step so it stays inside a Pages Function's limits and never hogs the shared Lark queue:
 //   recorded  one page of Customer Approaching -> the chat (thread) ids of rows created since `fromMs`, and "thread|agent name"
@@ -29,6 +30,47 @@ function sameKey(a, b) {
   let diff = 0;
   for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+// Who is QA? Rows of the Agent Logins table whose "Role" column says QA, matched on the LiveChat email or the LiveChat login
+// (the id LiveChat gives the signed-in person). The admin types the email of each QA person into a row of that table; the
+// person needs no agent name there. This is the one place that decides: a later "group" rule only has to change this function.
+const ROLE_QA = /(^|[\s,;/|])qa($|[\s,;/|])/i;
+const QA_CACHE_MS = 60_000;
+const qaCache = new Map(); // "account:token" -> { result, expires }: a long scan sends hundreds of steps, the token is checked once a minute
+export function resetQaCache() { qaCache.clear(); }
+
+export async function checkQaLogin(env, accountKey, token) {
+  const cacheKey = `${accountKey}:${token}`;
+  const cached = qaCache.get(cacheKey);
+  if (cached && cached.expires > Date.now()) return cached.result;
+  let result;
+  if (!["lc1", "lc2"].includes(accountKey)) {
+    result = { ok: false, error: "LiveChat account is required." };
+  } else {
+    const pat = LIVECHAT_ACCOUNTS.find((account) => account.key === accountKey)?.pat || "";
+    const who = await identifyAgent(env, accountKey, token, { withEmail: true, pat });
+    if (!who.ok) {
+      result = { ok: false, error: who.error };
+    } else {
+      const identities = new Set(who.identities);
+      let qa = false;
+      let pageToken = "";
+      do {
+        const page = await searchPage(TABLE_AGENT_LOGINS, [], { pageSize: 500, pageToken });
+        for (const item of page.items) {
+          const fields = item.fields || {};
+          if (!ROLE_QA.test(clean(toDisplay(fields["Role"])))) continue;
+          if (identities.has(clean(toDisplay(fields["Livechat Email"])).toLowerCase()) || identities.has(clean(toDisplay(fields["LiveChat Login"])).toLowerCase())) qa = true;
+        }
+        pageToken = page.next;
+      } while (pageToken && !qa);
+      result = { ok: true, qa };
+    }
+  }
+  if (qaCache.size > 200) qaCache.clear();
+  qaCache.set(cacheKey, { result, expires: Date.now() + QA_CACHE_MS });
+  return result;
 }
 
 // LiveChat wants RFC 3339 with microseconds: 2026-10-07T00:00:00.000000+00:00.
@@ -91,16 +133,21 @@ async function listArchives(account, { from, to, pageId }) {
 
 export async function handler(event) {
   try {
-    // Two keys: SCAN_KEY (the admin: every step, including the ones that write the Unrecorded Chats table) and QA_KEY (the QA
-    // page: only the steps that read, so it can be handed to QA without handing over the means to write).
+    // Two ways in. SCAN_KEY (the admin: every step, including the ones that write the Unrecorded Chats table), or a LiveChat
+    // sign-in (headers x-livechat-account + x-livechat-token) of someone marked QA in the Agent Logins table: only the steps
+    // that read, so QA gets the list without the means to write.
     const adminKey = clean(event.env?.SCAN_KEY);
-    const qaKey = clean(event.env?.QA_KEY);
-    if (!adminKey && !qaKey) return reply(404, { ok: false, error: "Not found" });
-    const sent = clean(event.headers?.["x-scan-key"]);
-    const isAdmin = sameKey(sent, adminKey);
-    if (!isAdmin && !sameKey(sent, qaKey)) return reply(401, { ok: false, error: "Wrong key" });
+    if (!adminKey && !TABLE_AGENT_LOGINS) return reply(404, { ok: false, error: "Not found" });
+    const isAdmin = sameKey(clean(event.headers?.["x-scan-key"]), adminKey);
+    if (!isAdmin) {
+      const token = clean(event.headers?.["x-livechat-token"]);
+      if (!token) return reply(401, { ok: false, error: "Sign in with LiveChat (or send the scan key)." });
+      const check = await checkQaLogin(event.env, clean(event.headers?.["x-livechat-account"]).toLowerCase(), token);
+      if (!check.ok) return reply(401, { ok: false, loginExpired: true, error: check.error });
+      if (!check.qa) return reply(403, { ok: false, error: "This LiveChat login is not marked QA in the tracker." });
+    }
     const body = JSON.parse(event.body || "{}");
-    if (!isAdmin && (body.step === "existing" || body.step === "write")) return reply(403, { ok: false, error: "This key can only read." });
+    if (!isAdmin && (body.step === "existing" || body.step === "write")) return reply(403, { ok: false, error: "QA can only read." });
 
     if (body.step === "recorded") {
       const fromMs = Number(body.fromMs) || 0;

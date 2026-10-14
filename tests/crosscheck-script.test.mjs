@@ -270,3 +270,17 @@ test('--show lists the newest chats of one agent with a link, the date and both 
   assert.equal(shown.length, 2);
   assert.match(shown[0], /archives\/NEW\s+2026-10-05 10:30\s+agent 4 \/ customer 2\s+Zimito NEW/, 'newest first');
 });
+
+test('a LiveChat sign-in is sent as its own headers, and a refusal says what the site said (not marked QA, expired) and stops at once', async () => {
+  const seen = [];
+  const refusing = (status, error, extra = {}) => createClient({ base: '', login: { account: 'lc2', token: 'tok' }, pauseMs: 0, retries: 3, fetchImpl: async (url, options) => {
+    seen.push(options.headers);
+    return { status, json: async () => ({ ok: false, error, ...extra }) };
+  } });
+  await assert.rejects(() => refusing(403, 'This LiveChat login is not marked QA in the tracker.')({ step: 'agents' }), (e) => e.status === 403 && /not marked QA/.test(e.message) && e.fatal);
+  await assert.rejects(() => refusing(401, 'LiveChat login expired', { loginExpired: true })({ step: 'agents' }), (e) => e.status === 401 && e.loginExpired === true);
+  assert.equal(seen.length, 2, 'no retries for a refusal');
+  assert.equal(seen[0]['x-livechat-account'], 'lc2');
+  assert.equal(seen[0]['x-livechat-token'], 'tok');
+  assert.equal(seen[0]['x-scan-key'], undefined, 'the scan key is not sent with a sign-in');
+});

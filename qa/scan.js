@@ -110,14 +110,17 @@ export function toCsv(entries, byEmail = new Map()) {
   return "﻿" + lines.map((line) => line.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
-// The caller of the site's /crosscheck endpoint (base "" = the same site). Retries a network blip; a refused key stops at once.
-export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retries = 3 }) {
+// The caller of the site's /crosscheck endpoint (base "" = the same site). Identifies itself with the admin's scan `key`, or with
+// a LiveChat sign-in `login` = { account: "lc1", token }. Retries a network blip; a refusal (wrong key, not signed in, not QA)
+// stops at once, with the site's own words when it gave any.
+export function createClient({ base, key = "", login = null, fetchImpl = fetch, pauseMs = 300, retries = 3 }) {
+  const identity = login ? { "x-livechat-account": login.account, "x-livechat-token": login.token } : { "x-scan-key": key };
   return async function step(body) {
     for (let attempt = 1; ; attempt += 1) {
       try {
-        const response = await fetchImpl(`${base}/crosscheck`, { method: "POST", headers: { "Content-Type": "application/json", "x-scan-key": key }, body: JSON.stringify(body) });
+        const response = await fetchImpl(`${base}/crosscheck`, { method: "POST", headers: { "Content-Type": "application/json", ...identity }, body: JSON.stringify(body) });
         const data = await response.json();
-        if (response.status === 401 || response.status === 404) throw Object.assign(new Error(`The site answered ${response.status}: check the key and that SCAN_KEY is set in Cloudflare Pages.`), { fatal: true, status: response.status });
+        if ([401, 403, 404].includes(response.status)) throw Object.assign(new Error(data?.error && response.status !== 404 ? data.error : `The site answered ${response.status}: check the key and that SCAN_KEY is set in Cloudflare Pages.`), { fatal: true, status: response.status, loginExpired: Boolean(data?.loginExpired) });
         if (pauseMs) await sleep(pauseMs);
         return data;
       } catch (error) {
