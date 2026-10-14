@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { calendarDays, displayDate } from '../qa/datepicker.js';
 import { createCache } from '../qa/cache.js';
 import { pickerLabel } from '../qa/agentpicker.js';
-import { agentChoices, alignedWindows, checkKnownUsernames, toCsv } from '../qa/scan.js';
+import { agentChoices, alignedWindows, checkKnownUsernames, describeChatLog, threadFromInput, toCsv } from '../qa/scan.js';
 import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
@@ -410,4 +410,85 @@ test('the QA view is wired in the widget: on by default, with an off switch, Tic
   assert.match(app, /const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;/, 'Tickets and Knowledge are not live for QA yet');
   assert.match(app, /\.get\("department"\)/, 'the department views are untouched');
   assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/, 'the department switch stays off');
+});
+
+// ---- one chat -------------------------------------------------------------------------------------------------------------
+
+const fn2 = (name) => app.match(new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n\\}'))[0];
+
+test('a thread id is found in a pasted chat link, archive link or the bare id; anything else is refused', () => {
+  assert.equal(threadFromInput('https://my.livechatinc.com/archives/THREAD_9-x'), 'THREAD_9-x');
+  assert.equal(threadFromInput('  https://my.livechatinc.com/chats/CHAT1/THREAD2?foo=1 '), 'THREAD2', 'the second id of a live chat link is the thread');
+  assert.equal(threadFromInput('ABC123'), 'ABC123');
+  assert.equal(threadFromInput('ab'), '');
+  assert.equal(threadFromInput('not a link'), '');
+  assert.equal(threadFromInput(''), '');
+  assert.equal(threadFromInput(undefined), '');
+});
+
+test('one chat is described as logged, logged with something missing, ticked Unknown only, or nothing at all', () => {
+  const row = (agent, extra = {}) => ({ agent, createdAt: 1000, username: 'p1', brand: 'VS96', inquiry: ['Free Spin'], status: 'Done', amount: 5, link: 'l', ...extra });
+  const logged = describeChatLog({ rows: [row('96 Alice')], ticks: [], tracking: { configured: true, since: 5 } });
+  assert.deepEqual([logged.verdict, logged.headline, logged.note], ['logged', 'Logged by 96 Alice', '']);
+  const incomplete = describeChatLog({ rows: [row('96 Alice', { status: '' }), row('96 Bob')], ticks: [] });
+  assert.equal(incomplete.verdict, 'incomplete');
+  assert.match(incomplete.headline, /something is missing: 96 Alice, 96 Bob/);
+  assert.deepEqual(incomplete.rows[0].issues, ['No status']);
+  const ticked = describeChatLog({ rows: [], ticks: [{ agent: '96 Carl', source: 'manual', at: 9 }, { agent: '96 Carl', source: 'auto', at: 10 }] });
+  assert.equal(ticked.verdict, 'ticked');
+  assert.match(ticked.headline, /96 Carl ticked Unknown player on this chat/);
+  assert.deepEqual(ticked.ticks.map((t) => t.label), ['ticked by the agent', 'automatic: the Look up said not VIP']);
+  const nothing = describeChatLog({ rows: [], ticks: [], tracking: { configured: true, since: Date.UTC(2026, 9, 14, 16, 0) } });
+  assert.equal(nothing.verdict, 'nothing');
+  assert.match(nothing.note, /only recorded from 2026-10-15 00:00 \(Malaysia time\)/);
+  assert.match(describeChatLog({ rows: [], ticks: [], tracking: { configured: false, since: 0 } }).note, /not being recorded yet/);
+  const both = describeChatLog({ rows: [row('96 Alice')], ticks: [{ agent: '96 Bob', source: 'manual', at: 3 }] });
+  assert.equal(both.verdict, 'logged');
+  assert.equal(both.ticks.length, 1, 'a tick by another agent still shows beside the record');
+});
+
+test('the QA page has a read-only card for the open chat, and the two reports are folded under Reports', () => {
+  const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
+  for (const id of ['chatCard', 'chatForm', 'chatInput', 'chatResult']) assert.match(page, new RegExp('id="' + id + '"'));
+  const reports = page.slice(page.indexOf('<details id="reports"'), page.indexOf('</details>', page.indexOf('id="unknownPanel"')) + 10);
+  assert.ok(reports.includes('id="form"') && reports.includes('id="loggedPanel"') && reports.includes('id="unknownPanel"'), 'both reports sit inside Reports');
+  assert.ok(page.indexOf('id="chatCard"') < page.indexOf('<details id="reports"'), 'the chat comes first, the reports at the bottom');
+  assert.doesNotMatch(page.slice(page.indexOf('id="chatCard"'), page.indexOf('<details id="reports"')), /<textarea|type="checkbox"/, 'nothing to edit in the chat card');
+  const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
+  assert.match(script, /type="checkbox" disabled/, 'the Unknown player box on the card is disabled');
+  assert.doesNotMatch(script, /<input type="text"|<select|<textarea/, 'the cards have no fields to type in');
+  assert.match(script, /source: "ca-qa-ready"/);
+  assert.match(script, /event\.data\?\.source !== "ca-qa-chat"/);
+});
+
+test('the widget tells the QA page which chat is open, remembers it for a page that loads later, and answers its ready message; only for the chat of this window', () => {
+  const sent = [];
+  const frame = { contentWindow: { postMessage: (message, origin) => sent.push([message, origin]) } };
+  const listeners = [];
+  const context = vm.createContext({
+    String, qaView: true, location: { origin: 'https://app.test' },
+    document: { querySelector: (selector) => (selector === '#unknownChatsView iframe' ? frame : null) },
+    window: { addEventListener: (type, fn) => listeners.push([type, fn]) },
+  });
+  vm.runInContext([app.match(/let qaOpenChat = "";[^\n]*/)[0], fn2('postQaChat'), fn2('reportQaChat'), app.match(/window\.addEventListener\("message", \(event\) => \{\s*\n\s*if \(event\.origin === location\.origin && event\.data && event\.data\.source === "ca-qa-ready"\) postQaChat\(\);\s*\n\}\);/)[0]].join('\n'), context);
+  const open = (profile) => vm.runInContext('reportQaChat(' + JSON.stringify(profile) + ')', context);
+  open({ source: 'archives', chat: { id: 'THREAD1' } });
+  open({ source: 'archives', chat: { id: 'THREAD1' } });
+  open({ source: 'chats', chat: { id: 'THREAD2' } });
+  open({ source: 'customers', chat: { id: 'IGNORED' } });
+  open(null);
+  assert.deepEqual(sent.map(([m]) => m.threadId), ['THREAD1', 'THREAD2', ''], 'a repeat is not sent again; the Customers section and no profile mean no chat');
+  assert.ok(sent.every(([m, origin]) => m.source === 'ca-qa-chat' && origin === 'https://app.test'));
+  open({ source: 'chats', chat: { id: 'THREAD3' } });
+  sent.length = 0;
+  const ready = listeners.find(([type]) => type === 'message')[1];
+  ready({ origin: 'https://evil.test', data: { source: 'ca-qa-ready' } });
+  ready({ origin: 'https://app.test', data: { source: 'something-else' } });
+  assert.equal(sent.length, 0, 'only the ready message from this site is answered');
+  ready({ origin: 'https://app.test', data: { source: 'ca-qa-ready' } });
+  assert.equal(sent[0][0].threadId, 'THREAD3');
+  vm.runInContext('qaView = false', context);
+  sent.length = 0;
+  open({ source: 'chats', chat: { id: 'THREAD4' } });
+  assert.equal(sent.length, 0, 'an agent who is not QA is never sent anything');
 });

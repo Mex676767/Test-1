@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
-import { searchPage, createRecord, toDisplay, TABLE_CUSTOMER_APPROACHING, TABLE_UNRECORDED, TABLE_AGENT_LOGINS } from "./_lib/lark.js";
+import { searchPage, searchRecords, searchAllRecords, createRecord, toDisplay, TABLE_CUSTOMER_APPROACHING, TABLE_UNRECORDED, TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { CA, CA_SUMMARY_FIELDS, linkUrl, parseChatLink, summarizeRow } from "./_lib/ca-row.js";
 import { agentWroteIn } from "./livechat-agent-wrote.js";
 import { findLastUsername } from "./lark-last-username.js";
@@ -18,6 +18,7 @@ import { UNREC } from "./_lib/unrecorded.js";
 //             pairs, so a chat can be judged per agent when the agent is known
 //   logged    one page of Customer Approaching -> what agents logged (agent, player, brand, inquiry, status, amount, chat link) for
 //             rows created in a time window: the QA page shows it beside the chat
+//   chatlog   one chat (thread id): every agent's Customer Approaching rows for it and every Unknown tick, for the QA "this chat" panel
 //   lastusername  the player this chat's customer was last recorded under, if any (the widget's "Last username recorded")
 //   ticks     one page of the "Unknown player" ticks agents made (KV, see unknown-tick.js) and when tracking began
 //   agents    the Agent Logins table -> which LiveChat email belongs to which agent name (only logins whose email is filled in)
@@ -186,6 +187,30 @@ export async function handler(event) {
           };
         });
       return reply(200, { ok: true, rows, next: page.next, scanned: page.items.length });
+    }
+
+    if (body.step === "chatlog") {
+      // Everything recorded for ONE chat (its thread id, what LiveChat calls the chat in /archives/): every agent's Customer Approaching
+      // rows for it and every Unknown tick, so QA can open a chat and see how it was logged.
+      const threadId = clean(body.threadId);
+      if (!/^[A-Za-z0-9_-]{4,64}$/.test(threadId)) return reply(400, { ok: false, error: "A valid threadId is required." });
+      let items;
+      try {
+        items = await searchRecords(TABLE_CUSTOMER_APPROACHING, [{ field_name: CA.link, operator: "contains", value: [threadId] }], undefined, { pageSize: 500, automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
+      } catch (_) {
+        // If Lark will not filter on the Link field, look through the table instead (slow, but it answers).
+        items = await searchAllRecords(TABLE_CUSTOMER_APPROACHING, [], { maxPages: 30, automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
+      }
+      const rows = items
+        .map(summarizeRow)
+        .filter((row) => row.threadId === threadId) // "contains" is a substring match
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((row) => ({ recordId: row.recordId, createdAt: row.createdAt, agent: row.agent, username: row.username, brand: row.brand, inquiry: row.inquiry, status: row.status, amount: row.amount, telegram: row.telegram, link: row.link, threadId: row.threadId }));
+      const kv = event.env?.UNKNOWN_TICKS;
+      const listed = kv ? await kv.list({ prefix: `t:${threadId}:`, limit: 100 }) : { keys: [] };
+      const ticks = listed.keys.map((key) => key.metadata).filter((meta) => meta && meta.agent);
+      const since = kv ? Number(await kv.get("meta:since")) || 0 : 0;
+      return reply(200, { ok: true, rows, ticks, tracking: { configured: Boolean(kv), since } });
     }
 
     if (body.step === "lastusername") {

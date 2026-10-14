@@ -479,3 +479,40 @@ export async function checkKnownUsernames(entries, step, { onProgress = () => {}
   });
   return result;
 }
+
+// ---- One chat: how was it logged? ------------------------------------------------------------------------------------------
+
+// The thread id in whatever a person pastes: a LiveChat chat or archive link, or the id itself. "" when it is none of those.
+export function threadFromInput(text) {
+  const value = String(text || "").trim();
+  const archive = /\/archives\/([A-Za-z0-9_-]{4,64})/.exec(value);
+  if (archive) return archive[1];
+  const live = /\/chats\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]{4,64})/.exec(value);
+  if (live) return live[1];
+  return /^[A-Za-z0-9_-]{4,64}$/.test(value) ? value : "";
+}
+
+// What QA should be told about one chat from the server's chatlog answer ({ rows, ticks, tracking }):
+// verdict "logged" | "incomplete" | "ticked" | "nothing", a headline, the logged rows with what each is missing, and the ticks.
+export function describeChatLog(data) {
+  const rows = (data.rows || []).map((row) => ({ ...row, issues: loggedIssues(row) }));
+  const ticks = (data.ticks || []).map((tick) => ({ ...tick, label: tick.source === "auto" ? "automatic: the Look up said not VIP" : "ticked by the agent" }));
+  const agents = [...new Set(rows.map((row) => String(row.agent || "").trim() || "(no agent name)"))];
+  let verdict;
+  let headline;
+  if (rows.length) {
+    verdict = rows.some((row) => row.issues.length) ? "incomplete" : "logged";
+    headline = `${verdict === "incomplete" ? "Logged, but something is missing: " : "Logged by "}${agents.join(", ")}`;
+  } else if (ticks.length) {
+    verdict = "ticked";
+    headline = `Not logged: ${[...new Set(ticks.map((tick) => tick.agent))].join(", ")} ticked Unknown player on this chat`;
+  } else {
+    verdict = "nothing";
+    headline = "Nothing was logged for this chat and nobody ticked Unknown player";
+  }
+  const since = data.tracking?.configured ? data.tracking.since : 0;
+  const note = verdict === "nothing"
+    ? (since ? `An Unknown tick is only recorded from ${myt(since)} (Malaysia time) on, so a chat older than that cannot tell you whether the agent ticked it.` : "Unknown ticks are not being recorded yet, so a tick could not have been saved.")
+    : "";
+  return { verdict, headline, rows, ticks, note };
+}

@@ -745,6 +745,23 @@ function applyQaAgent(accountKey) {
   logDiagnostic("Signed in with LiveChat as QA.", "success");
 }
 
+// The QA tab shows how the chat that is open in LiveChat was logged: its thread id (the SDK's chat id, the id the archive and the Lark
+// links use) is sent to the QA page, which asks for it once more when it has loaded. A chat opened from the archive counts too.
+let qaOpenChat = ""; // "" when no chat is open
+function postQaChat() {
+  if (!qaView) return;
+  try { document.querySelector("#unknownChatsView iframe")?.contentWindow?.postMessage({ source: "ca-qa-chat", threadId: qaOpenChat }, location.origin); } catch (_) { /* the page is not loaded yet: it asks when it is */ }
+}
+function reportQaChat(profile) {
+  const id = profile && profile.chat && profile.chat.id && profile.source !== "customers" ? String(profile.chat.id) : "";
+  if (id === qaOpenChat) return;
+  qaOpenChat = id;
+  postQaChat();
+}
+window.addEventListener("message", (event) => {
+  if (event.origin === location.origin && event.data && event.data.source === "ca-qa-ready") postQaChat();
+});
+
 async function requireAgentLogin() {
   agentSigningIn = true;
   updateAgentBadge();
@@ -1559,6 +1576,7 @@ function openFreshArchivedCard(threadId, entry, profile) {
 }
 
 function applyProfile(profile) {
+  reportQaChat(profile);
   archiveOpening = "";
   if (!profile || !profile.chat || !profile.chat.id) {
     stopChatStatusPolling();

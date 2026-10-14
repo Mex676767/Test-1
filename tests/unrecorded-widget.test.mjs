@@ -141,7 +141,7 @@ function archivedHarness({ restored = false, entries = [{ threadId: 'T1', chatId
   const calls = { shown: [], brand: [], status: [], saved: 0, ensured: [], restoreAsked: [], logs: [] };
   const st = {};
   const context = vm.createContext({
-    String, Promise, state: st, unrecordedChats: entries, activeChats: [], archiveOpening: '', logDiagnostic: (t) => calls.logs.push(t),
+    String, Promise, state: st, unrecordedChats: entries, activeChats: [], archiveOpening: '', reportQaChat() {}, logDiagnostic: (t) => calls.logs.push(t),
     findTrackedChatByThread: () => '', stopChatStatusPolling() {}, renderChats() {}, setStatus: (t) => calls.status.push(t),
     chatFromProfile: () => ({ chatId: 'LIVE' }), announceChatSwitch() {}, refreshBackgroundLookupPill() {}, bgLookupDone: null,
     ensureChatState: (chat) => { calls.ensured.push(chat); st[chat.chatId] = { chatOpen: true, chatUrl: '' }; },

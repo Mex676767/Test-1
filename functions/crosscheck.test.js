@@ -193,6 +193,35 @@ test("lastusername: the player a chat's customer was last recorded under, found 
   assert.deepEqual([noTable.ok, noTable.found], [true, false], "without the P&L table nothing is known, not an error");
 });
 
+test("chatlog: every agent's rows for ONE chat (exact thread id, oldest first) and every Unknown tick on it, without date of birth or claim secret", async (t) => {
+  const row = (createdAt, link, fields = {}) => ({ record_id: "r" + createdAt, created_time: createdAt, fields: { link: { link, text: "chat" }, "Claim Secret": true, "Player D.O.B": 946684800000, ...fields } });
+  const w = world({ caPages: [[
+    row(3000, "https://my.livechatinc.com/archives/THREADX", { Username: "player1", Brand: "VS96", "Agent Name": "96 Bob", Inquiry: ["Free Spin"], Status: "Done", "Released amount": 5 }),
+    row(1000, "https://my.livechatinc.com/chats/CHAT9/THREADX", { Username: "player1", "Agent Name": "96 Alice" }),
+    row(2000, "https://my.livechatinc.com/archives/THREADXY", { Username: "other chat", "Agent Name": "96 Alice" }),
+    row(4000, "https://my.livechatinc.com/archives/OTHER", { Username: "unrelated" }),
+  ]] });
+  t.after(w.restore);
+  const kv = {
+    store: new Map([["t:THREADX:96 carl", { metadata: { threadId: "THREADX", chatId: "CHAT9", agent: "96 Carl", source: "manual", at: 5000 } }], ["t:THREADY:96 dan", { metadata: { threadId: "THREADY", agent: "96 Dan" } }], ["meta:since", { value: "777" }]]),
+    async list({ prefix }) { return { keys: [...this.store.entries()].filter(([name]) => name.startsWith(prefix)).map(([name, v]) => ({ name, metadata: v.metadata })), list_complete: true }; },
+    async get(key) { return this.store.get(key)?.value ?? null; },
+  };
+  const env = { ...ENV, UNKNOWN_TICKS: kv };
+  const found = await call({ step: "chatlog", threadId: "THREADX" }, { env });
+  assert.equal(found.ok, true);
+  assert.deepEqual(found.rows.map((r) => [r.agent, r.username, r.createdAt]), [["96 Alice", "player1", 1000], ["96 Bob", "player1", 3000]], "only THREADX (not THREADXY), oldest first");
+  assert.deepEqual(found.rows[1], { recordId: "r3000", createdAt: 3000, agent: "96 Bob", username: "player1", brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 5, telegram: false, link: "https://my.livechatinc.com/archives/THREADX", threadId: "THREADX" });
+  assert.deepEqual(found.ticks.map((x) => x.agent), ["96 Carl"], "only the ticks of this chat");
+  assert.deepEqual(found.tracking, { configured: true, since: 777 });
+  assert.ok(!/946684800000|claimSecret|dob/i.test(JSON.stringify(found)));
+  const none = await call({ step: "chatlog", threadId: "NOTHINGHERE" }, { env });
+  assert.deepEqual([none.ok, none.rows, none.ticks], [true, [], []]);
+  const unbound = await call({ step: "chatlog", threadId: "THREADX" });
+  assert.deepEqual([unbound.ticks, unbound.tracking], [[], { configured: false, since: 0 }], "without the KV binding there are no ticks, and it says so");
+  for (const bad of ["", "ab", "has space", "x".repeat(65), "../etc"]) assert.equal((await call({ step: "chatlog", threadId: bad }, { env })).status, 400);
+});
+
 test("recorded: the thread ids of Customer Approaching rows created since the start date, from the link, page by page", async (t) => {
   const w = world({ caPages: [
     [caRow("https://my.livechatinc.com/chats/CHAT/THREADNEW", 2000), caRow("https://my.livechatinc.com/chats/CHAT/THREADOLD", 500), caRow("", 2500)],
