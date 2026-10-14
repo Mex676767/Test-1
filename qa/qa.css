@@ -67,3 +67,29 @@ button { font: inherit; cursor: pointer; }
 .uc-check input { width: auto; }
 .uc-warn { color: var(--warn); }
 .uc-name .uc-warn { color: var(--warn); font-size: 12px; }
+.uc-field { display: grid; gap: 4px; align-content: start; }
+.uc-label { font-weight: 600; }
+.dp { position: relative; display: block; }
+.dp-display { width: 100%; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.dp-display.placeholder { color: var(--muted); }
+.dp-display::after { content: "▾"; float: right; color: var(--muted); }
+.dp-pop { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: 280px; max-width: calc(100vw - 32px); padding: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+.dp-header { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+.dp-nav, .dp-jump { background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--text); padding: 5px 8px; }
+.dp-nav { width: 30px; color: var(--muted); }
+.dp-jump { flex: 1; font-weight: 600; }
+.dp-nav:hover, .dp-jump:hover { border-color: var(--line); color: var(--accent); }
+.dp-weekdays, .dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.dp-weekdays span { color: var(--muted); font-size: 11px; padding: 4px 0; }
+.dp-day { background: transparent; border: 0; border-radius: 7px; color: var(--text); padding: 6px 0; }
+.dp-day:hover:not(.selected) { background: var(--bg); }
+.dp-day.other { color: var(--muted); opacity: .6; }
+.dp-day.today { color: var(--accent); font-weight: 700; }
+.dp-day.selected { background: var(--accent); color: var(--accent-text); font-weight: 700; }
+.dp-footer { display: flex; justify-content: space-between; margin-top: 8px; }
+.dp-link { background: none; border: 0; padding: 2px 4px; color: var(--accent); font-size: 12px; }
+.dp-link:hover { text-decoration: underline; }
+.dp-list { display: grid; gap: 2px; max-height: 220px; overflow-y: auto; }
+.dp-option { background: transparent; border: 0; border-radius: 7px; color: var(--text); padding: 7px 10px; text-align: left; }
+.dp-option:hover { background: var(--bg); }
+.dp-option.active { background: var(--accent); color: var(--accent-text); font-weight: 600; }

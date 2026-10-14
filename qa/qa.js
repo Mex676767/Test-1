@@ -1,5 +1,6 @@
 // The QA page (/qa/, also the QA tab of the admin preview): runs the crosscheck (see scan.js) from the browser and shows the agents with
 // the most chats nobody recorded, with a .csv for QA. Read-only: nothing is written to Lark or anywhere else.
+import { attachDatePicker } from "./datepicker.js";
 import { archiveLink, createClient, loadLogged, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
 
 const $ = (id) => document.getElementById(id);
@@ -311,7 +312,8 @@ function saveCsv(text, name) {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
-$("from").value = store.get(FROM) || dayInMyt(Date.now() - 7 * 86_400_000);
+attachDatePicker($("toPicker"));
+attachDatePicker($("fromPicker")).setValue(store.get(FROM) || dayInMyt(Date.now() - 7 * 86_400_000));
 $("form").addEventListener("submit", find);
 $("stop").addEventListener("click", () => { if (currentRun) currentRun.stopped = true; setStatus("Stopping…"); });
 $("download").addEventListener("click", () => { if (result) saveCsv(toCsv(result.entries, result.byEmail), `qa-unknown-chats_${result.from}_to_${result.to}.csv`); });
