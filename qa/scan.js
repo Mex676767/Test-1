@@ -63,20 +63,6 @@ export function planEntries(chats, recorded, existing, account, names = null, { 
   return entries;
 }
 
-// How long saved results live: a window of ended chats no longer changes once it is long over; the Customer Approaching rows and the
-// logged rows change all the time, so they are only kept for a few minutes (a second search with other filters is then instant).
-export const WINDOW_TTL_MS = 30 * 24 * 3_600_000;
-export const SETTLED_MS = 12 * 3_600_000;
-export const TABLE_TTL_MS = 10 * 60_000;
-export const FOUND_USERNAME_TTL_MS = 30 * 24 * 3_600_000;
-export const NO_USERNAME_TTL_MS = 3_600_000;
-
-// The time windows to read: on a fixed grid (multiples of the window length), so a search from another start date reuses the
-// windows an earlier one saved. The first window may begin before the start date: chats older than it are dropped afterwards.
-export function alignedWindows(fromMs, toMs, stepMs) {
-  return windows(Math.floor(fromMs / stepMs) * stepMs, toMs, stepMs);
-}
-
 export function windows(fromMs, toMs, stepMs) {
   const out = [];
   for (let start = fromMs; start < toMs; start += stepMs) out.push([start, Math.min(start + stepMs, toMs)]);
@@ -172,32 +158,22 @@ async function matchingEmails(chatMaps, hashes) {
 // Reads everything needed to judge the chats of [fromMs, toMs): the recorded chats, the agent list, and the ended chats of each
 // LiveChat account (several time windows at once, both accounts at the same time).
 // isCancelled(): checked between steps; true stops the scan with an error whose .cancelled is true.
-// cache (optional, see cache.js): saved results to reuse; fresh = true ignores them and reads everything again (and saves the new read).
-export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true, log = () => {}, accounts = ["lc1", "lc2"], isCancelled = () => false, cache = null, fresh = false }) {
+export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true, log = () => {}, accounts = ["lc1", "lc2"], isCancelled = () => false }) {
   const stopIfCancelled = () => { if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true }); };
   const recorded = new Set();
   const pairs = new Set();
   let pageToken = "";
   let rows = 0;
-  const recordedKey = `recorded:v1:${fromMs}`;
-  const savedRecorded = cache && !fresh ? await cache.get(recordedKey) : undefined;
-  if (savedRecorded) {
-    savedRecorded.threads.forEach((thread) => recorded.add(thread));
-    savedRecorded.pairs.forEach((pair) => pairs.add(pair));
-    rows = savedRecorded.rows;
-  } else {
-    do {
-      stopIfCancelled();
-      const data = await step({ step: "recorded", fromMs, pageToken });
-      if (!data.ok) throw new Error(`recorded: ${data.error}`);
-      data.threads.forEach((thread) => recorded.add(thread));
-      (data.pairs || []).forEach((pair) => pairs.add(pair));
-      rows += data.rows;
-      pageToken = data.next;
-    } while (pageToken);
-    if (cache) await cache.set(recordedKey, { threads: [...recorded], pairs: [...pairs], rows }, TABLE_TTL_MS);
-  }
-  log(`Customer Approaching: ${savedRecorded ? "saved read of" : "read"} ${rows} rows; ${recorded.size} chats since the start date have a record.`);
+  do {
+    stopIfCancelled();
+    const data = await step({ step: "recorded", fromMs, pageToken });
+    if (!data.ok) throw new Error(`recorded: ${data.error}`);
+    data.threads.forEach((thread) => recorded.add(thread));
+    (data.pairs || []).forEach((pair) => pairs.add(pair));
+    rows += data.rows;
+    pageToken = data.next;
+  } while (pageToken);
+  log(`Customer Approaching: read ${rows} rows; ${recorded.size} chats since the start date have a record.`);
 
   const agents = await step({ step: "agents" });
   if (!agents.ok) throw new Error(`agents: ${agents.error}`);
@@ -208,56 +184,35 @@ export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true
 
   async function scanAccount(account) {
     const chats = new Map();
-    const result = { account, chats, configured: true, fetchedAlone: 0, unjudged: 0, outreach: 0, fromSaved: 0 };
-    const list = alignedWindows(fromMs, toMs, windowMs);
+    const result = { account, chats, configured: true, fetchedAlone: 0, unjudged: 0, outreach: 0 };
+    const list = windows(fromMs, toMs, windowMs);
     let done = 0;
-    // The grid's first window may start before the start date; the archive lists by thread creation time, so drop older ones.
-    const keep = (chat) => !(chat.date && chat.date < fromMs);
     await pool(list, WINDOW_CONCURRENCY, async ([from, to]) => {
       if (!result.configured) return;
-      const windowKey = `win:v1:${account}:${from}:${to}`;
-      const settled = to <= Date.now() - SETTLED_MS;
-      const saved = cache && !fresh && settled ? await cache.get(windowKey) : undefined;
-      const windowChats = new Map();
-      let outreach = 0;
-      let fetchedAlone = 0;
-      let unjudged = 0;
-      if (saved) {
-        saved.chats.forEach((chat) => windowChats.set(chat.threadId, chat));
-        outreach = saved.outreach;
-        result.fromSaved += 1;
-      } else {
-        let pageId = "";
-        do {
+      let pageId = "";
+      do {
+        stopIfCancelled();
+        const data = await stepWithRetry(step, { step: "archives", account, from, to, pageId });
+        if (!data.ok) {
+          if (/not configured/i.test(data.error || "")) { result.configured = false; return; }
+          throw new Error(`archives (${account}): ${data.error}`);
+        }
+        data.chats.forEach((chat) => chats.set(chat.threadId, chat));
+        result.outreach += data.outreach || 0;
+        // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
+        for (const pending of data.pending || []) {
+          if (chats.has(pending.threadId)) continue;
           stopIfCancelled();
-          const data = await stepWithRetry(step, { step: "archives", account, from, to, pageId });
-          if (!data.ok) {
-            if (/not configured/i.test(data.error || "")) { result.configured = false; return; }
-            throw new Error(`archives (${account}): ${data.error}`);
-          }
-          data.chats.forEach((chat) => windowChats.set(chat.threadId, chat));
-          outreach += data.outreach || 0;
-          // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
-          for (const pending of data.pending || []) {
-            if (windowChats.has(pending.threadId) || chats.has(pending.threadId)) continue;
-            stopIfCancelled();
-            const one = await stepWithRetry(step, { step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
-            fetchedAlone += 1;
-            if (!one.ok) { unjudged += 1; continue; }
-            outreach += one.outreach || 0;
-            if (one.chat) windowChats.set(one.chat.threadId, one.chat);
-          }
-          pageId = data.next;
-        } while (pageId);
-        // Only a window that is long over and was read completely is worth keeping.
-        if (cache && settled && !unjudged) await cache.set(windowKey, { chats: [...windowChats.values()], outreach }, WINDOW_TTL_MS);
-      }
-      for (const chat of windowChats.values()) if (keep(chat)) chats.set(chat.threadId, chat);
-      result.outreach += outreach;
-      result.fetchedAlone += fetchedAlone;
-      result.unjudged += unjudged;
+          const one = await stepWithRetry(step, { step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
+          result.fetchedAlone += 1;
+          if (!one.ok) { result.unjudged += 1; continue; }
+          result.outreach += one.outreach || 0;
+          if (one.chat) chats.set(one.chat.threadId, one.chat);
+        }
+        pageId = data.next;
+      } while (pageId);
       done += 1;
-      log(`  [${account}] window ${done}/${list.length} done, ${chats.size} chats so far${saved ? " (saved)" : ""}`, { account, done, total: list.length, saved: Boolean(saved) });
+      log(`  [${account}] window ${done}/${list.length} done, ${chats.size} chats so far`, { account, done, total: list.length });
     });
     return result;
   }
@@ -294,34 +249,26 @@ export async function excludedAgentNames(byEmail) {
 
 // Reads the rows agents logged in [fromMs, toMs), page by page, and drops the excluded agents'.
 // onProgress(rowsScanned) after each page. Returns { rows, byEmail } -- the rows newest first within no particular agent order.
-// only (optional): agent names; when given, only their rows are kept (applied after reading, so a saved read serves any choice).
-// cacheKey (optional, with cache): names this search for saving, e.g. the From/To the person chose; fresh ignores what is saved.
-export async function loadLogged({ step, fromMs, toMs, only = null, onProgress = () => {}, isCancelled = () => false, cache = null, cacheKey = "", fresh = false }) {
+// only (optional): agent names; when given, only their rows are kept.
+export async function loadLogged({ step, fromMs, toMs, only = null, onProgress = () => {}, isCancelled = () => false }) {
   const wanted = only && only.length ? new Set(only.map(nameKey)) : null;
   const agents = await step({ step: "agents" });
   if (!agents.ok) throw new Error(`agents: ${agents.error}`);
   const byEmail = new Map((agents.agents || []).map((agent) => [String(agent.email).toLowerCase(), agent.name]));
   const hidden = await excludedAgentNames(byEmail);
-  const key = cache && cacheKey ? `logged:v1:${cacheKey}` : "";
-  let rows = key && !fresh ? await cache.get(key) : undefined;
-  const fromSaved = Boolean(rows);
-  if (!rows) {
-    rows = [];
-    let pageToken = "";
-    let scanned = 0;
-    do {
-      if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true });
-      const data = await stepWithRetry(step, { step: "logged", fromMs, toMs, pageToken });
-      if (!data.ok) throw new Error(`logged: ${data.error}`);
-      rows.push(...data.rows);
-      scanned += data.scanned || 0;
-      onProgress(scanned);
-      pageToken = data.next;
-    } while (pageToken);
-    if (key) await cache.set(key, rows, TABLE_TTL_MS);
-  }
-  const kept = rows.filter((row) => !hidden.has(String(row.agent || "").trim().toLowerCase()) && (!wanted || wanted.has(nameKey(row.agent))));
-  return { rows: kept, byEmail, hiddenAgents: hidden.size, fromSaved };
+  const rows = [];
+  let pageToken = "";
+  let scanned = 0;
+  do {
+    if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true });
+    const data = await stepWithRetry(step, { step: "logged", fromMs, toMs, pageToken });
+    if (!data.ok) throw new Error(`logged: ${data.error}`);
+    for (const row of data.rows) if (!hidden.has(String(row.agent || "").trim().toLowerCase()) && (!wanted || wanted.has(nameKey(row.agent)))) rows.push(row);
+    scanned += data.scanned || 0;
+    onProgress(scanned);
+    pageToken = data.next;
+  } while (pageToken);
+  return { rows, byEmail, hiddenAgents: hidden.size };
 }
 
 // What is obviously missing from a logged case. QA still judges whether what IS there matches the chat.
@@ -459,19 +406,13 @@ export function agentChoices(agents) {
 // For the chats an agent ticked Unknown on by hand: asks whether the customer's chat was already recorded under a player username
 // (the widget's "Last username recorded", found by the stable chat id) and sets entry.knownUsername. A chat the lookup could not
 // answer is counted in failed and left unmarked. Returns { checked, found, failed }.
-export async function checkKnownUsernames(entries, step, { onProgress = () => {}, isCancelled = () => false, concurrency = 3, cache = null, fresh = false } = {}) {
+export async function checkKnownUsernames(entries, step, { onProgress = () => {}, isCancelled = () => false, concurrency = 3 } = {}) {
   const byChat = new Map();
   for (const entry of entries) if (entry.mark === "ticked" && entry.chatId) byChat.set(entry.chatId, [...(byChat.get(entry.chatId) || []), entry]);
   const result = { checked: 0, found: 0, failed: 0 };
   await pool([...byChat.entries()], concurrency, async ([chatId, list]) => {
     if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true });
-    const key = `lu:v1:${chatId}`;
-    let data = cache && !fresh ? await cache.get(key) : undefined;
-    if (!data) {
-      data = await stepWithRetry(step, { step: "lastusername", chatId });
-      // A username on file stays; "nobody yet" may change the next time the agent logs that player, so it is asked again after an hour.
-      if (cache && data.ok) await cache.set(key, { ok: true, found: data.found, username: data.username }, data.found ? FOUND_USERNAME_TTL_MS : NO_USERNAME_TTL_MS);
-    }
+    const data = await stepWithRetry(step, { step: "lastusername", chatId });
     result.checked += 1;
     if (!data.ok) result.failed += 1;
     else if (data.found && data.username) { result.found += 1; for (const entry of list) entry.knownUsername = data.username; }
