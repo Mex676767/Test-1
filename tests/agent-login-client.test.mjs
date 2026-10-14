@@ -41,9 +41,9 @@ test('once the name comes from the login, Settings shows it read-only and the Sa
 });
 
 // ---- requireAgentLogin, driven with fakes ---------------------------------------------------------
-function harness({ configured = '', stored = {}, serverReplies, department = '' }) {
+function harness({ configured = '', stored = {}, serverReplies, department = '', qa = false }) {
   const session = new Map(Object.entries(stored));
-  const calls = { posted: [], panels: [], bound: [], picked: [], dropped: [], detected: [], cs: [] };
+  const calls = { posted: [], panels: [], bound: [], picked: [], dropped: [], detected: [], cs: [], qa: [], qaChecked: [] };
   const handlers = {};
   const context = vm.createContext({
     JSON, Date, Promise, Boolean, URL, location: { origin: 'https://app.test' }, CONFIGURED_LIVECHAT_ACCOUNT: configured,
@@ -68,6 +68,9 @@ function harness({ configured = '', stored = {}, serverReplies, department = '' 
     applyBoundAgent: (name, key) => calls.bound.push([name, key]),
     detectDepartment: async (key, token) => { calls.detected.push([key, token]); return department; },
     applyCustomerServiceAgent: (key) => calls.cs.push(key),
+    detectQaRole: async (key, token) => { calls.qaChecked.push([key, token, calls.posted.length]); return typeof qa === 'function' ? qa(key) : qa; },
+    applyQaAgent: (key) => calls.qa.push(key),
+    qaView: false, syncMainTabs() {},
     pickAgentName: async (key, token, available) => { calls.picked.push([key, token, available]); },
     connectLiveChatLogin: async () => ({ accountKey: 'lc1', token: 'fresh', expiresAt: Date.now() + 3600_000 }),
   });
@@ -163,6 +166,7 @@ function signOutHarness({ confirmed = true } = {}) {
     document: { getElementById: () => ({ remove() { calls.settingsClosed = true; } }) },
     updateAgentBadge() { calls.badge = true; }, renderNeedsAttentionPanel() { calls.rendered += 1; }, renderChats() { calls.rendered += 1; },
     logDiagnostic: (t) => calls.logs.push(t), requireAgentLogin: async () => { calls.login += 1; },
+    qaView: false, syncMainTabs() { calls.tabs = (calls.tabs || 0) + 1; },
   });
   vm.runInContext(['let unrecordedChats = [1, 2]; let unrecordedLoaded = true;', fn('signOutLiveChat')].join(String.fromCharCode(10)), context);
   return { calls, context, run: () => vm.runInContext('signOutLiveChat()', context), read: (code) => vm.runInContext(code, context) };
@@ -215,4 +219,51 @@ test('a Retention agent, or one whose department could not be found, goes throug
     assert.deepEqual(h.calls.cs, []);
     assert.deepEqual(h.calls.bound, [['96 Teh', 'lc1']]);
   }
+});
+
+test('a login marked QA goes straight to the QA view: no agent name, no panel; the QA question is asked while the login request is on its way', async () => {
+  const h = harness({ stored: { 'ca-livechat-agent-token:lc1': 'tok', 'ca-livechat-agent-token-expiry:lc1': future }, serverReplies: [{ ok: true, bound: false, available: ['96 Mexha'] }], qa: true });
+  await h.run();
+  assert.deepEqual(h.calls.qa, ['lc1']);
+  assert.deepEqual(h.calls.picked, [], 'a QA person is never asked to choose an agent name');
+  assert.deepEqual(h.calls.bound, []);
+  assert.equal(h.calls.panels.length, 0);
+  assert.deepEqual(h.calls.qaChecked, [['lc1', 'tok', 0]], 'asked before the login answer came back');
+});
+
+test('an ordinary agent is unaffected by the QA check, even when it fails to answer', async () => {
+  const known = harness({ stored: { 'ca-livechat-agent-token:lc1': 'tok', 'ca-livechat-agent-token-expiry:lc1': future }, serverReplies: [{ ok: true, bound: true, name: '96 Teh' }], qa: false });
+  await known.run();
+  assert.deepEqual(known.calls.bound, [['96 Teh', 'lc1']]);
+  assert.deepEqual(known.calls.qa, []);
+  const fresh = harness({ stored: { 'ca-livechat-agent-token:lc2': 'tok2', 'ca-livechat-agent-token-expiry:lc2': future }, serverReplies: [{ ok: true, bound: false, available: ['96 Mexha'] }], qa: false });
+  await fresh.run();
+  assert.deepEqual(fresh.calls.picked.map((p) => p[0]), ['lc2']);
+});
+
+test('the QA check itself never throws or blocks: no answer, a refusal or a switched-off view all mean "not QA"', async () => {
+  const code = [app.match(/const QA_VIEW_LIVE = [^\n]+;/)[0], fn('detectQaRole')].join(String.fromCharCode(10));
+  const run = async (fetchImpl, search = '') => {
+    const context = vm.createContext({ URLSearchParams, location: { search }, AbortSignal, JSON, Boolean, fetch: fetchImpl });
+    vm.runInContext(code, context);
+    return vm.runInContext("detectQaRole('lc1', 'tok')", context);
+  };
+  const seen = [];
+  assert.equal(await run(async (url, options) => { seen.push([url, JSON.parse(options.body)]); return { json: async () => ({ ok: true, qa: true }) }; }), true);
+  assert.deepEqual(seen, [['/qa-role', { accountKey: 'lc1', agentToken: 'tok' }]]);
+  assert.equal(await run(async () => ({ json: async () => ({ ok: true, qa: false }) })), false);
+  assert.equal(await run(async () => ({ json: async () => ({ ok: false, loginExpired: true }) })), false);
+  assert.equal(await run(async () => { throw new Error('offline'); }), false);
+  assert.equal(await run(async () => ({ json: async () => { throw new Error('not json'); } })), false);
+  let asked = 0;
+  assert.equal(await run(async () => { asked += 1; return { json: async () => ({ ok: true, qa: true }) }; }, '?qaView=0'), false, 'the off switch');
+  assert.equal(asked, 0, 'and it does not even ask');
+});
+
+test('signing out of a QA view puts the tabs back for the next sign-in', async () => {
+  const h = signOutHarness();
+  h.context.qaView = true;
+  await h.run();
+  assert.equal(h.read('qaView'), false);
+  assert.equal(h.calls.tabs, 1, 'the tabs are redrawn without the QA view');
 });

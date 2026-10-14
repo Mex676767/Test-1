@@ -17,6 +17,11 @@ const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
 // agentLogin=0 to the page address (for the LiveChat widget: to its App URL) turns it off again without a deploy, e.g. if
 // the login window cannot open somewhere. Independent of the department switches above.
 const AGENT_LOGIN_LIVE = new URLSearchParams(location.search).get("agentLogin") !== "0";
+// The QA view: a LiveChat login marked QA in the Agent Logins table (Role = QA) sees only the QA, Tickets and Knowledge tabs: no Retention,
+// no Blast, nothing is recorded and there is no agent name (see detectQaRole and applyQaAgent). ON; adding qaView=0 to the page address
+// (for the LiveChat widget: to its App URL) turns it off again without a deploy. Independent of the department switches above.
+const QA_VIEW_LIVE = new URLSearchParams(location.search).get("qaView") !== "0";
+let qaView = false; // true once the signed-in login is marked QA
 
 /* ============================================================
    THEME
@@ -196,7 +201,7 @@ function saveAgent(name) {
 // Settings panel — overlaid on top of the widget, blocking interaction
 // until an agent is chosen.
 function openSettingsPanel() {
-  const customerService = isCustomerServiceView();
+  const customerService = isCustomerServiceView() || qaView;
   document.getElementById("settingsOverlay")?.remove();
   const blastFailures = readBlastStorage(BLAST_LOCAL_STORAGE_KEY).failureLog;
   const failureLog = Array.isArray(blastFailures) ? blastFailures : [];
@@ -212,7 +217,7 @@ function openSettingsPanel() {
         </div>
         ${selectedAgent || customerService ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
-      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you.</p>${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
+      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? "You are signed in with LiveChat as QA. QA, Tickets and Knowledge are available to you." : "You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
@@ -645,6 +650,7 @@ async function signOutLiveChat() {
   if (!confirm("Sign out of LiveChat in this widget? Nothing can be recorded until you sign in again.")) return;
   for (const accountKey of ["lc1", "lc2"]) forgetLiveChatLogin(accountKey);
   try { localStorage.removeItem(AGENT_KEY); } catch (_) { /* non-fatal */ }
+  if (qaView) { qaView = false; syncMainTabs(); } // the next sign-in decides again
   selectedAgent = "";
   agentLocked = false;
   staleRecords = [];
@@ -709,6 +715,34 @@ function applyCustomerServiceAgent(accountKey) {
   logDiagnostic("Signed in with LiveChat as Customer Service (Tickets and Knowledge).", "success");
 }
 
+// Is this signed-in LiveChat login marked QA in the Agent Logins table? The server checks the token with LiveChat and reads the table.
+// Never blocks a sign-in: any failure just means "not QA", and the agent continues as before.
+async function detectQaRole(accountKey, token) {
+  if (!QA_VIEW_LIVE) return false;
+  try {
+    const response = await fetch("/qa-role", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountKey, agentToken: token }),
+      ...(typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(8_000) } : {}),
+    });
+    const data = await response.json();
+    return Boolean(data.ok && data.qa);
+  } catch (_) { return false; }
+}
+
+// A QA person records no cases, so there is no agent name to pick: straight to the QA, Tickets and Knowledge tabs.
+function applyQaAgent(accountKey) {
+  qaView = true;
+  agentSigningIn = false;
+  setCurrentLiveChatAccount(accountKey);
+  updateAgentBadge();
+  document.getElementById("agentLoginOverlay")?.remove();
+  activeMainTab = "unknownChats";
+  syncMainTabs();
+  logDiagnostic("Signed in with LiveChat as QA (QA, Tickets and Knowledge).", "success");
+}
+
 async function requireAgentLogin() {
   agentSigningIn = true;
   updateAgentBadge();
@@ -728,8 +762,10 @@ async function requireAgentLogin() {
     const usable = clients.map((client) => client.key).filter((key) => tokens[key]);
     for (const key of usable) {
       if (await detectDepartment(key, tokens[key]) === "cs") { applyCustomerServiceAgent(key); return; }
+      const qaCheck = detectQaRole(key, tokens[key]); // asked while the login request is on its way: no extra wait
       let data;
       try { data = await postAgentLogin(key, tokens[key]); } catch (_) { failure = "Couldn't reach the server — check your connection."; continue; }
+      if (await qaCheck) { applyQaAgent(key); return; }
       if (data.loginExpired) { dropLiveChatToken(key); failure = data.error || ""; continue; }
       if (data.ok && data.bound) { applyBoundAgent(data.name, key); return; }
       if (data.ok) { await pickAgentName(key, tokens[key], Array.isArray(data.available) ? data.available : []); return; }
@@ -1101,14 +1137,16 @@ function mainTabAvailability() {
 
 function syncMainTabs() {
   const available = mainTabAvailability();
+  // A QA person sees QA, Tickets and Knowledge only: never Retention or Blast.
+  if (qaView) Object.assign(available, { customer: false, blast: false, tickets: ESCALATION_TICKET_ENABLED, knowledge: true });
   const { tickets: ticketsAvailable, blast: blastAvailable, knowledge: knowledgeAvailable } = available;
   // Chat/department updates can arrive after an agent starts Blast.
   // Keep its existing iframe visible for the lifetime of the queue.
   if (blastRunInProgress && blastAvailable) activeMainTab = "blast";
-  // The QA tab (the page at /qa/) is shown only in the standalone admin preview, never in the installed widget.
-  const unknownChatsAvailable = previewMode;
+  // The QA tab (the page at /qa/) is shown in the standalone admin preview and to a person marked QA, never to other agents.
+  const unknownChatsAvailable = previewMode || qaView;
   if (!available[activeMainTab] && !(activeMainTab === "unknownChats" && unknownChatsAvailable)) {
-    activeMainTab = ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
+    activeMainTab = qaView ? "unknownChats" : ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
   }
   const mainTabs = document.getElementById("mainTabs");
   if (mainTabs) mainTabs.hidden = !previewMode && !DEPARTMENT_TABS_LIVE && !BLAST_LIVE;
@@ -1122,6 +1160,8 @@ function syncMainTabs() {
   if (knowledgeTab) knowledgeTab.hidden = !knowledgeAvailable;
   const unknownChatsTab = document.getElementById("unknownChatsTab");
   if (unknownChatsTab) unknownChatsTab.hidden = !unknownChatsAvailable;
+  const agentBadge = document.getElementById("agentBadge");
+  if (agentBadge && qaView) agentBadge.hidden = true; // a QA person has no agent name to show
   document.querySelectorAll("[data-main-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mainTab === activeMainTab);
   });
@@ -5898,7 +5938,7 @@ function runWhenIdle(task, timeout = 1500) {
     }
   }
   const originalAgentSetup = !DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE);
-  if ((originalAgentSetup || !departmentKnown || currentDepartment === "rtn") && !selectedAgent) {
+  if ((originalAgentSetup || !departmentKnown || currentDepartment === "rtn") && !selectedAgent && !qaView) {
     // Give the agent-name list a short chance to arrive, while never holding
     // the LiveChat connection or the first paint behind the network.
     await Promise.race([
