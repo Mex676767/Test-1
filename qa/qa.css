@@ -100,7 +100,6 @@ button { font: inherit; cursor: pointer; }
 .dp-option.active { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 
 .uc-agents-field { margin-top: 14px; }
-.uc-fresh { margin: 12px 0 0; }
 .ap { position: relative; display: block; max-width: 420px; }
 .ap-display { width: 100%; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
 .ap-display::after { content: "▾"; float: right; color: var(--muted); }

@@ -1,9 +1,8 @@
 // The QA page (/qa/, also the QA tab of the admin preview): runs the crosscheck (see scan.js) from the browser and shows the agents with
 // the most chats nobody recorded, with a .csv for QA. Read-only: nothing is written to Lark or anywhere else.
 import { attachAgentPicker } from "./agentpicker.js";
-import { createCache } from "./cache.js";
 import { attachDatePicker } from "./datepicker.js";
-import { agentChoices, alignedWindows, describeChatLog, threadFromInput, archiveLink, checkKnownUsernames, classifyEntries, countMarks, createClient, dropOwnUntracked, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
+import { agentChoices, describeChatLog, threadFromInput, archiveLink, checkKnownUsernames, classifyEntries, countMarks, createClient, dropOwnUntracked, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -19,7 +18,6 @@ const dayInMyt = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(0, 10)
 
 let result = null; // { entries, byEmail, from, to } of the last finished scan
 let running = false;
-const cache = createCache(); // saved results of earlier searches (this browser only), emptied on sign-out
 let agentPicker = null;
 let agentsLoaded = false;
 let currentRun = null; // { stopped } of the scan on screen: every scan has its own flag, so a stopped scan stays stopped when the next one starts
@@ -129,7 +127,6 @@ function signOut() {
   agentsLoaded = false;
   agentPicker?.setChoices([]);
   agentPicker?.reset();
-  cache.clear();
   chatToken += 1;
   renderChatLog(null);
   showSignedIn(false);
@@ -370,7 +367,7 @@ async function find(event) {
   $("bar").firstElementChild.style.width = "0";
   const step = createClient({ base: "", ...(login ? { login } : { key }) });
   try {
-    const options = { step, fromMs, toMs, run, fresh: $("fresh").checked, only: { names: agentPicker.selectedNames(), emails: agentPicker.selectedEmails() }, cacheKey: `${from}:${to || "now"}` };
+    const options = { step, fromMs, toMs, run, only: { names: agentPicker.selectedNames(), emails: agentPicker.selectedEmails() } };
     if (mode === "logged") await findLogged(options);
     else await findUnknown(options);
   } catch (error) {
@@ -385,16 +382,16 @@ async function find(event) {
   }
 }
 
-async function findLogged({ step, fromMs, toMs, run, fresh, only, cacheKey }) {
+async function findLogged({ step, fromMs, toMs, run, only }) {
   $("loggedResults").hidden = true;
   setStatus("Reading what agents logged…");
-  const read = await loadLogged({ step, fromMs, toMs, only: only.names, cache, cacheKey, fresh, isCancelled: () => run.stopped, onProgress: (scanned) => !run.stopped && setStatus(`Reading what agents logged… ${scanned} rows checked`) });
+  const read = await loadLogged({ step, fromMs, toMs, only: only.names, isCancelled: () => run.stopped, onProgress: (scanned) => !run.stopped && setStatus(`Reading what agents logged… ${scanned} rows checked`) });
   logged = { rows: read.rows, byEmail: read.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs) };
   renderLogged();
-  setStatus(`Done. ${plural(read.rows.length, "logged chat")} found${read.fromSaved ? " (from saved results: tick \"Read everything again\" for the latest)" : ""}.`);
+  setStatus(`Done. ${plural(read.rows.length, "logged chat")} found.`);
 }
 
-async function findUnknown({ step, fromMs, toMs, run, fresh, only }) {
+async function findUnknown({ step, fromMs, toMs, run, only }) {
   // The first line of the scan appears only after the whole Customer Approaching table is read: say so, instead of leaving the last message.
   setStatus("Reading Customer Approaching… this can take a minute.");
   $("results").hidden = true;
@@ -402,7 +399,7 @@ async function findUnknown({ step, fromMs, toMs, run, fresh, only }) {
   $("log").textContent = "";
   const lines = [];
   // Every finished time window of either LiveChat account moves the bar (two accounts read the same windows).
-  const expectedWindows = alignedWindows(fromMs, toMs, WINDOW_MS).length * 2;
+  const expectedWindows = windows(fromMs, toMs, WINDOW_MS).length * 2;
   let finishedWindows = 0;
   const note = (line, meta) => {
     if (run.stopped) return; // a stopped scan may still finish a request in the background: it must not write over the next one
@@ -417,7 +414,7 @@ async function findUnknown({ step, fromMs, toMs, run, fresh, only }) {
       setStatus(line);
     }
   };
-  const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => run.stopped, cache, fresh });
+  const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => run.stopped });
   const entries = planAll(scan, { onlyKnown: true, only: only.emails, log: note });
   note("Reading the Unknown ticks agents made…");
   const tickData = await loadTicks(step);
@@ -426,13 +423,12 @@ async function findUnknown({ step, fromMs, toMs, run, fresh, only }) {
   // Chats ticked Unknown whose customer already had a player username on file: the lookup is per chat, so it comes last, on what is left.
   if (shown.some((entry) => entry.mark === "ticked")) {
     note("Checking whether the customers of ticked chats already had a username…");
-    const lookup = await checkKnownUsernames(shown, step, { cache, fresh, isCancelled: () => run.stopped, onProgress: (done, total) => !run.stopped && setStatus(`Checking ticked chats for a username on file… ${done}/${total}`) });
+    const lookup = await checkKnownUsernames(shown, step, { isCancelled: () => run.stopped, onProgress: (done, total) => !run.stopped && setStatus(`Checking ticked chats for a username on file… ${done}/${total}`) });
     note(`${lookup.found} of ${lookup.checked} ticked chats had a username on file${lookup.failed ? `; ${lookup.failed} could not be checked` : ""}.`);
   }
   result = { entries: shown, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs), tracked: tickData.configured && tickData.since > 0 };
   render();
-  const savedWindows = scan.results.reduce((sum, item) => sum + item.fromSaved, 0);
-  setStatus(`Done. ${plural(shown.length, "chat")} found${savedWindows ? ` (${savedWindows} time windows from saved results)` : ""}.`);
+  setStatus(`Done. ${plural(shown.length, "chat")} found.`);
 }
 
 function saveCsv(text, name) {
