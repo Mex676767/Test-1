@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { calendarDays, displayDate } from '../qa/datepicker.js';
 import { pickerLabel } from '../qa/agentpicker.js';
-import { agentChoices, checkKnownUsernames, describeChatLog, toCsv } from '../qa/scan.js';
+import { agentChoices, checkClaim, checkKnownUsernames, describeChatLog, toCsv } from '../qa/scan.js';
 import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loggedIssues, planAll, scanChats } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
@@ -379,4 +379,56 @@ test('the card for a logged case is a tidy read-only grid: agent and time, usern
   assert.match(card, /Not filled in/);
   assert.match(card, /row\.claimSecret \? "✓" : "—"/);
   assert.doesNotMatch(card, /Customer<\/div>|Case details|VIEW ONLY|<input/, 'no boxes inside boxes, nothing to edit');
+});
+
+// ---- the bonus the agent claimed, against what they logged ----------------------------------------------------------------
+
+const claimOf = (extra = {}) => ({ agent: '96 Alice', program: 'topPnl', label: 'Top 10 P&L', source: 'Pass RM18', inquiry: 'TOP P&L', amount: '18', at: 5, ...extra });
+const loggedRow = (extra = {}) => ({ agent: '96 Alice', createdAt: 1000, username: 'p1', brand: 'VS96', inquiry: ['TOP P&L'], status: 'Given', amount: 18, link: 'l', ...extra });
+
+test('a claim is checked against the logged inquiry (the claimed bonus tag is among them) and amount (the first number), with nothing compared when the bonus implies none', () => {
+  assert.deepEqual(checkClaim(claimOf(), loggedRow()), { expectedAmount: 18, inquiryOk: true, amountOk: true });
+  assert.deepEqual(checkClaim(claimOf(), loggedRow({ inquiry: ['Others'] })), { expectedAmount: 18, inquiryOk: false, amountOk: true });
+  assert.equal(checkClaim(claimOf(), loggedRow({ amount: 20 })).amountOk, false);
+  assert.equal(checkClaim(claimOf(), loggedRow({ amount: null })).amountOk, false, 'a bonus with an amount but none logged is wrong');
+  assert.equal(checkClaim(claimOf(), loggedRow({ inquiry: ['top p&l ', 'Feedback'] })).inquiryOk, true, 'letter case and spaces do not matter, other tags are fine');
+  assert.equal(checkClaim(claimOf({ amount: '18 | 20' }), loggedRow()).amountOk, true, 'several numbers: the first, as the record keeps one');
+  assert.equal(checkClaim(claimOf({ amount: 18.5 }), loggedRow({ amount: 18.5 })).amountOk, true);
+  const none = checkClaim(claimOf({ program: 'redeemCode', inquiry: '', amount: '' }), loggedRow({ amount: null, inquiry: [] }));
+  assert.deepEqual(none, { expectedAmount: null, inquiryOk: null, amountOk: null });
+});
+
+test('one chat with a claim: a matching log is fine, a wrong inquiry or amount makes the whole chat a mismatch that names the agent', () => {
+  const ok = describeChatLog({ rows: [loggedRow()], ticks: [], claims: [claimOf()], tracking: { configured: true, since: 1, claimsSince: 1 } });
+  assert.equal(ok.verdict, 'logged');
+  assert.deepEqual(ok.rows[0].claims.map((c) => [c.label, c.inquiryOk, c.amountOk]), [['Top 10 P&L', true, true]]);
+  const wrong = describeChatLog({ rows: [loggedRow({ amount: 20, inquiry: ['Others'] }), loggedRow({ agent: '96 Bob' })], ticks: [], claims: [claimOf(), claimOf({ agent: '96 Bob' })] });
+  assert.equal(wrong.verdict, 'mismatch');
+  assert.match(wrong.headline, /does not match the bonus claimed: 96 Alice$/);
+  assert.deepEqual(wrong.rows[0].claims.map((c) => [c.inquiryOk, c.amountOk]), [[false, false]]);
+  assert.deepEqual(wrong.rows[1].claims.map((c) => [c.inquiryOk, c.amountOk]), [[true, true]], 'Bob\'s own claim is checked against Bob\'s own record');
+});
+
+test('a claim by an agent who logged nothing is called out; Status Given without any claim on record says why nothing could be compared', () => {
+  const orphan = describeChatLog({ rows: [], ticks: [], claims: [claimOf()] });
+  assert.equal(orphan.verdict, 'mismatch');
+  assert.match(orphan.headline, /96 Alice claimed a bonus on this chat but logged nothing/);
+  assert.equal(orphan.orphanClaims.length, 1);
+  const mixed = describeChatLog({ rows: [loggedRow()], ticks: [], claims: [claimOf(), claimOf({ agent: '96 Cara' })] });
+  assert.equal(mixed.verdict, 'mismatch', 'an agent who claimed and logged nothing counts even when another agent logged');
+  assert.match(mixed.headline, /does not match the bonus claimed: 96 Cara$/);
+  const since = Date.UTC(2026, 9, 14, 16, 0);
+  const noClaim = describeChatLog({ rows: [loggedRow()], ticks: [], claims: [], tracking: { configured: true, since: 1, claimsSince: since } });
+  assert.equal(noClaim.verdict, 'logged');
+  assert.match(noClaim.note, /Status is Given but no bonus claim was recorded for this agent\. Claims are only recorded from 2026-10-15 00:00/);
+  assert.match(describeChatLog({ rows: [loggedRow()], ticks: [], claims: [], tracking: { configured: false, since: 0 } }).note, /claims are not being recorded yet/);
+  assert.equal(describeChatLog({ rows: [loggedRow({ status: 'Solved' })], ticks: [], claims: [] }).note, '', 'no bonus given, nothing to explain');
+});
+
+test('the card lists the bonus claimed with its source value and a tick or warning for the inquiry and the amount', () => {
+  const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
+  const block = script.slice(script.indexOf('function claimsBlock'), script.indexOf('// One logged case'));
+  for (const text of ['Bonus claimed', 'claim.label', 'claim.source', 'Inquiry should be', 'Amount should be', 'No amount for this bonus']) assert.ok(block.includes(text), text);
+  assert.match(script, /\$\{claimsBlock\(row\.claims \|\| \[\]\)\}/, 'each logged card shows its own agent\'s claims');
+  assert.match(script, /function claimOnlyCard/);
 });
