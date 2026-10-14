@@ -353,18 +353,21 @@ export function classifyEntries(entries, { ticks, configured, since }, byEmail) 
   return entries;
 }
 
-// Logins whose "Before tracking" chats are not listed: the admin's own two. Their ticks from before tracking began were lost and cannot
+// Logins whose older "Before tracking" chats are not listed: the admin's own two. Their ticks from before tracking began were lost and cannot
 // be judged, so those chats would only be noise; everything else of theirs still shows. Salted hashes, like ALWAYS_EXCLUDED_HASHES.
 export const HIDE_UNTRACKED_HASHES = new Set([
   "8558db0b41fcc9498d501dd7de34117faa290e573aaebcfee20dac0d2dad902c",
   "c9bbc994474dc2dc433c0c11710a8e2626e978cb813fd615c03f82044044f6c9",
 ]);
 
-// The entries without the "Before tracking" chats of the logins in HIDE_UNTRACKED_HASHES.
+// Only chats before this moment are hidden (14 Oct 2026, 00:00 Malaysian time): from that day on the admin's chats show like anyone's.
+export const HIDE_UNTRACKED_BEFORE = Date.parse("2026-10-14T00:00:00+08:00");
+
+// The entries without the "Before tracking" chats of the logins in HIDE_UNTRACKED_HASHES that are older than HIDE_UNTRACKED_BEFORE.
 export async function dropOwnUntracked(entries) {
   const hide = new Map();
   for (const email of new Set(entries.map((entry) => entry.email))) hide.set(email, HIDE_UNTRACKED_HASHES.has(await emailHash(email)));
-  return entries.filter((entry) => !(entry.mark === "untracked" && hide.get(entry.email)));
+  return entries.filter((entry) => !(entry.mark === "untracked" && hide.get(entry.email) && entry.date < HIDE_UNTRACKED_BEFORE));
 }
 
 // { ticked, notTicked, untracked } counts (automatic ticks count as ticked).
