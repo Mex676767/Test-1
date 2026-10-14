@@ -3,6 +3,7 @@
 // its own: it uses the LiveChat login the widget already holds in this tab (sign in and out in the widget's Settings).
 import { attachAgentPicker } from "./agentpicker.js";
 import { attachDatePicker } from "./datepicker.js";
+import { buildExamples } from "./examples.js";
 import { agentChoices, archiveLink, checkKnownUsernames, classifyEntries, countMarks, createClient, describeChatLog, dropOwnUntracked, loadTicks, MARK_LABELS, myt, planAll, scanChats, sortedEntries, summarize, toCsv, windows } from "./scan.js";
 
 const $ = (id) => document.getElementById(id);
@@ -16,6 +17,7 @@ const MYT = "+08:00";
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const dayInMyt = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(0, 10);
+const PREVIEW = new URLSearchParams(location.search).get("preview") === "1";
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 let login = null; // { account, token } once the server has accepted the widget's LiveChat login
@@ -142,7 +144,7 @@ async function showChat(threadId) {
 
 // The page around us says which chat is open in LiveChat (and is asked once when this page has loaded).
 window.addEventListener("message", (event) => {
-  if (event.origin !== location.origin || event.source !== window.parent || event.data?.source !== "ca-qa-chat") return;
+  if (event.origin !== location.origin || event.source !== window.parent || event.data?.source !== "ca-qa-chat" || PREVIEW) return;
   showChat(String(event.data.threadId || ""));
 });
 if (window.parent !== window) { try { window.parent.postMessage({ source: "ca-qa-ready" }, location.origin); } catch (_) { /* standalone */ } }
@@ -285,5 +287,22 @@ $("onlyKnownUser").addEventListener("change", () => { if (result) render(); });
 agentPicker = attachAgentPicker($("agentPicker"), {
   onOpen: () => { if (!login) agentPicker.setMessage(loginProblem || "Sign in with LiveChat in Settings (⚙) first."); },
 });
-renderChatLog(null, "Checking your LiveChat login…");
-resumeLogin();
+// The admin preview (the QA tab opened with ?preview=1) shows made-up example chats instead of reading anything.
+if (new URLSearchParams(location.search).get("preview") === "1") {
+  const examples = buildExamples();
+  const toolbar = document.createElement("div");
+  toolbar.className = "qc-preview";
+  toolbar.innerHTML = `<div class="qc-preview-title"><span class="qc-preview-badge">PREVIEW EXAMPLE</span> Sample chats: made-up data, nothing here is real.</div>
+    <div class="qc-preview-pick">${examples.map((example) => `<button type="button" data-example="${example.id}">${escapeHtml(example.label)}</button>`).join("")}</div>`;
+  $("chatCard").prepend(toolbar);
+  const show = (id) => {
+    const example = examples.find((item) => item.id === id) || examples[0];
+    for (const button of toolbar.querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.example === example.id));
+    renderChatLog(describeChatLog(example.data));
+  };
+  toolbar.addEventListener("click", (event) => { const button = event.target.closest("button[data-example]"); if (button) show(button.dataset.example); });
+  show(examples[0].id);
+} else {
+  renderChatLog(null, "Checking your LiveChat login…");
+  resumeLogin();
+}

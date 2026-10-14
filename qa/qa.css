@@ -151,3 +151,10 @@ button { font: inherit; cursor: pointer; }
 .qc-check { font-size: 13px; color: var(--muted); }
 .qc-check.ok { color: var(--ok); }
 .qc-check.bad { color: var(--warn); font-weight: 600; }
+
+.qc-preview { margin-bottom: 12px; display: grid; gap: 8px; }
+.qc-preview-title { color: var(--muted); font-size: 13px; }
+.qc-preview-badge { font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; margin-right: 6px; }
+.qc-preview-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.qc-preview-pick button { padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--text); font-size: 12px; }
+.qc-preview-pick button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
