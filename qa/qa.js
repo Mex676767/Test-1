@@ -16,7 +16,7 @@ const dayInMyt = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(0, 10)
 
 let result = null; // { entries, byEmail, from, to } of the last finished scan
 let running = false;
-let stopRequested = false;
+let currentRun = null; // { stopped } of the scan on screen: every scan has its own flag, so a stopped scan stays stopped when the next one starts
 
 function setStatus(text, isError = false) {
   $("status").textContent = text;
@@ -242,12 +242,13 @@ async function find(event) {
   store.set(FROM, from);
 
   setRunning(true);
-  stopRequested = false;
+  const run = { stopped: false };
+  currentRun = run;
   $("bar").firstElementChild.style.width = "0";
   const step = createClient({ base: "", ...(login ? { login } : { key }) });
   try {
-    if (mode === "logged") await findLogged({ step, fromMs, toMs });
-    else await findUnknown({ step, fromMs, toMs });
+    if (mode === "logged") await findLogged({ step, fromMs, toMs, run });
+    else await findUnknown({ step, fromMs, toMs, run });
   } catch (error) {
     if (error.cancelled) setStatus("Stopped.");
     else if (error.status === 404) setStatus("This page is not switched on yet. Ask the admin.", true);
@@ -260,16 +261,18 @@ async function find(event) {
   }
 }
 
-async function findLogged({ step, fromMs, toMs }) {
+async function findLogged({ step, fromMs, toMs, run }) {
   $("loggedResults").hidden = true;
   setStatus("Reading what agents logged…");
-  const read = await loadLogged({ step, fromMs, toMs, isCancelled: () => stopRequested, onProgress: (scanned) => setStatus(`Reading what agents logged… ${scanned} rows checked`) });
+  const read = await loadLogged({ step, fromMs, toMs, isCancelled: () => run.stopped, onProgress: (scanned) => !run.stopped && setStatus(`Reading what agents logged… ${scanned} rows checked`) });
   logged = { rows: read.rows, byEmail: read.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs) };
   renderLogged();
   setStatus(`Done. ${plural(read.rows.length, "logged chat")} found.`);
 }
 
-async function findUnknown({ step, fromMs, toMs }) {
+async function findUnknown({ step, fromMs, toMs, run }) {
+  // The first line of the scan appears only after the whole Customer Approaching table is read: say so, instead of leaving the last message.
+  setStatus("Reading Customer Approaching… this can take a minute.");
   $("results").hidden = true;
   $("notes").hidden = false;
   $("log").textContent = "";
@@ -278,6 +281,7 @@ async function findUnknown({ step, fromMs, toMs }) {
   const expectedWindows = windows(fromMs, toMs, WINDOW_MS).length * 2;
   let finishedWindows = 0;
   const note = (line, meta) => {
+    if (run.stopped) return; // a stopped scan may still finish a request in the background: it must not write over the next one
     lines.push(line);
     $("log").textContent = lines.join("\n");
     if (meta) {
@@ -289,7 +293,7 @@ async function findUnknown({ step, fromMs, toMs }) {
       setStatus(line);
     }
   };
-  const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => stopRequested });
+  const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => run.stopped });
   const entries = planAll(scan, { onlyKnown: true, log: note });
   result = { entries, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs) };
   render();
@@ -309,7 +313,7 @@ function saveCsv(text, name) {
 
 $("from").value = store.get(FROM) || dayInMyt(Date.now() - 7 * 86_400_000);
 $("form").addEventListener("submit", find);
-$("stop").addEventListener("click", () => { stopRequested = true; setStatus("Stopping…"); });
+$("stop").addEventListener("click", () => { if (currentRun) currentRun.stopped = true; setStatus("Stopping…"); });
 $("download").addEventListener("click", () => { if (result) saveCsv(toCsv(result.entries, result.byEmail), `qa-unknown-chats_${result.from}_to_${result.to}.csv`); });
 $("loggedDownload").addEventListener("click", () => { if (logged) saveCsv(toLoggedCsv(logged.rows), `qa-logged-chats_${logged.from}_to_${logged.to}.csv`); });
 $("onlyIncomplete").addEventListener("change", () => { if (logged) renderLogged(); });

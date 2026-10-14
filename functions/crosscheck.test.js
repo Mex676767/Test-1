@@ -255,12 +255,16 @@ test("write: creates Open rows with lowercase emails, at most 25 per call, and r
   assert.equal(many.created, 25);
 });
 
-test("the Unrecorded Chats table must be configured for every step except recorded", async (t) => {
-  const w = world();
+test("the Unrecorded Chats table is needed only by the steps that use it: with it gone (deleted) the scan steps still work", async (t) => {
+  const w = world({ archivesReply: { chats: [] } });
   t.after(w.restore);
   const env = { ...ENV, LARK_TABLE_UNRECORDED: "" };
-  assert.match((await call({ step: "existing" }, { env })).error, /LARK_TABLE_UNRECORDED/);
+  for (const step of ["existing", "write"]) assert.match((await call({ step, entries: [] }, { env })).error, /LARK_TABLE_UNRECORDED/);
   assert.equal((await call({ step: "recorded", fromMs: 1 }, { env })).ok, true);
+  assert.equal((await call({ step: "agents" }, { env })).ok, true);
+  assert.equal((await call({ step: "logged", fromMs: 1 }, { env })).ok, true);
+  const archives = await call({ step: "archives", account: "lc1", from: 1, to: 2 }, { env });
+  assert.equal(archives.ok, true, "listing the archives never touches the table");
 });
 
 test("recorded: also gives 'thread|agent name' pairs (lower case), so a chat can be judged per agent", async (t) => {
