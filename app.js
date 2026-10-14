@@ -1208,7 +1208,8 @@ function syncMainTabs() {
   if (unknownChatsView) unknownChatsView.hidden = activeMainTab !== "unknownChats";
   if (unknownChatsAvailable && activeMainTab === "unknownChats") {
     const frame = unknownChatsView?.querySelector("iframe[data-src]");
-    if (frame && !frame.src) frame.src = frame.dataset.src;
+    // The admin preview opens the QA tab with made-up example chats (?preview=1); a QA person in the widget gets the real thing.
+    if (frame && !frame.src) frame.src = frame.dataset.src + (previewMode ? "?preview=1" : "");
   }
   const needsAttention = document.getElementById("needsAttentionPanel");
   if (needsAttention) needsAttention.style.display = activeMainTab === "customer" ? "" : "none";

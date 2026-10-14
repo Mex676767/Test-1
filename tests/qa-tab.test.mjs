@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { calendarDays, displayDate } from '../qa/datepicker.js';
+import { buildExamples } from '../qa/examples.js';
 import { pickerLabel } from '../qa/agentpicker.js';
 import { agentChoices, checkClaim, checkKnownUsernames, describeChatLog, toCsv } from '../qa/scan.js';
 import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loggedIssues, planAll, scanChats } from '../qa/scan.js';
@@ -32,7 +33,7 @@ test('QA is a tab of the admin preview only: shown there, its page loads once op
   assert.equal(preview.context.activeMainTab, 'unknownChats');
   assert.equal(preview.els.unknownChatsView.hidden, false);
   assert.equal(preview.els.chatList.hidden, true, 'the chat cards give way to the page');
-  assert.equal(preview.frame.src, '/qa/index.html');
+  assert.equal(preview.frame.src, '/qa/index.html?preview=1', 'the admin preview opens the QA tab with example chats');
 
   const otherTab = tabs({ previewMode: true, activeMainTab: 'customer' });
   assert.equal(otherTab.els.unknownChatsTab.hidden, false);
@@ -431,4 +432,27 @@ test('the card lists the bonus claimed with its source value and a tick or warni
   for (const text of ['Bonus claimed', 'claim.label', 'claim.source', 'Inquiry should be', 'Amount should be', 'No amount for this bonus']) assert.ok(block.includes(text), text);
   assert.match(script, /\$\{claimsBlock\(row\.claims \|\| \[\]\)\}/, 'each logged card shows its own agent\'s claims');
   assert.match(script, /function claimOnlyCard/);
+});
+
+test('the admin preview has example chats for the QA card: each one runs through the real description and gives the verdict it is meant to show', () => {
+  const examples = buildExamples(Date.UTC(2026, 9, 14, 12, 0));
+  assert.deepEqual(examples.map((e) => e.id), ['logged', 'mismatch', 'missing', 'ticked', 'claimed', 'nothing']);
+  const verdicts = Object.fromEntries(examples.map((e) => [e.id, describeChatLog(e.data).verdict]));
+  assert.deepEqual(verdicts, { logged: 'logged', mismatch: 'mismatch', missing: 'incomplete', ticked: 'ticked', claimed: 'mismatch', nothing: 'nothing' });
+  const mismatch = describeChatLog(examples[1].data);
+  assert.deepEqual(mismatch.rows[0].claims.map((c) => [c.inquiryOk, c.amountOk]), [[false, false]], 'the example shows both warnings');
+  const logged = describeChatLog(examples[0].data);
+  assert.deepEqual(logged.rows[0].claims.map((c) => [c.inquiryOk, c.amountOk]), [[true, true]]);
+  assert.ok(examples.every((e) => !JSON.stringify(e.data).match(/@|password|token/i)), 'made-up data only');
+});
+
+test('the QA page shows the examples only when the admin preview asks for them (?preview=1), and then reads nothing from the server', () => {
+  const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
+  assert.match(script, /new URLSearchParams\(location\.search\)\.get\("preview"\) === "1"/);
+  const preview = script.slice(script.indexOf('// The admin preview (the QA tab opened with ?preview=1)'));
+  const previewBranch = preview.slice(0, preview.indexOf('} else {'));
+  assert.doesNotMatch(previewBranch, /resumeLogin|createClient|fetch\(/, 'the preview branch makes no request');
+  assert.match(preview.slice(preview.indexOf('} else {')), /resumeLogin\(\)/, 'the real tab still signs in and reads');
+  assert.match(script, /"ca-qa-chat" \|\| PREVIEW\) return;/, 'the preview ignores the open chat');
+  assert.match(app, /frame\.dataset\.src \+ \(previewMode \? "\?preview=1" : ""\)/);
 });
