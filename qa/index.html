@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex" />
   <title>QA</title>
-  <link rel="stylesheet" href="qa.css?v=20261014-7" />
+  <link rel="stylesheet" href="qa.css?v=20261014-8" />
 </head>
 <body>
   <main class="uc">
@@ -34,12 +34,14 @@
         <button type="button" data-mode="unknown" aria-pressed="false">Unknown chats</button>
       </div>
       <div class="uc-grid">
-        <label>From
-          <input id="from" type="date" required />
-        </label>
-        <label>To <span class="uc-opt">(empty = now)</span>
-          <input id="to" type="date" />
-        </label>
+        <div class="uc-field">
+          <span class="uc-label">From</span>
+          <span class="dp" id="fromPicker"><input id="from" type="hidden" /><button type="button" class="dp-display" aria-haspopup="dialog" aria-expanded="false"></button><div class="dp-pop" hidden></div></span>
+        </div>
+        <div class="uc-field">
+          <span class="uc-label">To <span class="uc-opt">(empty = now)</span></span>
+          <span class="dp" id="toPicker"><input id="to" type="hidden" /><button type="button" class="dp-display" aria-haspopup="dialog" aria-expanded="false"></button><div class="dp-pop" hidden></div></span>
+        </div>
       </div>
       <div class="uc-actions">
         <button type="submit" id="run" class="uc-primary">Show what agents logged</button>
@@ -79,6 +81,6 @@
       </details>
     </div>
   </main>
-  <script type="module" src="qa.js?v=20261014-7"></script>
+  <script type="module" src="qa.js?v=20261014-8"></script>
 </body>
 </html>

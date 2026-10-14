@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
+import { calendarDays, displayDate } from '../qa/datepicker.js';
 import { ALWAYS_EXCLUDED_HASHES, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
@@ -186,4 +187,17 @@ test('the ticks are read page after page until the list is complete', async () =
   assert.deepEqual([read.configured, read.since], [true, 7]);
   assert.deepEqual(await loadTicks(async () => ({ ok: true, configured: false, ticks: [], next: '', since: 0 })), { ticks: [], configured: false, since: 0 });
   await assert.rejects(() => loadTicks(async () => ({ ok: false, error: 'boom' })), /ticks: boom/);
+});
+
+test("the QA page uses its own calendar, not the browser's date input; weeks start on Monday and always show 6 rows", () => {
+  const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /type="date"/);
+  const october = calendarDays(2026, 9); // 1 Oct 2026 is a Thursday
+  assert.equal(october.length, 42);
+  assert.deepEqual([october[0].year, october[0].month, october[0].day, october[0].otherMonth], [2026, 8, 28, true], 'the first cell is Monday 28 Sep');
+  assert.deepEqual(october.filter((d) => !d.otherMonth).map((d) => d.day), Array.from({ length: 31 }, (_, i) => i + 1));
+  const monday = calendarDays(2026, 5); // 1 Jun 2026 is a Monday: no days of May in front
+  assert.deepEqual([monday[0].month, monday[0].day, monday[0].otherMonth], [5, 1, false]);
+  assert.equal(displayDate('2026-10-07'), '07/10/2026');
+  assert.equal(displayDate(''), '');
 });
