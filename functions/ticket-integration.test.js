@@ -27,9 +27,15 @@ test("config returns fields without exposing ticket records", async () => {
     assert.equal(body.ok, true);
     assert.equal("tickets" in body, false);
     assert.equal(body.fields[0].key, "status");
-    assert.deepEqual(body.fields[0].options, [{ value: "PYM_SOLVED", label: "PYM_SOLVED", isActive: true }]);
-    assert.deepEqual(body.departments, [{ id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" }]);
-    assert.deepEqual(body.markets, [{ id: 4, code: "MYR", label: "Malaysia" }]);
+    // The ticket system's own list (with display labels) comes first; the observed value is already in it.
+    assert.equal(body.fields[0].options.length, 13);
+    assert.deepEqual(body.fields[0].options.find((option) => option.value === "PYM_SOLVED"), { value: "PYM_SOLVED", label: "PYM TEAM SOLVED", isActive: true });
+    // Every department and market is offered; the ones seen on a ticket carry that ticket system id.
+    assert.equal(body.departments.length, 20);
+    assert.deepEqual(body.departments.find((item) => item.code === "PYM_MYR"), { id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" });
+    assert.deepEqual(body.departments.find((item) => item.code === "CS"), { id: "CS", code: "CS", name: "Customer Service" });
+    assert.equal(body.markets.length, 9);
+    assert.deepEqual(body.markets.find((item) => item.code === "MYR"), { id: 4, code: "MYR", label: "Malaysia" });
   } finally {
     global.fetch = originalFetch;
   }

@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { CATALOG_SNAPSHOT_DATE, TICKET_CATALOG } from "./_lib/ticket-catalog.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
 // The catalog is the same for every agent and changes rarely, but every open widget refetched it (a 100-ticket
@@ -7,6 +8,39 @@ import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets
 const CONFIG_TTL_MS = 5 * 60_000;
 let cachedConfig = null; // { key, at, body }
 export function resetTicketConfigCache() { cachedConfig = null; }
+
+const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const normalizeOption = (option) => (typeof option === "string"
+  ? { value: option, label: option, isActive: true }
+  : { value: option?.value, label: option?.label ?? option?.value, isActive: option?.isActive !== false });
+
+// The choices of one SELECT / MULTISELECT field: whatever the API itself lists (it does not yet), then the ticket system's own list
+// (ticket-catalog.js, with its display labels), then any value real tickets carry that neither knows (a choice added after the
+// snapshot), so a stale snapshot never hides something agents can use.
+function fieldOptions(field, observedValues) {
+  const options = [];
+  const add = (option) => {
+    if (option.value === undefined || option.value === null || options.some((item) => same(item.value, option.value))) return;
+    options.push(option);
+  };
+  (Array.isArray(field.options) ? field.options : []).map(normalizeOption).forEach(add);
+  (TICKET_CATALOG[field.key] || []).forEach(({ value, label }) => add({ value, label, isActive: true }));
+  const known = (value) => options.some((item) => same(item.value, value) || same(item.label, value));
+  [...new Set(observedValues.map(String))].filter((value) => !known(value)).sort((a, b) => a.localeCompare(b))
+    .forEach((value) => add({ value, label: value, isActive: true }));
+  return options;
+}
+
+// Departments and markets: the catalog's entries (code + label) carry the ids seen on real tickets; without one the code stands in
+// as the id (the widget posts the code either way). A department or market seen on a ticket but not in the catalog is added.
+function mergeByCode(catalogItems, observedItems, build) {
+  const observedByCode = new Map(observedItems.map((item) => [String(item.code).toLowerCase(), item]));
+  const merged = catalogItems.map((item) => build(item, observedByCode.get(String(item.code).toLowerCase())));
+  for (const item of observedItems) {
+    if (!merged.some((entry) => same(entry.code, item.code))) merged.push(build({ code: item.code, label: item.name ?? item.label }, item));
+  }
+  return merged;
+}
 
 export async function handler(event) {
   if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
@@ -32,11 +66,21 @@ export async function handler(event) {
     const uniqueById = (items) => Array.from(new Map(items
       .filter((item) => item && Number.isInteger(Number(item.id)))
       .map((item) => [Number(item.id), item])).values());
-    const departments = uniqueById(tickets.flatMap((ticket) => [ticket.currentDepartment, ticket.raisedByDepartment]))
+    const observedDepartments = uniqueById(tickets.flatMap((ticket) => [ticket.currentDepartment, ticket.raisedByDepartment]))
       .map(({ id, code, name }) => ({ id: Number(id), code, name }));
-    const markets = uniqueById(tickets.map((ticket) => ticket.market))
+    const observedMarkets = uniqueById(tickets.map((ticket) => ticket.market))
       .filter((market) => market.isActive !== false)
       .map(({ id, code, label, currency }) => ({ id: Number(id), code, label, currency }));
+    const departments = mergeByCode(
+      TICKET_CATALOG.toDepartment.map(({ value, label }) => ({ code: value, label })),
+      observedDepartments,
+      (item, seen) => ({ id: seen ? seen.id : item.code, code: item.code, name: item.label ?? seen?.name ?? item.code }),
+    );
+    const markets = mergeByCode(
+      TICKET_CATALOG.market.map(({ value, label }) => ({ code: value, label })),
+      observedMarkets,
+      (item, seen) => ({ id: seen ? seen.id : item.code, code: item.code, label: item.label ?? seen?.label ?? item.code, ...(seen?.currency ? { currency: seen.currency } : {}) }),
+    );
     const fields = (data.fields || [])
       .filter((field) => field.isActive !== false)
       .map((field) => {
@@ -45,10 +89,7 @@ export async function handler(event) {
           const value = ticket.fields?.[field.key];
           return Array.isArray(value) ? value : [value];
         }).filter((value) => value !== undefined && value !== null && String(value).trim());
-        const options = Array.from(new Set(observed.map(String)))
-          .sort((a, b) => a.localeCompare(b))
-          .map((value) => ({ value, label: value, isActive: true }));
-        return { ...field, options };
+        return { ...field, options: fieldOptions(field, observed) };
       });
     const body = {
       ok: true,
@@ -56,6 +97,7 @@ export async function handler(event) {
       fields,
       departments,
       markets,
+      catalogSnapshot: CATALOG_SNAPSHOT_DATE,
       defaultDepartmentId: settings.departmentId,
       defaultMarketId: settings.marketId,
     };
