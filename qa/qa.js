@@ -3,7 +3,7 @@
 import { attachAgentPicker } from "./agentpicker.js";
 import { createCache } from "./cache.js";
 import { attachDatePicker } from "./datepicker.js";
-import { agentChoices, alignedWindows, archiveLink, checkKnownUsernames, classifyEntries, countMarks, createClient, dropOwnUntracked, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
+import { agentChoices, alignedWindows, describeChatLog, threadFromInput, archiveLink, checkKnownUsernames, classifyEntries, countMarks, createClient, dropOwnUntracked, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -47,12 +47,18 @@ const forgetToken = (account) => { session.remove(TOKEN(account)); session.remov
 
 // Asks the server to accept this sign-in: a cheap read-only step. Throws the site's own refusal (401 = not this account or expired,
 // 403 = signed in but not marked QA).
+function setSignInStatus(text, isError = false) {
+  $("signinStatus").textContent = text;
+  $("signinStatus").classList.toggle("error", isError);
+}
+
 async function acceptLogin(candidate) {
   const data = await createClient({ base: "", login: candidate, pauseMs: 0, retries: 1 })({ step: "agents" });
   login = candidate;
   if (data && data.ok) { agentPicker?.setChoices(agentChoices(data.agents)); agentsLoaded = true; }
   session.set(PREFERRED, candidate.account);
   showSignedIn(true);
+  if (chatThread) showChat(chatThread); // a chat was opened before the sign-in finished
 }
 
 function showSignedIn(on) {
@@ -85,7 +91,7 @@ function authorize(client, redirectUri) {
 
 async function signIn() {
   $("signInBtn").disabled = true;
-  setStatus("Complete the login in the new window…");
+  setSignInStatus("Complete the login in the new window…");
   try {
     const config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json();
     const clients = Array.isArray(config.clients) ? config.clients : [];
@@ -100,7 +106,7 @@ async function signIn() {
         session.set(TOKEN(client.key), token);
         session.set(EXPIRY(client.key), String(expiresAt));
         await acceptLogin({ account: client.key, token });
-        setStatus("");
+        setSignInStatus("");
         return;
       } catch (error) {
         forgetToken(client.key);
@@ -111,7 +117,7 @@ async function signIn() {
     }
     throw lastError || new Error("LiveChat login was not completed.");
   } catch (error) {
-    setStatus(error.message, true);
+    setSignInStatus(error.message, true);
   } finally {
     $("signInBtn").disabled = false;
   }
@@ -124,7 +130,10 @@ function signOut() {
   agentPicker?.setChoices([]);
   agentPicker?.reset();
   cache.clear();
+  chatToken += 1;
+  renderChatLog(null);
   showSignedIn(false);
+  setSignInStatus("");
   setStatus("");
 }
 
@@ -136,6 +145,102 @@ async function resumeSignIn() {
     try { await acceptLogin({ account, token }); return; } catch (_) { /* wrong account, expired, or not QA: the button stays */ }
   }
 }
+
+// ---- This chat ------------------------------------------------------------------------------------------------------------
+// The chat open in LiveChat (the widget tells this page its thread id), or one pasted here: every agent's record for it, and any Unknown tick.
+let chatThread = "";
+let chatToken = 0; // an answer for a chat that is no longer the one on screen is dropped
+
+// One logged case as a card shaped like the Retention card (Customer, Case details), but nothing on it can be changed.
+function loggedCard(row) {
+  const empty = '<span class="rc-missing">not filled in</span>';
+  const chips = (list, extra = "") => (list.length ? `<div class="rc-chips">${list.map((item) => `<span class="rc-chip ${extra}">${escapeHtml(item)}</span>`).join("")}</div>` : `<div class="rc-input">${empty}</div>`);
+  return `<article class="rc-card">
+    <header class="rc-head"><span class="rc-agent">◉ ${escapeHtml(row.agent || "(no agent name)")}</span><span class="rc-readonly">VIEW ONLY</span></header>
+    <section class="rc-section">
+      <div class="rc-section-title">Customer</div>
+      <div class="rc-label">Username or user ID</div>
+      <div class="rc-input rc-mono">${row.username ? escapeHtml(row.username) : empty}</div>
+      <div class="rc-label">Brand</div>
+      <div class="rc-input">${row.brand ? escapeHtml(row.brand) : empty}</div>
+      <label class="rc-unknown"><input type="checkbox" disabled /><span>Unknown player</span></label>
+    </section>
+    <section class="rc-section">
+      <div class="rc-section-title">Case details</div>
+      <div class="rc-label">Inquiry</div>
+      ${chips(row.inquiry || [])}
+      <div class="rc-label">Status</div>
+      ${row.status ? `<div class="rc-chips"><span class="rc-chip status">${escapeHtml(row.status)}</span></div>` : `<div class="rc-input">${empty}</div>`}
+      <div class="rc-label">Released amount</div>
+      <div class="rc-input">${row.amount === null || row.amount === undefined ? '<span class="rc-muted">none</span>' : escapeHtml(String(row.amount))}</div>
+      ${row.telegram ? '<div class="rc-label">Telegram</div><div class="rc-input">Yes</div>' : ""}
+    </section>
+    <footer class="rc-foot">Logged ${escapeHtml(myt(row.createdAt))} (Malaysia time)</footer>
+  </article>`;
+}
+
+// An agent ticked Unknown player on this chat: that is all the system keeps, shown on a card of the same shape.
+function tickCard(tick) {
+  return `<article class="rc-card rc-card-unknown">
+    <header class="rc-head"><span class="rc-agent">◉ ${escapeHtml(tick.agent)}</span><span class="rc-readonly">VIEW ONLY</span></header>
+    <section class="rc-section">
+      <div class="rc-section-title">Customer</div>
+      <label class="rc-unknown"><input type="checkbox" checked disabled /><span>Unknown player</span></label>
+      <p class="rc-note">${escapeHtml(tick.label)}. Nothing else is recorded for an Unknown player.</p>
+    </section>
+    <footer class="rc-foot">Ticked ${escapeHtml(myt(tick.at))} (Malaysia time)</footer>
+  </article>`;
+}
+
+function renderChatLog(info, message = "") {
+  const box = $("chatResult");
+  if (!info) {
+    box.hidden = !message;
+    box.innerHTML = message ? `<p class="uc-hint">${escapeHtml(message)}</p>` : "";
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = `<div class="uc-verdict ${info.verdict}">${escapeHtml(info.headline)}</div>
+    ${info.rows.map(loggedCard).join("")}${info.ticks.map(tickCard).join("")}
+    ${info.rows.some((row) => row.issues.length) ? `<p class="uc-hint uc-warn">Missing: ${escapeHtml([...new Set(info.rows.flatMap((row) => row.issues))].join(", "))}</p>` : ""}
+    ${info.note ? `<p class="uc-hint">${escapeHtml(info.note)}</p>` : ""}
+    <p class="uc-hint"><a href="${escapeHtml(archiveLink(chatThread))}" target="_blank" rel="noopener noreferrer">Open this chat in LiveChat ↗</a></p>`;
+}
+
+async function showChat(threadId) {
+  chatThread = threadId;
+  const mine = (chatToken += 1);
+  if (!threadId) return renderChatLog(null);
+  const key = $("key").value.trim();
+  if (!login && !key) return renderChatLog(null, "Sign in with LiveChat to see how this chat was logged.");
+  renderChatLog(null, "Looking up how this chat was logged…");
+  try {
+    const step = createClient({ base: "", ...(login ? { login } : { key }), pauseMs: 0, retries: 2 });
+    const data = await step({ step: "chatlog", threadId });
+    if (mine !== chatToken) return;
+    if (!data.ok) throw new Error(data.error || "Could not read this chat.");
+    renderChatLog(describeChatLog(data));
+  } catch (error) {
+    if (mine !== chatToken) return;
+    if (error.status === 401 && login && error.loginExpired) signOut();
+    renderChatLog(null, error.message);
+  }
+}
+
+$("chatForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const threadId = threadFromInput($("chatInput").value);
+  if (!threadId) return renderChatLog(null, "That is not a LiveChat chat link or thread id.");
+  showChat(threadId);
+});
+
+// Inside the widget, the page around us says which chat is open in LiveChat (and is asked once when this page has loaded).
+window.addEventListener("message", (event) => {
+  if (event.origin !== location.origin || event.source !== window.parent || event.data?.source !== "ca-qa-chat") return;
+  $("chatInput").value = "";
+  showChat(String(event.data.threadId || ""));
+});
+if (window.parent !== window) { try { window.parent.postMessage({ source: "ca-qa-ready" }, location.origin); } catch (_) { /* standalone */ } }
 
 // ---- Scan ----
 // Two views share the sign-in and the dates: what agents LOGGED (Customer Approaching rows, to compare with the chat) and the
