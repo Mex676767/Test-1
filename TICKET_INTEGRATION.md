@@ -54,3 +54,19 @@ field is set, a ticket without a valid LiveChat login is refused.
 **All LiveChat users.** `GET /livechat-agents` with header `x-agents-key: <LIVECHAT_AGENTS_KEY>` lists every agent of both
 LiveChat accounts (`account`, `email`, `name`, `role`) and, for agents who have signed in to the widget, their `login` (the
 account_id UUID) and `agentName`. The accounts' Personal Access Tokens need the `agents--all:ro` scope. Unset key = 404.
+
+## Choice lists and the request limit
+
+**Choice lists.** The ticket API has no call for the dropdown choices, the departments or the markets (`GET /tickets` lists the fields
+without choices). The ticket system's docs page (`https://tickets.96ghq.com/api-docs`, "Fields you can post") does list them, so
+`functions/_lib/ticket-catalog.js` is a snapshot of that page: every choice with its display label and stored value, the 20 departments
+and the 9 markets. `/ticket-config` offers the catalog first, then any value real tickets carry that the catalog does not know, so a
+stale snapshot hides nothing. If the API ever lists a field's choices itself, those come first. The widget shows the labels everywhere
+(title, detail rows, filters, the create form). **When the ticket team changes a list, refresh the snapshot** (open the docs page,
+expand every "+N more", copy the lists into the file, update `CATALOG_SNAPSHOT_DATE`). Drop the file once the API serves the lists as JSON.
+
+**Request limit.** Each API key may make 120 requests a minute, shared by every agent. To stay inside it: ticket and inbox reads are
+shared for 10 s / 15 s per isolate (identical reads in flight at once are one call; `?fresh=1`, sent for Refresh, search and opening a
+ticket, skips the copy); the 30 s ticket poll pauses while the widget is hidden; after a 429 an isolate stops calling for the
+`Retry-After` seconds and the agent sees "The ticket system is busy ... Try again in N s". Watch for that message when more agents
+use Tickets (the Customer Service rollout).

@@ -3474,6 +3474,8 @@ function ticketChoiceSlug(value) {
 }
 
 function ticketChoiceDisplayLabel(fieldKey, rawValue, rawLabel = rawValue) {
+  const liveOption = (ticketFields.find((field) => field.key === fieldKey)?.options || []).find((option) => String(option.value) === String(rawValue));
+  if (liveOption?.label && String(liveOption.label) !== String(liveOption.value)) return String(liveOption.label);
   const fallback = TICKET_FALLBACK_OPTIONS[fieldKey] || [];
   const candidates = [rawValue, rawLabel].map(ticketChoiceSlug);
   const compactCandidates = candidates.map((value) => value.replaceAll("_", ""));
@@ -3654,9 +3656,9 @@ function renderTicketSlot(chatId) {
   restoreFocus(focus);
 }
 
-async function refreshTicketInbox(chatId, query = "", mode = "all") {
+async function refreshTicketInbox(chatId, query = "", mode = "all", { fresh = true } = {}) {
   if (ticketSearchResultsByChat.get(chatId)?.loading) return;
-  const pending = searchTickets(chatId, query, mode);
+  const pending = searchTickets(chatId, query, mode, { fresh });
   renderTicketSlot(chatId);
   try {
     await pending;
@@ -3740,11 +3742,11 @@ function renderTicketStatus(chatId) {
   </article>`;
 }
 
-async function loadTicketStatus(chatId, ref, { silent = false } = {}) {
+async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = {}) {
   const s = state[chatId];
   const normalized = String(ref || "").trim().toUpperCase();
   if (!normalized) throw new Error("Enter a ticket reference");
-  const res = await fetch(`/ticket-status?ref=${encodeURIComponent(normalized)}`);
+  const res = await fetch(`/ticket-status?ref=${encodeURIComponent(normalized)}${fresh ? "&fresh=1" : ""}`);
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Ticket status lookup failed");
   s.ticketLookupRef = normalized;
@@ -3755,9 +3757,9 @@ async function loadTicketStatus(chatId, ref, { silent = false } = {}) {
   return data.ticket;
 }
 
-async function searchTickets(chatId, query, mode = "search") {
+async function searchTickets(chatId, query, mode = "search", { fresh = true } = {}) {
   ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [], mode });
-  const res = await fetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}`);
+  const res = await fetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}${fresh ? "&fresh=1" : ""}`);
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Ticket search failed");
   ticketSearchResultsByChat.set(chatId, { loading: false, tickets: data.tickets || [], total: data.total || 0, mode });
@@ -3765,13 +3767,13 @@ async function searchTickets(chatId, query, mode = "search") {
 }
 
 async function pollTicketUpdates() {
-  if (activeMainTab !== "tickets" || !watchedTicketSnapshots.size) return;
+  if (activeMainTab !== "tickets" || !watchedTicketSnapshots.size || document.hidden) return;
   for (const ref of watchedTicketSnapshots.keys()) {
     const owner = Object.entries(state).find(([, value]) => value?.ticketRecord?.ref === ref);
     if (!owner) continue;
     try {
       const [chatId] = owner;
-      await loadTicketStatus(chatId, ref);
+      await loadTicketStatus(chatId, ref, { fresh: false });
       const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .escalation-slot`);
       if (slot && ticketWorkspaceView(state[chatId]) === "detail") renderTicketSlot(chatId);
     } catch (_) { /* a temporary poll failure should not interrupt the agent */ }
@@ -4102,7 +4104,7 @@ function renderChatsInner(chats) {
     card.dataset.chatId = chat.chatId;
     card.innerHTML = renderAdminTicketWorkspace(chat);
     chatListEl.appendChild(card);
-    if (ticketWorkspaceView(state[chat.chatId]) === "list" && !ticketSearchResultsByChat.has(chat.chatId)) void refreshTicketInbox(chat.chatId);
+    if (ticketWorkspaceView(state[chat.chatId]) === "list" && !ticketSearchResultsByChat.has(chat.chatId)) void refreshTicketInbox(chat.chatId, "", "all", { fresh: false });
     return;
   }
   // Default: expand exactly one chat (the first) on first load only, so
@@ -4393,7 +4395,7 @@ chatListEl.addEventListener("click", async (e) => {
       for (const key of ["ticketExplorerAgent", "ticketExplorerStatus", "ticketExplorerDepartment", "ticketExplorerMarket"]) s[key] = "all";
     }
     renderTicketSlot(chatId);
-    if (!ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId);
+    if (!ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId, "", "all", { fresh: false });
     saveState();
     return;
   }

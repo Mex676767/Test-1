@@ -1,5 +1,8 @@
 import { adapt } from "./_lib/adapt.js";
-import { json, ticketError, ticketRequest } from "./_lib/tickets.js";
+import { json, ticketError, ticketGet } from "./_lib/tickets.js";
+
+// A ticket read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
+const STATUS_TTL_MS = 10_000;
 
 export async function handler(event) {
   if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
@@ -9,7 +12,7 @@ export async function handler(event) {
   }
 
   try {
-    const data = await ticketRequest(event.env, `/tickets/${encodeURIComponent(ref)}`);
+    const data = await ticketGet(event.env, `/tickets/${encodeURIComponent(ref)}`, { ttlMs: STATUS_TTL_MS, fresh: event.queryStringParameters?.fresh === "1" });
     // The current API wraps a single record as { ticket, fields }, where
     // top-level fields is the field catalog. Older deployments returned the
     // ticket directly. Support both shapes and never mistake the catalog

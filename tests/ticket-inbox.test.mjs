@@ -111,7 +111,7 @@ test('ticket polling updates an open ticket without replacing a creation form', 
   w.state.chat.ticketRecord = { ref: 'TK1' };
   Object.assign(w.context, {
     activeMainTab: 'tickets', watchedTicketSnapshots: new Map([['TK1', {}]]),
-    loadTicketStatus: async () => {}, chatListEl: { querySelector: () => ({}) },
+    loadTicketStatus: async () => {}, chatListEl: { querySelector: () => ({}) }, document: { hidden: false },
     renderTicketSlot: () => { rendered++; },
   });
   vm.runInContext(fn('pollTicketUpdates'), w.context);
@@ -220,4 +220,42 @@ test('a stale remembered department never outlives a failed check, and the chrom
   assert.equal(vm.runInContext('currentDepartment', context), 'rtn');
   assert.ok(log.includes('chrome') && log.includes('tabs'), 'Settings and the badge follow a department change');
   assert.equal(store.get('rc-agent-department'), 'rtn');
+});
+
+test('polling pauses while the widget is hidden, and polls from the server copy while it is shown', async () => {
+  const w = widget();
+  const calls = [];
+  w.state.chat.ticketRecord = { ref: 'TK1' };
+  Object.assign(w.context, {
+    activeMainTab: 'tickets', watchedTicketSnapshots: new Map([['TK1', {}]]), document: { hidden: true },
+    loadTicketStatus: async (...args) => { calls.push(args); }, chatListEl: { querySelector: () => ({}) }, renderTicketSlot: () => {},
+  });
+  vm.runInContext(fn('pollTicketUpdates'), w.context);
+  w.state.chat.ticketView = 'detail';
+  await w.run('pollTicketUpdates()');
+  assert.equal(calls.length, 0, 'hidden: no call to the shared ticket API');
+  w.context.document.hidden = false;
+  await w.run('pollTicketUpdates()');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['chat', 'TK1', { fresh: false }]]);
+});
+
+test('explicit reads skip the server copy; the automatic first load and the poll use it', () => {
+  assert.ok(app.includes('async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = {}) {'));
+  assert.ok(app.includes('`/ticket-status?ref=${encodeURIComponent(normalized)}${fresh ? "&fresh=1" : ""}`'));
+  assert.ok(app.includes('${fresh ? "&fresh=1" : ""}`);'));
+  assert.equal((app.match(/refreshTicketInbox\([^)]*\{ fresh: false \}\)/g) || []).length, 2, 'the two automatic loads');
+});
+
+test('a ticket value shows the ticket system\'s own label from /ticket-config before any built-in guess', () => {
+  const fallback = app.match(/const TICKET_FALLBACK_OPTIONS = \{[\s\S]*?\n\};/)[0];
+  const context = vm.createContext({ Array, String, Boolean, ticketFields: [
+    { key: 'payment_gateway', type: 'SELECT', options: [{ value: 'dumpling_pay_dpp', label: 'DUMPLING PAY (DPP)' }, { value: 'KAAZPAY', label: 'KAAZPAY' }] },
+    { key: 'query_type', type: 'SELECT', options: [{ value: 'brand_new_choice', label: 'A Brand New Choice' }] },
+  ] });
+  vm.runInContext([fallback, ...['ticketChoiceSlug', 'ticketChoiceDisplayLabel', 'ticketFieldDisplay', 'ticketValueDisplay'].map(fn)].join('\n'), context);
+  const show = (key, value) => vm.runInContext(`ticketValueDisplay(${JSON.stringify(key)}, ${JSON.stringify(value)})`, context);
+  assert.equal(show('payment_gateway', 'dumpling_pay_dpp'), 'DUMPLING PAY (DPP)');
+  assert.equal(show('payment_gateway', 'KAAZPAY'), 'KAAZPAY');
+  assert.equal(show('query_type', 'brand_new_choice'), 'A Brand New Choice', 'a choice added after this widget was built');
+  assert.equal(show('query_type', 'vvip_ltv_70_bonus'), 'VVIP LTV 70 BONUS', 'still the built-in list when the live one lacks it');
 });

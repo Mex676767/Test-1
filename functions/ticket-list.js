@@ -1,5 +1,8 @@
 import { adapt } from "./_lib/adapt.js";
-import { json, ticketError, ticketRequest } from "./_lib/tickets.js";
+import { json, ticketError, ticketGet } from "./_lib/tickets.js";
+
+// An inbox read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
+const LIST_TTL_MS = 15_000;
 
 function cleanTicket(ticket) {
   return {
@@ -26,7 +29,7 @@ export async function handler(event) {
   try {
     const params = new URLSearchParams({ pageSize: "100", sort: "updatedAt:desc" });
     if (q) params.set("q", q);
-    const data = await ticketRequest(event.env, `/tickets?${params}`);
+    const data = await ticketGet(event.env, `/tickets?${params}`, { ttlMs: LIST_TTL_MS, fresh: event.queryStringParameters?.fresh === "1" });
     return json(200, {
       ok: true,
       total: Number(data.total || 0),
