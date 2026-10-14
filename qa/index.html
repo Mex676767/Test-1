@@ -5,49 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex" />
   <title>QA</title>
-  <link rel="stylesheet" href="qa.css?v=20261014-11" />
+  <link rel="stylesheet" href="qa.css?v=20261014-12" />
 </head>
 <body>
   <main class="uc">
-    <header class="uc-head">
-      <div>
-        <h1>QA</h1>
-        <p>Check that agents log their chats properly. Open a chat in LiveChat to see how it was logged; the reports below cover many chats at once.</p>
-      </div>
-    </header>
-
-    <section id="signin" class="uc-card">
-      <div class="uc-actions uc-signin">
-        <button type="button" id="signInBtn" class="uc-primary">Sign in with LiveChat</button>
-        <span id="who" class="uc-status">Sign in with the LiveChat account you use for QA. Only people marked QA get in.</span>
-        <button type="button" id="signOutBtn" class="uc-link" hidden>Sign out</button>
-      </div>
-      <span id="signinStatus" class="uc-status uc-signin-status" role="status"></span>
-      <details class="uc-admin">
-        <summary>Admin: use the scan key instead</summary>
-        <input id="key" type="password" placeholder="SCAN_KEY" spellcheck="false" autocomplete="off" />
-      </details>
-    </section>
-
-    <section id="chatCard" class="uc-card">
-      <h2 class="uc-h2">This chat</h2>
-      <p id="chatHint" class="uc-hint">Open a chat in LiveChat and how it was logged shows here. You can also paste a chat link or thread id.</p>
-      <form id="chatForm" class="uc-chatform" autocomplete="off">
-        <input id="chatInput" type="text" placeholder="Paste a LiveChat chat link or thread id" spellcheck="false" />
-        <button type="submit" id="chatShow" class="uc-secondary">Show</button>
-      </form>
-      <div id="chatResult" hidden></div>
+    <section id="chatCard" aria-live="polite">
+      <div id="chatResult" class="qc-wrap"></div>
     </section>
 
     <details id="reports" class="uc-reports">
-      <summary><b>Reports</b> <span class="uc-opt">what agents logged, and chats nobody logged</span></summary>
-      <p class="uc-hint"><b>What agents logged</b> lists each agent's Customer Approaching records next to a link to the chat. <b>Unknown chats</b> lists chats an agent replied to but never logged (including ones ticked <i>Unknown player</i>).</p>
+      <summary><b>Reports</b> <span class="uc-opt">chats an agent replied to but never logged</span></summary>
+      <p class="uc-hint">Chats an agent replied to that have no Customer Approaching record by that agent: chats ticked <i>Unknown player</i> (nothing is saved for those) and chats the agent forgot to log.</p>
 
       <form id="form" class="uc-card" autocomplete="off">
-        <div class="uc-modes" role="group" aria-label="What to check">
-          <button type="button" data-mode="logged" aria-pressed="true">What agents logged</button>
-          <button type="button" data-mode="unknown" aria-pressed="false">Unknown chats</button>
-        </div>
         <div class="uc-grid">
           <div class="uc-field">
             <span class="uc-label">From</span>
@@ -63,45 +33,31 @@
           <span class="ap" id="agentPicker"><button type="button" class="ap-display" aria-haspopup="listbox" aria-expanded="false"></button><div class="ap-pop" hidden></div></span>
         </div>
         <div class="uc-actions">
-          <button type="submit" id="run" class="uc-primary">Show what agents logged</button>
+          <button type="submit" id="run" class="uc-primary">Find unknown chats</button>
           <button type="button" id="stop" class="uc-secondary" hidden>Stop</button>
           <span id="status" class="uc-status" role="status"></span>
         </div>
         <div id="bar" class="uc-bar" hidden><span></span></div>
       </form>
 
-      <div id="loggedPanel">
-        <section id="loggedResults" class="uc-card" hidden>
-          <div class="uc-results-head">
-            <h2 id="loggedSummary"></h2>
-            <button type="button" id="loggedDownload" class="uc-primary">Download (.csv)</button>
-          </div>
-          <p class="uc-hint">Agents with the most logged chats first. Click an agent, open each chat and check that the inquiry, status and amount they logged match what happened. The .csv has empty QA verdict / QA note columns to fill in.</p>
-          <label class="uc-check"><input type="checkbox" id="onlyIncomplete" /> Only chats with something missing (no inquiry, status, username, brand or chat link)</label>
-          <div id="loggedAgents" class="uc-agents"></div>
-        </section>
-      </div>
+      <section id="results" class="uc-card" hidden>
+        <div class="uc-results-head">
+          <h2 id="summary"></h2>
+          <button type="button" id="download" class="uc-primary">Download (.csv)</button>
+        </div>
+        <p class="uc-hint">Agents with the most chats first. Each chat shows the agent's mark: they ticked <i>Unknown player</i>, or they left it without ticking. Open each chat and judge whether it really was an unknown player.</p>
+        <p id="tickNote" class="uc-hint" hidden>"Before tracking" means the chat is older than the first Unknown tick the system recorded (or ticks are not set up yet), so nobody can say whether the agent ticked it.</p>
+        <label class="uc-check"><input type="checkbox" id="onlyNotTicked" /> Only chats the agent left without ticking Unknown</label>
+        <label class="uc-check"><input type="checkbox" id="onlyKnownUser" /> Only chats ticked Unknown although the customer already had a username on file</label>
+        <div id="agents" class="uc-agents"></div>
+      </section>
 
-      <div id="unknownPanel" hidden>
-        <section id="results" class="uc-card" hidden>
-          <div class="uc-results-head">
-            <h2 id="summary"></h2>
-            <button type="button" id="download" class="uc-primary">Download (.csv)</button>
-          </div>
-          <p class="uc-hint">Agents with the most chats first. These are chats the agent replied to that have no Customer Approaching record by that agent: chats ticked <i>Unknown player</i> (nothing is saved for those) and chats the agent forgot to log. Each chat shows the agent's mark: they ticked <i>Unknown player</i>, or they left it without ticking. Open each chat and judge whether it really was an unknown player.</p>
-          <p id="tickNote" class="uc-hint" hidden>"Before tracking" means the chat is older than the first Unknown tick the system recorded (or ticks are not set up yet), so nobody can say whether the agent ticked it.</p>
-          <label class="uc-check"><input type="checkbox" id="onlyNotTicked" /> Only chats the agent left without ticking Unknown</label>
-          <label class="uc-check"><input type="checkbox" id="onlyKnownUser" /> Only chats ticked Unknown although the customer already had a username on file</label>
-          <div id="agents" class="uc-agents"></div>
-        </section>
-
-        <details id="notes" class="uc-notes" hidden>
-          <summary>How the scan went</summary>
-          <pre id="log"></pre>
-        </details>
-      </div>
+      <details id="notes" class="uc-notes" hidden>
+        <summary>How the scan went</summary>
+        <pre id="log"></pre>
+      </details>
     </details>
   </main>
-  <script type="module" src="qa.js?v=20261014-11"></script>
+  <script type="module" src="qa.js?v=20261014-12"></script>
 </body>
 </html>

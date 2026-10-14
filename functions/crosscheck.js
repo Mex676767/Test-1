@@ -16,8 +16,6 @@ import { UNREC } from "./_lib/unrecorded.js";
 // Each call is one small step so it stays inside a Pages Function's limits and never hogs the shared Lark queue:
 //   recorded  one page of Customer Approaching -> the chat (thread) ids of rows created since `fromMs`, and "thread|agent name"
 //             pairs, so a chat can be judged per agent when the agent is known
-//   logged    one page of Customer Approaching -> what agents logged (agent, player, brand, inquiry, status, amount, chat link) for
-//             rows created in a time window: the QA page shows it beside the chat
 //   chatlog   one chat (thread id): every agent's Customer Approaching rows for it and every Unknown tick, for the QA "this chat" panel
 //   lastusername  the player this chat's customer was last recorded under, if any (the widget's "Last username recorded")
 //   ticks     one page of the "Unknown player" ticks agents made (KV, see unknown-tick.js) and when tracking began
@@ -169,24 +167,6 @@ export async function handler(event) {
         if (agent) pairs.add(`${threadId}|${agent}`);
       }
       return reply(200, { ok: true, threads: [...threads], pairs: [...pairs], next: page.next, rows: page.items.length });
-    }
-
-    if (body.step === "logged") {
-      // What the agents logged: one page of Customer Approaching rows created in [fromMs, toMs), for QA to compare with the chat. The
-      // player's date of birth and claim secret are never sent.
-      const fromMs = Number(body.fromMs) || 0;
-      const toMs = Number(body.toMs) || Infinity;
-      const page = await searchPage(TABLE_CUSTOMER_APPROACHING, [], { pageSize: 500, pageToken: clean(body.pageToken), automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
-      const rows = page.items
-        .filter((item) => Number(item.created_time) >= fromMs && Number(item.created_time) < toMs)
-        .map((item) => {
-          const row = summarizeRow(item);
-          return {
-            recordId: row.recordId, createdAt: row.createdAt, agent: row.agent, username: row.username, brand: row.brand, inquiry: row.inquiry,
-            status: row.status, amount: row.amount, telegram: row.telegram, link: row.link, threadId: row.threadId,
-          };
-        });
-      return reply(200, { ok: true, rows, next: page.next, scanned: page.items.length });
     }
 
     if (body.step === "chatlog") {

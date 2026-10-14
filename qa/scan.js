@@ -238,38 +238,7 @@ export function planAll(scan, { existing = new Set(), onlyKnown = true, minAgent
   return all;
 }
 
-// ---- What agents logged (Customer Approaching rows) --------------------------------------------------------------------------
-
-// The agent names behind the built-in excluded logins: their logged rows are left out too (rows carry a name, not an email).
-export async function excludedAgentNames(byEmail) {
-  const names = new Set();
-  for (const [email, name] of byEmail) if (name && ALWAYS_EXCLUDED_HASHES.has(await emailHash(email))) names.add(String(name).trim().toLowerCase());
-  return names;
-}
-
-// Reads the rows agents logged in [fromMs, toMs), page by page, and drops the excluded agents'.
-// onProgress(rowsScanned) after each page. Returns { rows, byEmail } -- the rows newest first within no particular agent order.
-// only (optional): agent names; when given, only their rows are kept.
-export async function loadLogged({ step, fromMs, toMs, only = null, onProgress = () => {}, isCancelled = () => false }) {
-  const wanted = only && only.length ? new Set(only.map(nameKey)) : null;
-  const agents = await step({ step: "agents" });
-  if (!agents.ok) throw new Error(`agents: ${agents.error}`);
-  const byEmail = new Map((agents.agents || []).map((agent) => [String(agent.email).toLowerCase(), agent.name]));
-  const hidden = await excludedAgentNames(byEmail);
-  const rows = [];
-  let pageToken = "";
-  let scanned = 0;
-  do {
-    if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true });
-    const data = await stepWithRetry(step, { step: "logged", fromMs, toMs, pageToken });
-    if (!data.ok) throw new Error(`logged: ${data.error}`);
-    for (const row of data.rows) if (!hidden.has(String(row.agent || "").trim().toLowerCase()) && (!wanted || wanted.has(nameKey(row.agent)))) rows.push(row);
-    scanned += data.scanned || 0;
-    onProgress(scanned);
-    pageToken = data.next;
-  } while (pageToken);
-  return { rows, byEmail, hiddenAgents: hidden.size };
-}
+// ---- What is missing from a logged case ----------------------------------------------------------------------------------
 
 // What is obviously missing from a logged case. QA still judges whether what IS there matches the chat.
 export function loggedIssues(row) {
@@ -280,33 +249,6 @@ export function loggedIssues(row) {
   if (!row.brand) issues.push("No brand");
   if (!row.link) issues.push("No chat link");
   return issues;
-}
-
-// [{ agent, total, incomplete }] the agents with the most logged chats first (names compared without letter case).
-export function summarizeLogged(rows) {
-  const perAgent = new Map();
-  for (const row of rows) {
-    const name = String(row.agent || "").trim() || "(no agent name)";
-    const entry = perAgent.get(name.toLowerCase()) || { agent: name, total: 0, incomplete: 0 };
-    entry.total += 1;
-    if (loggedIssues(row).length) entry.incomplete += 1;
-    perAgent.set(name.toLowerCase(), entry);
-  }
-  return [...perAgent.values()].sort((a, b) => b.total - a.total || a.agent.localeCompare(b.agent));
-}
-
-export const loggedLink = (row) => (row.threadId ? archiveLink(row.threadId) : row.link || "");
-
-// The sheet for QA: one row per logged chat, agents with the most chats first, newest first within an agent.
-export function toLoggedCsv(rows) {
-  const rank = new Map(summarizeLogged(rows).map((entry, index) => [entry.agent.toLowerCase(), index]));
-  const key = (row) => String(row.agent || "").trim().toLowerCase() || "(no agent name)";
-  const sorted = [...rows].sort((a, b) => rank.get(key(a)) - rank.get(key(b)) || b.createdAt - a.createdAt);
-  const header = ["Agent", "Date logged (MYT)", "Player username", "Brand", "Inquiry", "Status", "Released amount", "Missing", "Chat link", "QA verdict", "QA note"];
-  const lines = [header, ...sorted.map((row) => [
-    row.agent, myt(row.createdAt), row.username, row.brand, (row.inquiry || []).join(", "), row.status, row.amount ?? "", loggedIssues(row).join("; "), loggedLink(row), "", "",
-  ])];
-  return "﻿" + lines.map((line) => line.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
 // ---- Which unrecorded chats did the agent tick "Unknown player" on, and which did they just leave? -----------------------------
@@ -422,16 +364,6 @@ export async function checkKnownUsernames(entries, step, { onProgress = () => {}
 }
 
 // ---- One chat: how was it logged? ------------------------------------------------------------------------------------------
-
-// The thread id in whatever a person pastes: a LiveChat chat or archive link, or the id itself. "" when it is none of those.
-export function threadFromInput(text) {
-  const value = String(text || "").trim();
-  const archive = /\/archives\/([A-Za-z0-9_-]{4,64})/.exec(value);
-  if (archive) return archive[1];
-  const live = /\/chats\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]{4,64})/.exec(value);
-  if (live) return live[1];
-  return /^[A-Za-z0-9_-]{4,64}$/.test(value) ? value : "";
-}
 
 // What QA should be told about one chat from the server's chatlog answer ({ rows, ticks, tracking }):
 // verdict "logged" | "incomplete" | "ticked" | "nothing", a headline, the logged rows with what each is missing, and the ticks.
