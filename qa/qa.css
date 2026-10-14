@@ -67,3 +67,8 @@ button { font: inherit; cursor: pointer; }
 .uc-check input { width: auto; }
 .uc-warn { color: var(--warn); }
 .uc-name .uc-warn { color: var(--warn); font-size: 12px; }
+
+.uc-name .uc-marks { display: block; }
+.uc-mark.ticked, .uc-mark.ticked-auto { color: var(--accent); }
+.uc-mark.not-ticked { color: var(--warn); font-weight: 600; }
+.uc-mark.untracked { color: var(--muted); }

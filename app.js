@@ -1417,7 +1417,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
       lookupSay(chatId, lookupWarnings.length ? `${caseRowError} Also unavailable: ${lookupWarnings.join(", ")}.` : caseRowError, "error", true);
     }
   } catch (err) {
-    if (forcing) s.isUnknown = true; // failed force lookup -- back to how it was
+    if (forcing) { s.isUnknown = true; reportUnknownTick(chatId, true, true); } // failed force lookup -- back to how it was
     if (controller.signal.aborted) {
       lookupSay(chatId, timedOut ? "Lookup timed out after 45 seconds. Try again." : "Lookup canceled.", timedOut ? "error" : "info", timedOut);
     } else {
@@ -4450,7 +4450,7 @@ chatListEl.addEventListener("click", async (e) => {
     // CS is saying the player is VIP anyway (the list just isn't updated
     // yet), so un-mark Unknown up front and don't auto-mark it again below.
     const forcing = !!s.notVipResult;
-    if (forcing) s.isUnknown = false;
+    if (forcing) { s.isUnknown = false; reportUnknownTick(chatId, false, true); }
     // One Customer Approaching row per chat: a repeat lookup passes back the record created last time (only if it was not logged yet and is this
     // agent's own), so the backend deletes it first.
     const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
@@ -5231,6 +5231,19 @@ chatListEl.addEventListener("change", (e) => {
   }
 });
 
+// Tells the server an agent ticked (or un-ticked) "Unknown player" on a chat, so QA can tell a chat ticked Unknown from one the agent
+// never logged (see functions/unknown-tick.js). Fire and forget: a failure never affects the agent. Never from the admin preview.
+// Which chat: the thread id from the chat link when the card has one (the id the archive and Lark rows use), the card's own id besides.
+function reportUnknownTick(chatId, ticked, auto) {
+  const s = state[chatId];
+  if (previewMode || !s || !selectedAgent) return;
+  const live = String(s.chatUrl || "").match(/\/chats\/([^/?#]+)\/([^/?#]+)/);
+  const archived = String(s.chatUrl || "").match(/\/archives\/([^/?#]+)/);
+  const threadId = live ? live[2] : archived ? archived[1] : "";
+  const body = { agentName: selectedAgent, ticked, source: auto ? "auto" : "manual", threadId, chatId: live ? live[1] : String(chatId) };
+  fetch("/unknown-tick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+}
+
 // Shared by the manual "Unknown player" checkbox and the auto-tick once a
 // Look Up comes back Not VVIP (see the lookup action handler) -- both mean
 // the same thing to this widget: nothing about this chat should end up in
@@ -5245,6 +5258,7 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   const s = state[chatId];
   if (!s) return;
   s.isUnknown = value;
+  reportUnknownTick(chatId, value, silent);
   // A chat on the agent's unrecorded list that they mark Unknown is written off in Lark right away, so it cannot come back
   // from there (an incognito window forgets the tick, Lark does not).
   if (value && unrecordedChats.some((chat) => chat.threadId === chatId)) resolveUnrecorded(chatId, "Ignored");
