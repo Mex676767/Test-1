@@ -201,7 +201,8 @@ export async function handler(event) {
       return reply(200, { ok: true, agents });
     }
 
-    if (!TABLE_UNRECORDED) return reply(200, { ok: false, error: "LARK_TABLE_UNRECORDED is not set." });
+    // Only the steps that use the Unrecorded Chats table need it: scanning the archives works without it.
+    if (!TABLE_UNRECORDED && (body.step === "existing" || body.step === "write")) return reply(200, { ok: false, error: "LARK_TABLE_UNRECORDED is not set." });
 
     if (body.step === "existing") {
       const page = await searchPage(TABLE_UNRECORDED, [], { pageSize: 500, pageToken: clean(body.pageToken), fieldNames: [UNREC.thread, UNREC.email] });
