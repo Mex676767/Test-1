@@ -59,7 +59,7 @@ test('SDK connection preserves selected Blast and queue pins its existing iframe
   const buttons=['customer','blast'].map(tab=>({dataset:{mainTab:tab},classList:{toggle(){}}}));
   let connect;
   const context=vm.createContext({
-    activeMainTab:'blast',blastRunInProgress:false,previewMode:true,
+    activeMainTab:'blast',blastRunInProgress:false,previewMode:true,qaView:false,
     DEPARTMENT_TABS_LIVE:false,BLAST_LIVE:true,CONFIGURED_LIVECHAT_ACCOUNT:'lc2',
     mainTabAvailability:()=>({customer:true,blast:true,tickets:false,knowledge:false}),
     document:{getElementById:id=>id==='blastView'?view:null,querySelector:()=>null,querySelectorAll:()=>buttons},

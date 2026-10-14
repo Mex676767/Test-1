@@ -11,13 +11,13 @@ import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, d
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0];
 
-function tabs({ previewMode, activeMainTab }) {
+function tabs({ previewMode, activeMainTab, qaView = false }) {
   const element = (extra = {}) => ({ hidden: true, style: {}, ...extra });
   const frame = { src: '', dataset: { src: '/qa/index.html' } };
-  const els = { unknownChatsTab: element(), unknownChatsView: element({ querySelector: () => frame }), chatList: element({ hidden: false }), mainTabs: element(), retentionTab: element(), ticketsTab: element(), blastTab: element(), knowledgeTab: element() };
+  const els = { unknownChatsTab: element(), unknownChatsView: element({ querySelector: () => frame }), chatList: element({ hidden: false }), mainTabs: element(), retentionTab: element(), ticketsTab: element(), blastTab: element(), knowledgeTab: element(), agentBadge: element({ hidden: false }) };
   const context = vm.createContext({
-    activeMainTab, previewMode, blastRunInProgress: false, DEPARTMENT_TABS_LIVE: false, BLAST_LIVE: false, CONFIGURED_LIVECHAT_ACCOUNT: '',
-    mainTabAvailability: () => ({ customer: true, blast: false, tickets: false, knowledge: false }),
+    activeMainTab, previewMode, qaView, blastRunInProgress: false, DEPARTMENT_TABS_LIVE: false, BLAST_LIVE: false, CONFIGURED_LIVECHAT_ACCOUNT: '',
+    mainTabAvailability: () => ({ customer: true, blast: true, tickets: false, knowledge: false }), ESCALATION_TICKET_ENABLED: true,
     document: { getElementById: (id) => els[id] || null, querySelector: () => null, querySelectorAll: () => [] },
     URL,
     location: { origin: 'https://widget.test' },
@@ -213,7 +213,7 @@ test('by default nobody is hidden: the admin\'s own logins show in the unknown-c
   assert.deepEqual((await loadLogged({ step, fromMs: 0, toMs: 10 })).rows.map((r) => r.agent), ['Admin']);
 });
 
-test('"Before tracking" chats older than 14 Oct are dropped for the listed logins only; their newer chats, other chats and everyone else\'s stay', async () => {
+test('"Before tracking" chats older than 15 Oct are dropped for the listed logins only; their newer chats, other chats and everyone else\'s stay', async () => {
   assert.equal(HIDE_UNTRACKED_HASHES.size, 2);
   for (const hash of HIDE_UNTRACKED_HASHES) assert.match(hash, /^[0-9a-f]{64}$/);
   const hash = await emailHash('boss@x');
@@ -228,8 +228,8 @@ test('"Before tracking" chats older than 14 Oct are dropped for the listed login
       { threadId: 'T5', email: 'boss@x', mark: 'untracked', date: HIDE_UNTRACKED_BEFORE },
       { threadId: 'T6', email: 'boss@x', mark: 'untracked', date: HIDE_UNTRACKED_BEFORE + 86_400_000 },
     ];
-    assert.deepEqual((await dropOwnUntracked(entries)).map((e) => e.threadId), ['T2', 'T3', 'T4', 'T5', 'T6'], 'from 14 Oct 00:00 (Malaysia) on, nothing of theirs is hidden');
-    assert.equal(HIDE_UNTRACKED_BEFORE, Date.UTC(2026, 9, 13, 16, 0, 0));
+    assert.deepEqual((await dropOwnUntracked(entries)).map((e) => e.threadId), ['T2', 'T3', 'T4', 'T5', 'T6'], 'from 15 Oct 00:00 (Malaysia) on, nothing of theirs is hidden');
+    assert.equal(HIDE_UNTRACKED_BEFORE, Date.UTC(2026, 9, 14, 16, 0, 0));
   } finally {
     HIDE_UNTRACKED_HASHES.delete(hash);
   }
@@ -382,4 +382,33 @@ test('the QA page carries the new controls: who to check, read again, the userna
   for (const id of ['agentPicker', 'fresh', 'onlyKnownUser']) assert.match(page, new RegExp('id="' + id + '"'));
   const csv = toCsv([{ threadId: 'T', chatId: 'C', email: 'a@x', date: 1, customer: 'Z', account: 'lc1', mark: 'ticked', knownUsername: 'player-one' }], new Map());
   assert.ok(csv.includes('Ticked Unknown,player-one,,'), 'the sheet has the username already on file');
+});
+
+test('a person marked QA sees QA, Tickets and Knowledge only: no Retention, no Blast, no agent badge, and the QA page opens first', () => {
+  const qa = tabs({ previewMode: false, activeMainTab: 'customer', qaView: true });
+  assert.equal(qa.context.activeMainTab, 'unknownChats', 'a remembered Retention tab falls back to QA');
+  assert.deepEqual(['unknownChatsTab', 'ticketsTab', 'knowledgeTab', 'retentionTab', 'blastTab'].map((id) => qa.els[id].hidden), [false, false, false, true, true]);
+  assert.equal(qa.els.unknownChatsView.hidden, false);
+  assert.equal(qa.frame.src, '/qa/index.html');
+  assert.equal(qa.els.chatList.hidden, true);
+  assert.equal(qa.els.agentBadge.hidden, true);
+  const onKnowledge = tabs({ previewMode: false, activeMainTab: 'knowledge', qaView: true });
+  assert.equal(onKnowledge.context.activeMainTab, 'knowledge', 'QA may stay on Knowledge or Tickets');
+  assert.equal(onKnowledge.els.knowledgeTab.hidden, false);
+  const blast = tabs({ previewMode: false, activeMainTab: 'blast', qaView: true });
+  assert.equal(blast.context.activeMainTab, 'unknownChats', 'Blast is not available to QA');
+});
+
+test('every other agent in the installed widget is unchanged by the QA view: Retention and Blast as before, no QA tab, badge untouched', () => {
+  const agent = tabs({ previewMode: false, activeMainTab: 'customer', qaView: false });
+  assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab', 'ticketsTab', 'knowledgeTab'].map((id) => agent.els[id].hidden), [true, false, false, true, true]);
+  assert.equal(agent.els.agentBadge.hidden, false);
+});
+
+test('the QA view is wired in the widget: on by default, with an off switch, and it skips the agent-name step and the settings name panel', () => {
+  assert.match(app, /const QA_VIEW_LIVE = new URLSearchParams\(location\.search\)\.get\("qaView"\) !== "0";/);
+  assert.match(app, /&& !selectedAgent && !qaView\) \{\s*\n\s*\/\/ Give the agent-name list a short chance/, 'boot does not force the agent-name panel on a QA person');
+  assert.match(app, /const customerService = isCustomerServiceView\(\) \|\| qaView;/);
+  assert.match(app, /\.get\("department"\)/, 'the department views are untouched');
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/, 'the department switch stays off');
 });

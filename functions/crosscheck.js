@@ -41,8 +41,8 @@ function sameKey(a, b) {
 // (the id LiveChat gives the signed-in person). The admin types the email of each QA person into a row of that table; the
 // person needs no agent name there. This is the one place that decides: a later "group" rule only has to change this function.
 const ROLE_QA = /(^|[\s,;/|])qa($|[\s,;/|])/i;
-const QA_CACHE_MS = 60_000;
-const qaCache = new Map(); // "account:token" -> { result, expires }: a long scan sends hundreds of steps, the token is checked once a minute
+const QA_CACHE_MS = 5 * 60_000;
+const qaCache = new Map(); // "account:token" -> { result, expires }: a long scan sends hundreds of steps, the token is checked once every 5 minutes
 export function resetQaCache() { qaCache.clear(); }
 
 export async function checkQaLogin(env, accountKey, token) {

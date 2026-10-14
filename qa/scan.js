@@ -418,8 +418,8 @@ export const HIDE_UNTRACKED_HASHES = new Set([
   "c9bbc994474dc2dc433c0c11710a8e2626e978cb813fd615c03f82044044f6c9",
 ]);
 
-// Only chats before this moment are hidden (14 Oct 2026, 00:00 Malaysian time): from that day on the admin's chats show like anyone's.
-export const HIDE_UNTRACKED_BEFORE = Date.parse("2026-10-14T00:00:00+08:00");
+// Only chats before this moment are hidden (15 Oct 2026, 00:00 Malaysian time): from that day on the admin's chats show like anyone's.
+export const HIDE_UNTRACKED_BEFORE = Date.parse("2026-10-15T00:00:00+08:00");
 
 // The entries without the "Before tracking" chats of the logins in HIDE_UNTRACKED_HASHES that are older than HIDE_UNTRACKED_BEFORE.
 export async function dropOwnUntracked(entries) {
