@@ -1,7 +1,7 @@
 // The QA page (/qa/, also the QA tab of the admin preview): runs the crosscheck (see scan.js) from the browser and shows the agents with
 // the most chats nobody recorded, with a .csv for QA. Read-only: nothing is written to Lark or anywhere else.
 import { attachDatePicker } from "./datepicker.js";
-import { archiveLink, classifyEntries, countMarks, createClient, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
+import { archiveLink, classifyEntries, countMarks, createClient, dropOwnUntracked, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -303,9 +303,10 @@ async function findUnknown({ step, fromMs, toMs, run }) {
   note("Reading the Unknown ticks agents made…");
   const tickData = await loadTicks(step);
   classifyEntries(entries, tickData, scan.byEmail);
-  result = { entries, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs), tracked: tickData.configured && tickData.since > 0 };
+  const shown = await dropOwnUntracked(entries);
+  result = { entries: shown, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs), tracked: tickData.configured && tickData.since > 0 };
   render();
-  setStatus(`Done. ${plural(entries.length, "chat")} found.`);
+  setStatus(`Done. ${plural(shown.length, "chat")} found.`);
 }
 
 function saveCsv(text, name) {
