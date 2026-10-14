@@ -98,3 +98,22 @@ button { font: inherit; cursor: pointer; }
 .dp-option { background: transparent; border: 0; border-radius: 7px; color: var(--text); padding: 7px 10px; text-align: left; }
 .dp-option:hover { background: var(--bg); }
 .dp-option.active { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+
+.uc-agents-field { margin-top: 14px; }
+.uc-fresh { margin: 12px 0 0; }
+.ap { position: relative; display: block; max-width: 420px; }
+.ap-display { width: 100%; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.ap-display::after { content: "▾"; float: right; color: var(--muted); }
+.ap-pop { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: 100%; min-width: 280px; padding: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+.ap-search { width: 100%; margin-bottom: 6px; }
+.ap-actions { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.ap-link { background: none; border: 0; padding: 2px 4px; color: var(--accent); font-size: 12px; }
+.ap-link:hover { text-decoration: underline; }
+.ap-list { max-height: 240px; overflow-y: auto; display: grid; gap: 1px; }
+.ap-option { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-weight: 400; }
+.ap-option:hover { background: var(--bg); }
+.ap-option input { width: auto; }
+.ap-empty { color: var(--muted); margin: 6px 8px; }
+.uc-flagged { background: rgba(255, 138, 128, .12); }
+.uc-badge-known { display: block; margin-top: 3px; color: var(--warn); font-weight: 700; font-size: 12px; white-space: normal; }
+.uc-flagline { display: block; color: var(--warn); font-size: 12px; font-weight: 600; }

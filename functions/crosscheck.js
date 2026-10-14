@@ -4,6 +4,7 @@ import { identifyAgent } from "./_lib/livechat-identity.js";
 import { searchPage, createRecord, toDisplay, TABLE_CUSTOMER_APPROACHING, TABLE_UNRECORDED, TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { CA, CA_SUMMARY_FIELDS, linkUrl, parseChatLink, summarizeRow } from "./_lib/ca-row.js";
 import { agentWroteIn } from "./livechat-agent-wrote.js";
+import { findLastUsername } from "./lark-last-username.js";
 import { UNREC } from "./_lib/unrecorded.js";
 
 // One-time crosscheck, driven by scripts/crosscheck-unrecorded.mjs: which chats since a start date did an agent write in
@@ -17,6 +18,7 @@ import { UNREC } from "./_lib/unrecorded.js";
 //             pairs, so a chat can be judged per agent when the agent is known
 //   logged    one page of Customer Approaching -> what agents logged (agent, player, brand, inquiry, status, amount, chat link) for
 //             rows created in a time window: the QA page shows it beside the chat
+//   lastusername  the player this chat's customer was last recorded under, if any (the widget's "Last username recorded")
 //   ticks     one page of the "Unknown player" ticks agents made (KV, see unknown-tick.js) and when tracking began
 //   agents    the Agent Logins table -> which LiveChat email belongs to which agent name (only logins whose email is filled in)
 //   existing  one page of the Unrecorded Chats table -> "thread|email" keys already written (so a re-run adds no twins)
@@ -184,6 +186,18 @@ export async function handler(event) {
           };
         });
       return reply(200, { ok: true, rows, next: page.next, scanned: page.items.length });
+    }
+
+    if (body.step === "lastusername") {
+      // Did this customer's chat already have a player username on file (the widget's "Last username recorded")? Any brand.
+      const chatId = clean(body.chatId);
+      if (!chatId || chatId.length > 80) return reply(400, { ok: false, error: "chatId is required." });
+      try {
+        const match = await findLastUsername(chatId);
+        return reply(200, { ok: true, found: Boolean(match), username: match?.username || "", brand: match?.brand || "" });
+      } catch (error) {
+        return reply(200, { ok: false, error: error.message });
+      }
     }
 
     if (body.step === "ticks") {

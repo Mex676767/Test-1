@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex" />
   <title>QA</title>
-  <link rel="stylesheet" href="qa.css?v=20261014-8" />
+  <link rel="stylesheet" href="qa.css?v=20261014-9" />
 </head>
 <body>
   <main class="uc">
@@ -43,6 +43,11 @@
           <span class="dp" id="toPicker"><input id="to" type="hidden" /><button type="button" class="dp-display" aria-haspopup="dialog" aria-expanded="false"></button><div class="dp-pop" hidden></div></span>
         </div>
       </div>
+      <div class="uc-field uc-agents-field">
+        <span class="uc-label">Who to check <span class="uc-opt">(optional: nobody chosen = all agents)</span></span>
+        <span class="ap" id="agentPicker"><button type="button" class="ap-display" aria-haspopup="listbox" aria-expanded="false"></button><div class="ap-pop" hidden></div></span>
+      </div>
+      <label class="uc-check uc-fresh"><input type="checkbox" id="fresh" /> Read everything again (ignore saved results from earlier searches)</label>
       <div class="uc-actions">
         <button type="submit" id="run" class="uc-primary">Show what agents logged</button>
         <button type="button" id="stop" class="uc-secondary" hidden>Stop</button>
@@ -72,6 +77,7 @@
         <p class="uc-hint">Agents with the most chats first. These are chats the agent replied to that have no Customer Approaching record by that agent: chats ticked <i>Unknown player</i> (nothing is saved for those) and chats the agent forgot to log. Each chat shows the agent's mark: they ticked <i>Unknown player</i>, or they left it without ticking. Open each chat and judge whether it really was an unknown player.</p>
         <p id="tickNote" class="uc-hint" hidden>"Before tracking" means the chat is older than the first Unknown tick the system recorded (or ticks are not set up yet), so nobody can say whether the agent ticked it.</p>
         <label class="uc-check"><input type="checkbox" id="onlyNotTicked" /> Only chats the agent left without ticking Unknown</label>
+        <label class="uc-check"><input type="checkbox" id="onlyKnownUser" /> Only chats ticked Unknown although the customer already had a username on file</label>
         <div id="agents" class="uc-agents"></div>
       </section>
 
@@ -81,6 +87,6 @@
       </details>
     </div>
   </main>
-  <script type="module" src="qa.js?v=20261014-8"></script>
+  <script type="module" src="qa.js?v=20261014-9"></script>
 </body>
 </html>

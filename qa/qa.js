@@ -1,7 +1,9 @@
 // The QA page (/qa/, also the QA tab of the admin preview): runs the crosscheck (see scan.js) from the browser and shows the agents with
 // the most chats nobody recorded, with a .csv for QA. Read-only: nothing is written to Lark or anywhere else.
+import { attachAgentPicker } from "./agentpicker.js";
+import { createCache } from "./cache.js";
 import { attachDatePicker } from "./datepicker.js";
-import { archiveLink, classifyEntries, countMarks, createClient, dropOwnUntracked, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
+import { agentChoices, alignedWindows, archiveLink, checkKnownUsernames, classifyEntries, countMarks, createClient, dropOwnUntracked, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -17,6 +19,9 @@ const dayInMyt = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(0, 10)
 
 let result = null; // { entries, byEmail, from, to } of the last finished scan
 let running = false;
+const cache = createCache(); // saved results of earlier searches (this browser only), emptied on sign-out
+let agentPicker = null;
+let agentsLoaded = false;
 let currentRun = null; // { stopped } of the scan on screen: every scan has its own flag, so a stopped scan stays stopped when the next one starts
 
 function setStatus(text, isError = false) {
@@ -43,8 +48,9 @@ const forgetToken = (account) => { session.remove(TOKEN(account)); session.remov
 // Asks the server to accept this sign-in: a cheap read-only step. Throws the site's own refusal (401 = not this account or expired,
 // 403 = signed in but not marked QA).
 async function acceptLogin(candidate) {
-  await createClient({ base: "", login: candidate, pauseMs: 0, retries: 1 })({ step: "agents" });
+  const data = await createClient({ base: "", login: candidate, pauseMs: 0, retries: 1 })({ step: "agents" });
   login = candidate;
+  if (data && data.ok) { agentPicker?.setChoices(agentChoices(data.agents)); agentsLoaded = true; }
   session.set(PREFERRED, candidate.account);
   showSignedIn(true);
 }
@@ -114,6 +120,10 @@ async function signIn() {
 function signOut() {
   if (login) forgetToken(login.account);
   login = null;
+  agentsLoaded = false;
+  agentPicker?.setChoices([]);
+  agentPicker?.reset();
+  cache.clear();
   showSignedIn(false);
   setStatus("");
 }
@@ -138,11 +148,12 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function render() {
   const { byEmail } = result;
   const all = countMarks(result.entries);
-  const entries = $("onlyNotTicked").checked ? result.entries.filter((entry) => entry.mark === "not-ticked") : result.entries;
+  const entries = result.entries.filter((entry) => (!$("onlyNotTicked").checked || entry.mark === "not-ticked") && (!$("onlyKnownUser").checked || entry.knownUsername));
+  const knownCount = result.entries.filter((entry) => entry.knownUsername).length;
   const ranking = summarize(entries);
   $("results").hidden = false;
   $("summary").textContent = result.entries.length
-    ? `${plural(result.entries.length, "unrecorded chat")} · ${plural(summarize(result.entries).length, "agent")} · ${all.ticked} ticked Unknown · ${all.notTicked} left without ticking${all.untracked ? ` · ${all.untracked} before tracking` : ""}`
+    ? `${plural(result.entries.length, "unrecorded chat")} · ${plural(summarize(result.entries).length, "agent")} · ${all.ticked} ticked Unknown · ${all.notTicked} left without ticking${all.untracked ? ` · ${all.untracked} before tracking` : ""}${knownCount ? ` · ${knownCount} ticked although a username was on file` : ""}`
     : "No unrecorded chats in this period";
   $("download").hidden = !result.entries.length;
   $("tickNote").hidden = !all.untracked && result.tracked;
@@ -152,16 +163,17 @@ function render() {
     const name = byEmail.get(email) || "";
     const chats = ordered.filter((entry) => entry.email === email);
     const marks = countMarks(chats);
+    const known = chats.filter((entry) => entry.knownUsername).length;
     return `<div class="uc-agent" data-email="${escapeHtml(email)}">
       <button type="button" aria-expanded="false">
         <span class="uc-rank">${index + 1}</span>
-        <span class="uc-name"><b>${escapeHtml(name || email)}</b><span>${escapeHtml(email)}</span><span class="uc-marks">${marks.ticked} ticked Unknown · ${marks.notTicked} left without ticking${marks.untracked ? ` · ${marks.untracked} before tracking` : ""}</span></span>
+        <span class="uc-name"><b>${escapeHtml(name || email)}</b><span>${escapeHtml(email)}</span><span class="uc-marks">${marks.ticked} ticked Unknown · ${marks.notTicked} left without ticking${marks.untracked ? ` · ${marks.untracked} before tracking` : ""}</span>${known ? `<span class="uc-flagline">${known} ticked Unknown although a username was already on file</span>` : ""}</span>
         <span class="uc-meter" style="width:${Math.max(4, Math.round((count / top) * 100))}%"></span>
         <span class="uc-count">${count}</span>
       </button>
       <div class="uc-chats" hidden><table>
         <thead><tr><th>Date (MYT)</th><th>Customer</th><th>Agent's mark</th><th>Agent msgs</th><th>Customer msgs</th><th></th></tr></thead>
-        <tbody>${chats.map((entry) => `<tr><td>${escapeHtml(myt(entry.date))}</td><td>${escapeHtml(entry.customer)}</td><td class="uc-mark ${escapeHtml(entry.mark || "")}">${escapeHtml(MARK_LABELS[entry.mark] || "")}</td><td>${entry.agentMessages ?? ""}</td><td>${entry.customerMessages ?? ""}</td><td><a href="${escapeHtml(archiveLink(entry.threadId))}" target="_blank" rel="noopener noreferrer">Open chat ↗</a></td></tr>`).join("")}</tbody>
+        <tbody>${chats.map((entry) => `<tr class="${entry.knownUsername ? "uc-flagged" : ""}"><td>${escapeHtml(myt(entry.date))}</td><td>${escapeHtml(entry.customer)}</td><td class="uc-mark ${escapeHtml(entry.mark || "")}">${escapeHtml(MARK_LABELS[entry.mark] || "")}${entry.knownUsername ? `<span class="uc-badge-known">Already had username: ${escapeHtml(entry.knownUsername)}</span>` : ""}</td><td>${entry.agentMessages ?? ""}</td><td>${entry.customerMessages ?? ""}</td><td><a href="${escapeHtml(archiveLink(entry.threadId))}" target="_blank" rel="noopener noreferrer">Open chat ↗</a></td></tr>`).join("")}</tbody>
       </table></div>
     </div>`;
   }).join("");
@@ -252,8 +264,9 @@ async function find(event) {
   $("bar").firstElementChild.style.width = "0";
   const step = createClient({ base: "", ...(login ? { login } : { key }) });
   try {
-    if (mode === "logged") await findLogged({ step, fromMs, toMs, run });
-    else await findUnknown({ step, fromMs, toMs, run });
+    const options = { step, fromMs, toMs, run, fresh: $("fresh").checked, only: { names: agentPicker.selectedNames(), emails: agentPicker.selectedEmails() }, cacheKey: `${from}:${to || "now"}` };
+    if (mode === "logged") await findLogged(options);
+    else await findUnknown(options);
   } catch (error) {
     if (error.cancelled) setStatus("Stopped.");
     else if (error.status === 404) setStatus("This page is not switched on yet. Ask the admin.", true);
@@ -266,16 +279,16 @@ async function find(event) {
   }
 }
 
-async function findLogged({ step, fromMs, toMs, run }) {
+async function findLogged({ step, fromMs, toMs, run, fresh, only, cacheKey }) {
   $("loggedResults").hidden = true;
   setStatus("Reading what agents logged…");
-  const read = await loadLogged({ step, fromMs, toMs, isCancelled: () => run.stopped, onProgress: (scanned) => !run.stopped && setStatus(`Reading what agents logged… ${scanned} rows checked`) });
+  const read = await loadLogged({ step, fromMs, toMs, only: only.names, cache, cacheKey, fresh, isCancelled: () => run.stopped, onProgress: (scanned) => !run.stopped && setStatus(`Reading what agents logged… ${scanned} rows checked`) });
   logged = { rows: read.rows, byEmail: read.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs) };
   renderLogged();
-  setStatus(`Done. ${plural(read.rows.length, "logged chat")} found.`);
+  setStatus(`Done. ${plural(read.rows.length, "logged chat")} found${read.fromSaved ? " (from saved results: tick \"Read everything again\" for the latest)" : ""}.`);
 }
 
-async function findUnknown({ step, fromMs, toMs, run }) {
+async function findUnknown({ step, fromMs, toMs, run, fresh, only }) {
   // The first line of the scan appears only after the whole Customer Approaching table is read: say so, instead of leaving the last message.
   setStatus("Reading Customer Approaching… this can take a minute.");
   $("results").hidden = true;
@@ -283,7 +296,7 @@ async function findUnknown({ step, fromMs, toMs, run }) {
   $("log").textContent = "";
   const lines = [];
   // Every finished time window of either LiveChat account moves the bar (two accounts read the same windows).
-  const expectedWindows = windows(fromMs, toMs, WINDOW_MS).length * 2;
+  const expectedWindows = alignedWindows(fromMs, toMs, WINDOW_MS).length * 2;
   let finishedWindows = 0;
   const note = (line, meta) => {
     if (run.stopped) return; // a stopped scan may still finish a request in the background: it must not write over the next one
@@ -298,15 +311,22 @@ async function findUnknown({ step, fromMs, toMs, run }) {
       setStatus(line);
     }
   };
-  const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => run.stopped });
-  const entries = planAll(scan, { onlyKnown: true, log: note });
+  const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => run.stopped, cache, fresh });
+  const entries = planAll(scan, { onlyKnown: true, only: only.emails, log: note });
   note("Reading the Unknown ticks agents made…");
   const tickData = await loadTicks(step);
   classifyEntries(entries, tickData, scan.byEmail);
   const shown = await dropOwnUntracked(entries);
+  // Chats ticked Unknown whose customer already had a player username on file: the lookup is per chat, so it comes last, on what is left.
+  if (shown.some((entry) => entry.mark === "ticked")) {
+    note("Checking whether the customers of ticked chats already had a username…");
+    const lookup = await checkKnownUsernames(shown, step, { cache, fresh, isCancelled: () => run.stopped, onProgress: (done, total) => !run.stopped && setStatus(`Checking ticked chats for a username on file… ${done}/${total}`) });
+    note(`${lookup.found} of ${lookup.checked} ticked chats had a username on file${lookup.failed ? `; ${lookup.failed} could not be checked` : ""}.`);
+  }
   result = { entries: shown, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs), tracked: tickData.configured && tickData.since > 0 };
   render();
-  setStatus(`Done. ${plural(shown.length, "chat")} found.`);
+  const savedWindows = scan.results.reduce((sum, item) => sum + item.fromSaved, 0);
+  setStatus(`Done. ${plural(shown.length, "chat")} found${savedWindows ? ` (${savedWindows} time windows from saved results)` : ""}.`);
 }
 
 function saveCsv(text, name) {
@@ -328,8 +348,24 @@ $("download").addEventListener("click", () => { if (result) saveCsv(toCsv(result
 $("loggedDownload").addEventListener("click", () => { if (logged) saveCsv(toLoggedCsv(logged.rows), `qa-logged-chats_${logged.from}_to_${logged.to}.csv`); });
 $("onlyIncomplete").addEventListener("change", () => { if (logged) renderLogged(); });
 $("onlyNotTicked").addEventListener("change", () => { if (result) render(); });
+$("onlyKnownUser").addEventListener("change", () => { if (result) render(); });
 for (const button of document.querySelectorAll("[data-mode]")) button.addEventListener("click", () => setMode(button.dataset.mode));
 $("signInBtn").addEventListener("click", signIn);
 $("signOutBtn").addEventListener("click", signOut);
+// The "who to check" list: filled when the person signs in; with the admin's scan key it is read when the list is opened.
+agentPicker = attachAgentPicker($("agentPicker"), {
+  onOpen: async () => {
+    if (agentsLoaded) return;
+    const key = $("key").value.trim();
+    if (!login && !key) { agentPicker.setMessage("Sign in first to see the agents."); return; }
+    agentPicker.setMessage("Loading agents…");
+    try {
+      const data = await createClient({ base: "", ...(login ? { login } : { key }), pauseMs: 0, retries: 1 })({ step: "agents" });
+      if (!data.ok) throw new Error(data.error);
+      agentPicker.setChoices(agentChoices(data.agents));
+      agentsLoaded = true;
+    } catch (error) { agentPicker.setMessage(error.message); }
+  },
+});
 setMode("logged");
 resumeSignIn();

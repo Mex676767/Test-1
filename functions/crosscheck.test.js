@@ -165,6 +165,34 @@ test("logged: the rows agents logged in the window, with what QA compares and ne
   assert.ok(!JSON.stringify([first, second]).includes("946684800000") && !/claimSecret|dob/i.test(JSON.stringify([first, second])));
 });
 
+test("lastusername: the player a chat's customer was last recorded under, found by the stable chat id in any brand; nothing found is not an error", async (t) => {
+  const w = world();
+  t.after(w.restore);
+  const searches = [];
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("/tables/pnl-table/records/search")) {
+      const conditions = JSON.parse(options.body).filter?.conditions || [];
+      searches.push(conditions);
+      const link = conditions.find((c) => c.operator === "contains");
+      const rows = [{ record_id: "p1", fields: { Username: "player-one", Brand: "VS96", "Live Chat link": { link: "https://my.livechatinc.com/chats/CHATKNOWN/THREADOLD", text: "chat" } } }];
+      const items = link.field_name === "Live Chat link" ? rows.filter((r) => JSON.stringify(r.fields["Live Chat link"]).includes(link.value[0])) : [];
+      return { json: async () => ({ code: 0, data: { items, has_more: false } }) };
+    }
+    return inner(url, options);
+  };
+  const env = { ...ENV, LARK_TABLE_PNL: "pnl-table" };
+  const found = await call({ step: "lastusername", chatId: "CHATKNOWN" }, { env });
+  assert.deepEqual([found.ok, found.found, found.username, found.brand], [true, true, "player-one", "VS96"]);
+  assert.ok(searches.every((conditions) => !conditions.some((c) => c.field_name === "Brand")), "no brand is asked for: the QA page only has the chat id");
+  const none = await call({ step: "lastusername", chatId: "CHATNEW" }, { env });
+  assert.deepEqual([none.ok, none.found, none.username], [true, false, ""]);
+  assert.equal((await call({ step: "lastusername" }, { env })).status, 400);
+  assert.equal((await call({ step: "lastusername", chatId: "x".repeat(81) }, { env })).status, 400);
+  const noTable = await call({ step: "lastusername", chatId: "CHATKNOWN" }, { env: { ...ENV, LARK_TABLE_PNL: "" } });
+  assert.deepEqual([noTable.ok, noTable.found], [true, false], "without the P&L table nothing is known, not an error");
+});
+
 test("recorded: the thread ids of Customer Approaching rows created since the start date, from the link, page by page", async (t) => {
   const w = world({ caPages: [
     [caRow("https://my.livechatinc.com/chats/CHAT/THREADNEW", 2000), caRow("https://my.livechatinc.com/chats/CHAT/THREADOLD", 500), caRow("", 2500)],

@@ -25,6 +25,28 @@ import { searchRecords, toDisplay, TABLE_PNL } from "./_lib/lark.js";
 // OR — check both fields in parallel and treat either match as found.
 const F = { username: "Username", brand: "Brand", lastLink: "Live Chat link", lastTelegramLink: "Telegram" };
 
+// The player this customer's chat was last recorded under: { username, brand }, or null. brand narrows the search to one brand
+// (the widget knows it); without it any brand matches (the QA page only has the chat id).
+export async function findLastUsername(chatId, brand = "") {
+  if (!TABLE_PNL) return null;
+  const inBrand = brand ? [{ field_name: F.brand, operator: "is", value: [brand] }] : [];
+  // Only the FIRST match's Username is used, so read one small page (maxRows: 1) of just that column
+  // instead of up to 5,000 full P&L rows. Projections are per search so a renamed Telegram column
+  // can never break the Live Chat link search.
+  const [liveChatMatches, telegramMatches] = await Promise.all([
+    searchRecords(TABLE_PNL, [
+      ...inBrand,
+      { field_name: F.lastLink, operator: "contains", value: [chatId] },
+    ], undefined, { maxRows: 1, fieldNames: [F.username, F.lastLink, F.brand] }),
+    searchRecords(TABLE_PNL, [
+      ...inBrand,
+      { field_name: F.lastTelegramLink, operator: "contains", value: [chatId] },
+    ], undefined, { maxRows: 1, fieldNames: [F.username, F.lastTelegramLink, F.brand] }).catch(() => []), // non-fatal — e.g. if the Telegram field ever gets renamed, Live Chat link still works
+  ]);
+  const match = liveChatMatches[0] || telegramMatches[0];
+  return match ? { username: toDisplay(match.fields[F.username]), brand: toDisplay(match.fields[F.brand]) } : null;
+}
+
 export async function handler(event) {
   try {
     const { chatId, brand } = JSON.parse(event.body || "{}");
@@ -35,27 +57,14 @@ export async function handler(event) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, found: false }) };
     }
 
-    // Only the FIRST match's Username is used, so read one small page (maxRows: 1) of just that column
-    // instead of up to 5,000 full P&L rows. Projections are per search so a renamed Telegram column
-    // can never break the Live Chat link search.
-    const [liveChatMatches, telegramMatches] = await Promise.all([
-      searchRecords(TABLE_PNL, [
-        { field_name: F.brand, operator: "is", value: [brand] },
-        { field_name: F.lastLink, operator: "contains", value: [chatId] },
-      ], undefined, { maxRows: 1, fieldNames: [F.username, F.lastLink, F.brand] }),
-      searchRecords(TABLE_PNL, [
-        { field_name: F.brand, operator: "is", value: [brand] },
-        { field_name: F.lastTelegramLink, operator: "contains", value: [chatId] },
-      ], undefined, { maxRows: 1, fieldNames: [F.username, F.lastTelegramLink, F.brand] }).catch(() => []), // non-fatal — e.g. if the Telegram field ever gets renamed, Live Chat link still works
-    ]);
-    const match = liveChatMatches[0] || telegramMatches[0];
+    const match = await findLastUsername(chatId, brand);
     if (!match) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, found: false }) };
     }
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ ok: true, found: true, username: toDisplay(match.fields[F.username]) }),
+      body: JSON.stringify({ ok: true, found: true, username: match.username }),
     };
   } catch (err) {
     return { statusCode: 200, body: JSON.stringify({ ok: true, found: false, error: err.message }) };
