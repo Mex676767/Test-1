@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planEntries, windows, summarize, run, createClient, pool, stepWithRetry, histogram } from '../scripts/crosscheck-unrecorded.mjs';
+import { planEntries, windows, summarize, run, createClient, pool, stepWithRetry, histogram, toCsv } from '../scripts/crosscheck-unrecorded.mjs';
 
 const chat = (threadId, writers, extra = {}) => ({ chatId: 'C-' + threadId, threadId, date: 5, customer: 'Zimito', writers, ...extra });
 
@@ -213,6 +213,51 @@ test('the message histogram buckets entries and skips those without counts', () 
   assert.equal(histogram(entries, 'agentMessages'), '1: 2, 2: 1, 3-5: 2, 6+: 2');
 });
 
+test('excluded emails (any letter case) are left out of the list and counted, whatever else is going on', () => {
+  const chats = [chat('T1', ['me@x', 'a@x']), chat('T2', ['ME@X'])];
+  const stats = {};
+  const entries = planEntries(chats, new Set(), new Set(), 'lc1', null, { stats, exclude: new Set(['me@x']) });
+  assert.deepEqual(entries.map((e) => `${e.threadId}|${e.email}`), ['T1|a@x']);
+  assert.equal(stats.excluded, 2);
+});
+
+test('the QA sheet puts the agent with the most chats first, newest chat first, names and links filled in, QA columns empty, and no formulas run', () => {
+  const mk = (threadId, email, date, customer = 'Zimito') => ({ threadId, chatId: 'C-' + threadId, account: 'lc1', email, date, customer, agentMessages: 2, customerMessages: 1 });
+  const entries = [
+    mk('B1', 'b@x', Date.UTC(2026, 9, 3, 20, 0)),
+    mk('A1', 'a@x', Date.UTC(2026, 9, 2)), mk('A2', 'a@x', Date.UTC(2026, 9, 4), '=HYPERLINK("http://evil")'), mk('A3', 'a@x', Date.UTC(2026, 9, 3), 'Lim, "Ah" Seng'),
+  ];
+  const lines = toCsv(entries, new Map([['a@x', '96 Alice']])).replace(/^﻿/, '').trimEnd().split('\r\n');
+  assert.equal(lines[0], "Agent,Agent email,Agent's unrecorded chats,Date (MYT),Chat link,Customer,Agent messages,Customer messages,LiveChat account,QA verdict,QA note");
+  assert.deepEqual(lines.slice(1).map((l) => l.split(',')[4].replace('https://my.livechatinc.com/archives/', '')), ['A2', 'A3', 'A1', 'B1'], 'Alice has 3, Bob 1; newest first within an agent');
+  assert.equal(lines[1], `96 Alice,a@x,3,2026-10-04 08:00,https://my.livechatinc.com/archives/A2,"'=HYPERLINK(""http://evil"")",2,1,lc1,,`);
+  assert.equal(lines[2].split(',').slice(0, 2).join(','), '96 Alice,a@x');
+  assert.match(lines[2], /"Lim, ""Ah"" Seng"/);
+  assert.equal(lines[4], 'b@x'.padStart(4, ',') + ',1,2026-10-04 04:00,https://my.livechatinc.com/archives/B1,Zimito,2,1,lc1,,', 'an agent without a known name gets an empty name cell');
+});
+
+test('the run leaves excluded emails out of the summary and the sheet, says so, and writes the sheet file', async () => {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'qa-sheet-'));
+  try {
+    const site = fakeSite({ archives: { lc1: [[chat('T1', ['me@x', 'a@x']), chat('T2', ['a@x'])]] }, knownAgents: [{ email: 'a@x', name: '96 Alice' }, { email: 'me@x', name: 'Admin' }] });
+    const lines = [];
+    const csvPath = join(dir, 'qa.csv');
+    const out = await run({ step: site.step, ...period, write: false, exclude: ['ME@x', ' '], csvPath, log: (l) => lines.push(l), accounts: ['lc1'] });
+    assert.deepEqual(out.entries.map((e) => e.email), ['a@x', 'a@x']);
+    assert.match(lines.find((l) => l.startsWith('lc1:')), /1 chat\/writer pairs left out: excluded emails/);
+    assert.ok(!lines.some((l) => /me@x/.test(l)), 'the excluded login is not in the per-agent summary');
+    const sheet = await readFile(csvPath, 'utf8');
+    assert.ok(!/me@x|Admin/.test(sheet));
+    assert.equal(sheet.trimEnd().split('\r\n').length, 3, 'header + Alice\'s two chats');
+    assert.ok(lines.some((l) => /QA sheet written/.test(l)));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('--show lists the newest chats of one agent with a link, the date and both message counts; the run prints the histograms', async () => {
   const mk = (threadId, date, agent) => chat(threadId, ['a@x'], { date, counts: { 'a@x': agent }, customerMessages: 2, customer: 'Zimito ' + threadId });
   const site = fakeSite({ archives: { lc1: [[mk('OLD', Date.UTC(2026, 9, 2), 1), mk('NEW', Date.UTC(2026, 9, 5, 10, 30), 4)]] }, knownAgents: [{ email: 'a@x', name: '96 Alice' }] });
@@ -224,4 +269,18 @@ test('--show lists the newest chats of one agent with a link, the date and both 
   const shown = lines.filter((l) => l.includes('https://my.livechatinc.com/archives/'));
   assert.equal(shown.length, 2);
   assert.match(shown[0], /archives\/NEW\s+2026-10-05 10:30\s+agent 4 \/ customer 2\s+Zimito NEW/, 'newest first');
+});
+
+test('a LiveChat sign-in is sent as its own headers, and a refusal says what the site said (not marked QA, expired) and stops at once', async () => {
+  const seen = [];
+  const refusing = (status, error, extra = {}) => createClient({ base: '', login: { account: 'lc2', token: 'tok' }, pauseMs: 0, retries: 3, fetchImpl: async (url, options) => {
+    seen.push(options.headers);
+    return { status, json: async () => ({ ok: false, error, ...extra }) };
+  } });
+  await assert.rejects(() => refusing(403, 'This LiveChat login is not marked QA in the tracker.')({ step: 'agents' }), (e) => e.status === 403 && /not marked QA/.test(e.message) && e.fatal);
+  await assert.rejects(() => refusing(401, 'LiveChat login expired', { loginExpired: true })({ step: 'agents' }), (e) => e.status === 401 && e.loginExpired === true);
+  assert.equal(seen.length, 2, 'no retries for a refusal');
+  assert.equal(seen[0]['x-livechat-account'], 'lc2');
+  assert.equal(seen[0]['x-livechat-token'], 'tok');
+  assert.equal(seen[0]['x-scan-key'], undefined, 'the scan key is not sent with a sign-in');
 });

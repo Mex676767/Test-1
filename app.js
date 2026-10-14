@@ -1105,7 +1105,9 @@ function syncMainTabs() {
   // Chat/department updates can arrive after an agent starts Blast.
   // Keep its existing iframe visible for the lifetime of the queue.
   if (blastRunInProgress && blastAvailable) activeMainTab = "blast";
-  if (!available[activeMainTab]) {
+  // The QA tab (the page at /qa/) is shown only in the standalone admin preview, never in the installed widget.
+  const unknownChatsAvailable = previewMode;
+  if (!available[activeMainTab] && !(activeMainTab === "unknownChats" && unknownChatsAvailable)) {
     activeMainTab = ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
   }
   const mainTabs = document.getElementById("mainTabs");
@@ -1118,11 +1120,13 @@ function syncMainTabs() {
   if (blastTab) blastTab.hidden = !blastAvailable;
   const knowledgeTab = document.getElementById("knowledgeTab");
   if (knowledgeTab) knowledgeTab.hidden = !knowledgeAvailable;
+  const unknownChatsTab = document.getElementById("unknownChatsTab");
+  if (unknownChatsTab) unknownChatsTab.hidden = !unknownChatsAvailable;
   document.querySelectorAll("[data-main-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mainTab === activeMainTab);
   });
   const chatList = document.getElementById("chatList");
-  if (chatList) chatList.hidden = activeMainTab === "knowledge" || activeMainTab === "blast";
+  if (chatList) chatList.hidden = activeMainTab === "knowledge" || activeMainTab === "blast" || activeMainTab === "unknownChats";
   const blastView = document.getElementById("blastView");
   if (blastView) blastView.hidden = activeMainTab !== "blast";
   if (blastAvailable && activeMainTab === "blast") {
@@ -1137,6 +1141,12 @@ function syncMainTabs() {
   if (knowledgeView) knowledgeView.hidden = activeMainTab !== "knowledge";
   if (knowledgeAvailable && activeMainTab === "knowledge") {
     const frame = knowledgeView?.querySelector("iframe[data-src]");
+    if (frame && !frame.src) frame.src = frame.dataset.src;
+  }
+  const unknownChatsView = document.getElementById("unknownChatsView");
+  if (unknownChatsView) unknownChatsView.hidden = activeMainTab !== "unknownChats";
+  if (unknownChatsAvailable && activeMainTab === "unknownChats") {
+    const frame = unknownChatsView?.querySelector("iframe[data-src]");
     if (frame && !frame.src) frame.src = frame.dataset.src;
   }
   const needsAttention = document.getElementById("needsAttentionPanel");
@@ -2163,7 +2173,7 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   activeMainTab = button.dataset.mainTab;
   syncMainTabs();
   try { sessionStorage.setItem(MAIN_TAB_SESSION_KEY, activeMainTab); } catch (_) {}
-  if (activeMainTab !== "knowledge" && activeMainTab !== "blast") renderChats(activeChats);
+  if (activeMainTab !== "knowledge" && activeMainTab !== "blast" && activeMainTab !== "unknownChats") renderChats(activeChats);
 });
 const statusEl = document.getElementById("statusBar");
 const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }

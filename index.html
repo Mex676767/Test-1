@@ -34,6 +34,7 @@
     <button type="button" id="blastTab" class="main-tab" data-main-tab="blast" hidden>Blast</button>
     <button type="button" id="ticketsTab" class="main-tab" data-main-tab="tickets" hidden>Tickets</button>
     <button type="button" id="knowledgeTab" class="main-tab" data-main-tab="knowledge" hidden>Knowledge</button>
+    <button type="button" id="unknownChatsTab" class="main-tab" data-main-tab="unknownChats" hidden>QA</button>
   </nav>
 
   <div id="statusBar" class="status-bar hidden"></div>
@@ -57,6 +58,9 @@
   <section id="knowledgeView" class="knowledge-view" hidden>
     <iframe data-src="/knowledge/index.html" loading="lazy" title="CS Learning Assistant"></iframe>
   </section>
+  <section id="unknownChatsView" class="knowledge-view" hidden>
+    <iframe data-src="/qa/index.html" loading="lazy" title="QA"></iframe>
+  </section>
 
   <!-- LiveChat Agent App SDK — provides the currently active chat (customer
        name, chat ID) when this widget is actually running inside LiveChat's
@@ -64,7 +68,7 @@
        time app.js checks for it; harmless (just unused) when previewed
        standalone outside LiveChat, or if this CDN fails to load. -->
   <script src="vendor/livechat-agentapp-1.16.0.min.js"></script>
-  <script src="app.js?v=20261013-5"></script>
+  <script src="app.js?v=20261014-1"></script>
   <script src="deployment-refresh.js?v=20261007-1"></script>
 </body>
 </html>

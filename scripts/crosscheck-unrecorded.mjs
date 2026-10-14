@@ -6,126 +6,27 @@
 //   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-07            (dry run: only prints)
 //   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-07 --write    (writes the rows)
 //
+// A sheet for QA (who has the most never-recorded chats, with a link per chat), leaving out the admin's own logins:
+//   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-01 --exclude a@x.com,b@y.com --csv qa.csv
+// (The admin preview has the same thing as a page: the "QA" tab, no command line needed.)
+//
 // It only talks to the site's /crosscheck endpoint (small steps, one at a time, with a pause between them), so the credentials
 // stay in Cloudflare. A chat counts as recorded when ANY Customer Approaching row created since the start date carries its
 // thread id in the link. Run it again later and it adds only what is missing (rows already written are skipped).
+// The scanning and judging live in qa/scan.js, shared with that page.
+import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { archiveLink, createClient, histogram, pool, planAll, planEntries, scanChats, stepWithRetry, summarize, toCsv, windows } from "../qa/scan.js";
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-// How many time windows of one account are read at once.
-const WINDOW_CONCURRENCY = 3;
+export { archiveLink, createClient, histogram, pool, planEntries, stepWithRetry, summarize, toCsv, windows };
 
-// Runs fn(item) for every item, `limit` at a time; the first failure rejects.
-export async function pool(items, limit, fn) {
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) { const item = items[next]; next += 1; await fn(item); }
-  }));
-}
-
-// A step LiveChat refused only for now (rate limit, timeout, busy) is asked again after a pause, up to `tries` times.
-export async function stepWithRetry(step, body, tries = 4, pauseMs = 2000) {
-  for (let attempt = 1; ; attempt += 1) {
-    const data = await step(body);
-    if (data.ok || attempt >= tries || !/too many|rate.?limit|timeout|timed out|temporar|busy|unavailable|try again/i.test(data.error || "")) return data;
-    await sleep(pauseMs * attempt);
-  }
-}
-
-// chats: [{ chatId, threadId, date, customer, writers: [email] }]; recorded: Set of thread ids; existing: Set of "thread|email".
-// names (optional): { pairs: Set of "thread|agent name" in lower case, byEmail: Map email -> agent name }. A writer whose email is
-// known as an agent is judged on THEIR OWN record (a chat another agent recorded still counts as unrecorded for them); a
-// writer who is not known falls back to "does any row carry this chat".
-// onlyKnown (the default once any agent is known): the LiveChat accounts also hold the whole customer-service team and bots,
-// who never use this tool -- their chats are not meant to be recorded here and nobody's widget would show them. Only writers
-// whose email is in the Agent Logins table are listed; stats.unknownWriters counts the rest. Agents who have not opened
-// the widget since the email column was added are picked up by running the script again later.
-// minAgentMessages / minCustomerMessages (default 1 = no filter) leave out chats with fewer messages, judged on the writer's own
-// messages and the customer's; stats.belowMinimum counts them. A chat that came without counts is never filtered out.
-export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {}, minAgentMessages = 1, minCustomerMessages = 1 } = {}) {
-  const seen = new Set();
-  const entries = [];
-  for (const chat of chats) {
-    for (const writer of chat.writers) {
-      const email = String(writer).trim().toLowerCase();
-      const agent = names?.byEmail.get(email);
-      if (onlyKnown && names && names.byEmail.size && !agent) { stats.unknownWriters = (stats.unknownWriters || 0) + 1; continue; }
-      const isRecorded = agent ? names.pairs.has(`${chat.threadId}|${agent.toLowerCase()}`) : recorded.has(chat.threadId);
-      if (isRecorded) continue;
-      const key = `${chat.threadId}|${email}`;
-      if (!email || existing.has(key) || seen.has(key)) continue;
-      const agentMessages = chat.counts ? (chat.counts[email] || 0) : null;
-      const customerMessages = chat.counts ? (chat.customerMessages || 0) : null;
-      if (chat.counts && (agentMessages < minAgentMessages || customerMessages < minCustomerMessages)) { stats.belowMinimum = (stats.belowMinimum || 0) + 1; continue; }
-      seen.add(key);
-      entries.push({ threadId: chat.threadId, chatId: chat.chatId, account, email, date: chat.date, customer: chat.customer, agentMessages, customerMessages });
-    }
-  }
-  return entries;
-}
-
-export function windows(fromMs, toMs, stepMs) {
-  const out = [];
-  for (let start = fromMs; start < toMs; start += stepMs) out.push([start, Math.min(start + stepMs, toMs)]);
-  return out;
-}
-
-// "1: 120, 2: 40, 3-5: 30, 6+: 10" -- how many entries have that many messages (entries without counts are skipped).
-export function histogram(entries, field) {
-  const buckets = [["1", (n) => n === 1], ["2", (n) => n === 2], ["3-5", (n) => n >= 3 && n <= 5], ["6+", (n) => n >= 6]];
-  const counted = entries.filter((entry) => typeof entry[field] === "number");
-  return buckets.map(([label, test]) => `${label}: ${counted.filter((entry) => test(entry[field])).length}`).join(", ");
-}
-
-export function summarize(entries) {
-  const perWriter = new Map();
-  for (const entry of entries) perWriter.set(entry.email, (perWriter.get(entry.email) || 0) + 1);
-  return [...perWriter.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retries = 3 }) {
-  return async function step(body) {
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        const response = await fetchImpl(`${base}/crosscheck`, { method: "POST", headers: { "Content-Type": "application/json", "x-scan-key": key }, body: JSON.stringify(body) });
-        const data = await response.json();
-        if (response.status === 401 || response.status === 404) throw Object.assign(new Error(`The site answered ${response.status}: check the key and that SCAN_KEY is set in Cloudflare Pages.`), { fatal: true });
-        if (pauseMs) await sleep(pauseMs);
-        return data;
-      } catch (error) {
-        if (error.fatal || attempt >= retries) throw error;
-        await sleep(1000 * attempt);
-      }
-    }
-  };
-}
-
-export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, show = "", log = console.log, accounts = ["lc1", "lc2"] }) {
-  const recorded = new Set();
-  const pairs = new Set();
-  let pageToken = "";
-  let rows = 0;
-  do {
-    const data = await step({ step: "recorded", fromMs, pageToken });
-    if (!data.ok) throw new Error(`recorded: ${data.error}`);
-    data.threads.forEach((thread) => recorded.add(thread));
-    (data.pairs || []).forEach((pair) => pairs.add(pair));
-    rows += data.rows;
-    pageToken = data.next;
-  } while (pageToken);
-  log(`Customer Approaching: read ${rows} rows; ${recorded.size} chats since the start date have a record.`);
-
-  const agents = await step({ step: "agents" });
-  if (!agents.ok) throw new Error(`agents: ${agents.error}`);
-  const byEmail = new Map((agents.agents || []).map((agent) => [String(agent.email).toLowerCase(), agent.name]));
-  const names = { pairs, byEmail };
-  log(`Agent Logins: ${byEmail.size} agents have their LiveChat email filled in (they are judged on their own records; the rest on "any row for the chat").`);
-  // With nobody known yet, "only agents who use the widget" would list nobody: say so instead of writing nothing quietly.
-  if (onlyKnown && byEmail.size === 0) throw new Error("No agent has their LiveChat email in the Agent Logins table yet, so there is nobody to list. Wait until agents have opened the widget, or add --all-writers to list every writer (customer service and bots included).");
+export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, show = "", exclude = [], csvPath = "", log = console.log, accounts = ["lc1", "lc2"] }) {
+  const say = (line) => log(line);
+  const scan = await scanChats({ step, fromMs, toMs, windowMs, onlyKnown, log: say, accounts });
 
   const existing = new Set();
-  pageToken = "";
   if (write) {
+    let pageToken = "";
     do {
       const data = await step({ step: "existing", pageToken });
       if (!data.ok) throw new Error(`existing: ${data.error}`);
@@ -135,50 +36,7 @@ export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = tru
     log(`Unrecorded Chats table: ${existing.size} rows already there.`);
   }
 
-  // Both LiveChat accounts are read at the same time (separate credentials, separate limits), and several time windows of
-  // one account at once, with a progress line per finished window.
-  async function scanAccount(account) {
-    const chats = new Map();
-    const result = { account, chats, configured: true, fetchedAlone: 0, unjudged: 0, outreach: 0 };
-    const list = windows(fromMs, toMs, windowMs);
-    let done = 0;
-    await pool(list, WINDOW_CONCURRENCY, async ([from, to]) => {
-      if (!result.configured) return;
-      let pageId = "";
-      do {
-        const data = await stepWithRetry(step, { step: "archives", account, from, to, pageId });
-        if (!data.ok) {
-          if (/not configured/i.test(data.error || "")) { result.configured = false; return; }
-          throw new Error(`archives (${account}): ${data.error}`);
-        }
-        data.chats.forEach((chat) => chats.set(chat.threadId, chat));
-        result.outreach += data.outreach || 0;
-        // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
-        for (const pending of data.pending || []) {
-          if (chats.has(pending.threadId)) continue;
-          const one = await stepWithRetry(step, { step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
-          result.fetchedAlone += 1;
-          if (!one.ok) { result.unjudged += 1; continue; }
-          result.outreach += one.outreach || 0;
-          if (one.chat) chats.set(one.chat.threadId, one.chat);
-        }
-        pageId = data.next;
-      } while (pageId);
-      done += 1;
-      log(`  [${account}] window ${done}/${list.length} done, ${chats.size} chats so far`);
-    });
-    return result;
-  }
-
-  const all = [];
-  for (const result of await Promise.all(accounts.map(scanAccount))) {
-    const { account, chats, fetchedAlone, unjudged, outreach } = result;
-    if (!result.configured) { log(`${account}: not configured, skipped.`); continue; }
-    const stats = {};
-    const entries = planEntries([...chats.values()], recorded, existing, account, names, { onlyKnown, stats, minAgentMessages, minCustomerMessages });
-    log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded by an agent who uses the widget.${stats.unknownWriters ? ` ${stats.unknownWriters} chat/writer pairs left out: the writer is not in the Agent Logins table (customer service, bots, or an agent who has not opened the widget yet).` : ""}${stats.belowMinimum ? ` ${stats.belowMinimum} left out for having fewer messages than the minimum.` : ""}${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
-    all.push(...entries);
-  }
+  const all = planAll(scan, { existing, onlyKnown, minAgentMessages, minCustomerMessages, exclude, log: say });
 
   log("\nNever-recorded chats per agent email:");
   for (const [email, count] of summarize(all)) log(`  ${String(count).padStart(4)}  ${email}`);
@@ -189,7 +47,12 @@ export async function run({ step, fromMs, toMs, windowMs, write, onlyKnown = tru
     const wanted = String(show).trim().toLowerCase();
     const sample = all.filter((entry) => entry.email === wanted).sort((a, b) => b.date - a.date).slice(0, 15);
     log(`\nThe 15 newest chats for ${wanted} (${all.filter((entry) => entry.email === wanted).length} in all) -- open a few and judge whether they needed recording:`);
-    for (const entry of sample) log(`  https://my.livechatinc.com/archives/${entry.threadId}  ${entry.date ? new Date(entry.date).toISOString().slice(0, 16).replace("T", " ") : "?"}  agent ${entry.agentMessages ?? "?"} / customer ${entry.customerMessages ?? "?"}  ${entry.customer || ""}`);
+    for (const entry of sample) log(`  ${archiveLink(entry.threadId)}  ${entry.date ? new Date(entry.date).toISOString().slice(0, 16).replace("T", " ") : "?"}  agent ${entry.agentMessages ?? "?"} / customer ${entry.customerMessages ?? "?"}  ${entry.customer || ""}`);
+  }
+
+  if (csvPath) {
+    await writeFile(csvPath, toCsv(all, scan.byEmail), "utf8");
+    log(`\nQA sheet written: ${csvPath} (${all.length} chats, ${summarize(all).length} agents, busiest agent first).`);
   }
 
   if (!write) { log("\nDry run: nothing was written. Add --write to put these rows in the Unrecorded Chats table."); return { entries: all, created: 0 }; }
@@ -226,6 +89,8 @@ async function main() {
     step: createClient({ base, key }), fromMs, toMs: Date.now(), windowMs, write: args.has("write"), onlyKnown: !args.has("all-writers"),
     minAgentMessages: Number(args.get("min-agent-messages") || 1), minCustomerMessages: Number(args.get("min-customer-messages") || 1),
     show: args.get("show") === true ? "" : String(args.get("show") || ""),
+    exclude: args.get("exclude") === true ? [] : String(args.get("exclude") || "").split(","),
+    csvPath: args.get("csv") === true ? `unrecorded-chats-${new Date().toISOString().slice(0, 10)}.csv` : String(args.get("csv") || ""),
   });
 }
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handler, chatsWithWriters, larkTime } from "./crosscheck.js";
+import { handler, chatsWithWriters, larkTime, resetQaCache } from "./crosscheck.js";
 import { initEnv as initLarkEnv } from "./_lib/lark.js";
 import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 
@@ -72,13 +72,97 @@ test("only ended chats an agent wrote in are listed, with the agents (not bots o
   assert.equal(chats[0].date, Date.parse("2026-10-08T00:55:00.000000Z"));
 });
 
-test("without SCAN_KEY the endpoint does not exist; a wrong or missing key is refused and nothing is read", async (t) => {
+test("without SCAN_KEY and without the Agent Logins table the endpoint does not exist; a wrong or missing key is refused and nothing is read", async (t) => {
   const w = world();
   t.after(w.restore);
-  assert.equal((await call({ step: "recorded" }, { env: { ...ENV, SCAN_KEY: "" } })).status, 404);
+  assert.equal((await call({ step: "recorded" }, { env: { ...ENV, SCAN_KEY: "", LARK_TABLE_AGENT_LOGINS: "" } })).status, 404);
   assert.equal((await call({ step: "recorded" }, { key: "nope" })).status, 401);
   assert.equal((await call({ step: "recorded" }, { key: null })).status, 401);
   assert.equal(w.log.searches.length, 0);
+});
+
+// LiveChat's account endpoints and the tracker (Agent Logins) rows, on top of the world() fake.
+function withLiveChatLogins(w, { accounts }) {
+  const inner = globalThis.fetch;
+  w.log.accountCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    url = String(url);
+    if (url === "https://accounts.livechat.com/v2/info") {
+      w.log.accountCalls += 1;
+      const token = String(options.headers?.Authorization || "").replace("Bearer ", "");
+      const who = accounts[token];
+      return who ? { ok: true, json: async () => ({ account_id: who.login, email: who.email, client_id: "client-1" }) } : { ok: false, json: async () => ({ error: "invalid" }) };
+    }
+    return inner(url, options);
+  };
+}
+const tracker = (...rows) => rows.map(([email, role, login = ""]) => ({ record_id: "t" + email, fields: { "Livechat Email": email, "LiveChat Login": login, ...(role ? { Role: role } : {}) } }));
+const asLogin = (token, env = ENV) => ({ key: null, env, headers: { "x-livechat-account": "lc1", "x-livechat-token": token } });
+
+test("a LiveChat sign-in marked QA in the tracker may read, never write; anyone else is refused, and the scan key still does everything", async (t) => {
+  const w = world({ caPages: [[caRow("https://my.livechatinc.com/chats/CHAT/THREADNEW", 2000)]], loginItems: tracker(["qa@x.com", "QA"], ["agent@x.com", ""], ["both@x.com", "Lead, QA"], ["byid@x.com", "qa", "login-by-id"]) });
+  withLiveChatLogins(w, { accounts: { "tok-qa": { login: "u1", email: "QA@x.com" }, "tok-agent": { login: "u2", email: "agent@x.com" }, "tok-both": { login: "u3", email: "both@x.com" }, "tok-id": { login: "login-by-id", email: "" } } });
+  t.after(w.restore);
+  resetQaCache();
+  const env = { ...ENV, LIVECHAT_CLIENT_ID: "client-1" };
+  const send = async (body, token, key = null) => {
+    initLarkEnv(env); initLiveChatEnv({ LIVECHAT_PAT: "pat-1", LIVECHAT_PAT_2: "pat-2" });
+    const res = await handler({ body: JSON.stringify(body), env, headers: key ? { "x-scan-key": key } : { "x-livechat-account": "lc1", "x-livechat-token": token } });
+    return { status: res.statusCode, ...JSON.parse(res.body) };
+  };
+  assert.equal((await send({ step: "recorded", fromMs: 1000 }, "tok-qa")).threads[0], "THREADNEW", "marked QA: the email in the tracker matches whatever the letter case");
+  assert.equal((await send({ step: "agents" }, "tok-both")).ok, true, "a Role cell with several values counts when one of them is QA");
+  assert.equal((await send({ step: "agents" }, "tok-id")).ok, true, "a row can name the LiveChat login instead of the email");
+  const notQa = await send({ step: "recorded" }, "tok-agent");
+  assert.equal(notQa.status, 403);
+  assert.match(notQa.error, /not marked QA/);
+  assert.equal((await send({ step: "recorded" }, "tok-nobody")).status, 401, "a token LiveChat does not know");
+  assert.equal((await send({ step: "recorded" }, "")).status, 401, "no sign-in and no key");
+  for (const step of ["write", "existing"]) assert.equal((await send({ step, entries: [{ threadId: "T1", email: "a@x.com" }] }, "tok-qa")).status, 403);
+  assert.equal(w.log.created.length, 0, "nothing was written by a QA sign-in");
+  assert.equal((await send({ step: "write", entries: [{ threadId: "T1", email: "a@x.com" }] }, "", "scan-secret")).created, 1, "the admin key still writes");
+  const before = w.log.accountCalls;
+  await send({ step: "agents" }, "tok-qa");
+  await send({ step: "agents" }, "tok-qa");
+  assert.equal(w.log.accountCalls, before, "a sign-in already checked is not asked of LiveChat again for every step of a scan");
+});
+
+test("a login for the wrong LiveChat account or an unknown account name is refused before the tracker is read", async (t) => {
+  const w = world({ loginItems: tracker(["qa@x.com", "QA"]) });
+  withLiveChatLogins(w, { accounts: { "tok-qa": { login: "u1", email: "qa@x.com" } } });
+  t.after(w.restore);
+  resetQaCache();
+  const env = { ...ENV, LIVECHAT_CLIENT_ID: "other-client" };
+  initLarkEnv(env); initLiveChatEnv({ LIVECHAT_PAT: "pat-1", LIVECHAT_PAT_2: "pat-2" });
+  const wrong = await handler({ body: JSON.stringify({ step: "agents" }), env, headers: { "x-livechat-account": "lc1", "x-livechat-token": "tok-qa" } });
+  assert.equal(wrong.statusCode, 401);
+  assert.match(JSON.parse(wrong.body).error, /different account/);
+  const unknown = await handler({ body: JSON.stringify({ step: "agents" }), env, headers: { "x-livechat-account": "lc9", "x-livechat-token": "tok-qa" } });
+  assert.equal(unknown.statusCode, 401);
+});
+test("logged: the rows agents logged in the window, with what QA compares and never the date of birth or claim secret; QA may read it", async (t) => {
+  const row = (createdAt, fields) => ({ record_id: "r" + createdAt, created_time: createdAt, fields });
+  const w = world({ caPages: [
+    [row(2000, { Username: "player1", Brand: "VS96", "Agent Name": "96 Alice", Inquiry: ["Free Spin"], Status: "Done", "Released amount": 30, link: { link: "https://my.livechatinc.com/archives/THREADA", text: "chat" }, "Player D.O.B": 946684800000, "Claim Secret": true }),
+     row(500, { Username: "too-old", "Agent Name": "96 Alice" })],
+    [row(3000, { Username: "player2", "Agent Name": "96 Bob" }), row(9000, { Username: "too-new", "Agent Name": "96 Bob" })],
+  ], loginItems: tracker(["qa@x.com", "QA"]) });
+  withLiveChatLogins(w, { accounts: { "tok-qa": { login: "u1", email: "qa@x.com" } } });
+  t.after(w.restore);
+  resetQaCache();
+  const env = { ...ENV, LIVECHAT_CLIENT_ID: "client-1" };
+  initLarkEnv(env); initLiveChatEnv({ LIVECHAT_PAT: "pat-1", LIVECHAT_PAT_2: "pat-2" });
+  const ask = async (body) => JSON.parse((await handler({ body: JSON.stringify(body), env, headers: { "x-livechat-account": "lc1", "x-livechat-token": "tok-qa" } })).body);
+  const first = await ask({ step: "logged", fromMs: 1000, toMs: 5000, pageToken: "" });
+  assert.equal(first.ok, true);
+  assert.equal(first.rows.length, 1, "the row before the window is left out");
+  assert.deepEqual(first.rows[0], { recordId: "r2000", createdAt: 2000, agent: "96 Alice", username: "player1", brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 30, telegram: false, link: "https://my.livechatinc.com/archives/THREADA", threadId: "THREADA" });
+  assert.equal(first.next, "1");
+  assert.equal(first.scanned, 2);
+  const second = await ask({ step: "logged", fromMs: 1000, toMs: 5000, pageToken: "1" });
+  assert.deepEqual(second.rows.map((r) => r.username), ["player2"], "the row after the window is left out");
+  assert.equal(second.next, "");
+  assert.ok(!JSON.stringify([first, second]).includes("946684800000") && !/claimSecret|dob/i.test(JSON.stringify([first, second])));
 });
 
 test("recorded: the thread ids of Customer Approaching rows created since the start date, from the link, page by page", async (t) => {
