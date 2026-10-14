@@ -23,7 +23,9 @@ const AGENT_LOGIN_LIVE = new URLSearchParams(location.search).get("agentLogin") 
 // QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE: whether that view also gets the Tickets and Knowledge tabs. Off until they are approved for QA.
 const QA_VIEW_LIVE = new URLSearchParams(location.search).get("qaView") !== "0";
 const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;
-let qaView = false; // true once the signed-in login is marked QA
+// The admin preview is never turned into the QA view by a login (it stays the full admin view); like the department views, it shows the QA
+// view only when asked: ?department=qa. In the installed widget the QA view comes from the signed-in login (see detectQaRole).
+let qaView = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("department") === "qa";
 
 /* ============================================================
    THEME
@@ -652,7 +654,7 @@ async function signOutLiveChat() {
   if (!confirm("Sign out of LiveChat in this widget? Nothing can be recorded until you sign in again.")) return;
   for (const accountKey of ["lc1", "lc2"]) forgetLiveChatLogin(accountKey);
   try { localStorage.removeItem(AGENT_KEY); } catch (_) { /* non-fatal */ }
-  if (qaView) { qaView = false; syncMainTabs(); } // the next sign-in decides again
+  if (qaView && IS_EMBEDDED_APP) { qaView = false; syncMainTabs(); } // the next sign-in decides again (the preview's ?department=qa stays)
   selectedAgent = "";
   agentLocked = false;
   staleRecords = [];
@@ -720,7 +722,7 @@ function applyCustomerServiceAgent(accountKey) {
 // Is this signed-in LiveChat login marked QA in the Agent Logins table? The server checks the token with LiveChat and reads the table.
 // Never blocks a sign-in: any failure just means "not QA", and the agent continues as before.
 async function detectQaRole(accountKey, token) {
-  if (!QA_VIEW_LIVE) return false;
+  if (!QA_VIEW_LIVE || !IS_EMBEDDED_APP) return false; // the admin preview keeps the full view whoever signs in
   try {
     const response = await fetch("/qa-role", {
       method: "POST",

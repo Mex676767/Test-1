@@ -205,7 +205,7 @@ export async function handler(event) {
         .map(summarizeRow)
         .filter((row) => row.threadId === threadId) // "contains" is a substring match
         .sort((a, b) => a.createdAt - b.createdAt)
-        .map((row) => ({ recordId: row.recordId, createdAt: row.createdAt, agent: row.agent, username: row.username, brand: row.brand, inquiry: row.inquiry, status: row.status, amount: row.amount, telegram: row.telegram, link: row.link, threadId: row.threadId }));
+        .map((row) => ({ recordId: row.recordId, createdAt: row.createdAt, agent: row.agent, username: row.username, brand: row.brand, inquiry: row.inquiry, status: row.status, amount: row.amount, claimSecret: row.claimSecret, telegram: row.telegram, link: row.link, threadId: row.threadId }));
       const kv = event.env?.UNKNOWN_TICKS;
       const listed = kv ? await kv.list({ prefix: `t:${threadId}:`, limit: 100 }) : { keys: [] };
       const ticks = listed.keys.map((key) => key.metadata).filter((meta) => meta && meta.agent);

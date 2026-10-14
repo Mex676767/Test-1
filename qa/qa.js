@@ -173,6 +173,8 @@ function loggedCard(row) {
       ${row.status ? `<div class="rc-chips"><span class="rc-chip status">${escapeHtml(row.status)}</span></div>` : `<div class="rc-input">${empty}</div>`}
       <div class="rc-label">Released amount</div>
       <div class="rc-input">${row.amount === null || row.amount === undefined ? '<span class="rc-muted">none</span>' : escapeHtml(String(row.amount))}</div>
+      <div class="rc-label">Claim Secret</div>
+      <label class="rc-unknown"><input type="checkbox" disabled ${row.claimSecret ? "checked" : ""} /><span>${row.claimSecret ? "✓ Ticked" : "— Not ticked"}</span></label>
       ${row.telegram ? '<div class="rc-label">Telegram</div><div class="rc-input">Yes</div>' : ""}
     </section>
     <footer class="rc-foot">Logged ${escapeHtml(myt(row.createdAt))} (Malaysia time)</footer>
@@ -203,8 +205,7 @@ function renderChatLog(info, message = "") {
   box.innerHTML = `<div class="uc-verdict ${info.verdict}">${escapeHtml(info.headline)}</div>
     ${info.rows.map(loggedCard).join("")}${info.ticks.map(tickCard).join("")}
     ${info.rows.some((row) => row.issues.length) ? `<p class="uc-hint uc-warn">Missing: ${escapeHtml([...new Set(info.rows.flatMap((row) => row.issues))].join(", "))}</p>` : ""}
-    ${info.note ? `<p class="uc-hint">${escapeHtml(info.note)}</p>` : ""}
-    <p class="uc-hint"><a href="${escapeHtml(archiveLink(chatThread))}" target="_blank" rel="noopener noreferrer">Open this chat in LiveChat ↗</a></p>`;
+    ${info.note ? `<p class="uc-hint">${escapeHtml(info.note)}</p>` : ""}`;
 }
 
 async function showChat(threadId) {
