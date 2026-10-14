@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { calendarDays, displayDate } from '../qa/datepicker.js';
+import { createCache } from '../qa/cache.js';
+import { pickerLabel } from '../qa/agentpicker.js';
+import { agentChoices, alignedWindows, checkKnownUsernames, toCsv } from '../qa/scan.js';
 import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
@@ -230,4 +233,153 @@ test('"Before tracking" chats older than 14 Oct are dropped for the listed login
   } finally {
     HIDE_UNTRACKED_HASHES.delete(hash);
   }
+});
+
+// ---- saved results ----------------------------------------------------------------------------------------------------------
+
+test('the saved-results store keeps a value until it expires, hands out copies, and can be emptied', async () => {
+  let clock = 1000;
+  const cache = createCache({ useDb: false, now: () => clock });
+  await cache.set('k', { list: [1, 2] }, 500);
+  const first = await cache.get('k');
+  first.list.push(3);
+  assert.deepEqual(await cache.get('k'), { list: [1, 2] }, 'a caller cannot change what is saved');
+  clock = 1499;
+  assert.ok(await cache.get('k'));
+  clock = 1500;
+  assert.equal(await cache.get('k'), undefined, 'expired');
+  await cache.set('j', 1, 500);
+  await cache.clear();
+  assert.equal(await cache.get('j'), undefined);
+  assert.equal(await cache.get('never'), undefined);
+});
+
+test('time windows sit on a fixed grid, so another start date reuses the windows an earlier search saved', () => {
+  assert.deepEqual(alignedWindows(25, 55, 10), [[20, 30], [30, 40], [40, 50], [50, 55]]);
+  assert.deepEqual(alignedWindows(20, 30, 10), [[20, 30]]);
+});
+
+const longAgo = () => Date.now() - 5 * 24 * 3_600_000; // well past the "settled" time
+function archiveSite(chatsByWindow, counters) {
+  return async (body) => {
+    if (body.step === 'recorded') { counters.recorded += 1; return { ok: true, threads: [], pairs: [], next: '', rows: 3 }; }
+    if (body.step === 'agents') return { ok: true, agents: [{ email: 'a@x', name: '96 Alice' }] };
+    if (body.step === 'archives') {
+      counters.archives += 1;
+      return { ok: true, chats: body.account === 'lc1' ? (chatsByWindow[body.from] || []) : [], pending: [], outreach: body.account === 'lc1' ? 1 : 0, next: '' };
+    }
+    throw new Error('unexpected ' + body.step);
+  };
+}
+
+test('a second search reuses saved windows of settled time and the saved table read; a recent window is always read again; "read again" ignores it all', async () => {
+  const step = 10 * 3_600_000;
+  const base = Math.floor(longAgo() / step) * step;
+  const chat = (id, date) => ({ chatId: 'C' + id, threadId: id, date, customer: 'Z', writers: ['a@x'], counts: { 'a@x': 2 }, customerMessages: 1 });
+  const chatsByWindow = { [base]: [chat('OLD1', base + 5), chat('OLD2', base + 9)] };
+  const cache = createCache({ useDb: false });
+  const first = { recorded: 0, archives: 0 };
+  const toMs = base + step;
+  const one = await scanChats({ step: archiveSite(chatsByWindow, first), fromMs: base, toMs, windowMs: step, cache });
+  assert.deepEqual([first.recorded, first.archives], [1, 2], 'both accounts read for the first time');
+  const second = { recorded: 0, archives: 0 };
+  const two = await scanChats({ step: archiveSite(chatsByWindow, second), fromMs: base, toMs, windowMs: step, cache });
+  assert.deepEqual([second.recorded, second.archives], [0, 0], 'nothing asked: windows and the table read come from the saved results');
+  assert.deepEqual([...two.results[0].chats.keys()].sort(), ['OLD1', 'OLD2']);
+  assert.equal(two.results[0].outreach, 1);
+  assert.equal(two.results[0].fromSaved, 1);
+  assert.deepEqual(planAll(two).map((e) => e.threadId).sort(), planAll(one).map((e) => e.threadId).sort(), 'the same answer');
+
+  const third = { recorded: 0, archives: 0 };
+  await scanChats({ step: archiveSite(chatsByWindow, third), fromMs: base, toMs, windowMs: step, cache, fresh: true });
+  assert.deepEqual([third.recorded, third.archives], [1, 2], 'fresh reads everything again');
+
+  // A window that ended minutes ago is not settled: it is not saved and not reused.
+  const recent = { recorded: 0, archives: 0 };
+  const cache2 = createCache({ useDb: false });
+  const recentFrom = Math.floor(Date.now() / step) * step;
+  await scanChats({ step: archiveSite({}, recent), fromMs: recentFrom, toMs: Date.now(), windowMs: step, cache: cache2 });
+  await scanChats({ step: archiveSite({}, recent), fromMs: recentFrom, toMs: Date.now(), windowMs: step, cache: cache2 });
+  assert.equal(recent.archives, 4, 'both accounts, both times');
+});
+
+test('chats older than the start date, from the grid\'s first window, are dropped', async () => {
+  const step = 10;
+  const chat = (id, date) => ({ chatId: 'C' + id, threadId: id, date, customer: 'Z', writers: ['a@x'], counts: { 'a@x': 2 }, customerMessages: 1 });
+  const counters = { recorded: 0, archives: 0 };
+  const scan = await scanChats({ step: archiveSite({ 20: [chat('BEFORE', 22), chat('AFTER', 28), chat('UNDATED', 0)] }, counters), fromMs: 25, toMs: 30, windowMs: step });
+  assert.deepEqual([...scan.results[0].chats.keys()].sort(), ['AFTER', 'UNDATED']);
+});
+
+test('what agents logged: a saved read serves any agent choice; the choice only filters, by name without letter case', async () => {
+  const rows = [logRow('96 Alice', 1), logRow('96 Bob', 2), logRow('96 BOB', 3)];
+  let reads = 0;
+  const step = async (body) => {
+    if (body.step === 'agents') return { ok: true, agents: [] };
+    reads += 1;
+    return { ok: true, rows, next: '', scanned: 3 };
+  };
+  const cache = createCache({ useDb: false });
+  const all = await loadLogged({ step, fromMs: 0, toMs: 10, cache, cacheKey: '2026-10-01:now' });
+  const bob = await loadLogged({ step, fromMs: 0, toMs: 10, only: ['96 bob'], cache, cacheKey: '2026-10-01:now' });
+  assert.deepEqual([all.rows.length, bob.rows.length, reads, all.fromSaved, bob.fromSaved], [3, 2, 1, false, true]);
+  await loadLogged({ step, fromMs: 0, toMs: 10, cache, cacheKey: '2026-10-01:now', fresh: true });
+  assert.equal(reads, 2);
+  assert.equal((await loadLogged({ step, fromMs: 0, toMs: 10, only: ['Nobody'] })).rows.length, 0);
+});
+
+// ---- who to check -----------------------------------------------------------------------------------------------------------
+
+test('the agents to choose from are the Agent Logins names, A to Z, with every login of a name; the button says what is chosen', () => {
+  const choices = agentChoices([
+    { email: 'B2@x', name: '96  Bob' }, { email: 'a@x', name: '96 Alice' }, { email: 'b1@x', name: '96 bob' }, { email: '', name: 'No email' }, { email: 'z@x', name: '' },
+  ]);
+  assert.deepEqual(choices, [{ name: '96 Alice', emails: ['a@x'] }, { name: '96 Bob', emails: ['b2@x', 'b1@x'] }]);
+  assert.equal(pickerLabel([], 12), 'All agents (12)');
+  assert.equal(pickerLabel([], 0), 'All agents');
+  assert.equal(pickerLabel(['96 Alice'], 12), '96 Alice');
+  assert.equal(pickerLabel(['A', 'B', 'C'], 12), '3 agents');
+});
+
+test('only the chosen agents are listed as unknown chats, whatever else is going on; nothing chosen lists everybody', async () => {
+  const scan = await scanChats({ step: site([archive('T1', ['a@x']), archive('T2', ['me@x']), archive('T3', ['a@x', 'me@x'])]), fromMs: 0, toMs: 10, windowMs: 10 });
+  assert.deepEqual(planAll(scan, { only: ['ME@x'] }).map((e) => e.threadId).sort(), ['T2', 'T3']);
+  assert.deepEqual(planAll(scan, { only: ['a@x'] }).map((e) => e.threadId).sort(), ['T1', 'T3']);
+  assert.equal(planAll(scan, { only: null }).length, 4);
+  assert.equal(planAll(scan, { only: [] }).length, 0, 'an empty list of emails is a choice of nobody (the page passes null for "everybody")');
+});
+
+// ---- ticked Unknown although a username was on file -------------------------------------------------------------------------
+
+test('a chat ticked Unknown by hand whose customer already had a username on file is marked with it; automatic ticks and untouched chats are not asked', async () => {
+  const entries = [
+    { threadId: 'T1', chatId: 'CA', mark: 'ticked' }, { threadId: 'T2', chatId: 'CA', mark: 'ticked' }, { threadId: 'T3', chatId: 'CB', mark: 'ticked' },
+    { threadId: 'T4', chatId: 'CC', mark: 'ticked-auto' }, { threadId: 'T5', chatId: 'CD', mark: 'not-ticked' }, { threadId: 'T6', chatId: 'CE', mark: 'ticked' },
+  ];
+  const asked = [];
+  const step = async (body) => {
+    asked.push(body.chatId);
+    if (body.chatId === 'CA') return { ok: true, found: true, username: 'player-one' };
+    if (body.chatId === 'CE') return { ok: false, error: 'Lark said no' };
+    return { ok: true, found: false, username: '' };
+  };
+  const cache = createCache({ useDb: false });
+  const progress = [];
+  const result = await checkKnownUsernames(entries, step, { cache, onProgress: (done, total) => progress.push([done, total]) });
+  assert.deepEqual(asked.sort(), ['CA', 'CB', 'CE'], 'one question per chat, only for hand-ticked chats');
+  assert.deepEqual(result, { checked: 3, found: 1, failed: 1 });
+  assert.deepEqual(entries.map((e) => e.knownUsername), ['player-one', 'player-one', undefined, undefined, undefined, undefined]);
+  assert.equal(progress.at(-1)[1], 3);
+
+  const again = [];
+  await checkKnownUsernames(entries.map((e) => ({ ...e })), async (body) => { again.push(body.chatId); return { ok: true, found: false }; }, { cache });
+  assert.deepEqual(again, ['CE'], 'answers are saved (a failed one is asked again)');
+  await assert.rejects(() => checkKnownUsernames(entries, step, { isCancelled: () => true }), (e) => e.cancelled === true);
+});
+
+test('the QA page carries the new controls: who to check, read again, the username filter', () => {
+  const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
+  for (const id of ['agentPicker', 'fresh', 'onlyKnownUser']) assert.match(page, new RegExp('id="' + id + '"'));
+  const csv = toCsv([{ threadId: 'T', chatId: 'C', email: 'a@x', date: 1, customer: 'Z', account: 'lc1', mark: 'ticked', knownUsername: 'player-one' }], new Map());
+  assert.ok(csv.includes('Ticked Unknown,player-one,,'), 'the sheet has the username already on file');
 });

@@ -228,12 +228,12 @@ test('the QA sheet puts the agent with the most chats first, newest chat first, 
     mk('A1', 'a@x', Date.UTC(2026, 9, 2)), mk('A2', 'a@x', Date.UTC(2026, 9, 4), '=HYPERLINK("http://evil")'), mk('A3', 'a@x', Date.UTC(2026, 9, 3), 'Lim, "Ah" Seng'),
   ];
   const lines = toCsv(entries, new Map([['a@x', '96 Alice']])).replace(/^﻿/, '').trimEnd().split('\r\n');
-  assert.equal(lines[0], "Agent,Agent email,Agent's unrecorded chats,Date (MYT),Chat link,Customer,Agent messages,Customer messages,LiveChat account,Unknown tick,QA verdict,QA note");
+  assert.equal(lines[0], "Agent,Agent email,Agent's unrecorded chats,Date (MYT),Chat link,Customer,Agent messages,Customer messages,LiveChat account,Unknown tick,Username already on file,QA verdict,QA note");
   assert.deepEqual(lines.slice(1).map((l) => l.split(',')[4].replace('https://my.livechatinc.com/archives/', '')), ['A2', 'A3', 'A1', 'B1'], 'Alice has 3, Bob 1; newest first within an agent');
-  assert.equal(lines[1], `96 Alice,a@x,3,2026-10-04 08:00,https://my.livechatinc.com/archives/A2,"'=HYPERLINK(""http://evil"")",2,1,lc1,,,`);
+  assert.equal(lines[1], `96 Alice,a@x,3,2026-10-04 08:00,https://my.livechatinc.com/archives/A2,"'=HYPERLINK(""http://evil"")",2,1,lc1,,,,`);
   assert.equal(lines[2].split(',').slice(0, 2).join(','), '96 Alice,a@x');
   assert.match(lines[2], /"Lim, ""Ah"" Seng"/);
-  assert.equal(lines[4], 'b@x'.padStart(4, ',') + ',1,2026-10-04 04:00,https://my.livechatinc.com/archives/B1,Zimito,2,1,lc1,,,', 'an agent without a known name gets an empty name cell');
+  assert.equal(lines[4], 'b@x'.padStart(4, ',') + ',1,2026-10-04 04:00,https://my.livechatinc.com/archives/B1,Zimito,2,1,lc1,,,,', 'an agent without a known name gets an empty name cell');
 });
 
 test('the run leaves excluded emails out of the summary and the sheet, says so, and writes the sheet file', async () => {

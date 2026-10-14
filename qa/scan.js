@@ -37,13 +37,15 @@ export async function stepWithRetry(step, body, tries = 4, pauseMs = 2000) {
 // the widget since the email column was added are picked up by running the scan again later.
 // minAgentMessages / minCustomerMessages (default 1 = no filter) leave out chats with fewer messages, judged on the writer's own
 // messages and the customer's; stats.belowMinimum counts them. A chat that came without counts is never filtered out.
+// only (optional): a Set of lower-case emails; when given, nobody else is listed (the QA page's "who to check" filter).
 // exclude: a Set of lower-case emails that are left out entirely (e.g. the admin's own logins); stats.excluded counts them.
-export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {}, minAgentMessages = 1, minCustomerMessages = 1, exclude = new Set() } = {}) {
+export function planEntries(chats, recorded, existing, account, names = null, { onlyKnown = true, stats = {}, minAgentMessages = 1, minCustomerMessages = 1, exclude = new Set(), only = null } = {}) {
   const seen = new Set();
   const entries = [];
   for (const chat of chats) {
     for (const writer of chat.writers) {
       const email = String(writer).trim().toLowerCase();
+      if (only && !only.has(email)) continue;
       if (exclude.has(email)) { stats.excluded = (stats.excluded || 0) + 1; continue; }
       const agent = names?.byEmail.get(email);
       if (onlyKnown && names && names.byEmail.size && !agent) { stats.unknownWriters = (stats.unknownWriters || 0) + 1; continue; }
@@ -59,6 +61,20 @@ export function planEntries(chats, recorded, existing, account, names = null, { 
     }
   }
   return entries;
+}
+
+// How long saved results live: a window of ended chats no longer changes once it is long over; the Customer Approaching rows and the
+// logged rows change all the time, so they are only kept for a few minutes (a second search with other filters is then instant).
+export const WINDOW_TTL_MS = 30 * 24 * 3_600_000;
+export const SETTLED_MS = 12 * 3_600_000;
+export const TABLE_TTL_MS = 10 * 60_000;
+export const FOUND_USERNAME_TTL_MS = 30 * 24 * 3_600_000;
+export const NO_USERNAME_TTL_MS = 3_600_000;
+
+// The time windows to read: on a fixed grid (multiples of the window length), so a search from another start date reuses the
+// windows an earlier one saved. The first window may begin before the start date: chats older than it are dropped afterwards.
+export function alignedWindows(fromMs, toMs, stepMs) {
+  return windows(Math.floor(fromMs / stepMs) * stepMs, toMs, stepMs);
 }
 
 export function windows(fromMs, toMs, stepMs) {
@@ -102,10 +118,10 @@ export function sortedEntries(entries) {
 // The sheet for QA: one row per chat, with empty "QA verdict" / "QA note" columns to fill in.
 export function toCsv(entries, byEmail = new Map()) {
   const perAgent = new Map(summarize(entries));
-  const header = ["Agent", "Agent email", "Agent's unrecorded chats", "Date (MYT)", "Chat link", "Customer", "Agent messages", "Customer messages", "LiveChat account", "Unknown tick", "QA verdict", "QA note"];
+  const header = ["Agent", "Agent email", "Agent's unrecorded chats", "Date (MYT)", "Chat link", "Customer", "Agent messages", "Customer messages", "LiveChat account", "Unknown tick", "Username already on file", "QA verdict", "QA note"];
   const lines = [header, ...sortedEntries(entries).map((entry) => [
     byEmail.get(entry.email) || "", entry.email, perAgent.get(entry.email), myt(entry.date),
-    archiveLink(entry.threadId), entry.customer, entry.agentMessages ?? "", entry.customerMessages ?? "", entry.account, MARK_LABELS[entry.mark] || "", "", "",
+    archiveLink(entry.threadId), entry.customer, entry.agentMessages ?? "", entry.customerMessages ?? "", entry.account, MARK_LABELS[entry.mark] || "", entry.knownUsername || "", "", "",
   ])];
   return "﻿" + lines.map((line) => line.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
@@ -156,22 +172,32 @@ async function matchingEmails(chatMaps, hashes) {
 // Reads everything needed to judge the chats of [fromMs, toMs): the recorded chats, the agent list, and the ended chats of each
 // LiveChat account (several time windows at once, both accounts at the same time).
 // isCancelled(): checked between steps; true stops the scan with an error whose .cancelled is true.
-export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true, log = () => {}, accounts = ["lc1", "lc2"], isCancelled = () => false }) {
+// cache (optional, see cache.js): saved results to reuse; fresh = true ignores them and reads everything again (and saves the new read).
+export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true, log = () => {}, accounts = ["lc1", "lc2"], isCancelled = () => false, cache = null, fresh = false }) {
   const stopIfCancelled = () => { if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true }); };
   const recorded = new Set();
   const pairs = new Set();
   let pageToken = "";
   let rows = 0;
-  do {
-    stopIfCancelled();
-    const data = await step({ step: "recorded", fromMs, pageToken });
-    if (!data.ok) throw new Error(`recorded: ${data.error}`);
-    data.threads.forEach((thread) => recorded.add(thread));
-    (data.pairs || []).forEach((pair) => pairs.add(pair));
-    rows += data.rows;
-    pageToken = data.next;
-  } while (pageToken);
-  log(`Customer Approaching: read ${rows} rows; ${recorded.size} chats since the start date have a record.`);
+  const recordedKey = `recorded:v1:${fromMs}`;
+  const savedRecorded = cache && !fresh ? await cache.get(recordedKey) : undefined;
+  if (savedRecorded) {
+    savedRecorded.threads.forEach((thread) => recorded.add(thread));
+    savedRecorded.pairs.forEach((pair) => pairs.add(pair));
+    rows = savedRecorded.rows;
+  } else {
+    do {
+      stopIfCancelled();
+      const data = await step({ step: "recorded", fromMs, pageToken });
+      if (!data.ok) throw new Error(`recorded: ${data.error}`);
+      data.threads.forEach((thread) => recorded.add(thread));
+      (data.pairs || []).forEach((pair) => pairs.add(pair));
+      rows += data.rows;
+      pageToken = data.next;
+    } while (pageToken);
+    if (cache) await cache.set(recordedKey, { threads: [...recorded], pairs: [...pairs], rows }, TABLE_TTL_MS);
+  }
+  log(`Customer Approaching: ${savedRecorded ? "saved read of" : "read"} ${rows} rows; ${recorded.size} chats since the start date have a record.`);
 
   const agents = await step({ step: "agents" });
   if (!agents.ok) throw new Error(`agents: ${agents.error}`);
@@ -182,35 +208,56 @@ export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true
 
   async function scanAccount(account) {
     const chats = new Map();
-    const result = { account, chats, configured: true, fetchedAlone: 0, unjudged: 0, outreach: 0 };
-    const list = windows(fromMs, toMs, windowMs);
+    const result = { account, chats, configured: true, fetchedAlone: 0, unjudged: 0, outreach: 0, fromSaved: 0 };
+    const list = alignedWindows(fromMs, toMs, windowMs);
     let done = 0;
+    // The grid's first window may start before the start date; the archive lists by thread creation time, so drop older ones.
+    const keep = (chat) => !(chat.date && chat.date < fromMs);
     await pool(list, WINDOW_CONCURRENCY, async ([from, to]) => {
       if (!result.configured) return;
-      let pageId = "";
-      do {
-        stopIfCancelled();
-        const data = await stepWithRetry(step, { step: "archives", account, from, to, pageId });
-        if (!data.ok) {
-          if (/not configured/i.test(data.error || "")) { result.configured = false; return; }
-          throw new Error(`archives (${account}): ${data.error}`);
-        }
-        data.chats.forEach((chat) => chats.set(chat.threadId, chat));
-        result.outreach += data.outreach || 0;
-        // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
-        for (const pending of data.pending || []) {
-          if (chats.has(pending.threadId)) continue;
+      const windowKey = `win:v1:${account}:${from}:${to}`;
+      const settled = to <= Date.now() - SETTLED_MS;
+      const saved = cache && !fresh && settled ? await cache.get(windowKey) : undefined;
+      const windowChats = new Map();
+      let outreach = 0;
+      let fetchedAlone = 0;
+      let unjudged = 0;
+      if (saved) {
+        saved.chats.forEach((chat) => windowChats.set(chat.threadId, chat));
+        outreach = saved.outreach;
+        result.fromSaved += 1;
+      } else {
+        let pageId = "";
+        do {
           stopIfCancelled();
-          const one = await stepWithRetry(step, { step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
-          result.fetchedAlone += 1;
-          if (!one.ok) { result.unjudged += 1; continue; }
-          result.outreach += one.outreach || 0;
-          if (one.chat) chats.set(one.chat.threadId, one.chat);
-        }
-        pageId = data.next;
-      } while (pageId);
+          const data = await stepWithRetry(step, { step: "archives", account, from, to, pageId });
+          if (!data.ok) {
+            if (/not configured/i.test(data.error || "")) { result.configured = false; return; }
+            throw new Error(`archives (${account}): ${data.error}`);
+          }
+          data.chats.forEach((chat) => windowChats.set(chat.threadId, chat));
+          outreach += data.outreach || 0;
+          // Ended chats that came without their messages are fetched one by one, so nothing is left unjudged.
+          for (const pending of data.pending || []) {
+            if (windowChats.has(pending.threadId) || chats.has(pending.threadId)) continue;
+            stopIfCancelled();
+            const one = await stepWithRetry(step, { step: "chat", account, chatId: pending.chatId, threadId: pending.threadId });
+            fetchedAlone += 1;
+            if (!one.ok) { unjudged += 1; continue; }
+            outreach += one.outreach || 0;
+            if (one.chat) windowChats.set(one.chat.threadId, one.chat);
+          }
+          pageId = data.next;
+        } while (pageId);
+        // Only a window that is long over and was read completely is worth keeping.
+        if (cache && settled && !unjudged) await cache.set(windowKey, { chats: [...windowChats.values()], outreach }, WINDOW_TTL_MS);
+      }
+      for (const chat of windowChats.values()) if (keep(chat)) chats.set(chat.threadId, chat);
+      result.outreach += outreach;
+      result.fetchedAlone += fetchedAlone;
+      result.unjudged += unjudged;
       done += 1;
-      log(`  [${account}] window ${done}/${list.length} done, ${chats.size} chats so far`, { account, done, total: list.length });
+      log(`  [${account}] window ${done}/${list.length} done, ${chats.size} chats so far${saved ? " (saved)" : ""}`, { account, done, total: list.length, saved: Boolean(saved) });
     });
     return result;
   }
@@ -221,14 +268,15 @@ export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true
 }
 
 // Judges what scanChats read: the never-recorded chats, per account, with one summary line per account.
-export function planAll(scan, { existing = new Set(), onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, exclude = [], log = () => {} } = {}) {
+export function planAll(scan, { existing = new Set(), onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, exclude = [], only = null, log = () => {} } = {}) {
+  const onlySet = only ? new Set(only.map((email) => String(email).trim().toLowerCase())) : null;
   const excluded = new Set([...(scan.alwaysExcluded || []), ...exclude.map((email) => String(email).trim().toLowerCase()).filter(Boolean)]);
   const all = [];
   for (const result of scan.results) {
     const { account, chats, fetchedAlone, unjudged, outreach } = result;
     if (!result.configured) { log(`${account}: not configured, skipped.`); continue; }
     const stats = {};
-    const entries = planEntries([...chats.values()], scan.recorded, existing, account, scan.names, { onlyKnown, stats, minAgentMessages, minCustomerMessages, exclude: excluded });
+    const entries = planEntries([...chats.values()], scan.recorded, existing, account, scan.names, { onlyKnown, stats, minAgentMessages, minCustomerMessages, exclude: excluded, only: onlySet });
     log(`${account}: ${chats.size} ended chats with an agent message, ${entries.length} never recorded by an agent who uses the widget.${stats.excluded ? ` ${stats.excluded} chat/writer pairs left out: excluded emails.` : ""}${stats.unknownWriters ? ` ${stats.unknownWriters} chat/writer pairs left out: the writer is not in the Agent Logins table (customer service, bots, or an agent who has not opened the widget yet).` : ""}${stats.belowMinimum ? ` ${stats.belowMinimum} left out for having fewer messages than the minimum.` : ""}${outreach ? ` ${outreach} outreach-only chats (the customer never wrote, e.g. Blast) were left out.` : ""}${fetchedAlone ? ` ${fetchedAlone} chats had to be fetched one by one.` : ""}${unjudged ? ` ${unjudged} could NOT be judged (LiveChat refused them); run again to retry.` : ""}`);
     all.push(...entries);
   }
@@ -246,24 +294,34 @@ export async function excludedAgentNames(byEmail) {
 
 // Reads the rows agents logged in [fromMs, toMs), page by page, and drops the excluded agents'.
 // onProgress(rowsScanned) after each page. Returns { rows, byEmail } -- the rows newest first within no particular agent order.
-export async function loadLogged({ step, fromMs, toMs, onProgress = () => {}, isCancelled = () => false }) {
+// only (optional): agent names; when given, only their rows are kept (applied after reading, so a saved read serves any choice).
+// cacheKey (optional, with cache): names this search for saving, e.g. the From/To the person chose; fresh ignores what is saved.
+export async function loadLogged({ step, fromMs, toMs, only = null, onProgress = () => {}, isCancelled = () => false, cache = null, cacheKey = "", fresh = false }) {
+  const wanted = only && only.length ? new Set(only.map(nameKey)) : null;
   const agents = await step({ step: "agents" });
   if (!agents.ok) throw new Error(`agents: ${agents.error}`);
   const byEmail = new Map((agents.agents || []).map((agent) => [String(agent.email).toLowerCase(), agent.name]));
   const hidden = await excludedAgentNames(byEmail);
-  const rows = [];
-  let pageToken = "";
-  let scanned = 0;
-  do {
-    if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true });
-    const data = await stepWithRetry(step, { step: "logged", fromMs, toMs, pageToken });
-    if (!data.ok) throw new Error(`logged: ${data.error}`);
-    for (const row of data.rows) if (!hidden.has(String(row.agent || "").trim().toLowerCase())) rows.push(row);
-    scanned += data.scanned || 0;
-    onProgress(scanned);
-    pageToken = data.next;
-  } while (pageToken);
-  return { rows, byEmail, hiddenAgents: hidden.size };
+  const key = cache && cacheKey ? `logged:v1:${cacheKey}` : "";
+  let rows = key && !fresh ? await cache.get(key) : undefined;
+  const fromSaved = Boolean(rows);
+  if (!rows) {
+    rows = [];
+    let pageToken = "";
+    let scanned = 0;
+    do {
+      if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true });
+      const data = await stepWithRetry(step, { step: "logged", fromMs, toMs, pageToken });
+      if (!data.ok) throw new Error(`logged: ${data.error}`);
+      rows.push(...data.rows);
+      scanned += data.scanned || 0;
+      onProgress(scanned);
+      pageToken = data.next;
+    } while (pageToken);
+    if (key) await cache.set(key, rows, TABLE_TTL_MS);
+  }
+  const kept = rows.filter((row) => !hidden.has(String(row.agent || "").trim().toLowerCase()) && (!wanted || wanted.has(nameKey(row.agent))));
+  return { rows: kept, byEmail, hiddenAgents: hidden.size, fromSaved };
 }
 
 // What is obviously missing from a logged case. QA still judges whether what IS there matches the chat.
@@ -379,4 +437,45 @@ export function countMarks(entries) {
     else counts.untracked += 1;
   }
   return counts;
+}
+
+// ---- Choosing who to check -------------------------------------------------------------------------------------------------
+
+// The agents to choose from: [{ name, emails }] by name (one name can have two LiveChat logins), A to Z, from the Agent Logins list.
+export function agentChoices(agents) {
+  const byName = new Map();
+  for (const agent of agents || []) {
+    const name = String(agent.name || "").trim().replace(/\s+/g, " ");
+    if (!name || !agent.email) continue;
+    const entry = byName.get(name.toLowerCase()) || { name, emails: [] };
+    entry.emails.push(String(agent.email).trim().toLowerCase());
+    byName.set(name.toLowerCase(), entry);
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ---- "The agent ticked Unknown, but the customer already had a username on file" -------------------------------------------
+
+// For the chats an agent ticked Unknown on by hand: asks whether the customer's chat was already recorded under a player username
+// (the widget's "Last username recorded", found by the stable chat id) and sets entry.knownUsername. A chat the lookup could not
+// answer is counted in failed and left unmarked. Returns { checked, found, failed }.
+export async function checkKnownUsernames(entries, step, { onProgress = () => {}, isCancelled = () => false, concurrency = 3, cache = null, fresh = false } = {}) {
+  const byChat = new Map();
+  for (const entry of entries) if (entry.mark === "ticked" && entry.chatId) byChat.set(entry.chatId, [...(byChat.get(entry.chatId) || []), entry]);
+  const result = { checked: 0, found: 0, failed: 0 };
+  await pool([...byChat.entries()], concurrency, async ([chatId, list]) => {
+    if (isCancelled()) throw Object.assign(new Error("Stopped."), { cancelled: true });
+    const key = `lu:v1:${chatId}`;
+    let data = cache && !fresh ? await cache.get(key) : undefined;
+    if (!data) {
+      data = await stepWithRetry(step, { step: "lastusername", chatId });
+      // A username on file stays; "nobody yet" may change the next time the agent logs that player, so it is asked again after an hour.
+      if (cache && data.ok) await cache.set(key, { ok: true, found: data.found, username: data.username }, data.found ? FOUND_USERNAME_TTL_MS : NO_USERNAME_TTL_MS);
+    }
+    result.checked += 1;
+    if (!data.ok) result.failed += 1;
+    else if (data.found && data.username) { result.found += 1; for (const entry of list) entry.knownUsername = data.username; }
+    onProgress(result.checked, byChat.size);
+  });
+  return result;
 }
