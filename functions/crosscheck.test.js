@@ -140,6 +140,31 @@ test("a login for the wrong LiveChat account or an unknown account name is refus
   const unknown = await handler({ body: JSON.stringify({ step: "agents" }), env, headers: { "x-livechat-account": "lc9", "x-livechat-token": "tok-qa" } });
   assert.equal(unknown.statusCode, 401);
 });
+test("logged: the rows agents logged in the window, with what QA compares and never the date of birth or claim secret; QA may read it", async (t) => {
+  const row = (createdAt, fields) => ({ record_id: "r" + createdAt, created_time: createdAt, fields });
+  const w = world({ caPages: [
+    [row(2000, { Username: "player1", Brand: "VS96", "Agent Name": "96 Alice", Inquiry: ["Free Spin"], Status: "Done", "Released amount": 30, link: { link: "https://my.livechatinc.com/archives/THREADA", text: "chat" }, "Player D.O.B": 946684800000, "Claim Secret": true }),
+     row(500, { Username: "too-old", "Agent Name": "96 Alice" })],
+    [row(3000, { Username: "player2", "Agent Name": "96 Bob" }), row(9000, { Username: "too-new", "Agent Name": "96 Bob" })],
+  ], loginItems: tracker(["qa@x.com", "QA"]) });
+  withLiveChatLogins(w, { accounts: { "tok-qa": { login: "u1", email: "qa@x.com" } } });
+  t.after(w.restore);
+  resetQaCache();
+  const env = { ...ENV, LIVECHAT_CLIENT_ID: "client-1" };
+  initLarkEnv(env); initLiveChatEnv({ LIVECHAT_PAT: "pat-1", LIVECHAT_PAT_2: "pat-2" });
+  const ask = async (body) => JSON.parse((await handler({ body: JSON.stringify(body), env, headers: { "x-livechat-account": "lc1", "x-livechat-token": "tok-qa" } })).body);
+  const first = await ask({ step: "logged", fromMs: 1000, toMs: 5000, pageToken: "" });
+  assert.equal(first.ok, true);
+  assert.equal(first.rows.length, 1, "the row before the window is left out");
+  assert.deepEqual(first.rows[0], { recordId: "r2000", createdAt: 2000, agent: "96 Alice", username: "player1", brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 30, telegram: false, link: "https://my.livechatinc.com/archives/THREADA", threadId: "THREADA" });
+  assert.equal(first.next, "1");
+  assert.equal(first.scanned, 2);
+  const second = await ask({ step: "logged", fromMs: 1000, toMs: 5000, pageToken: "1" });
+  assert.deepEqual(second.rows.map((r) => r.username), ["player2"], "the row after the window is left out");
+  assert.equal(second.next, "");
+  assert.ok(!JSON.stringify([first, second]).includes("946684800000") && !/claimSecret|dob/i.test(JSON.stringify([first, second])));
+});
+
 test("recorded: the thread ids of Customer Approaching rows created since the start date, from the link, page by page", async (t) => {
   const w = world({ caPages: [
     [caRow("https://my.livechatinc.com/chats/CHAT/THREADNEW", 2000), caRow("https://my.livechatinc.com/chats/CHAT/THREADOLD", 500), caRow("", 2500)],

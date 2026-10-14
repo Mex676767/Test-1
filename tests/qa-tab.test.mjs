@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-import { ALWAYS_EXCLUDED_HASHES, emailHash, planAll, scanChats } from '../qa/scan.js';
+import { ALWAYS_EXCLUDED_HASHES, emailHash, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0];
@@ -102,6 +102,46 @@ test('the admin logins built into the code are salted hashes, never the plain em
     const entries = planAll(scan, { log: (l) => log.push(l) });
     assert.deepEqual(entries.map((e) => `${e.threadId}|${e.email}`), ['T1|a@x']);
     assert.match(log.join('\n'), /2 chat\/writer pairs left out: excluded emails/);
+  } finally {
+    ALWAYS_EXCLUDED_HASHES.delete(hash);
+  }
+});
+
+const logRow = (agent, createdAt, extra = {}) => ({ recordId: "r" + createdAt, createdAt, agent, username: "p" + createdAt, brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 10, link: "https://my.livechatinc.com/archives/T" + createdAt, threadId: "T" + createdAt, ...extra });
+
+test("what a logged case is missing is named, and agents are ranked by how much they logged", () => {
+  assert.deepEqual(loggedIssues(logRow("A", 1)), []);
+  assert.deepEqual(loggedIssues(logRow("A", 1, { inquiry: [], status: "", username: "", brand: "", link: "" })), ["No inquiry", "No status", "No username", "No brand", "No chat link"]);
+  const rows = [logRow("96 Alice", 1), logRow("96 bob", 2), logRow("96 Bob", 3, { status: "" }), logRow("96 Bob", 4)];
+  assert.deepEqual(summarizeLogged(rows), [{ agent: "96 bob", total: 3, incomplete: 1 }, { agent: "96 Alice", total: 1, incomplete: 0 }], "names that differ only in letter case are one agent");
+});
+
+test("the QA sheet of logged chats lists the busiest agent first, newest first, with the missing parts, a chat link and empty QA columns", () => {
+  const rows = [logRow("96 Alice", 1000), logRow("96 Bob", 2000, { username: "=cmd()" }), logRow("96 Bob", 3000, { inquiry: [], amount: null })];
+  const lines = toLoggedCsv(rows).replace(/^\uFEFF/, "").trimEnd().split("\r\n");
+  assert.equal(lines[0], "Agent,Date logged (MYT),Player username,Brand,Inquiry,Status,Released amount,Missing,Chat link,QA verdict,QA note");
+  assert.deepEqual(lines.slice(1).map((l) => l.split(",")[0]), ["96 Bob", "96 Bob", "96 Alice"]);
+  assert.equal(lines[1], "96 Bob,1970-01-01 08:00,p3000,VS96,,Done,,No inquiry,https://my.livechatinc.com/archives/T3000,,", "newest first, a missing amount stays empty");
+  assert.ok(lines[2].includes(",'=cmd(),"), "a typed value that looks like a formula is defused");
+});
+
+test("reading what agents logged pages through the table and leaves out the rows of the built-in excluded logins", async () => {
+  const hash = await emailHash("boss@x");
+  ALWAYS_EXCLUDED_HASHES.add(hash);
+  try {
+    const asked = [];
+    const step = async (body) => {
+      asked.push(body.step + ":" + (body.pageToken || ""));
+      if (body.step === "agents") return { ok: true, agents: [{ email: "a@x", name: "96 Alice" }, { email: "boss@x", name: "The Boss" }] };
+      if (body.step === "logged") return body.pageToken ? { ok: true, rows: [logRow("96 Alice", 3)], next: "", scanned: 1 } : { ok: true, rows: [logRow("96 Alice", 1), logRow("the boss", 2)], next: "p2", scanned: 2 };
+      throw new Error("unexpected " + body.step);
+    };
+    const progress = [];
+    const read = await loadLogged({ step, fromMs: 0, toMs: 10, onProgress: (n) => progress.push(n) });
+    assert.deepEqual(read.rows.map((r) => r.agent), ["96 Alice", "96 Alice"], "the excluded agent name matches without letter case");
+    assert.deepEqual(asked, ["agents:", "logged:", "logged:p2"]);
+    assert.deepEqual(progress, [2, 3]);
+    await assert.rejects(() => loadLogged({ step, fromMs: 0, toMs: 10, isCancelled: () => true }), (e) => e.cancelled === true);
   } finally {
     ALWAYS_EXCLUDED_HASHES.delete(hash);
   }

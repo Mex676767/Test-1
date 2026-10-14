@@ -58,3 +58,12 @@ button { font: inherit; cursor: pointer; }
   .uc-grid { grid-template-columns: 1fr; }
   .uc-head { flex-direction: column; }
 }
+.uc-modes { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 14px; }
+.uc-modes button { padding: 8px 14px; background: transparent; color: var(--text); border: 0; }
+.uc-modes button + button { border-left: 1px solid var(--line); }
+.uc-modes button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.uc-modes button:disabled { opacity: .6; cursor: default; }
+.uc-check { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; color: var(--muted); }
+.uc-check input { width: auto; }
+.uc-warn { color: var(--warn); }
+.uc-name .uc-warn { color: var(--warn); font-size: 12px; }
