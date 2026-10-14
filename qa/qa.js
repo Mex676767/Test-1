@@ -1,6 +1,7 @@
 // The QA page (/qa/, also the QA tab of the admin preview): runs the crosscheck (see scan.js) from the browser and shows the agents with
 // the most chats nobody recorded, with a .csv for QA. Read-only: nothing is written to Lark or anywhere else.
-import { archiveLink, createClient, loadLogged, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
+import { attachDatePicker } from "./datepicker.js";
+import { archiveLink, classifyEntries, countMarks, createClient, loadLogged, loadTicks, MARK_LABELS, loggedIssues, loggedLink, myt, planAll, scanChats, sortedEntries, summarize, summarizeLogged, toCsv, toLoggedCsv, windows } from "./scan.js";
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -135,28 +136,32 @@ let logged = null; // { rows, byEmail, from, to } of the last finished "logged" 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function render() {
-  const { entries, byEmail } = result;
+  const { byEmail } = result;
+  const all = countMarks(result.entries);
+  const entries = $("onlyNotTicked").checked ? result.entries.filter((entry) => entry.mark === "not-ticked") : result.entries;
   const ranking = summarize(entries);
   $("results").hidden = false;
-  $("summary").textContent = entries.length
-    ? `${plural(entries.length, "unrecorded chat")} · ${plural(ranking.length, "agent")}`
+  $("summary").textContent = result.entries.length
+    ? `${plural(result.entries.length, "unrecorded chat")} · ${plural(summarize(result.entries).length, "agent")} · ${all.ticked} ticked Unknown · ${all.notTicked} left without ticking${all.untracked ? ` · ${all.untracked} before tracking` : ""}`
     : "No unrecorded chats in this period";
-  $("download").hidden = !entries.length;
+  $("download").hidden = !result.entries.length;
+  $("tickNote").hidden = !all.untracked && result.tracked;
   const top = ranking.length ? ranking[0][1] : 1;
   const ordered = sortedEntries(entries);
   $("agents").innerHTML = ranking.map(([email, count], index) => {
     const name = byEmail.get(email) || "";
     const chats = ordered.filter((entry) => entry.email === email);
+    const marks = countMarks(chats);
     return `<div class="uc-agent" data-email="${escapeHtml(email)}">
       <button type="button" aria-expanded="false">
         <span class="uc-rank">${index + 1}</span>
-        <span class="uc-name"><b>${escapeHtml(name || email)}</b>${name ? `<span>${escapeHtml(email)}</span>` : ""}</span>
+        <span class="uc-name"><b>${escapeHtml(name || email)}</b><span>${escapeHtml(email)}</span><span class="uc-marks">${marks.ticked} ticked Unknown · ${marks.notTicked} left without ticking${marks.untracked ? ` · ${marks.untracked} before tracking` : ""}</span></span>
         <span class="uc-meter" style="width:${Math.max(4, Math.round((count / top) * 100))}%"></span>
         <span class="uc-count">${count}</span>
       </button>
       <div class="uc-chats" hidden><table>
-        <thead><tr><th>Date (MYT)</th><th>Customer</th><th>Agent msgs</th><th>Customer msgs</th><th></th></tr></thead>
-        <tbody>${chats.map((entry) => `<tr><td>${escapeHtml(myt(entry.date))}</td><td>${escapeHtml(entry.customer)}</td><td>${entry.agentMessages ?? ""}</td><td>${entry.customerMessages ?? ""}</td><td><a href="${escapeHtml(archiveLink(entry.threadId))}" target="_blank" rel="noopener noreferrer">Open chat ↗</a></td></tr>`).join("")}</tbody>
+        <thead><tr><th>Date (MYT)</th><th>Customer</th><th>Agent's mark</th><th>Agent msgs</th><th>Customer msgs</th><th></th></tr></thead>
+        <tbody>${chats.map((entry) => `<tr><td>${escapeHtml(myt(entry.date))}</td><td>${escapeHtml(entry.customer)}</td><td class="uc-mark ${escapeHtml(entry.mark || "")}">${escapeHtml(MARK_LABELS[entry.mark] || "")}</td><td>${entry.agentMessages ?? ""}</td><td>${entry.customerMessages ?? ""}</td><td><a href="${escapeHtml(archiveLink(entry.threadId))}" target="_blank" rel="noopener noreferrer">Open chat ↗</a></td></tr>`).join("")}</tbody>
       </table></div>
     </div>`;
   }).join("");
@@ -295,7 +300,10 @@ async function findUnknown({ step, fromMs, toMs, run }) {
   };
   const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => run.stopped });
   const entries = planAll(scan, { onlyKnown: true, log: note });
-  result = { entries, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs) };
+  note("Reading the Unknown ticks agents made…");
+  const tickData = await loadTicks(step);
+  classifyEntries(entries, tickData, scan.byEmail);
+  result = { entries, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs), tracked: tickData.configured && tickData.since > 0 };
   render();
   setStatus(`Done. ${plural(entries.length, "chat")} found.`);
 }
@@ -311,12 +319,14 @@ function saveCsv(text, name) {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
-$("from").value = store.get(FROM) || dayInMyt(Date.now() - 7 * 86_400_000);
+attachDatePicker($("toPicker"));
+attachDatePicker($("fromPicker")).setValue(store.get(FROM) || dayInMyt(Date.now() - 7 * 86_400_000));
 $("form").addEventListener("submit", find);
 $("stop").addEventListener("click", () => { if (currentRun) currentRun.stopped = true; setStatus("Stopping…"); });
 $("download").addEventListener("click", () => { if (result) saveCsv(toCsv(result.entries, result.byEmail), `qa-unknown-chats_${result.from}_to_${result.to}.csv`); });
 $("loggedDownload").addEventListener("click", () => { if (logged) saveCsv(toLoggedCsv(logged.rows), `qa-logged-chats_${logged.from}_to_${logged.to}.csv`); });
 $("onlyIncomplete").addEventListener("change", () => { if (logged) renderLogged(); });
+$("onlyNotTicked").addEventListener("change", () => { if (result) render(); });
 for (const button of document.querySelectorAll("[data-mode]")) button.addEventListener("click", () => setMode(button.dataset.mode));
 $("signInBtn").addEventListener("click", signIn);
 $("signOutBtn").addEventListener("click", signOut);

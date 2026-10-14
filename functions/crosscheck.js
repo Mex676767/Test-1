@@ -17,6 +17,7 @@ import { UNREC } from "./_lib/unrecorded.js";
 //             pairs, so a chat can be judged per agent when the agent is known
 //   logged    one page of Customer Approaching -> what agents logged (agent, player, brand, inquiry, status, amount, chat link) for
 //             rows created in a time window: the QA page shows it beside the chat
+//   ticks     one page of the "Unknown player" ticks agents made (KV, see unknown-tick.js) and when tracking began
 //   agents    the Agent Logins table -> which LiveChat email belongs to which agent name (only logins whose email is filled in)
 //   existing  one page of the Unrecorded Chats table -> "thread|email" keys already written (so a re-run adds no twins)
 //   archives  one page of LiveChat's archive for one account and time window -> ended chats with who wrote in them, plus the
@@ -183,6 +184,16 @@ export async function handler(event) {
           };
         });
       return reply(200, { ok: true, rows, next: page.next, scanned: page.items.length });
+    }
+
+    if (body.step === "ticks") {
+      // The "Unknown player" ticks agents made (see unknown-tick.js), one page of the KV list at a time, and when tracking began.
+      const kv = event.env?.UNKNOWN_TICKS;
+      if (!kv) return reply(200, { ok: true, configured: false, ticks: [], next: "", since: 0 });
+      const listed = await kv.list({ prefix: "t:", limit: 1000, ...(clean(body.cursor) ? { cursor: clean(body.cursor) } : {}) });
+      const ticks = listed.keys.map((key) => key.metadata).filter((meta) => meta && meta.agent);
+      const since = Number(await kv.get("meta:since")) || 0;
+      return reply(200, { ok: true, configured: true, ticks, next: listed.list_complete ? "" : clean(listed.cursor), since });
     }
 
     if (body.step === "agents") {

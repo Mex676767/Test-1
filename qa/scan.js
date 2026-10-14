@@ -102,10 +102,10 @@ export function sortedEntries(entries) {
 // The sheet for QA: one row per chat, with empty "QA verdict" / "QA note" columns to fill in.
 export function toCsv(entries, byEmail = new Map()) {
   const perAgent = new Map(summarize(entries));
-  const header = ["Agent", "Agent email", "Agent's unrecorded chats", "Date (MYT)", "Chat link", "Customer", "Agent messages", "Customer messages", "LiveChat account", "QA verdict", "QA note"];
+  const header = ["Agent", "Agent email", "Agent's unrecorded chats", "Date (MYT)", "Chat link", "Customer", "Agent messages", "Customer messages", "LiveChat account", "Unknown tick", "QA verdict", "QA note"];
   const lines = [header, ...sortedEntries(entries).map((entry) => [
     byEmail.get(entry.email) || "", entry.email, perAgent.get(entry.email), myt(entry.date),
-    archiveLink(entry.threadId), entry.customer, entry.agentMessages ?? "", entry.customerMessages ?? "", entry.account, "", "",
+    archiveLink(entry.threadId), entry.customer, entry.agentMessages ?? "", entry.customerMessages ?? "", entry.account, MARK_LABELS[entry.mark] || "", "", "",
   ])];
   return "﻿" + lines.map((line) => line.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
@@ -304,4 +304,64 @@ export function toLoggedCsv(rows) {
     row.agent, myt(row.createdAt), row.username, row.brand, (row.inquiry || []).join(", "), row.status, row.amount ?? "", loggedIssues(row).join("; "), loggedLink(row), "", "",
   ])];
   return "﻿" + lines.map((line) => line.map(csvCell).join(",")).join("\r\n") + "\r\n";
+}
+
+// ---- Which unrecorded chats did the agent tick "Unknown player" on, and which did they just leave? -----------------------------
+
+export const MARK_LABELS = {
+  ticked: "Ticked Unknown",
+  "ticked-auto": "Ticked Unknown (automatic: Look up said not VIP)",
+  "not-ticked": "Not ticked: left without logging",
+  untracked: "Before tick tracking",
+};
+
+// The ticks agents made (see functions/unknown-tick.js), all pages. configured: false when the site has no KV binding for them yet.
+export async function loadTicks(step) {
+  const ticks = [];
+  let cursor = "";
+  let configured = true;
+  let since = 0;
+  do {
+    const data = await stepWithRetry(step, { step: "ticks", cursor });
+    if (!data.ok) throw new Error(`ticks: ${data.error}`);
+    configured = data.configured !== false;
+    since = data.since || since;
+    ticks.push(...(data.ticks || []));
+    cursor = data.next;
+  } while (cursor);
+  return { ticks, configured, since };
+}
+
+const nameKey = (name) => String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+// Sets entry.mark on every unrecorded chat: ticked / ticked-auto when that agent ticked Unknown on that chat, otherwise not-ticked,
+// except chats from before tracking began (or with tracking not set up), which cannot be judged: untracked.
+// A tick made before the widget knew the thread is matched by chat id.
+export function classifyEntries(entries, { ticks, configured, since }, byEmail) {
+  const byThread = new Map();
+  const byChat = new Map();
+  for (const tick of ticks) {
+    const agent = nameKey(tick.agent);
+    if (tick.threadId) byThread.set(`${agent}|${tick.threadId}`, tick);
+    else if (tick.chatId) byChat.set(`${agent}|${tick.chatId}`, tick);
+  }
+  for (const entry of entries) {
+    const agent = nameKey(byEmail.get(entry.email));
+    const tick = byThread.get(`${agent}|${entry.threadId}`) || byChat.get(`${agent}|${entry.chatId}`) || byChat.get(`${agent}|${entry.threadId}`);
+    if (tick) entry.mark = tick.source === "auto" ? "ticked-auto" : "ticked";
+    else if (!configured || !since || entry.date < since) entry.mark = "untracked";
+    else entry.mark = "not-ticked";
+  }
+  return entries;
+}
+
+// { ticked, notTicked, untracked } counts (automatic ticks count as ticked).
+export function countMarks(entries) {
+  const counts = { ticked: 0, notTicked: 0, untracked: 0 };
+  for (const entry of entries) {
+    if (entry.mark === "ticked" || entry.mark === "ticked-auto") counts.ticked += 1;
+    else if (entry.mark === "not-ticked") counts.notTicked += 1;
+    else counts.untracked += 1;
+  }
+  return counts;
 }

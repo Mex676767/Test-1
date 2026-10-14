@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-import { ALWAYS_EXCLUDED_HASHES, emailHash, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
+import { calendarDays, displayDate } from '../qa/datepicker.js';
+import { ALWAYS_EXCLUDED_HASHES, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0];
@@ -145,4 +146,58 @@ test("reading what agents logged pages through the table and leaves out the rows
   } finally {
     ALWAYS_EXCLUDED_HASHES.delete(hash);
   }
+});
+
+const unrecorded = (threadId, email, date, extra = {}) => ({ threadId, chatId: 'C-' + threadId, email, date, customer: 'Z', account: 'lc1', agentMessages: 2, customerMessages: 1, ...extra });
+const byEmail = new Map([['a@x', '96 Alice'], ['b@x', '96 Bob']]);
+
+test('each unrecorded chat is marked ticked Unknown, ticked automatically, left without ticking, or too old to judge', () => {
+  const since = 1000;
+  const ticks = [
+    { threadId: 'T1', chatId: 'C-T1', agent: '96 alice', source: 'manual', at: 1500 },
+    { threadId: 'T2', chatId: 'C-T2', agent: '96  Alice', source: 'auto', at: 1600 },
+    { threadId: '', chatId: 'C-T5', agent: '96 Bob', source: 'manual', at: 1700 },
+    { threadId: 'T6', chatId: 'C-T6', agent: '96 Alice', source: 'manual', at: 1800 },
+  ];
+  const entries = [
+    unrecorded('T1', 'a@x', 1500), unrecorded('T2', 'a@x', 1600), unrecorded('T3', 'a@x', 1700),
+    unrecorded('T4', 'a@x', 500), unrecorded('T5', 'b@x', 1750), unrecorded('T6', 'b@x', 1800),
+  ];
+  classifyEntries(entries, { ticks, configured: true, since }, byEmail);
+  assert.deepEqual(entries.map((e) => e.mark), ['ticked', 'ticked-auto', 'not-ticked', 'untracked', 'ticked', 'not-ticked'],
+    'T3 was left; T4 is older than tracking; T5 was ticked before the thread was known (matched by chat id); T6 was ticked by Alice, not by Bob');
+  assert.deepEqual(countMarks(entries), { ticked: 3, notTicked: 2, untracked: 1 });
+  assert.ok(Object.keys(MARK_LABELS).every((mark) => MARK_LABELS[mark]));
+});
+
+test('with tick tracking not set up, or nobody ticked yet, nothing is claimed: every chat is "before tracking"', () => {
+  for (const data of [{ ticks: [], configured: false, since: 0 }, { ticks: [], configured: true, since: 0 }]) {
+    const entries = [unrecorded('T1', 'a@x', 5000)];
+    classifyEntries(entries, data, byEmail);
+    assert.equal(entries[0].mark, 'untracked');
+  }
+});
+
+test('the ticks are read page after page until the list is complete', async () => {
+  const pages = { '': { ok: true, configured: true, ticks: [{ threadId: 'T1', agent: 'A' }], next: 'c2', since: 7 }, c2: { ok: true, configured: true, ticks: [{ threadId: 'T2', agent: 'A' }], next: '', since: 7 } };
+  const asked = [];
+  const read = await loadTicks(async (body) => { asked.push(body.cursor); return pages[body.cursor]; });
+  assert.deepEqual(asked, ['', 'c2']);
+  assert.deepEqual(read.ticks.map((t) => t.threadId), ['T1', 'T2']);
+  assert.deepEqual([read.configured, read.since], [true, 7]);
+  assert.deepEqual(await loadTicks(async () => ({ ok: true, configured: false, ticks: [], next: '', since: 0 })), { ticks: [], configured: false, since: 0 });
+  await assert.rejects(() => loadTicks(async () => ({ ok: false, error: 'boom' })), /ticks: boom/);
+});
+
+test("the QA page uses its own calendar, not the browser's date input; weeks start on Monday and always show 6 rows", () => {
+  const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /type="date"/);
+  const october = calendarDays(2026, 9); // 1 Oct 2026 is a Thursday
+  assert.equal(october.length, 42);
+  assert.deepEqual([october[0].year, october[0].month, october[0].day, october[0].otherMonth], [2026, 8, 28, true], 'the first cell is Monday 28 Sep');
+  assert.deepEqual(october.filter((d) => !d.otherMonth).map((d) => d.day), Array.from({ length: 31 }, (_, i) => i + 1));
+  const monday = calendarDays(2026, 5); // 1 Jun 2026 is a Monday: no days of May in front
+  assert.deepEqual([monday[0].month, monday[0].day, monday[0].otherMonth], [5, 1, false]);
+  assert.equal(displayDate('2026-10-07'), '07/10/2026');
+  assert.equal(displayDate(''), '');
 });
