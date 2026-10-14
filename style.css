@@ -77,6 +77,7 @@ body {
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 20px;
   padding: 5px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.agent-badge[hidden] { display: none; }
 .agent-badge.set { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 40%, transparent); }
 .agent-badge.unset { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 

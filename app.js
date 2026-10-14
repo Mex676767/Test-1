@@ -17,10 +17,12 @@ const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
 // agentLogin=0 to the page address (for the LiveChat widget: to its App URL) turns it off again without a deploy, e.g. if
 // the login window cannot open somewhere. Independent of the department switches above.
 const AGENT_LOGIN_LIVE = new URLSearchParams(location.search).get("agentLogin") !== "0";
-// The QA view: a LiveChat login marked QA in the Agent Logins table (Role = QA) sees only the QA, Tickets and Knowledge tabs: no Retention,
-// no Blast, nothing is recorded and there is no agent name (see detectQaRole and applyQaAgent). ON; adding qaView=0 to the page address
-// (for the LiveChat widget: to its App URL) turns it off again without a deploy. Independent of the department switches above.
+// The QA view: a LiveChat login marked QA in the Agent Logins table (Role = QA) sees only the QA tab: no Retention, no Blast, nothing is
+// recorded and there is no agent name (see detectQaRole and applyQaAgent). ON; adding qaView=0 to the page address (for the LiveChat
+// widget: to its App URL) turns it off again without a deploy. Independent of the department switches above.
+// QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE: whether that view also gets the Tickets and Knowledge tabs. Off until they are approved for QA.
 const QA_VIEW_LIVE = new URLSearchParams(location.search).get("qaView") !== "0";
+const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;
 let qaView = false; // true once the signed-in login is marked QA
 
 /* ============================================================
@@ -217,7 +219,7 @@ function openSettingsPanel() {
         </div>
         ${selectedAgent || customerService ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
-      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? "You are signed in with LiveChat as QA. QA, Tickets and Knowledge are available to you." : "You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
+      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? "You are signed in with LiveChat as QA. The QA tab is available to you." : "You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
@@ -731,7 +733,7 @@ async function detectQaRole(accountKey, token) {
   } catch (_) { return false; }
 }
 
-// A QA person records no cases, so there is no agent name to pick: straight to the QA, Tickets and Knowledge tabs.
+// A QA person records no cases, so there is no agent name to pick: straight to the QA tab.
 function applyQaAgent(accountKey) {
   qaView = true;
   agentSigningIn = false;
@@ -740,7 +742,7 @@ function applyQaAgent(accountKey) {
   document.getElementById("agentLoginOverlay")?.remove();
   activeMainTab = "unknownChats";
   syncMainTabs();
-  logDiagnostic("Signed in with LiveChat as QA (QA, Tickets and Knowledge).", "success");
+  logDiagnostic("Signed in with LiveChat as QA.", "success");
 }
 
 async function requireAgentLogin() {
@@ -1137,8 +1139,8 @@ function mainTabAvailability() {
 
 function syncMainTabs() {
   const available = mainTabAvailability();
-  // A QA person sees QA, Tickets and Knowledge only: never Retention or Blast.
-  if (qaView) Object.assign(available, { customer: false, blast: false, tickets: ESCALATION_TICKET_ENABLED, knowledge: true });
+  // A QA person sees the QA tab only (Tickets and Knowledge when QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE is on): never Retention or Blast.
+  if (qaView) Object.assign(available, { customer: false, blast: false, tickets: QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE && ESCALATION_TICKET_ENABLED, knowledge: QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE });
   const { tickets: ticketsAvailable, blast: blastAvailable, knowledge: knowledgeAvailable } = available;
   // Chat/department updates can arrive after an agent starts Blast.
   // Keep its existing iframe visible for the lifetime of the queue.

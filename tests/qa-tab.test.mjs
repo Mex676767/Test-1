@@ -16,7 +16,7 @@ function tabs({ previewMode, activeMainTab, qaView = false }) {
   const frame = { src: '', dataset: { src: '/qa/index.html' } };
   const els = { unknownChatsTab: element(), unknownChatsView: element({ querySelector: () => frame }), chatList: element({ hidden: false }), mainTabs: element(), retentionTab: element(), ticketsTab: element(), blastTab: element(), knowledgeTab: element(), agentBadge: element({ hidden: false }) };
   const context = vm.createContext({
-    activeMainTab, previewMode, qaView, blastRunInProgress: false, DEPARTMENT_TABS_LIVE: false, BLAST_LIVE: false, CONFIGURED_LIVECHAT_ACCOUNT: '',
+    activeMainTab, previewMode, qaView, QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE: false, blastRunInProgress: false, DEPARTMENT_TABS_LIVE: false, BLAST_LIVE: false, CONFIGURED_LIVECHAT_ACCOUNT: '',
     mainTabAvailability: () => ({ customer: true, blast: true, tickets: false, knowledge: false }), ESCALATION_TICKET_ENABLED: true,
     document: { getElementById: (id) => els[id] || null, querySelector: () => null, querySelectorAll: () => [] },
     URL,
@@ -384,17 +384,15 @@ test('the QA page carries the new controls: who to check, read again, the userna
   assert.ok(csv.includes('Ticked Unknown,player-one,,'), 'the sheet has the username already on file');
 });
 
-test('a person marked QA sees QA, Tickets and Knowledge only: no Retention, no Blast, no agent badge, and the QA page opens first', () => {
+test('a person marked QA sees the QA tab only: no Retention, Blast, Tickets or Knowledge, no agent badge, and the QA page opens first', () => {
   const qa = tabs({ previewMode: false, activeMainTab: 'customer', qaView: true });
   assert.equal(qa.context.activeMainTab, 'unknownChats', 'a remembered Retention tab falls back to QA');
-  assert.deepEqual(['unknownChatsTab', 'ticketsTab', 'knowledgeTab', 'retentionTab', 'blastTab'].map((id) => qa.els[id].hidden), [false, false, false, true, true]);
+  assert.deepEqual(['unknownChatsTab', 'ticketsTab', 'knowledgeTab', 'retentionTab', 'blastTab'].map((id) => qa.els[id].hidden), [false, true, true, true, true]);
   assert.equal(qa.els.unknownChatsView.hidden, false);
   assert.equal(qa.frame.src, '/qa/index.html');
   assert.equal(qa.els.chatList.hidden, true);
   assert.equal(qa.els.agentBadge.hidden, true);
-  const onKnowledge = tabs({ previewMode: false, activeMainTab: 'knowledge', qaView: true });
-  assert.equal(onKnowledge.context.activeMainTab, 'knowledge', 'QA may stay on Knowledge or Tickets');
-  assert.equal(onKnowledge.els.knowledgeTab.hidden, false);
+  for (const remembered of ['knowledge', 'tickets']) assert.equal(tabs({ previewMode: false, activeMainTab: remembered, qaView: true }).context.activeMainTab, 'unknownChats', remembered + ' is not available to QA yet');
   const blast = tabs({ previewMode: false, activeMainTab: 'blast', qaView: true });
   assert.equal(blast.context.activeMainTab, 'unknownChats', 'Blast is not available to QA');
 });
@@ -405,10 +403,11 @@ test('every other agent in the installed widget is unchanged by the QA view: Ret
   assert.equal(agent.els.agentBadge.hidden, false);
 });
 
-test('the QA view is wired in the widget: on by default, with an off switch, and it skips the agent-name step and the settings name panel', () => {
+test('the QA view is wired in the widget: on by default, with an off switch, Tickets and Knowledge held back, and it skips the agent-name step and the settings name panel', () => {
   assert.match(app, /const QA_VIEW_LIVE = new URLSearchParams\(location\.search\)\.get\("qaView"\) !== "0";/);
   assert.match(app, /&& !selectedAgent && !qaView\) \{\s*\n\s*\/\/ Give the agent-name list a short chance/, 'boot does not force the agent-name panel on a QA person');
   assert.match(app, /const customerService = isCustomerServiceView\(\) \|\| qaView;/);
+  assert.match(app, /const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;/, 'Tickets and Knowledge are not live for QA yet');
   assert.match(app, /\.get\("department"\)/, 'the department views are untouched');
   assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/, 'the department switch stays off');
 });
