@@ -188,12 +188,13 @@ test("chatlog: every agent's rows for ONE chat (exact thread id, oldest first) a
   assert.deepEqual(found.rows.map((r) => [r.agent, r.username, r.createdAt]), [["96 Alice", "player1", 1000], ["96 Bob", "player1", 3000]], "only THREADX (not THREADXY), oldest first");
   assert.deepEqual(found.rows[1], { recordId: "r3000", createdAt: 3000, agent: "96 Bob", username: "player1", brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 5, claimSecret: true, telegram: false, link: "https://my.livechatinc.com/archives/THREADX", threadId: "THREADX" });
   assert.deepEqual(found.ticks.map((x) => x.agent), ["96 Carl"], "only the ticks of this chat");
-  assert.deepEqual(found.tracking, { configured: true, since: 777 });
+  assert.deepEqual(found.tracking, { configured: true, since: 777, claimsSince: 0 });
+  assert.deepEqual(found.claims, [], "no claims recorded for this chat");
   assert.ok(!/946684800000|dob/i.test(JSON.stringify(found)), "the date of birth is never sent");
   const none = await call({ step: "chatlog", threadId: "NOTHINGHERE" }, { env });
   assert.deepEqual([none.ok, none.rows, none.ticks], [true, [], []]);
   const unbound = await call({ step: "chatlog", threadId: "THREADX" });
-  assert.deepEqual([unbound.ticks, unbound.tracking], [[], { configured: false, since: 0 }], "without the KV binding there are no ticks, and it says so");
+  assert.deepEqual([unbound.ticks, unbound.tracking], [[], { configured: false, since: 0, claimsSince: 0 }], "without the KV binding there are no ticks, and it says so");
   for (const bad of ["", "ab", "has space", "x".repeat(65), "../etc"]) assert.equal((await call({ step: "chatlog", threadId: bad }, { env })).status, 400);
 });
 

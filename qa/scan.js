@@ -365,17 +365,49 @@ export async function checkKnownUsernames(entries, step, { onProgress = () => {}
 
 // ---- One chat: how was it logged? ------------------------------------------------------------------------------------------
 
-// What QA should be told about one chat from the server's chatlog answer ({ rows, ticks, tracking }):
-// verdict "logged" | "incomplete" | "ticked" | "nothing", a headline, the logged rows with what each is missing, and the ticks.
+const sameName = (a, b) => String(a || "").trim().replace(/\s+/g, " ").toLowerCase() === String(b || "").trim().replace(/\s+/g, " ").toLowerCase();
+const firstNumber = (value) => { const match = /-?\d+(?:\.\d+)?/.exec(String(value ?? "")); return match ? Number(match[0]) : null; };
+
+// Does what the agent logged match the bonus they claimed? inquiryOk: the claimed bonus's inquiry tag is among the logged ones;
+// amountOk: the logged released amount is the amount that bonus gives (the first number, as the record keeps one number).
+// null = nothing to compare (the bonus implies no inquiry / no amount).
+export function checkClaim(claim, row) {
+  const expectedAmount = firstNumber(claim.amount);
+  return {
+    expectedAmount,
+    inquiryOk: claim.inquiry ? (row.inquiry || []).some((tag) => sameName(tag, claim.inquiry)) : null,
+    amountOk: expectedAmount === null ? null : row.amount !== null && row.amount !== undefined && Number(row.amount) === expectedAmount,
+  };
+}
+
+// What QA should be told about one chat from the server's chatlog answer ({ rows, ticks, claims, tracking }): verdict "mismatch" | "incomplete" |
+// "logged" | "ticked" | "nothing", a headline, the logged rows (each with what it is missing and the bonuses its agent claimed, checked against
+// it), the claims of agents who logged nothing, and the ticks.
 export function describeChatLog(data) {
-  const rows = (data.rows || []).map((row) => ({ ...row, issues: loggedIssues(row) }));
+  const claims = data.claims || [];
+  const rows = (data.rows || []).map((row) => ({
+    ...row,
+    issues: loggedIssues(row),
+    claims: claims.filter((claim) => sameName(claim.agent, row.agent)).map((claim) => ({ ...claim, ...checkClaim(claim, row) })),
+  }));
+  const orphanClaims = claims.filter((claim) => !rows.some((row) => sameName(row.agent, claim.agent)));
   const ticks = (data.ticks || []).map((tick) => ({ ...tick, label: tick.source === "auto" ? "automatic: the Look up said not VIP" : "ticked by the agent" }));
   const agents = [...new Set(rows.map((row) => String(row.agent || "").trim() || "(no agent name)"))];
+  // Agents whose log does not match what they claimed, and agents who claimed a bonus but logged nothing at all.
+  const mismatched = [...new Set([
+    ...rows.filter((row) => row.claims.some((claim) => claim.inquiryOk === false || claim.amountOk === false)).map((row) => String(row.agent || "").trim() || "(no agent name)"),
+    ...orphanClaims.map((claim) => claim.agent),
+  ])];
   let verdict;
   let headline;
   if (rows.length) {
-    verdict = rows.some((row) => row.issues.length) ? "incomplete" : "logged";
-    headline = `${verdict === "incomplete" ? "Logged, but something is missing: " : "Logged by "}${agents.join(", ")}`;
+    verdict = mismatched.length ? "mismatch" : rows.some((row) => row.issues.length) ? "incomplete" : "logged";
+    headline = mismatched.length
+      ? `Logged, but the inquiry or amount does not match the bonus claimed: ${mismatched.join(", ")}`
+      : `${verdict === "incomplete" ? "Logged, but something is missing: " : "Logged by "}${agents.join(", ")}`;
+  } else if (orphanClaims.length) {
+    verdict = "mismatch";
+    headline = `Not logged: ${[...new Set(orphanClaims.map((claim) => claim.agent))].join(", ")} claimed a bonus on this chat but logged nothing`;
   } else if (ticks.length) {
     verdict = "ticked";
     headline = `Not logged: ${[...new Set(ticks.map((tick) => tick.agent))].join(", ")} ticked Unknown player on this chat`;
@@ -384,8 +416,12 @@ export function describeChatLog(data) {
     headline = "Nothing was logged for this chat and nobody ticked Unknown player";
   }
   const since = data.tracking?.configured ? data.tracking.since : 0;
-  const note = verdict === "nothing"
-    ? (since ? `An Unknown tick is only recorded from ${myt(since)} (Malaysia time) on, so a chat older than that cannot tell you whether the agent ticked it.` : "Unknown ticks are not being recorded yet, so a tick could not have been saved.")
-    : "";
-  return { verdict, headline, rows, ticks, note };
+  const claimsSince = data.tracking?.configured ? data.tracking.claimsSince || 0 : 0;
+  const notes = [];
+  if (verdict === "nothing") notes.push(since ? `An Unknown tick is only recorded from ${myt(since)} (Malaysia time) on, so a chat older than that cannot tell you whether the agent ticked it.` : "Unknown ticks are not being recorded yet, so a tick could not have been saved.");
+  // Status Given means a bonus was handed out; with no claim on record QA cannot compare, and should know why.
+  if (rows.some((row) => String(row.status || "").trim().toLowerCase() === "given" && !row.claims.length)) {
+    notes.push(claimsSince ? `Status is Given but no bonus claim was recorded for this agent. Claims are only recorded from ${myt(claimsSince)} (Malaysia time) on.` : "Status is Given but no bonus claim was recorded: claims are not being recorded yet.");
+  }
+  return { verdict, headline, rows, ticks, orphanClaims, note: notes.join(" ") };
 }

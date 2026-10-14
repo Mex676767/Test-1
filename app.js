@@ -4569,6 +4569,7 @@ chatListEl.addEventListener("click", async (e) => {
         // which bonus this is).
         s.releasedBonusAmount = amount || display;
         s.releasedAmountRaw = amount || display;
+        reportClaim(chatId, { program: "gracePeriod", label: "Grace Period", source: display, inquiry: "Grace Period", amount });
         if (!s.escalation.amount && amount) s.escalation.amount = amount;
       }
       card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
@@ -4656,6 +4657,11 @@ chatListEl.addEventListener("click", async (e) => {
 
     // Status auto-sets to "Given" the moment any bonus is claimed.
     s.status = "Given";
+    const claimedSource = allSources.find((src) => src.key === programKey);
+    reportClaim(chatId, {
+      program: programKey, label: claimedSource?.label || programKey, source: String(claimedSource?.display ?? ""), inquiry: mappedInquiry || "",
+      amount: riskClaim?.valid ? riskClaim.formattedClaim : programHasAmount(programKey) ? extractAmountNumber(claimedSource?.display) : "",
+    });
 
     card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
     card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
@@ -4717,6 +4723,7 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
     s.unclaimInFlight = false;
+    reportClaim(chatId, null); // QA no longer sees the claim
 
     const prevFirstAmount = String(s.releasedBonusAmount || "").split(" | ")[0];
     if (wasGraceActivationOnly) s.gracePeriodActivated = false;
@@ -5306,6 +5313,19 @@ function reportUnknownTick(chatId, ticked, auto) {
   const threadId = live ? live[2] : archived ? archived[1] : "";
   const body = { agentName: selectedAgent, ticked, source: auto ? "auto" : "manual", threadId, chatId: live ? live[1] : String(chatId) };
   fetch("/unknown-tick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+}
+
+// Tells the server which bonus an agent claimed on a chat, with the source table's value and the inquiry and amount that bonus implies, so
+// QA can check what was logged against what was claimed (see functions/claim-log.js). claim = null reports an unclaim (every bonus of this
+// agent on this chat is forgotten). Fire and forget: a failure never affects the agent. Never from the admin preview.
+function reportClaim(chatId, claim) {
+  const s = state[chatId];
+  if (previewMode || !s || !selectedAgent) return;
+  const live = String(s.chatUrl || "").match(/\/chats\/([^/?#]+)\/([^/?#]+)/);
+  const archived = String(s.chatUrl || "").match(/\/archives\/([^/?#]+)/);
+  const threadId = live ? live[2] : archived ? archived[1] : "";
+  const body = { agentName: selectedAgent, threadId, chatId: live ? live[1] : String(chatId), ...(claim ? { claim } : { remove: true }) };
+  fetch("/claim-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 }
 
 // Shared by the manual "Unknown player" checkbox and the auto-tick once a

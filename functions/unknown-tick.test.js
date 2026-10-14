@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { handler, tickKey } from "./unknown-tick.js";
+import { handler as claimHandler } from "./claim-log.js";
 import { handler as crosscheck } from "./crosscheck.js";
 import { initEnv as initLarkEnv } from "./_lib/lark.js";
 
@@ -80,4 +81,63 @@ test("/crosscheck step ticks lists the ticks with when tracking began; with no b
   assert.ok(!JSON.stringify(all.ticks).includes("meta:since"), "the start-of-tracking key is not a tick");
   const unbound = await ask({ step: "ticks" }, { SCAN_KEY: "scan-secret" });
   assert.deepEqual(unbound, { ok: true, configured: false, ticks: [], next: "", since: 0 });
+});
+
+test("a claim is stored per chat, agent and bonus with its facts in the metadata and an expiry; the first claim starts the 'since' clock once", async () => {
+  const kv = fakeKv();
+  const send = async (body) => JSON.parse((await claimHandler({ body: JSON.stringify(body), env: { UNKNOWN_TICKS: kv } })).body);
+  const claim = (extra = {}) => ({ agentName: "96 Alice", threadId: "T1", chatId: "C1", claim: { program: "topPnl", label: "Top 10 P&L", source: "Pass RM18", inquiry: "TOP P&L", amount: "18", ...extra } });
+  assert.equal((await send(claim())).ok, true);
+  const stored = kv.data.get("claim:T1:96 alice:topPnl");
+  assert.deepEqual({ ...stored.metadata, at: 0 }, { threadId: "T1", chatId: "C1", agent: "96 Alice", program: "topPnl", at: 0, label: "Top 10 P&L", source: "Pass RM18", inquiry: "TOP P&L", amount: "18" });
+  assert.ok(stored.ttl > 86400);
+  const since = kv.data.get("meta:claims-since").value;
+  await send(claim({ program: "ltvTest", amount: 20 }));
+  assert.equal(kv.data.get("meta:claims-since").value, since, "never moves");
+  assert.equal(kv.data.get("claim:T1:96 alice:ltvTest").metadata.amount, "20", "a number is kept as text");
+  await send({ ...claim(), agentName: "96 Bob" });
+  assert.equal([...kv.data.keys()].filter((k) => k.startsWith("claim:T1:")).length, 3, "each agent keeps their own");
+});
+
+test("an unclaim forgets every bonus of that agent on that chat, under either id, and nobody else's", async () => {
+  const kv = fakeKv();
+  const send = async (body) => JSON.parse((await claimHandler({ body: JSON.stringify(body), env: { UNKNOWN_TICKS: kv } })).body);
+  const claim = (agent, program, ids) => ({ agentName: agent, ...ids, claim: { program, label: program, inquiry: "X", amount: "1" } });
+  await send(claim("96 Alice", "topPnl", { threadId: "T1", chatId: "C1" }));
+  await send(claim("96 Alice", "ltvTest", { threadId: "T1", chatId: "C1" }));
+  await send(claim("96 Alice", "gracePeriod", { chatId: "C1" })); // stored before the thread was known
+  await send(claim("96 Bob", "topPnl", { threadId: "T1", chatId: "C1" }));
+  assert.equal((await send({ agentName: "96 ALICE", threadId: "T1", chatId: "C1", remove: true })).removed, true);
+  assert.deepEqual([...kv.data.keys()].filter((k) => k.startsWith("claim:")), ["claim:T1:96 bob:topPnl"]);
+});
+
+test("a claim needs a program, an agent, a chat and a valid id; without the KV binding it says so", async () => {
+  const kv = fakeKv();
+  const send = async (body, env = { UNKNOWN_TICKS: kv }) => { const r = await claimHandler({ body: JSON.stringify(body), env }); return { status: r.statusCode, ...JSON.parse(r.body) }; };
+  const ok = { agentName: "A", threadId: "T123", claim: { program: "topPnl" } };
+  assert.equal((await send({ ...ok, claim: {} })).status, 400, "no program");
+  assert.equal((await send({ ...ok, claim: { program: "bad program!" } })).status, 400);
+  assert.equal((await send({ ...ok, agentName: "" })).status, 400);
+  assert.equal((await send({ ...ok, threadId: "" })).status, 400);
+  assert.equal((await send({ ...ok, threadId: "has space" })).status, 400);
+  assert.equal(kv.data.size, 0);
+  assert.deepEqual(await send(ok, {}), { status: 200, ok: false, notConfigured: true, error: "UNKNOWN_TICKS (a KV binding) is not set." });
+});
+
+test("/crosscheck chatlog also lists the claims of that chat only, and when claims started being recorded", async () => {
+  const kv = fakeKv();
+  const send = async (body) => claimHandler({ body: JSON.stringify(body), env: { UNKNOWN_TICKS: kv } });
+  await send({ agentName: "96 Alice", threadId: "THREADX", chatId: "C", claim: { program: "topPnl", label: "Top 10 P&L", source: "Pass RM18", inquiry: "TOP P&L", amount: "18" } });
+  await send({ agentName: "96 Alice", threadId: "THREADXY", chatId: "C", claim: { program: "topPnl" } });
+  const env = { SCAN_KEY: "scan-secret", UNKNOWN_TICKS: kv, LARK_APP_ID: "a", LARK_APP_SECRET: "s", LARK_BASE_APP_TOKEN: "b", LARK_TABLE_CUSTOMER_APPROACHING: "ca-table" };
+  initLarkEnv(env);
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => (String(url).includes("tenant_access_token") ? { json: async () => ({ code: 0, tenant_access_token: "t", expire: 3600 }) } : { json: async () => ({ code: 0, data: { items: [], has_more: false } }) });
+  let data;
+  try {
+    const res = await crosscheck({ body: JSON.stringify({ step: "chatlog", threadId: "THREADX" }), env, headers: { "x-scan-key": "scan-secret" } });
+    data = JSON.parse(res.body);
+  } finally { globalThis.fetch = original; }
+  assert.deepEqual(data.claims.map((c) => [c.agent, c.program, c.label, c.source, c.inquiry, c.amount]), [["96 Alice", "topPnl", "Top 10 P&L", "Pass RM18", "TOP P&L", "18"]]);
+  assert.ok(data.tracking.claimsSince > 0);
 });

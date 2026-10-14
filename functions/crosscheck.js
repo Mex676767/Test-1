@@ -190,7 +190,11 @@ export async function handler(event) {
       const listed = kv ? await kv.list({ prefix: `t:${threadId}:`, limit: 100 }) : { keys: [] };
       const ticks = listed.keys.map((key) => key.metadata).filter((meta) => meta && meta.agent);
       const since = kv ? Number(await kv.get("meta:since")) || 0 : 0;
-      return reply(200, { ok: true, rows, ticks, tracking: { configured: Boolean(kv), since } });
+      // The bonuses the agents clicked Claim on for this chat (see claim-log.js), to check the logged inquiry and amount against.
+      const claimed = kv ? await kv.list({ prefix: `claim:${threadId}:`, limit: 100 }) : { keys: [] };
+      const claims = claimed.keys.map((key) => key.metadata).filter((meta) => meta && meta.agent);
+      const claimsSince = kv ? Number(await kv.get("meta:claims-since")) || 0 : 0;
+      return reply(200, { ok: true, rows, ticks, claims, tracking: { configured: Boolean(kv), since, claimsSince } });
     }
 
     if (body.step === "lastusername") {

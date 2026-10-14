@@ -62,6 +62,16 @@ async function resumeLogin() {
 let chatThread = "";
 let chatToken = 0; // an answer for a chat that is no longer the one on screen is dropped
 
+// The bonuses the agent clicked Claim on, each checked against what they logged: the inquiry tag and the amount that bonus implies.
+function claimsBlock(claims) {
+  if (!claims.length) return "";
+  return `<div class="qc-claims"><div class="qc-claims-title">Bonus claimed</div>${claims.map((claim) => `<div class="qc-claim">
+      <div class="qc-claim-name">${escapeHtml(claim.label || claim.program)}${claim.source ? ` <span class="qc-muted">· ${escapeHtml(claim.source)}</span>` : ""}</div>
+      ${claim.inquiry ? `<div class="qc-check ${claim.inquiryOk ? "ok" : "bad"}">${claim.inquiryOk ? "✓ Inquiry" : "⚠ Inquiry should be"} ${escapeHtml(claim.inquiry)}${claim.inquiryOk ? " (matches)" : ""}</div>` : ""}
+      ${claim.expectedAmount !== null ? `<div class="qc-check ${claim.amountOk ? "ok" : "bad"}">${claim.amountOk ? "✓ Amount" : "⚠ Amount should be"} ${escapeHtml(String(claim.expectedAmount))}${claim.amountOk ? " (matches)" : ""}</div>` : '<div class="qc-check">No amount for this bonus</div>'}
+    </div>`).join("")}</div>`;
+}
+
 // One logged case: who and when, then the fields in a tidy grid. Nothing on it can be changed.
 function loggedCard(row) {
   const missing = '<span class="qc-missing">Not filled in</span>';
@@ -76,7 +86,17 @@ function loggedCard(row) {
       <div><dt>Status</dt>${row.status ? `<dd class="qc-chips"><span class="qc-chip status">${escapeHtml(row.status)}</span></dd>` : `<dd>${missing}</dd>`}</div>
       <div><dt>Released amount</dt><dd>${row.amount === null || row.amount === undefined ? '<span class="qc-muted">—</span>' : escapeHtml(String(row.amount))}</dd></div>
     </dl>
+    ${claimsBlock(row.claims || [])}
     <div class="qc-flags"><span class="qc-flag${row.claimSecret ? " on" : ""}">${row.claimSecret ? "✓" : "—"} Claim Secret</span>${row.telegram ? '<span class="qc-flag on">✓ Telegram</span>' : ""}</div>
+  </article>`;
+}
+
+// An agent claimed a bonus on this chat but has logged nothing for it.
+function claimOnlyCard(agent, claims) {
+  return `<article class="qc qc-unknown">
+    <header class="qc-head"><span class="qc-agent">${escapeHtml(agent)}</span></header>
+    ${claimsBlock(claims.map((claim) => ({ ...claim, inquiryOk: false, amountOk: false, expectedAmount: Number.isFinite(Number.parseFloat(claim.amount)) ? Number.parseFloat(claim.amount) : null })))}
+    <p class="qc-note">Nothing was logged by this agent for the chat.</p>
   </article>`;
 }
 
@@ -97,7 +117,7 @@ function renderChatLog(info, message = "") {
   }
   const missing = [...new Set(info.rows.flatMap((row) => row.issues))];
   box.innerHTML = `<div class="qc-verdict ${info.verdict}">${escapeHtml(info.headline)}</div>
-    ${info.rows.map(loggedCard).join("")}${info.ticks.map(tickCard).join("")}
+    ${info.rows.map(loggedCard).join("")}${[...new Set(info.orphanClaims.map((claim) => claim.agent))].map((agent) => claimOnlyCard(agent, info.orphanClaims.filter((claim) => claim.agent === agent))).join("")}${info.ticks.map(tickCard).join("")}
     ${missing.length ? `<p class="qc-note qc-warn">Missing: ${escapeHtml(missing.join(", "))}</p>` : ""}
     ${info.note ? `<p class="qc-note">${escapeHtml(info.note)}</p>` : ""}`;
 }

@@ -143,3 +143,11 @@ button { font: inherit; cursor: pointer; }
 .qc-unknown .qc-note { margin: 12px 0 0; }
 .qc-warn { color: var(--warn); }
 @media (max-width: 380px) { .qc-grid { grid-template-columns: 1fr; } }
+.qc-verdict.mismatch { color: var(--warn); border-color: var(--warn); }
+.qc-claims { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.qc-claims-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.qc-claim { display: grid; gap: 3px; }
+.qc-claim-name { font-weight: 600; font-size: 14px; }
+.qc-check { font-size: 13px; color: var(--muted); }
+.qc-check.ok { color: var(--ok); }
+.qc-check.bad { color: var(--warn); font-weight: 600; }
