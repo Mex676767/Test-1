@@ -4,8 +4,8 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { calendarDays, displayDate } from '../qa/datepicker.js';
 import { pickerLabel } from '../qa/agentpicker.js';
-import { agentChoices, checkKnownUsernames, describeChatLog, threadFromInput, toCsv } from '../qa/scan.js';
-import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
+import { agentChoices, checkKnownUsernames, describeChatLog, toCsv } from '../qa/scan.js';
+import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loggedIssues, planAll, scanChats } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0];
@@ -52,8 +52,7 @@ test('the tab and its page are wired in index.html', () => {
   assert.match(html, /id="unknownChatsView"[\s\S]*?data-src="\/qa\/index\.html"/);
   const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
   assert.match(page, /src="qa\.js[^"]*"/);
-  assert.match(page, /id="signInBtn"/, 'QA signs in with LiveChat');
-  assert.doesNotMatch(page, /Access key|QA_KEY/);
+  assert.doesNotMatch(page, /signInBtn|Sign in with LiveChat|Access key|QA_KEY|SCAN_KEY/, 'the page has no sign-in of its own: the widget\'s Settings holds it');
 });
 
 test('scan.js runs in a browser: it imports nothing', () => {
@@ -112,42 +111,9 @@ test('the admin logins built into the code are salted hashes, never the plain em
 
 const logRow = (agent, createdAt, extra = {}) => ({ recordId: "r" + createdAt, createdAt, agent, username: "p" + createdAt, brand: "VS96", inquiry: ["Free Spin"], status: "Done", amount: 10, link: "https://my.livechatinc.com/archives/T" + createdAt, threadId: "T" + createdAt, ...extra });
 
-test("what a logged case is missing is named, and agents are ranked by how much they logged", () => {
+test("what a logged case is missing is named", () => {
   assert.deepEqual(loggedIssues(logRow("A", 1)), []);
   assert.deepEqual(loggedIssues(logRow("A", 1, { inquiry: [], status: "", username: "", brand: "", link: "" })), ["No inquiry", "No status", "No username", "No brand", "No chat link"]);
-  const rows = [logRow("96 Alice", 1), logRow("96 bob", 2), logRow("96 Bob", 3, { status: "" }), logRow("96 Bob", 4)];
-  assert.deepEqual(summarizeLogged(rows), [{ agent: "96 bob", total: 3, incomplete: 1 }, { agent: "96 Alice", total: 1, incomplete: 0 }], "names that differ only in letter case are one agent");
-});
-
-test("the QA sheet of logged chats lists the busiest agent first, newest first, with the missing parts, a chat link and empty QA columns", () => {
-  const rows = [logRow("96 Alice", 1000), logRow("96 Bob", 2000, { username: "=cmd()" }), logRow("96 Bob", 3000, { inquiry: [], amount: null })];
-  const lines = toLoggedCsv(rows).replace(/^\uFEFF/, "").trimEnd().split("\r\n");
-  assert.equal(lines[0], "Agent,Date logged (MYT),Player username,Brand,Inquiry,Status,Released amount,Missing,Chat link,QA verdict,QA note");
-  assert.deepEqual(lines.slice(1).map((l) => l.split(",")[0]), ["96 Bob", "96 Bob", "96 Alice"]);
-  assert.equal(lines[1], "96 Bob,1970-01-01 08:00,p3000,VS96,,Done,,No inquiry,https://my.livechatinc.com/archives/T3000,,", "newest first, a missing amount stays empty");
-  assert.ok(lines[2].includes(",'=cmd(),"), "a typed value that looks like a formula is defused");
-});
-
-test("reading what agents logged pages through the table and leaves out the rows of the built-in excluded logins", async () => {
-  const hash = await emailHash("boss@x");
-  ALWAYS_EXCLUDED_HASHES.add(hash);
-  try {
-    const asked = [];
-    const step = async (body) => {
-      asked.push(body.step + ":" + (body.pageToken || ""));
-      if (body.step === "agents") return { ok: true, agents: [{ email: "a@x", name: "96 Alice" }, { email: "boss@x", name: "The Boss" }] };
-      if (body.step === "logged") return body.pageToken ? { ok: true, rows: [logRow("96 Alice", 3)], next: "", scanned: 1 } : { ok: true, rows: [logRow("96 Alice", 1), logRow("the boss", 2)], next: "p2", scanned: 2 };
-      throw new Error("unexpected " + body.step);
-    };
-    const progress = [];
-    const read = await loadLogged({ step, fromMs: 0, toMs: 10, onProgress: (n) => progress.push(n) });
-    assert.deepEqual(read.rows.map((r) => r.agent), ["96 Alice", "96 Alice"], "the excluded agent name matches without letter case");
-    assert.deepEqual(asked, ["agents:", "logged:", "logged:p2"]);
-    assert.deepEqual(progress, [2, 3]);
-    await assert.rejects(() => loadLogged({ step, fromMs: 0, toMs: 10, isCancelled: () => true }), (e) => e.cancelled === true);
-  } finally {
-    ALWAYS_EXCLUDED_HASHES.delete(hash);
-  }
 });
 
 const unrecorded = (threadId, email, date, extra = {}) => ({ threadId, chatId: 'C-' + threadId, email, date, customer: 'Z', account: 'lc1', agentMessages: 2, customerMessages: 1, ...extra });
@@ -204,12 +170,10 @@ test("the QA page uses its own calendar, not the browser's date input; weeks sta
   assert.equal(displayDate(''), '');
 });
 
-test('by default nobody is hidden: the admin\'s own logins show in the unknown-chats list and the logged-chats list', async () => {
+test('by default nobody is hidden: the admin\'s own logins show in the unknown-chats list', async () => {
   const scan = await scanChats({ step: site([archive('T1', ['a@x', 'me@x'])]), fromMs: 0, toMs: 10, windowMs: 10 });
   assert.equal(scan.alwaysExcluded.size, 0);
   assert.deepEqual(planAll(scan).map((e) => e.email).sort(), ['a@x', 'me@x']);
-  const step = async (body) => (body.step === 'agents' ? { ok: true, agents: [{ email: 'me@x', name: 'Admin' }] } : { ok: true, rows: [logRow('Admin', 1)], next: '', scanned: 1 });
-  assert.deepEqual((await loadLogged({ step, fromMs: 0, toMs: 10 })).rows.map((r) => r.agent), ['Admin']);
 });
 
 test('"Before tracking" chats older than 15 Oct are dropped for the listed logins only; their newer chats, other chats and everyone else\'s stay', async () => {
@@ -234,18 +198,9 @@ test('"Before tracking" chats older than 15 Oct are dropped for the listed login
   }
 });
 
-test('what agents logged: the choice only filters, by name without letter case; nothing chosen keeps everybody', async () => {
-  const rows = [logRow('96 Alice', 1), logRow('96 Bob', 2), logRow('96 BOB', 3)];
-  const step = async (body) => (body.step === 'agents' ? { ok: true, agents: [] } : { ok: true, rows, next: '', scanned: 3 });
-  assert.equal((await loadLogged({ step, fromMs: 0, toMs: 10 })).rows.length, 3);
-  assert.equal((await loadLogged({ step, fromMs: 0, toMs: 10, only: ['96 bob'] })).rows.length, 2);
-  assert.equal((await loadLogged({ step, fromMs: 0, toMs: 10, only: [] })).rows.length, 3);
-  assert.equal((await loadLogged({ step, fromMs: 0, toMs: 10, only: ['Nobody'] })).rows.length, 0);
-});
-
 test('nothing is saved between searches: every search reads the data again, there is no "saved results" or "read again" control', () => {
   const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
-  assert.doesNotMatch(page, /id="fresh"|saved results/i);
+  assert.doesNotMatch(page, /id="fresh"|saved results|loggedPanel|data-mode/i, 'one report only, nothing saved');
   const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
   const scan = readFileSync(new URL('../qa/scan.js', import.meta.url), 'utf8');
   assert.doesNotMatch(script + scan, /indexedDB|createCache|cache\.(get|set|clear)|fromSaved|saved results/);
@@ -335,16 +290,6 @@ test('the QA view is wired in the widget: on by default, with an off switch, Tic
 
 const fn2 = (name) => app.match(new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n\\}'))[0];
 
-test('a thread id is found in a pasted chat link, archive link or the bare id; anything else is refused', () => {
-  assert.equal(threadFromInput('https://my.livechatinc.com/archives/THREAD_9-x'), 'THREAD_9-x');
-  assert.equal(threadFromInput('  https://my.livechatinc.com/chats/CHAT1/THREAD2?foo=1 '), 'THREAD2', 'the second id of a live chat link is the thread');
-  assert.equal(threadFromInput('ABC123'), 'ABC123');
-  assert.equal(threadFromInput('ab'), '');
-  assert.equal(threadFromInput('not a link'), '');
-  assert.equal(threadFromInput(''), '');
-  assert.equal(threadFromInput(undefined), '');
-});
-
 test('one chat is described as logged, logged with something missing, ticked Unknown only, or nothing at all', () => {
   const row = (agent, extra = {}) => ({ agent, createdAt: 1000, username: 'p1', brand: 'VS96', inquiry: ['Free Spin'], status: 'Done', amount: 5, link: 'l', ...extra });
   const logged = describeChatLog({ rows: [row('96 Alice')], ticks: [], tracking: { configured: true, since: 5 } });
@@ -364,20 +309,6 @@ test('one chat is described as logged, logged with something missing, ticked Unk
   const both = describeChatLog({ rows: [row('96 Alice')], ticks: [{ agent: '96 Bob', source: 'manual', at: 3 }] });
   assert.equal(both.verdict, 'logged');
   assert.equal(both.ticks.length, 1, 'a tick by another agent still shows beside the record');
-});
-
-test('the QA page has a read-only card for the open chat, and the two reports are folded under Reports', () => {
-  const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
-  for (const id of ['chatCard', 'chatForm', 'chatInput', 'chatResult']) assert.match(page, new RegExp('id="' + id + '"'));
-  const reports = page.slice(page.indexOf('<details id="reports"'), page.indexOf('</details>', page.indexOf('id="unknownPanel"')) + 10);
-  assert.ok(reports.includes('id="form"') && reports.includes('id="loggedPanel"') && reports.includes('id="unknownPanel"'), 'both reports sit inside Reports');
-  assert.ok(page.indexOf('id="chatCard"') < page.indexOf('<details id="reports"'), 'the chat comes first, the reports at the bottom');
-  assert.doesNotMatch(page.slice(page.indexOf('id="chatCard"'), page.indexOf('<details id="reports"')), /<textarea|type="checkbox"/, 'nothing to edit in the chat card');
-  const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
-  assert.match(script, /type="checkbox" disabled/, 'the Unknown player box on the card is disabled');
-  assert.doesNotMatch(script, /<input type="text"|<select|<textarea/, 'the cards have no fields to type in');
-  assert.match(script, /source: "ca-qa-ready"/);
-  assert.match(script, /event\.data\?\.source !== "ca-qa-chat"/);
 });
 
 test('the widget tells the QA page which chat is open, remembers it for a page that loads later, and answers its ready message; only for the chat of this window', () => {
@@ -428,8 +359,24 @@ test('the admin preview stays the full admin view for a QA login, and shows the 
   assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab'].map((id) => normal.els[id].hidden), [false, false, false], 'the preview shows everything, QA included');
 });
 
-test('the chat card shows the Claim Secret tick like the Retention card, read-only, and has no "open this chat" link', () => {
+test('the QA tab is the open chat\'s card with the unknown-chats report folded under Reports; no sign-in, no paste box, no "what agents logged" report', () => {
+  const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
+  assert.ok(page.indexOf('id="chatResult"') > -1 && page.indexOf('id="chatResult"') < page.indexOf('<details id="reports"'), 'the card first, the report at the bottom');
+  const reports = page.slice(page.indexOf('<details id="reports"'));
+  assert.ok(reports.includes('id="form"') && reports.includes('id="results"'), 'the unknown-chats report sits inside Reports');
+  assert.doesNotMatch(page, /chatForm|chatInput|id="signin|loggedPanel|loggedResults|data-mode|<h1/, 'nothing else on the page');
   const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
-  assert.match(script, /Claim Secret<\/div>\s*\n\s*<label class="rc-unknown"><input type="checkbox" disabled \$\{row\.claimSecret \? "checked" : ""\} \/><span>\$\{row\.claimSecret \? "✓ Ticked" : "— Not ticked"\}/);
-  assert.doesNotMatch(script, /Open this chat in LiveChat/, 'QA is already in the chat');
+  assert.doesNotMatch(script, /authorize\(|signIn|window\.open|loadLogged|toLoggedCsv|threadFromInput|\$\("key"\)/, 'no sign-in code, no logged report, no scan key');
+  assert.match(script, /source: "ca-qa-ready"/);
+  assert.match(script, /event\.data\?\.source !== "ca-qa-chat"/);
+  assert.doesNotMatch(script + page, /<input type="text"|<select|<textarea|type="checkbox" disabled/, 'nothing on the card to type in or tick');
+});
+
+test('the card for a logged case is a tidy read-only grid: agent and time, username, brand, inquiry, status, amount, Claim Secret; missing values are called out', () => {
+  const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
+  const card = script.slice(script.indexOf('function loggedCard'), script.indexOf('// An agent ticked Unknown player'));
+  for (const label of ['Username', 'Brand', 'Inquiry', 'Status', 'Released amount', 'Claim Secret']) assert.ok(card.includes(label), label);
+  assert.match(card, /Not filled in/);
+  assert.match(card, /row\.claimSecret \? "✓" : "—"/);
+  assert.doesNotMatch(card, /Customer<\/div>|Case details|VIEW ONLY|<input/, 'no boxes inside boxes, nothing to edit');
 });

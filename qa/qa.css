@@ -28,9 +28,6 @@ button { font: inherit; cursor: pointer; }
 .uc-primary:disabled { opacity: .55; cursor: default; }
 .uc-link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: inherit; }
 .uc-status { color: var(--muted); }
-.uc-signin { margin-top: 0; }
-.uc-admin { margin-top: 12px; color: var(--muted); }
-.uc-admin input { margin-top: 8px; max-width: 360px; }
 .uc-status.error { color: var(--warn); }
 .uc-bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 12px; overflow: hidden; }
 .uc-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
@@ -58,11 +55,6 @@ button { font: inherit; cursor: pointer; }
   .uc-grid { grid-template-columns: 1fr; }
   .uc-head { flex-direction: column; }
 }
-.uc-modes { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 14px; }
-.uc-modes button { padding: 8px 14px; background: transparent; color: var(--text); border: 0; }
-.uc-modes button + button { border-left: 1px solid var(--line); }
-.uc-modes button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
-.uc-modes button:disabled { opacity: .6; cursor: default; }
 .uc-check { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; color: var(--muted); }
 .uc-check input { width: auto; }
 .uc-warn { color: var(--warn); }
@@ -117,34 +109,37 @@ button { font: inherit; cursor: pointer; }
 .uc-badge-known { display: block; margin-top: 3px; color: var(--warn); font-weight: 700; font-size: 12px; white-space: normal; }
 .uc-flagline { display: block; color: var(--warn); font-size: 12px; font-weight: 600; }
 
-.uc-h2 { margin: 0 0 6px; font-size: 16px; }
-.uc-chatform { display: flex; gap: 8px; margin-bottom: 10px; }
-.uc-chatform input { flex: 1; min-width: 0; }
 .uc-reports { margin-top: 4px; }
 .uc-reports > summary { cursor: pointer; padding: 10px 2px; font-size: 15px; }
 .uc-reports > summary .uc-opt { margin-left: 8px; }
 .uc-reports > .uc-card { margin-top: 10px; }
-.uc-verdict { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); margin: 8px 0; font-weight: 600; }
-.uc-verdict.logged { border-color: var(--accent); }
-.uc-verdict.incomplete, .uc-verdict.ticked, .uc-verdict.nothing { border-color: var(--warn); color: var(--warn); }
-.uc-signin-status { display: block; margin-top: 8px; }
-.rc-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 10px 0; max-width: 520px; }
-.rc-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
-.rc-agent { font-weight: 700; color: #35d0a8; }
-@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .rc-agent { color: #128a6b; } }
-.rc-readonly { font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
-.rc-section { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
-.rc-section-title { font-weight: 700; margin-bottom: 6px; }
-.rc-label { color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
-.rc-input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); min-height: 34px; }
-.rc-mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-.rc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.rc-chip { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 13px; }
-.rc-chip.status { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.rc-unknown { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); }
-.rc-unknown input { width: auto; }
-.rc-missing { color: var(--warn); font-weight: 600; }
-.rc-muted { color: var(--muted); }
-.rc-note { color: var(--muted); margin: 6px 0 0; font-size: 13px; }
-.rc-foot { color: var(--muted); font-size: 12px; margin-top: 10px; }
-.rc-card-unknown { border-color: var(--warn); }
+:root { --ok: #128a6b; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ok: #35d0a8; } }
+.qc-wrap { display: grid; gap: 12px; }
+.qc-empty { color: var(--muted); text-align: center; padding: 32px 8px; margin: 0; }
+.qc-verdict { padding: 9px 12px; border-radius: 10px; font-weight: 600; font-size: 13px; border: 1px solid var(--line); background: var(--card); }
+.qc-verdict.logged { color: var(--ok); border-color: var(--ok); }
+.qc-verdict.incomplete, .qc-verdict.ticked, .qc-verdict.nothing { color: var(--warn); border-color: var(--warn); }
+.qc { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.qc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 14px; }
+.qc-agent { font-weight: 700; font-size: 15px; }
+.qc-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; margin: 0; }
+.qc-grid > div { min-width: 0; }
+.qc-wide { grid-column: 1 / -1; }
+.qc-grid dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.qc-grid dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.qc-mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.qc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.qc-chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); font-size: 12px; }
+.qc-chip.status { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.qc-missing { color: var(--warn); font-weight: 600; font-size: 13px; }
+.qc-muted { color: var(--muted); }
+.qc-flags { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.qc-flag { font-size: 12px; color: var(--muted); }
+.qc-flag.on { color: var(--ok); font-weight: 600; }
+.qc-unknown { border-color: var(--warn); }
+.qc-note { color: var(--muted); font-size: 12px; margin: 8px 2px 0; }
+.qc-unknown .qc-note { margin: 12px 0 0; }
+.qc-warn { color: var(--warn); }
+@media (max-width: 380px) { .qc-grid { grid-template-columns: 1fr; } }
