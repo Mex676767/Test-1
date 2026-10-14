@@ -131,14 +131,12 @@ export function createClient({ base, key = "", login = null, fetchImpl = fetch, 
   };
 }
 
-// Logins that never belong in the list (the admin's own LiveChat logins). Kept as salted SHA-256 hashes, not as emails, so the
-// addresses are not readable in the public source. A hash only keeps the plain text out of sight: it is not a secret, and
-// anyone who guesses an address can test it. The scan hashes the writers it actually met and drops the ones that match.
+// Logins that never belong in the list. Empty now: the admin's own two LiveChat logins were left out here at first and are included
+// again (2026-10-14). To leave a login out, add its hash: a salted SHA-256 of the lower-case email, so the address is not readable
+// in the public source (a hash only keeps the plain text out of sight: anyone who guesses an address can test it). The scan hashes
+// the writers it actually met and drops the ones that match.
 export const EXCLUDE_SALT = "rtn-qa-v1";
-export const ALWAYS_EXCLUDED_HASHES = new Set([
-  "8558db0b41fcc9498d501dd7de34117faa290e573aaebcfee20dac0d2dad902c",
-  "c9bbc994474dc2dc433c0c11710a8e2626e978cb813fd615c03f82044044f6c9",
-]);
+export const ALWAYS_EXCLUDED_HASHES = new Set([]);
 
 export async function emailHash(email) {
   const data = new TextEncoder().encode(`${EXCLUDE_SALT}:${String(email).trim().toLowerCase()}`);

@@ -89,7 +89,7 @@ test('a scan can be stopped between steps, and leaves out the emails it is told 
 });
 
 test('the admin logins built into the code are salted hashes, never the plain emails, and the scan drops the writers that match', async () => {
-  assert.ok(ALWAYS_EXCLUDED_HASHES.size >= 1);
+  assert.equal(ALWAYS_EXCLUDED_HASHES.size, 0, 'nobody is left out by default: the admin logins are included');
   for (const hash of ALWAYS_EXCLUDED_HASHES) assert.match(hash, /^[0-9a-f]{64}$/);
   assert.notEqual(await emailHash('boss@x'), await emailHash('boss@x '.replace('x ', 'y')), 'different emails, different hashes');
   assert.equal(await emailHash(' BOSS@x '), await emailHash('boss@x'), 'letter case and spaces do not matter');
@@ -200,4 +200,12 @@ test("the QA page uses its own calendar, not the browser's date input; weeks sta
   assert.deepEqual([monday[0].month, monday[0].day, monday[0].otherMonth], [5, 1, false]);
   assert.equal(displayDate('2026-10-07'), '07/10/2026');
   assert.equal(displayDate(''), '');
+});
+
+test('by default nobody is hidden: the admin\'s own logins show in the unknown-chats list and the logged-chats list', async () => {
+  const scan = await scanChats({ step: site([archive('T1', ['a@x', 'me@x'])]), fromMs: 0, toMs: 10, windowMs: 10 });
+  assert.equal(scan.alwaysExcluded.size, 0);
+  assert.deepEqual(planAll(scan).map((e) => e.email).sort(), ['a@x', 'me@x']);
+  const step = async (body) => (body.step === 'agents' ? { ok: true, agents: [{ email: 'me@x', name: 'Admin' }] } : { ok: true, rows: [logRow('Admin', 1)], next: '', scanned: 1 });
+  assert.deepEqual((await loadLogged({ step, fromMs: 0, toMs: 10 })).rows.map((r) => r.agent), ['Admin']);
 });
