@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { calendarDays, displayDate } from '../qa/datepicker.js';
-import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
+import { ALWAYS_EXCLUDED_HASHES, HIDE_UNTRACKED_BEFORE, HIDE_UNTRACKED_HASHES, dropOwnUntracked, MARK_LABELS, classifyEntries, countMarks, emailHash, loadTicks, loadLogged, loggedIssues, planAll, scanChats, summarizeLogged, toLoggedCsv } from '../qa/scan.js';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0];
@@ -210,19 +210,23 @@ test('by default nobody is hidden: the admin\'s own logins show in the unknown-c
   assert.deepEqual((await loadLogged({ step, fromMs: 0, toMs: 10 })).rows.map((r) => r.agent), ['Admin']);
 });
 
-test('"Before tracking" chats are dropped for the listed logins only; their other chats and everyone else\'s stay', async () => {
+test('"Before tracking" chats older than 14 Oct are dropped for the listed logins only; their newer chats, other chats and everyone else\'s stay', async () => {
   assert.equal(HIDE_UNTRACKED_HASHES.size, 2);
   for (const hash of HIDE_UNTRACKED_HASHES) assert.match(hash, /^[0-9a-f]{64}$/);
   const hash = await emailHash('boss@x');
   HIDE_UNTRACKED_HASHES.add(hash);
   try {
+    const old = HIDE_UNTRACKED_BEFORE - 1;
     const entries = [
-      { threadId: 'T1', email: 'boss@x', mark: 'untracked' },
-      { threadId: 'T2', email: 'boss@x', mark: 'not-ticked' },
-      { threadId: 'T3', email: 'boss@x', mark: 'ticked' },
-      { threadId: 'T4', email: 'a@x', mark: 'untracked' },
+      { threadId: 'T1', email: 'boss@x', mark: 'untracked', date: old },
+      { threadId: 'T2', email: 'boss@x', mark: 'not-ticked', date: old },
+      { threadId: 'T3', email: 'boss@x', mark: 'ticked', date: old },
+      { threadId: 'T4', email: 'a@x', mark: 'untracked', date: old },
+      { threadId: 'T5', email: 'boss@x', mark: 'untracked', date: HIDE_UNTRACKED_BEFORE },
+      { threadId: 'T6', email: 'boss@x', mark: 'untracked', date: HIDE_UNTRACKED_BEFORE + 86_400_000 },
     ];
-    assert.deepEqual((await dropOwnUntracked(entries)).map((e) => e.threadId), ['T2', 'T3', 'T4']);
+    assert.deepEqual((await dropOwnUntracked(entries)).map((e) => e.threadId), ['T2', 'T3', 'T4', 'T5', 'T6'], 'from 14 Oct 00:00 (Malaysia) on, nothing of theirs is hidden');
+    assert.equal(HIDE_UNTRACKED_BEFORE, Date.UTC(2026, 9, 13, 16, 0, 0));
   } finally {
     HIDE_UNTRACKED_HASHES.delete(hash);
   }
