@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Unknown chats</title>
-  <link rel="stylesheet" href="unknown-chats.css?v=20261014-1" />
+  <meta name="robots" content="noindex" />
+  <title>QA</title>
+  <link rel="stylesheet" href="qa.css?v=20261014-2" />
 </head>
 <body>
   <main class="uc">
     <header class="uc-head">
       <div>
-        <h1>Unknown chats</h1>
-        <p>Chats an agent replied to that have <b>no Customer Approaching record by that agent</b>. That covers chats ticked <i>Unknown player</i> (nothing is saved for those) and chats the agent forgot to record. Send the list to QA to judge which ones really were unknown.</p>
+        <h1>QA: unknown chats</h1>
+        <p>Chats an agent replied to that have <b>no Customer Approaching record by that agent</b>. That covers chats the agent ticked <i>Unknown player</i> (nothing is saved for those) and chats the agent forgot to record. Open each chat and judge whether it really was an unknown player.</p>
       </div>
-      <span class="uc-badge">ADMIN PREVIEW</span>
     </header>
 
     <form id="form" class="uc-card" autocomplete="off">
       <div class="uc-grid">
-        <label>Scan key
-          <input id="key" type="password" placeholder="SCAN_KEY from Cloudflare Pages" spellcheck="false" />
+        <label>Access key
+          <input id="key" type="password" placeholder="The key you were given" spellcheck="false" />
           <small>Asked once; kept in this browser. <button type="button" id="forgetKey" class="uc-link">Forget it</button></small>
         </label>
         <label>From
@@ -27,10 +27,6 @@
         </label>
         <label>To <span class="uc-opt">(empty = now)</span>
           <input id="to" type="date" />
-        </label>
-        <label class="uc-wide">Leave out these emails <span class="uc-opt">(your own logins; separate with commas)</span>
-          <textarea id="exclude" rows="2" placeholder="name@example.com, other@example.com" spellcheck="false"></textarea>
-          <small>Remembered in this browser.</small>
         </label>
       </div>
       <div class="uc-actions">
@@ -44,9 +40,9 @@
     <section id="results" class="uc-card" hidden>
       <div class="uc-results-head">
         <h2 id="summary"></h2>
-        <button type="button" id="download" class="uc-primary">Download for QA (.csv)</button>
+        <button type="button" id="download" class="uc-primary">Download (.csv)</button>
       </div>
-      <p class="uc-hint">Busiest agent first. Click an agent to see their chats. The .csv has every chat with a link and empty QA verdict / QA note columns.</p>
+      <p class="uc-hint">Agents with the most chats first. Click an agent to see their chats. The .csv has every chat with a link and empty QA verdict / QA note columns to fill in.</p>
       <div id="agents" class="uc-agents"></div>
     </section>
 
@@ -55,6 +51,6 @@
       <pre id="log"></pre>
     </details>
   </main>
-  <script type="module" src="unknown-chats.js?v=20261014-1"></script>
+  <script type="module" src="qa.js?v=20261014-2"></script>
 </body>
 </html>

@@ -53,7 +53,7 @@ test("_routes.json is valid and keeps API routes and hidden paths inside Functio
   assert.ok(routes.include.length + routes.exclude.length <= 100);
   assert.ok(routes.exclude.every((rule) => typeof rule === "string" && rule.startsWith("/")));
   const excluded = (path) => routes.exclude.some((rule) => rule === path || (rule.endsWith("/*") && path.startsWith(rule.slice(0, -1))));
-  for (const path of ["/app.js", "/style.css", "/index.html", "/", "/deployment-refresh.js", "/blast/popup.js", "/vendor/x.js", "/knowledge/index.html", "/unknown-chats/scan.js"]) {
+  for (const path of ["/app.js", "/style.css", "/index.html", "/", "/deployment-refresh.js", "/blast/popup.js", "/vendor/x.js", "/knowledge/index.html", "/qa/scan.js"]) {
     assert.equal(excluded(path), true, `${path} is served straight from static assets`);
   }
   for (const path of [...HIDDEN, "/lark-search", "/widget-version", "/lark-record", "/ticket-create"]) {
@@ -65,7 +65,7 @@ test("every committed top-level path is classified: served as the widget, hidden
   let tracked;
   try { tracked = execFileSync("git", ["ls-files"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter(Boolean); }
   catch (_) { return; }       // not a git checkout (e.g. a source archive): nothing to check
-  const widget = new Set(["index.html", "app.js", "style.css", "deployment-refresh.js", "vendor", "blast", "knowledge", "unknown-chats",
+  const widget = new Set(["index.html", "app.js", "style.css", "deployment-refresh.js", "vendor", "blast", "knowledge", "qa",
     "bonus-admin.html", "bonus-admin.css", "bonus-admin.js"]);
   const config = new Set(["_headers", "_routes.json", ".gitignore", "functions"]);
   const unclassified = new Set();

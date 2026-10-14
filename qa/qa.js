@@ -1,4 +1,4 @@
-// The "Unknown chats" page of the admin preview: runs the crosscheck (see scan.js) from the browser and shows the agents with
+// The QA page (/qa/, also the QA tab of the admin preview): runs the crosscheck (see scan.js) from the browser and shows the agents with
 // the most chats nobody recorded, with a .csv for QA. Read-only: nothing is written to Lark or anywhere else.
 import { archiveLink, createClient, myt, planAll, scanChats, sortedEntries, summarize, toCsv, windows } from "./scan.js";
 
@@ -7,9 +7,9 @@ const store = {
   get(key) { try { return localStorage.getItem(key) || ""; } catch (_) { return ""; } },
   set(key, value) { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch (_) { /* private window: simply not remembered */ } },
 };
-const KEY = "unknown-chats-key";
-const EXCLUDE = "unknown-chats-exclude";
-const FROM = "unknown-chats-from";
+const KEY = "qa-key";
+
+const FROM = "qa-from";
 const WINDOW_MS = 6 * 3_600_000;
 const MYT = "+08:00";
 
@@ -23,10 +23,6 @@ let stopRequested = false;
 function setStatus(text, isError = false) {
   $("status").textContent = text;
   $("status").classList.toggle("error", isError);
-}
-
-function excludedEmails() {
-  return $("exclude").value.split(/[\s,;]+/).map((email) => email.trim().toLowerCase()).filter(Boolean);
 }
 
 function render() {
@@ -80,10 +76,9 @@ async function find(event) {
   const to = $("to").value;
   const fromMs = Date.parse(`${from}T00:00:00${MYT}`);
   const toMs = to ? Math.min(Date.parse(`${to}T23:59:59.999${MYT}`), Date.now()) : Date.now();
-  if (!key) return setStatus("Enter the scan key first.", true);
+  if (!key) return setStatus("Enter the access key first.", true);
   if (!Number.isFinite(fromMs) || fromMs >= toMs) return setStatus("Pick a start date that is before the end date.", true);
   store.set(KEY, key);
-  store.set(EXCLUDE, $("exclude").value.trim());
   store.set(FROM, from);
 
   setRunning(true);
@@ -111,14 +106,14 @@ async function find(event) {
   try {
     const step = createClient({ base: "", key });
     const scan = await scanChats({ step, fromMs, toMs, windowMs: WINDOW_MS, onlyKnown: true, log: note, isCancelled: () => stopRequested });
-    const entries = planAll(scan, { onlyKnown: true, exclude: excludedEmails(), log: note });
+    const entries = planAll(scan, { onlyKnown: true, log: note });
     result = { entries, byEmail: scan.byEmail, from: dayInMyt(fromMs), to: dayInMyt(toMs) };
     render();
     setStatus(`Done. ${entries.length} chat${entries.length === 1 ? "" : "s"} found.`);
   } catch (error) {
     if (error.cancelled) setStatus("Stopped.");
-    else if (error.status === 404) setStatus("The site has no SCAN_KEY set (Cloudflare Pages → Settings → Variables). Without it this page cannot read the chats.", true);
-    else if (error.status === 401) setStatus("Wrong scan key.", true);
+    else if (error.status === 404) setStatus("This page is not switched on yet (the site has no key set). Ask the admin.", true);
+    else if (error.status === 401) setStatus("Wrong access key.", true);
     else setStatus(error.message, true);
   } finally {
     setRunning(false);
@@ -130,7 +125,7 @@ function download() {
   const blob = new Blob([toCsv(result.entries, result.byEmail)], { type: "text/csv;charset=utf-8" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `unknown-chats_${result.from}_to_${result.to}.csv`;
+  link.download = `qa-unknown-chats_${result.from}_to_${result.to}.csv`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -138,7 +133,6 @@ function download() {
 }
 
 $("key").value = store.get(KEY);
-$("exclude").value = store.get(EXCLUDE);
 $("from").value = store.get(FROM) || dayInMyt(Date.now() - 7 * 86_400_000);
 $("form").addEventListener("submit", find);
 $("stop").addEventListener("click", () => { stopRequested = true; setStatus("Stopping…"); });

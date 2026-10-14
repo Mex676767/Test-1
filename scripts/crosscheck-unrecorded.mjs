@@ -8,15 +8,15 @@
 //
 // A sheet for QA (who has the most never-recorded chats, with a link per chat), leaving out the admin's own logins:
 //   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-01 --exclude a@x.com,b@y.com --csv qa.csv
-// (The admin preview has the same thing as a page: the "Unknown chats" tab, no command line needed.)
+// (The admin preview has the same thing as a page: the "QA" tab, no command line needed.)
 //
 // It only talks to the site's /crosscheck endpoint (small steps, one at a time, with a pause between them), so the credentials
 // stay in Cloudflare. A chat counts as recorded when ANY Customer Approaching row created since the start date carries its
 // thread id in the link. Run it again later and it adds only what is missing (rows already written are skipped).
-// The scanning and judging live in unknown-chats/scan.js, shared with that page.
+// The scanning and judging live in qa/scan.js, shared with that page.
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { archiveLink, createClient, histogram, pool, planAll, planEntries, scanChats, stepWithRetry, summarize, toCsv, windows } from "../unknown-chats/scan.js";
+import { archiveLink, createClient, histogram, pool, planAll, planEntries, scanChats, stepWithRetry, summarize, toCsv, windows } from "../qa/scan.js";
 
 export { archiveLink, createClient, histogram, pool, planEntries, stepWithRetry, summarize, toCsv, windows };
 

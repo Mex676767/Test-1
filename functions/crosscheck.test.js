@@ -81,6 +81,24 @@ test("without SCAN_KEY the endpoint does not exist; a wrong or missing key is re
   assert.equal(w.log.searches.length, 0);
 });
 
+test("QA_KEY opens the read steps only: it can scan, never write or list the Unrecorded Chats table; with only QA_KEY set the admin key is refused", async (t) => {
+  const w = world({ caPages: [[caRow("https://my.livechatinc.com/chats/CHAT/THREADNEW", 2000)]], loginItems: [] });
+  t.after(w.restore);
+  const env = { ...ENV, QA_KEY: "qa-secret" };
+  assert.equal((await call({ step: "recorded", fromMs: 1000 }, { key: "qa-secret", env })).threads[0], "THREADNEW");
+  assert.equal((await call({ step: "agents" }, { key: "qa-secret", env })).ok, true);
+  for (const step of ["write", "existing"]) {
+    const refused = await call({ step, entries: [{ threadId: "T1", email: "a@x.com" }] }, { key: "qa-secret", env });
+    assert.equal(refused.status, 403);
+  }
+  assert.equal(w.log.created.length, 0, "nothing was written with the read-only key");
+  assert.equal((await call({ step: "write", entries: [{ threadId: "T1", email: "a@x.com" }] }, { key: "scan-secret", env })).created, 1, "the admin key still writes");
+  assert.equal((await call({ step: "recorded" }, { key: "nope", env })).status, 401);
+  const qaOnly = { ...ENV, SCAN_KEY: "", QA_KEY: "qa-secret" };
+  assert.equal((await call({ step: "recorded" }, { key: "qa-secret", env: qaOnly })).ok, true, "QA_KEY alone is enough to switch the endpoint on");
+  assert.equal((await call({ step: "recorded" }, { key: "", env: qaOnly })).status, 401, "an empty key never matches an unset one");
+});
+
 test("recorded: the thread ids of Customer Approaching rows created since the start date, from the link, page by page", async (t) => {
   const w = world({ caPages: [
     [caRow("https://my.livechatinc.com/chats/CHAT/THREADNEW", 2000), caRow("https://my.livechatinc.com/chats/CHAT/THREADOLD", 500), caRow("", 2500)],

@@ -1105,7 +1105,7 @@ function syncMainTabs() {
   // Chat/department updates can arrive after an agent starts Blast.
   // Keep its existing iframe visible for the lifetime of the queue.
   if (blastRunInProgress && blastAvailable) activeMainTab = "blast";
-  // "Unknown chats" is the admin's own page: only in the standalone admin preview, never in the installed widget.
+  // The QA tab (the page at /qa/) is shown only in the standalone admin preview, never in the installed widget.
   const unknownChatsAvailable = previewMode;
   if (!available[activeMainTab] && !(activeMainTab === "unknownChats" && unknownChatsAvailable)) {
     activeMainTab = ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";

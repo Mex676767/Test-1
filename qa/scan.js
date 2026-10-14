@@ -1,4 +1,4 @@
-// The crosscheck logic shared by the "Unknown chats" page in the admin preview (unknown-chats/index.html) and the command-line
+// The crosscheck logic shared by the QA page in the admin preview (qa/index.html) and the command-line
 // script (scripts/crosscheck-unrecorded.mjs). Runs in a browser and in Node: no Node-only imports in here.
 //
 // Question answered: which chats since a start date did an agent write in, but nobody ever recorded in Customer Approaching?
@@ -128,6 +128,30 @@ export function createClient({ base, key, fetchImpl = fetch, pauseMs = 300, retr
   };
 }
 
+// Logins that never belong in the list (the admin's own LiveChat logins). Kept as salted SHA-256 hashes, not as emails, so the
+// addresses are not readable in the public source. A hash only keeps the plain text out of sight: it is not a secret, and
+// anyone who guesses an address can test it. The scan hashes the writers it actually met and drops the ones that match.
+export const EXCLUDE_SALT = "rtn-qa-v1";
+export const ALWAYS_EXCLUDED_HASHES = new Set([
+  "8558db0b41fcc9498d501dd7de34117faa290e573aaebcfee20dac0d2dad902c",
+  "c9bbc994474dc2dc433c0c11710a8e2626e978cb813fd615c03f82044044f6c9",
+]);
+
+export async function emailHash(email) {
+  const data = new TextEncoder().encode(`${EXCLUDE_SALT}:${String(email).trim().toLowerCase()}`);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// The writers among `chats` (a Map of chats) whose hash is in `hashes`, as lower-case emails.
+async function matchingEmails(chatMaps, hashes) {
+  const writers = new Set();
+  for (const chats of chatMaps) for (const chat of chats.values()) for (const writer of chat.writers || []) writers.add(String(writer).trim().toLowerCase());
+  const found = new Set();
+  for (const email of writers) if (hashes.has(await emailHash(email))) found.add(email);
+  return found;
+}
+
 // Reads everything needed to judge the chats of [fromMs, toMs): the recorded chats, the agent list, and the ended chats of each
 // LiveChat account (several time windows at once, both accounts at the same time).
 // isCancelled(): checked between steps; true stops the scan with an error whose .cancelled is true.
@@ -191,12 +215,13 @@ export async function scanChats({ step, fromMs, toMs, windowMs, onlyKnown = true
   }
 
   const results = await Promise.all(accounts.map(scanAccount));
-  return { recorded, names: { pairs, byEmail }, byEmail, results };
+  const alwaysExcluded = await matchingEmails(results.map((result) => result.chats), ALWAYS_EXCLUDED_HASHES);
+  return { recorded, names: { pairs, byEmail }, byEmail, results, alwaysExcluded };
 }
 
 // Judges what scanChats read: the never-recorded chats, per account, with one summary line per account.
 export function planAll(scan, { existing = new Set(), onlyKnown = true, minAgentMessages = 1, minCustomerMessages = 1, exclude = [], log = () => {} } = {}) {
-  const excluded = new Set(exclude.map((email) => String(email).trim().toLowerCase()).filter(Boolean));
+  const excluded = new Set([...(scan.alwaysExcluded || []), ...exclude.map((email) => String(email).trim().toLowerCase()).filter(Boolean)]);
   const all = [];
   for (const result of scan.results) {
     const { account, chats, fetchedAlone, unjudged, outreach } = result;

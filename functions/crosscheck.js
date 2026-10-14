@@ -9,6 +9,7 @@ import { UNREC } from "./_lib/unrecorded.js";
 // but nobody ever recorded? The result goes into the Lark table "Unrecorded Chats" (one row per chat and writer), and each
 // agent's widget then lists their own rows. Not authentication for agents: this is an ADMIN endpoint, answered only to a
 // caller that sends the key in the SCAN_KEY environment variable (header x-scan-key); with no key set it does not exist.
+// QA_KEY (optional) is a second, read-only key for the QA page (qa/index.html).
 //
 // Each call is one small step so it stays inside a Pages Function's limits and never hogs the shared Lark queue:
 //   recorded  one page of Customer Approaching -> the chat (thread) ids of rows created since `fromMs`, and "thread|agent name"
@@ -90,10 +91,16 @@ async function listArchives(account, { from, to, pageId }) {
 
 export async function handler(event) {
   try {
-    const expected = clean(event.env?.SCAN_KEY);
-    if (!expected) return reply(404, { ok: false, error: "Not found" });
-    if (!sameKey(clean(event.headers?.["x-scan-key"]), expected)) return reply(401, { ok: false, error: "Wrong key" });
+    // Two keys: SCAN_KEY (the admin: every step, including the ones that write the Unrecorded Chats table) and QA_KEY (the QA
+    // page: only the steps that read, so it can be handed to QA without handing over the means to write).
+    const adminKey = clean(event.env?.SCAN_KEY);
+    const qaKey = clean(event.env?.QA_KEY);
+    if (!adminKey && !qaKey) return reply(404, { ok: false, error: "Not found" });
+    const sent = clean(event.headers?.["x-scan-key"]);
+    const isAdmin = sameKey(sent, adminKey);
+    if (!isAdmin && !sameKey(sent, qaKey)) return reply(401, { ok: false, error: "Wrong key" });
     const body = JSON.parse(event.body || "{}");
+    if (!isAdmin && (body.step === "existing" || body.step === "write")) return reply(403, { ok: false, error: "This key can only read." });
 
     if (body.step === "recorded") {
       const fromMs = Number(body.fromMs) || 0;
