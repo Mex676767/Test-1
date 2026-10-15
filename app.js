@@ -3752,6 +3752,7 @@ function renderTicketStatus(chatId) {
   return `<article class="ticket-inbox-detail">
     <div class="ticket-inbox-row-top"><span class="ticket-inbox-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-inbox-status ${ticketStatusTone(ticket)}">${escapeHtml(ticketStatusLabel(ticket))}</span></div>
     <h3>${escapeHtml(ticketTitle(ticket))}</h3>
+    ${s.ticketNotice && ticket.ref === s.ticketRef ? `<p class="ticket-inbox-note ticket-inbox-notice">${escapeHtml(s.ticketNotice)}</p>` : ""}
     <p class="ticket-inbox-player">${escapeHtml(ticket.fields?.member_id || "No player ID")} · ${escapeHtml(ticketValueDisplay("member_platform", ticket.fields?.member_platform || ticket.fields?.brand || ""))} · ${escapeHtml(market)}</p>
     <div class="ticket-inbox-summary"><div><span>Department</span><strong>${escapeHtml(department)}</strong></div><div><span>Assigned to</span><strong>${escapeHtml(assignees)}</strong></div></div>
     <details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketDetailsOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketDetailsOpen ? "open" : ""}><summary>Ticket details</summary><div class="ticket-inbox-data">
@@ -4903,6 +4904,7 @@ chatListEl.addEventListener("click", async (e) => {
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Submit failed");
       s.ticketRef = data.ref;
+      s.ticketNotice = data.warning || "";
       s.ticketLookupRef = data.ref;
       s.escalationSubmitted = true;
       s.ticketView = "detail";
@@ -4938,6 +4940,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.ticketView = "create";
     s.escalationSubmitted = false;
     s.ticketRef = "";
+    s.ticketNotice = "";
     s.ticketRecord = null;
     s.escalationError = "";
     s.ticketAttachmentError = "";

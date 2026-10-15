@@ -70,3 +70,21 @@ shared for 10 s / 15 s per isolate (identical reads in flight at once are one ca
 ticket, skips the copy); the 30 s ticket poll pauses while the widget is hidden; after a 429 an isolate stops calling for the
 `Retry-After` seconds and the agent sees "The ticket system is busy ... Try again in N s". Watch for that message when more agents
 use Tickets (the Customer Service rollout).
+
+## Live lists and raising tickets as the agent (2026-10-15)
+
+**Live lists.** The ticket API now has `GET /markets`, `GET /departments` and `GET /fields/choices` (live from its database: real ids,
+display labels, an active flag per choice, retired choices flagged). `/ticket-config` reads all three together with the ticket list and
+the widget shows them as they are; departments that cannot receive tickets are left out of the create form. Each list falls back to
+the snapshot in `functions/_lib/ticket-catalog.js` on its own if it cannot be read, so the form never goes empty. The response says which
+source each list came from (`catalogSource`). The ticket team asks callers not to cache beyond one run; `/ticket-config` keeps a
+copy for 5 minutes (Refresh bypasses it) to stay inside the 120 requests a minute.
+
+**Raising tickets as the agent.** Any request to the ticket API may carry `onBehalfOf` (an email); the ticket is then raised by that
+person, from their department. Set `TICKETS_ON_BEHALF_OF=1` to turn it on: `/ticket-create` asks LiveChat who the agent's token belongs
+to (the browser cannot choose) and sends that email. It needs:
+1. the API key bound to a role that holds `api-keys:act-on-behalf` (ask a ticket-system administrator), and
+2. an active ticket-system account with the agent's LiveChat email (and the person must not outrank the key's owner).
+
+When the ticket system refuses for either reason, the ticket is raised under the key's owner instead (with the LiveChat id and email in
+the `TICKETS_AUTHOR_*` fields if those are set) and the agent sees why above the ticket. Any other refusal is shown as is.

@@ -42,6 +42,21 @@ function mergeByCode(catalogItems, observedItems, build) {
   return merged;
 }
 
+// The ticket API's own lists (GET /markets, /departments, /fields/choices): live from its database, with real ids, labels and an active
+// flag per choice. Each is read on its own and an answer without the expected list is treated as missing, so a failure (or a ticket
+// system that does not have the call yet) falls back to the snapshot (ticket-catalog.js) for that part only.
+async function readLiveCatalog(env) {
+  const [markets, departments, choices] = await Promise.allSettled([
+    ticketRequest(env, "/markets"), ticketRequest(env, "/departments"), ticketRequest(env, "/fields/choices"),
+  ]);
+  const list = (result, key) => (result.status === "fulfilled" && Array.isArray(result.value?.[key]) ? result.value[key] : null);
+  const fieldList = list(choices, "fields");
+  const choiceMap = fieldList
+    ? new Map(fieldList.filter((field) => field && Array.isArray(field.choices)).map((field) => [field.key, field.choices.map(normalizeOption)]))
+    : null;
+  return { markets: list(markets, "markets"), departments: list(departments, "departments"), choices: choiceMap && choiceMap.size ? choiceMap : null };
+}
+
 export async function handler(event) {
   if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
   try {
@@ -61,7 +76,7 @@ export async function handler(event) {
 
     // The list response is the API's only field-catalog endpoint. Strip all
     // ticket records here so no unrelated customer data reaches the browser.
-    const data = await ticketRequest(event.env, "/tickets?pageSize=100");
+    const [data, live] = await Promise.all([ticketRequest(event.env, "/tickets?pageSize=100"), readLiveCatalog(event.env)]);
     const tickets = Array.isArray(data.tickets) ? data.tickets : [];
     const uniqueById = (items) => Array.from(new Map(items
       .filter((item) => item && Number.isInteger(Number(item.id)))
@@ -71,12 +86,12 @@ export async function handler(event) {
     const observedMarkets = uniqueById(tickets.map((ticket) => ticket.market))
       .filter((market) => market.isActive !== false)
       .map(({ id, code, label, currency }) => ({ id: Number(id), code, label, currency }));
-    const departments = mergeByCode(
+    const departments = live.departments ? live.departments.filter((item) => item.receivesTickets !== false).map(({ id, code, name }) => ({ id, code, name })) : mergeByCode(
       TICKET_CATALOG.toDepartment.map(({ value, label }) => ({ code: value, label })),
       observedDepartments,
       (item, seen) => ({ id: seen ? seen.id : item.code, code: item.code, name: item.label ?? seen?.name ?? item.code }),
     );
-    const markets = mergeByCode(
+    const markets = live.markets ? live.markets.map(({ id, code, label, currency }) => ({ id, code, label, ...(currency ? { currency } : {}) })) : mergeByCode(
       TICKET_CATALOG.market.map(({ value, label }) => ({ code: value, label })),
       observedMarkets,
       (item, seen) => ({ id: seen ? seen.id : item.code, code: item.code, label: item.label ?? seen?.label ?? item.code, ...(seen?.currency ? { currency: seen.currency } : {}) }),
@@ -89,7 +104,7 @@ export async function handler(event) {
           const value = ticket.fields?.[field.key];
           return Array.isArray(value) ? value : [value];
         }).filter((value) => value !== undefined && value !== null && String(value).trim());
-        return { ...field, options: fieldOptions(field, observed) };
+        return { ...field, options: live.choices?.get(field.key) || fieldOptions(field, observed) };
       });
     const body = {
       ok: true,
@@ -98,6 +113,7 @@ export async function handler(event) {
       departments,
       markets,
       catalogSnapshot: CATALOG_SNAPSHOT_DATE,
+      catalogSource: { departments: live.departments ? "live" : "snapshot", markets: live.markets ? "live" : "snapshot", choices: live.choices ? "live" : "snapshot" },
       defaultDepartmentId: settings.departmentId,
       defaultMarketId: settings.marketId,
     };

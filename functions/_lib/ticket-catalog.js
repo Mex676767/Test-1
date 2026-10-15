@@ -1,5 +1,6 @@
 // The ticket system's own choice lists, as its API docs page shows them (https://tickets.96ghq.com/api-docs, "Fields you can post").
-// Its API has no call for these lists yet (GET /tickets returns the field list without choices), so this is a snapshot of that page.
+// FALLBACK ONLY: the ticket API now serves these lists live (GET /markets, /departments, /fields/choices) and ticket-config.js uses them;
+// this snapshot of that page is used for any list the live call cannot return.
 // Each entry is [display label, stored value]; a bare string is both. Departments and markets are posted by code (the value).
 //
 // Keep it current: when the ticket team changes a list, re-read the docs page (expand every "+N more") and update this file. Values
