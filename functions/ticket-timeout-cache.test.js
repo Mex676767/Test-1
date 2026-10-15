@@ -54,7 +54,7 @@ test("normal ticket requests still pass headers and body through (deadline is ad
 test("ticket-config is served from a 5-minute per-isolate cache; ?fresh=1 bypasses it", async () => {
   resetTicketConfigCache();
   let upstream = 0;
-  await withFetch(async () => { upstream++; return okBody(); }, async () => {
+  await withFetch(async (url) => { if (String(url).includes("/v1/tickets?")) upstream++; return okBody(); }, async () => {
     const first = await configHandler({ httpMethod: "GET", env });
     const second = await configHandler({ httpMethod: "GET", env });
     assert.equal(upstream, 1, "second call came from the cache");
@@ -69,7 +69,7 @@ test("ticket-config is served from a 5-minute per-isolate cache; ?fresh=1 bypass
 test("an error is never cached, and a different API key never sees another key's cached catalog", async () => {
   resetTicketConfigCache();
   let fail = true, upstream = 0;
-  await withFetch(async () => { upstream++; return fail ? new Response("{}", { status: 500 }) : okBody(); }, async () => {
+  await withFetch(async (url) => { if (String(url).includes("/v1/tickets?")) upstream++; return fail ? new Response("{}", { status: 500 }) : okBody(); }, async () => {
     const bad = await configHandler({ httpMethod: "GET", env });
     assert.equal(JSON.parse(bad.body).ok, false);
     fail = false;
