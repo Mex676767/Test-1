@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
-import { ticketEmailFor } from "./_lib/ticket-email.js";
+import { looksLikeEmail, rememberTicketEmail, ticketEmailFor } from "./_lib/ticket-email.js";
 import { deleteTicketImages, isStoredImage, storeTicketImages } from "./_lib/ticket-images.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
@@ -67,7 +67,9 @@ export async function handler(event) {
     const authorEmailField = String(event.env?.TICKETS_AUTHOR_EMAIL_FIELD || "").trim();
     const onBehalf = flag(event.env?.TICKETS_ON_BEHALF_OF);
     let agentEmail = "";
-    let onBehalfEmail = ""; // the ticket-system account's email: the agent's Ticket Email in Lark if set, else their LiveChat email
+    let onBehalfEmail = ""; // the ticket-system account's email (see emailSource)
+    let emailSource = ""; // "ticket-email" / "same-agent" (set in Lark), "entered" (typed by the agent just now) or "livechat"
+    let agentLogin = null; // { accountKey, login }
     if (authorIdField || authorEmailField || onBehalf) {
       const account = LIVECHAT_ACCOUNTS.find((item) => item.key === body.author?.accountKey);
       if (!account || !String(body.author?.agentToken || "").trim()) {
@@ -79,8 +81,19 @@ export async function handler(event) {
       if (authorEmailField && !agentEmail) return json(502, { ok: false, error: "LiveChat did not return this agent's email, so the ticket was not created." });
       if (authorIdField) fields[authorIdField] = who.login;
       if (authorEmailField) fields[authorEmailField] = agentEmail;
-      if (onBehalf) onBehalfEmail = (await ticketEmailFor(account.key, who.login, agentEmail)).email;
+      if (onBehalf) {
+        const picked = await ticketEmailFor(account.key, who.login, agentEmail);
+        const entered = String(body.author?.ticketEmail || "").trim().toLowerCase();
+        // An email an admin set in Lark always wins; one the agent typed is used (and saved once) only when none is set.
+        if (picked.via !== "livechat") ({ email: onBehalfEmail, via: emailSource } = picked);
+        else if (looksLikeEmail(entered)) { onBehalfEmail = entered; emailSource = "entered"; }
+        else { onBehalfEmail = picked.email; emailSource = "livechat"; }
+        agentLogin = { accountKey: account.key, login: who.login };
+      }
     }
+    // The agent is asked for their ticket account email instead of the ticket being raised under someone else's name.
+    const needTicketEmail = (triedEmail) => ({ ok: false, needTicketEmail: true, ...(triedEmail ? { triedEmail } : {}), error: "Ticket account not found. Please enter your ticket account email." });
+    if (onBehalf && !onBehalfEmail) return json(400, needTicketEmail(""));
 
     // Images go to the R2 bucket and the ticket gets their links (in the remarks unless TICKETS_IMAGE_LINKS_FIELD names another
     // field). Without the bucket binding they are attached as before. PDFs are always attached.
@@ -117,13 +130,26 @@ export async function handler(event) {
           actedAs = onBehalfEmail;
         } catch (err) {
           if (!isOnBehalfRefusal(err)) throw err;
-          warning = Number(err.statusCode) === 403
-            ? "The ticket system's key may not raise tickets for other people yet, so this ticket was raised under the integration account."
-            : `${onBehalfEmail} has no active account in the ticket system, so this ticket was raised under the integration account. Ask your admin to set your Ticket Email.`;
+          if (Number(err.statusCode) !== 403) {
+            // No active ticket account with that email: nothing was created. Ask for the right one (or send them to the admin if the
+            // email came from the Ticket Email column, which an agent cannot change).
+            await deleteTicketImages(event.env, imageKeys);
+            return json(400, emailSource === "ticket-email" || emailSource === "same-agent"
+              ? { ok: false, triedEmail: onBehalfEmail, error: `The Ticket Email saved for you (${onBehalfEmail}) has no active ticket account. Ask your admin to correct it.` }
+              : needTicketEmail(onBehalfEmail));
+          }
+          // The key may not act for others (or this person is senior to it): not the agent's doing, so the ticket is raised under the
+          // integration account and the agent is told.
+          warning = /outranks/i.test(String(err.message))
+            ? "Your ticket account is senior to the integration key, so this ticket was raised under the integration account."
+            : "The ticket system's key may not raise tickets for other people yet, so this ticket was raised under the integration account.";
           data = await ticketRequest(event.env, "/tickets", { method: "POST", body: buildBody("") });
         }
+        if (actedAs && emailSource === "entered" && agentLogin) {
+          const save = rememberTicketEmail(agentLogin.accountKey, agentLogin.login, actedAs);
+          if (event.waitUntil) event.waitUntil(save); else await save;
+        }
       } else {
-        if (onBehalf) warning = "LiveChat did not give your email, so this ticket was raised under the integration account.";
         data = await ticketRequest(event.env, "/tickets", { method: "POST", body: buildBody("") });
       }
       return json(201, { ok: true, id: data.id, ref: data.ref, attachments: data.attachments || [], images: imageKeys.length, ...(actedAs ? { actedAs } : {}), ...(warning ? { warning } : {}) });

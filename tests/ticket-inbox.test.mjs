@@ -259,3 +259,18 @@ test('a ticket value shows the ticket system\'s own label from /ticket-config be
   assert.equal(show('query_type', 'brand_new_choice'), 'A Brand New Choice', 'a choice added after this widget was built');
   assert.equal(show('query_type', 'vvip_ltv_70_bonus'), 'VVIP LTV 70 BONUS', 'still the built-in list when the live one lacks it');
 });
+
+test('"Ticket account not found": the widget asks for the ticket account email, sends it with the ticket and remembers it', () => {
+  const store = new Map();
+  const context = vm.createContext({ localStorage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) }, String });
+  vm.runInContext(['const ticketEmailKey = (accountKey) => `rc-ticket-email:${accountKey || ""}`;', fn('storedTicketEmail'), fn('storeTicketEmail')].join('\n'), context);
+  assert.equal(vm.runInContext('storedTicketEmail("lc1")', context), '');
+  vm.runInContext('storeTicketEmail("lc1", " Alice@Company.com ")', context);
+  assert.equal(vm.runInContext('storedTicketEmail("lc1")', context), 'alice@company.com');
+  assert.equal(vm.runInContext('storedTicketEmail("lc2")', context), '', 'remembered per LiveChat account');
+  // The create form shows the box only after the server said the account was not found, and a typed value is what gets sent.
+  assert.ok(app.includes('${s.ticketEmailNeeded ? `<div class="escalation-field escalation-field-wide"><label class="field-label"'));
+  assert.ok(app.includes('data-field=\\"ticketEmail\\"') || app.includes('data-field="ticketEmail"'));
+  assert.ok(app.includes('ticketEmail: s.escalation.ticketEmail || storedTicketEmail(currentLiveChatAccount)'));
+  assert.ok(app.includes('if (data.needTicketEmail) s.ticketEmailNeeded = true;'));
+});

@@ -113,18 +113,98 @@ test("on behalf with files: onBehalfOf rides inside the multipart ticket part", 
   } finally { net.restore(); }
 });
 
-test("on behalf refused because the person has no ticket-system account: the ticket is raised under the key's owner, with the author fields, and the agent is told", async () => {
+test("no ticket-system account for that email: nothing is created, no image is kept, and the agent is asked for their ticket account email", async () => {
   const net = network({ ticketReplies: [reply({ ok: false, error: 'No active account has the email "alice@x.com", so nothing can be done on their behalf.' }, 400)] });
   try {
     const result = await createAs({ TICKETS_AUTHOR_EMAIL_FIELD: "livechat_email" });
-    assert.equal(result.statusCode, 201);
-    assert.equal(net.posts.length, 2);
-    assert.equal("onBehalfOf" in ticketJson(net.posts[1]), false);
-    assert.equal(ticketJson(net.posts[1]).fields.livechat_email, "alice@x.com", "the fallback still says who raised it");
+    assert.equal(result.statusCode, 400);
     const body = JSON.parse(result.body);
-    assert.match(body.warning, /alice@x\.com has no active account/);
-    assert.equal("actedAs" in body, false);
+    assert.equal(body.ok, false);
+    assert.equal(body.needTicketEmail, true);
+    assert.equal(body.triedEmail, "alice@x.com");
+    assert.equal(body.error, "Ticket account not found. Please enter your ticket account email.");
+    assert.equal(net.posts.length, 1, "no second attempt under the integration account");
   } finally { net.restore(); }
+});
+
+test("an agent whose LiveChat gives no email is asked for their ticket email before anything is sent", async () => {
+  TOKENS["tok-noemail"] = { account_id: "uuid-noemail", client_id: "c1" };
+  const net = network();
+  try {
+    const result = await createAs({}, {}, "tok-noemail");
+    assert.equal(result.statusCode, 400);
+    assert.equal(JSON.parse(result.body).needTicketEmail, true);
+    assert.equal(net.posts.length, 0);
+  } finally { net.restore(); delete TOKENS["tok-noemail"]; }
+});
+
+test("the email the agent typed is used, and saved on their row once so they are not asked again", async () => {
+  const net = network({ ticketReplies: [reply({ ok: true, id: 5, ref: "TK2610150005" }, 201)] });
+  const inner = globalThis.fetch;
+  const larkEnv = { LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_AGENT_LOGINS: "logins-table" };
+  const table = [{ record_id: "rec-1", ...row("lc1", "uuid-alice", "96 Alice") }];
+  const writes = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) return { json: async () => ({ code: 0, tenant_access_token: "t", expire: 3600 }) };
+    if (String(url).includes("/tables/logins-table/records")) {
+      if (options.method && options.method !== "GET") { writes.push({ url: String(url), body: JSON.parse(options.body) }); return { json: async () => ({ code: 0, data: {} }) }; }
+      return { json: async () => ({ code: 0, data: { items: table } }) };
+    }
+    return inner(url, options);
+  };
+  try {
+    initLarkEnv(larkEnv);
+    const result = await createAs(larkEnv, { author: { accountKey: "lc1", agentToken: "tok-alice", ticketEmail: "Alice@Company.com" } });
+    assert.equal(result.statusCode, 201);
+    assert.equal(ticketJson(net.posts[0]).onBehalfOf, "alice@company.com");
+    assert.equal(JSON.parse(result.body).actedAs, "alice@company.com");
+    assert.equal(writes.length, 1);
+    assert.ok(writes[0].url.endsWith("/records/rec-1"));
+    assert.deepEqual(writes[0].body.fields, { "Ticket Email": "alice@company.com" });
+  } finally { globalThis.fetch = inner; net.restore(); initLarkEnv({}); }
+});
+
+test("an email an admin set in Lark always wins over one typed in the widget, which is neither used nor saved", async () => {
+  const net = network({ ticketReplies: [reply({ ok: true, id: 6, ref: "TK2610150006" }, 201)] });
+  const inner = globalThis.fetch;
+  const larkEnv = { LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_AGENT_LOGINS: "logins-table" };
+  const table = [{ record_id: "rec-1", ...row("lc1", "uuid-alice", "96 Alice", "alice@company.com") }];
+  const writes = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) return { json: async () => ({ code: 0, tenant_access_token: "t", expire: 3600 }) };
+    if (String(url).includes("/tables/logins-table/records")) {
+      if (options.method && options.method !== "GET") { writes.push(1); return { json: async () => ({ code: 0, data: {} }) }; }
+      return { json: async () => ({ code: 0, data: { items: table } }) };
+    }
+    return inner(url, options);
+  };
+  try {
+    initLarkEnv(larkEnv);
+    const result = await createAs(larkEnv, { author: { accountKey: "lc1", agentToken: "tok-alice", ticketEmail: "boss@company.com" } });
+    assert.equal(result.statusCode, 201);
+    assert.equal(ticketJson(net.posts[0]).onBehalfOf, "alice@company.com", "never the typed boss@company.com");
+    assert.equal(writes.length, 0);
+  } finally { globalThis.fetch = inner; net.restore(); initLarkEnv({}); }
+});
+
+test("a Ticket Email an admin set that has no ticket account is not something the agent can fix: they are sent to the admin", async () => {
+  const net = network({ ticketReplies: [reply({ ok: false, error: 'No active account has the email "alice@company.com", so nothing can be done on their behalf.' }, 400)] });
+  const inner = globalThis.fetch;
+  const larkEnv = { LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_AGENT_LOGINS: "logins-table" };
+  const table = [{ record_id: "rec-1", ...row("lc1", "uuid-alice", "96 Alice", "alice@company.com") }];
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) return { json: async () => ({ code: 0, tenant_access_token: "t", expire: 3600 }) };
+    if (String(url).includes("/tables/logins-table/records")) return { json: async () => ({ code: 0, data: { items: table } }) };
+    return inner(url, options);
+  };
+  try {
+    initLarkEnv(larkEnv);
+    const result = await createAs(larkEnv);
+    assert.equal(result.statusCode, 400);
+    const body = JSON.parse(result.body);
+    assert.equal("needTicketEmail" in body, false);
+    assert.match(body.error, /Ticket Email saved for you \(alice@company\.com\) has no active ticket account\. Ask your admin/);
+  } finally { globalThis.fetch = inner; net.restore(); initLarkEnv({}); }
 });
 
 test("on behalf refused because the key may not act for others: the same fallback, with its own message", async () => {

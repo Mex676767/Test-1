@@ -86,7 +86,7 @@ to (the browser cannot choose) and sends that email. It needs:
 1. the API key bound to a role that holds `api-keys:act-on-behalf` (ask a ticket-system administrator), and
 2. an active ticket-system account with the agent's LiveChat email (and the person must not outrank the key's owner).
 
-When the ticket system refuses for either reason, the ticket is raised under the key's owner instead (with the LiveChat id and email in
+When the ticket system has no active account with the agent's email, nothing is created and the widget shows "Ticket account not found. Please enter your ticket account email." with a box for it (see Ticket Email below). When the key may not act for others at all (the missing grant, or a senior account), the ticket is raised under the key's owner instead (with the LiveChat id and email in
 the `TICKETS_AUTHOR_*` fields if those are set) and the agent sees why above the ticket. Any other refusal is shown as is.
 
 **Two LiveChat accounts, one ticket account.** An agent who works in both LiveChat accounts has a different email in each (checked
@@ -94,3 +94,4 @@ the `TICKETS_AUTHOR_*` fields if those are set) and the agent sees why above the
 text column **Ticket Email** (add it once). Fill it for an agent on either of their rows: both of their LiveChat logins then raise tickets
 as that ticket-system account. Without it the LiveChat email is used, which only works when it happens to be the ticket account's email.
 The widget shows who a ticket was raised as, or why it fell back, above the ticket.
+A typed email is used and saved on the agent's row (once, and only if neither of their rows has a Ticket Email), and remembered in that browser. An email an admin set in Lark always wins, and an agent cannot change it, so nobody can raise tickets as someone else by typing their email; a wrong admin-set email shows "Ask your admin to correct it" instead of the box.

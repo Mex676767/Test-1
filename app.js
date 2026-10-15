@@ -170,6 +170,11 @@ function mergeTicketChoices(live, fallback) {
     return true;
   });
 }
+// The ticket account email an agent typed, remembered in this browser per LiveChat account and sent with each ticket. An email an admin
+// set in Lark always wins on the server, so a stale or wrong value here can never make a ticket be raised as someone else.
+const ticketEmailKey = (accountKey) => `rc-ticket-email:${accountKey || ""}`;
+function storedTicketEmail(accountKey) { try { return localStorage.getItem(ticketEmailKey(accountKey)) || ""; } catch (_) { return ""; } }
+function storeTicketEmail(accountKey, email) { try { localStorage.setItem(ticketEmailKey(accountKey), String(email || "").trim().toLowerCase()); } catch (_) { /* not remembered */ } }
 async function fetchTicketConfig({ fresh = false } = {}) {
   if (!ESCALATION_TICKET_ENABLED) return;
   try {
@@ -3830,6 +3835,7 @@ function renderEscalationSection(chatId) {
     ${ticketFields.length ? `<div class="escalation-grid ticket-inbox-form">
       <div class="escalation-field"><label class="field-label">Department *</label>${renderTicketChoice(chatId, "departmentId", departmentId, ticketDepartments.map(item => ({ value: item.id, label: item.name || item.code || item.id })), { placeholder: "Please select", allowEmpty: false })}</div>
       <div class="escalation-field"><label class="field-label">Market</label>${renderTicketChoice(chatId, "marketId", marketId, ticketMarkets.map(item => ({ value: item.id, label: item.label || item.code || item.id })), { placeholder: "Use ticket default", allowEmpty: true })}</div>
+      ${s.ticketEmailNeeded ? `<div class="escalation-field escalation-field-wide"><label class="field-label" for="ticket-email-${escapeHtml(chatId)}">Your ticket account email *</label><input id="ticket-email-${escapeHtml(chatId)}" type="text" inputmode="email" autocomplete="email" class="input mono esc-input" data-chat="${escapeHtml(chatId)}" data-field="ticketEmail" value="${escapeHtml(s.escalation.ticketEmail || "")}" placeholder="name@company.com" /></div>` : ""}
       ${primary.map(spec => renderTicketInput(chatId, spec)).join("")}
     </div><details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketAdditionalOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketAdditionalOpen || requiredExtra ? "open" : ""}><summary>Additional details</summary><div class="escalation-grid ticket-inbox-form">${extra.map(spec => renderTicketInput(chatId, spec)).join("")}</div></details>
     ${renderTicketAttachments(chatId)}
@@ -4886,7 +4892,7 @@ chatListEl.addEventListener("click", async (e) => {
       const files = ticketAttachmentsByChat.get(chatId) || [];
       // The server asks LiveChat who this token belongs to and sends that agent's LiveChat id and email with the ticket.
       const agentToken = liveChatAgentTokens()[currentLiveChatAccount];
-      const author = agentToken && currentLiveChatAccount ? { accountKey: currentLiveChatAccount, agentToken } : undefined;
+      const author = agentToken && currentLiveChatAccount ? { accountKey: currentLiveChatAccount, agentToken, ticketEmail: s.escalation.ticketEmail || storedTicketEmail(currentLiveChatAccount) } : undefined;
       let requestBody;
       let headers;
       if (files.length) {
@@ -4902,9 +4908,11 @@ chatListEl.addEventListener("click", async (e) => {
       }
       const res = await fetch("/ticket-create", { method: "POST", headers, body: requestBody });
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Submit failed");
+      if (!data.ok) { if (data.needTicketEmail) s.ticketEmailNeeded = true; throw new Error(data.error || "Submit failed"); }
       s.ticketRef = data.ref;
       s.ticketNotice = data.warning || "";
+      s.ticketEmailNeeded = false;
+      if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
       s.ticketLookupRef = data.ref;
       s.escalationSubmitted = true;
       s.ticketView = "detail";
