@@ -207,13 +207,25 @@ test("a Ticket Email an admin set that has no ticket account is not something th
   } finally { globalThis.fetch = inner; net.restore(); initLarkEnv({}); }
 });
 
-test("on behalf refused because the key may not act for others: the same fallback, with its own message", async () => {
+test("on behalf refused because the key may not act for others: nothing is created under the integration account, the agent is told why", async () => {
   const net = network({ ticketReplies: [reply({ ok: false, error: "This API key's role may not act on behalf of other people (api-keys:act-on-behalf)." }, 403)] });
   try {
     const result = await createAs();
-    assert.equal(result.statusCode, 201);
-    assert.equal(net.posts.length, 2);
-    assert.match(JSON.parse(result.body).warning, /may not raise tickets for other people/);
+    assert.equal(result.statusCode, 403);
+    const body = JSON.parse(result.body);
+    assert.equal(body.ok, false);
+    assert.equal(body.keyNeedsGrant, true);
+    assert.match(body.error, /may not act on behalf of other people yet .*api-keys:act-on-behalf.*Nothing was created/);
+    assert.equal(net.posts.length, 1, "no second attempt as the key's owner");
+  } finally { net.restore(); }
+});
+
+test("on behalf refused because the person outranks the key's owner: the message names the account", async () => {
+  const net = network({ ticketReplies: [reply({ ok: false, error: '"alice@x.com" outranks the account this API key belongs to, so nothing can be done on their behalf.' }, 403)] });
+  try {
+    const result = await createAs();
+    assert.equal(result.statusCode, 403);
+    assert.match(JSON.parse(result.body).error, /Your ticket account \(alice@x\.com\) is senior/);
   } finally { net.restore(); }
 });
 

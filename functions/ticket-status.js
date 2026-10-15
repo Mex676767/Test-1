@@ -4,6 +4,17 @@ import { json, ticketError, ticketGet } from "./_lib/tickets.js";
 // A ticket read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
 const STATUS_TTL_MS = 10_000;
 
+const mapComment = (comment) => ({
+  id: comment.id,
+  author: { id: comment.author?.id ?? null, name: String(comment.author?.name || "") },
+  body: comment.deleted ? "" : String(comment.body ?? ""),
+  deleted: Boolean(comment.deleted),
+  createdAt: comment.createdAt || null,
+  mentions: Array.isArray(comment.mentions) ? comment.mentions.map((m) => ({ userId: m.userId, name: m.name })) : [],
+  attachments: Array.isArray(comment.attachments) ? comment.attachments.map((a) => ({ name: a.originalName || a.name || "File", mime: a.mimeType || a.mime || "", size: Number(a.sizeBytes ?? a.size) || 0 })) : [],
+  ...(Array.isArray(comment.replies) ? { replies: comment.replies.map(mapComment) } : {}),
+});
+
 export async function handler(event) {
   if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
   const ref = String(event.queryStringParameters?.ref || "").trim().toUpperCase();
@@ -35,6 +46,7 @@ export async function handler(event) {
         updatedAt: record.updatedAt || null,
         commentCount: Number(record.commentCount || 0),
         attachmentCount: Number(record.attachmentCount || 0),
+        comments: Array.isArray(record.comments) ? record.comments.map(mapComment) : [],
       },
     });
   } catch (err) {

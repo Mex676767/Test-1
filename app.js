@@ -3809,10 +3809,107 @@ function renderTicketStatus(chatId) {
     </div></details>
     ${attachments.length ? `<details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketFilesOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketFilesOpen ? "open" : ""}><summary>Attachments <span>${attachments.length}</span></summary><div class="ticket-attachment-summary">${attachments.map(item => escapeHtml(item?.name || "Attached file")).join("<br>")}</div></details>` : ""}
     <div class="ticket-inbox-conversation"><div class="ticket-inbox-caption"><strong>Conversation</strong><span>${Number(ticket.commentCount || 0)} comments</span></div>
-    ${comments.length ? `<div class="ticket-comments">${comments.map(comment => `<article class="ticket-comment"><span class="ticket-comment-avatar">${escapeHtml(String(comment.author || "?").charAt(0).toUpperCase())}</span><div><div class="ticket-comment-meta"><strong>${escapeHtml(comment.author || "Unknown")}</strong><span>${escapeHtml(comment.role || "")}</span><time>${escapeHtml(comment.time || "")}</time></div><p>${escapeHtml(comment.body || "")}</p></div></article>`).join("")}</div>` : '<p class="ticket-inbox-note">View the conversation and reply in the ticket system.</p>'}
+    ${renderTicketConversation(chatId, s, comments)}
     </div>
     <a class="ticket-open-link" href="https://tickets.96ghq.com/tickets?q=${encodeURIComponent(ticket.ref)}" target="_blank" rel="noopener">Open in ticket system ↗</a>
   </article>`;
+}
+
+const ticketCommentInFlight = new Set();
+
+// Who the ticket system should act as: the signed-in agent. The server asks LiveChat who the token belongs to; the ticket account email
+// typed in the box (or remembered in this browser) is used only when no admin-set Ticket Email exists.
+function ticketAuthor(s) {
+  const agentToken = liveChatAgentTokens()[currentLiveChatAccount];
+  return agentToken && currentLiveChatAccount ? { accountKey: currentLiveChatAccount, agentToken, ticketEmail: s.escalation.ticketEmail || storedTicketEmail(currentLiveChatAccount) } : undefined;
+}
+
+// A dialog for what the ticket system refused. "Ticket account not found" asks for the ticket account email in a box and tries the same
+// action again with it; anything else (the key may not act for others yet, a wrong Ticket Email) is a message to read.
+function showTicketProblem(chatId, failure, retry) {
+  document.getElementById("ticketProblemOverlay")?.remove();
+  const askEmail = Boolean(failure.needTicketEmail);
+  const overlay = document.createElement("div");
+  overlay.id = "ticketProblemOverlay";
+  overlay.className = "settings-overlay";
+  overlay.innerHTML = `<div class="settings-panel ticket-problem" role="alertdialog" aria-modal="true" aria-labelledby="ticketProblemTitle">
+    <div class="settings-head"><span id="ticketProblemTitle">${askEmail ? "Ticket account not found" : "This can't be done in the ticket system"}</span></div>
+    <p class="settings-hint">${escapeHtml(failure.error || "The ticket system refused this.")}${askEmail && failure.triedEmail ? ` We tried ${escapeHtml(failure.triedEmail)}.` : ""}</p>
+    ${askEmail ? `<input type="text" inputmode="email" autocomplete="email" class="input mono ticket-problem-email" placeholder="name@company.com" aria-label="Your ticket account email" /><div class="login-status error ticket-problem-status"></div>` : ""}
+    <div class="login-actions"><button type="button" class="submit-btn" data-problem="ok">${askEmail ? "Save and try again" : "OK"}</button>${askEmail ? `<button type="button" class="secondary-btn" data-problem="cancel">Cancel</button>` : ""}</div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector(".ticket-problem-email");
+  const status = overlay.querySelector(".ticket-problem-status");
+  if (input) input.focus();
+  const accept = () => {
+    if (!askEmail) { overlay.remove(); return; }
+    const value = input.value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) { status.textContent = "Enter your ticket account email, like name@company.com."; return; }
+    if (state[chatId]) state[chatId].escalation.ticketEmail = value;
+    overlay.remove();
+    retry();
+  };
+  overlay.querySelector('[data-problem="ok"]').addEventListener("click", accept);
+  const cancel = overlay.querySelector('[data-problem="cancel"]');
+  if (cancel) cancel.addEventListener("click", () => overlay.remove());
+  if (input) input.addEventListener("keydown", (event) => { if (event.key === "Enter") accept(); });
+}
+function resubmitTicket(chatId) {
+  const button = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] [data-action="submitEscalation"]`);
+  if (button) button.click();
+}
+
+// The conversation on a ticket: comments with their replies (the ticket API's shape; the preview's sample tickets use plain names),
+// and a box to comment or reply, posted as the signed-in agent.
+function renderTicketComment(comment, chatId, isReply = false) {
+  const name = typeof comment.author === "string" ? comment.author : comment.author?.name || "Unknown";
+  const when = comment.time || (comment.createdAt ? new Date(comment.createdAt).toLocaleString() : "");
+  const files = (comment.attachments || []).map((file) => escapeHtml(file?.name || "File"));
+  const text = comment.deleted ? "<em>This comment was deleted.</em>" : escapeHtml(comment.body || "");
+  const reply = !isReply && !comment.deleted && comment.id
+    ? `<button type="button" class="ticket-inbox-text-button" data-action="replyTicketComment" data-chat="${escapeHtml(chatId)}" data-comment="${escapeHtml(comment.id)}">Reply</button>` : "";
+  return `<article class="ticket-comment${isReply ? " ticket-comment-reply" : ""}"><span class="ticket-comment-avatar">${escapeHtml(String(name).charAt(0).toUpperCase() || "?")}</span><div><div class="ticket-comment-meta"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(comment.role || "")}</span><time>${escapeHtml(when)}</time>${reply}</div><p>${text}</p>${files.length ? `<small class="ticket-comment-files">📎 ${files.join(", ")}</small>` : ""}${(comment.replies || []).map((item) => renderTicketComment(item, chatId, true)).join("")}</div></article>`;
+}
+function renderTicketConversation(chatId, s, comments) {
+  const replyTo = s.commentReplyTo ? comments.find((comment) => String(comment.id) === String(s.commentReplyTo)) : null;
+  const busy = ticketCommentInFlight.has(chatId);
+  return `${comments.length ? `<div class="ticket-comments">${comments.map((comment) => renderTicketComment(comment, chatId)).join("")}</div>` : '<p class="ticket-inbox-note">No comments yet.</p>'}
+    <div class="ticket-comment-composer">
+      ${replyTo ? `<div class="ticket-comment-replying"><span>Replying to ${escapeHtml(typeof replyTo.author === "string" ? replyTo.author : replyTo.author?.name || "a comment")}</span><button type="button" class="ticket-inbox-text-button" data-action="cancelReplyTicketComment" data-chat="${escapeHtml(chatId)}">Cancel</button></div>` : ""}
+      <textarea class="input esc-input ticket-comment-input" data-chat="${escapeHtml(chatId)}" data-field="commentDraft" rows="3" placeholder="Write a comment…" aria-label="Write a comment">${escapeHtml(s.escalation.commentDraft || "")}</textarea>
+      <button type="button" class="submit-btn" data-action="sendTicketComment" data-chat="${escapeHtml(chatId)}" ${busy ? "disabled" : ""}>${busy ? "Sending…" : "Send comment"}</button>
+    </div>`;
+}
+async function sendTicketComment(chatId) {
+  const s = state[chatId];
+  const ref = s?.ticketRecord?.ref;
+  const text = String(s?.escalation?.commentDraft || "").trim();
+  if (!ref || ticketCommentInFlight.has(chatId)) return;
+  if (!text) { s.escalationError = "Write a comment first."; renderTicketSlot(chatId); return; }
+  ticketCommentInFlight.add(chatId);
+  renderTicketSlot(chatId);
+  let failure = null;
+  try {
+    const res = await fetch("/ticket-comment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref, body: text, parentId: s.commentReplyTo || undefined, author: ticketAuthor(s) }),
+    });
+    const data = await res.json();
+    if (!data.ok) { failure = data; throw new Error(data.error || "Comment failed"); }
+    s.escalation.commentDraft = "";
+    s.commentReplyTo = null;
+    if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
+    await loadTicketStatus(chatId, ref, { silent: true });
+    s.escalationError = "";
+  } catch (err) {
+    s.escalationError = "Comment failed: " + err.message;
+    if (failure) showTicketProblem(chatId, failure, () => sendTicketComment(chatId));
+  } finally {
+    ticketCommentInFlight.delete(chatId);
+  }
+  renderTicketSlot(chatId);
 }
 
 async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = {}) {
@@ -4931,6 +5028,7 @@ chatListEl.addEventListener("click", async (e) => {
     }
     btn.disabled = true;
     btn.textContent = "Creating…";
+    let failure = null;
     ticketCreateInFlight.add(chatId);
     try {
       const files = ticketAttachmentsByChat.get(chatId) || [];
@@ -4952,7 +5050,7 @@ chatListEl.addEventListener("click", async (e) => {
       }
       const res = await fetch("/ticket-create", { method: "POST", headers, body: requestBody });
       const data = await res.json();
-      if (!data.ok) { if (data.needTicketEmail) s.ticketEmailNeeded = true; throw new Error(data.error || "Submit failed"); }
+      if (!data.ok) { failure = data; if (data.needTicketEmail) s.ticketEmailNeeded = true; throw new Error(data.error || "Submit failed"); }
       s.ticketRef = data.ref;
       s.ticketNotice = data.warning || "";
       s.ticketEmailNeeded = false;
@@ -4968,11 +5066,29 @@ chatListEl.addEventListener("click", async (e) => {
       setStatus(`Ticket ${data.ref} created.`, "success");
     } catch (err) {
       s.escalationError = "Ticket creation failed: " + err.message;
+      if (failure) showTicketProblem(chatId, failure, () => resubmitTicket(chatId));
     } finally {
       ticketCreateInFlight.delete(chatId);
     }
     saveState();
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+  }
+
+  if (btn.dataset.action === "replyTicketComment") {
+    s.commentReplyTo = Number(btn.dataset.comment) || null;
+    renderTicketSlot(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "cancelReplyTicketComment") {
+    s.commentReplyTo = null;
+    renderTicketSlot(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "sendTicketComment") {
+    await sendTicketComment(chatId);
+    return;
   }
 
   if (btn.dataset.action === "lookupTicket") {
