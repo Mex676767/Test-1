@@ -274,3 +274,95 @@ test('"Ticket account not found": the widget asks for the ticket account email, 
   assert.ok(app.includes('ticketEmail: s.escalation.ticketEmail || storedTicketEmail(currentLiveChatAccount)'));
   assert.ok(app.includes('if (data.needTicketEmail) s.ticketEmailNeeded = true;'));
 });
+
+// ---- comments in the widget ---------------------------------------------------------------------------------
+function commentWorld(over = {}) {
+  const calls = { fetches: [], problems: [], loads: [], renders: 0 };
+  const state = { chat: { escalation: { commentDraft: 'Customer confirmed.' }, ticketRecord: { ref: 'TK2610150001' }, commentReplyTo: null, escalationError: '' } };
+  const context = vm.createContext({
+    state, Set, Map, String, Number, JSON, Array, Boolean, currentLiveChatAccount: 'lc1',
+    escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
+    liveChatAgentTokens: () => ({ lc1: 'tok' }), storedTicketEmail: () => '', storeTicketEmail: (account, email) => { calls.stored = [account, email]; },
+    renderTicketSlot: () => { calls.renders += 1; },
+    loadTicketStatus: async (...args) => { calls.loads.push(args); },
+    showTicketProblem: (chatId, failure, retry) => { calls.problems.push({ chatId, failure, retry }); },
+    fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); return { json: async () => (over.reply || { ok: true, comment: { id: 9 } }) }; },
+    ...over.context,
+  });
+  vm.runInContext(['const ticketCommentInFlight = new Set();', fn('ticketAuthor'), fn('renderTicketComment'), fn('renderTicketConversation'), fn('sendTicketComment')].join('\n'), context);
+  return { state, calls, context, run: (code) => vm.runInContext(code, context) };
+}
+
+test('comments: the thread shows authors, times, replies, files and a deleted comment without its text; everything is escaped', () => {
+  const w = commentWorld();
+  const html = w.run(`renderTicketConversation('chat', state.chat, ${JSON.stringify([
+    { id: 41, author: { id: 7, name: 'Alice' }, body: '<b>deposit</b>?', createdAt: '2026-10-15T08:01:00.000Z', attachments: [{ name: 'slip.png' }], replies: [{ id: 42, author: { id: 8, name: 'Bob' }, body: 'Done.' }] },
+    { id: 43, author: { id: 9, name: 'Cara' }, deleted: true, body: '' },
+    { author: 'R. Maxine', role: 'CS agent', time: '29 Sep · 8:31 PM', body: 'sample style' },
+  ])})`);
+  assert.match(html, /&lt;b&gt;deposit&lt;\/b&gt;\?/);
+  assert.doesNotMatch(html, /<b>deposit/);
+  assert.match(html, /ticket-comment-reply[\s\S]*Bob[\s\S]*Done\./);
+  assert.match(html, /📎 slip\.png/);
+  assert.match(html, /This comment was deleted/);
+  assert.match(html, /R\. Maxine[\s\S]*CS agent[\s\S]*sample style/);
+  assert.equal((html.match(/data-action="replyTicketComment"/g) || []).length, 1, 'only a live top-level comment with an id can be replied to');
+  assert.match(html, /data-field="commentDraft"[^>]*>Customer confirmed\.<\/textarea>/);
+  assert.match(w.run('renderTicketConversation("chat", state.chat, [])'), /No comments yet/);
+});
+
+test('comments: replying shows who to, and the box says Sending while it is on its way', () => {
+  const w = commentWorld();
+  w.state.chat.commentReplyTo = 41;
+  const html = w.run(`renderTicketConversation('chat', state.chat, [{ id: 41, author: { name: 'Alice' }, body: 'hi' }])`);
+  assert.match(html, /Replying to Alice/);
+  assert.match(html, /data-action="cancelReplyTicketComment"/);
+  w.run('ticketCommentInFlight.add("chat")');
+  assert.match(w.run('renderTicketConversation("chat", state.chat, [])'), /disabled>Sending…/);
+});
+
+test('comments: sending posts as the signed-in agent, clears the box and reloads the ticket', async () => {
+  const w = commentWorld();
+  w.state.chat.commentReplyTo = 41;
+  w.state.chat.escalation.ticketEmail = 'alice@company.com';
+  await w.run('sendTicketComment("chat")');
+  assert.equal(w.calls.fetches.length, 1);
+  assert.equal(w.calls.fetches[0].url, '/ticket-comment');
+  assert.deepEqual(w.calls.fetches[0].body, { ref: 'TK2610150001', body: 'Customer confirmed.', parentId: 41, author: { accountKey: 'lc1', agentToken: 'tok', ticketEmail: 'alice@company.com' } });
+  assert.equal(w.state.chat.escalation.commentDraft, '');
+  assert.equal(w.state.chat.commentReplyTo, null);
+  assert.deepEqual(w.calls.stored, ['lc1', 'alice@company.com']);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.calls.loads)), [['chat', 'TK2610150001', { silent: true }]]);
+  assert.equal(w.run('ticketCommentInFlight.size'), 0);
+});
+
+test('comments: an empty box sends nothing; a refusal keeps the text and opens the dialog, which sends again with the typed email', async () => {
+  const empty = commentWorld();
+  empty.state.chat.escalation.commentDraft = '   ';
+  await empty.run('sendTicketComment("chat")');
+  assert.equal(empty.calls.fetches.length, 0);
+  assert.equal(empty.state.chat.escalationError, 'Write a comment first.');
+
+  const refused = commentWorld({ reply: { ok: false, needTicketEmail: true, triedEmail: 'alice@x.com', error: 'Ticket account not found. Please enter your ticket account email.' } });
+  await refused.run('sendTicketComment("chat")');
+  assert.equal(refused.state.chat.escalation.commentDraft, 'Customer confirmed.', 'the text is kept');
+  assert.match(refused.state.chat.escalationError, /Comment failed: Ticket account not found/);
+  assert.equal(refused.calls.problems.length, 1);
+  assert.equal(refused.calls.problems[0].failure.needTicketEmail, true);
+  assert.equal(refused.run('ticketCommentInFlight.size'), 0);
+  refused.state.chat.escalation.ticketEmail = 'alice@company.com';
+  refused.context.fetch = async (url, options) => { refused.calls.fetches.push({ url, body: JSON.parse(options.body) }); return { json: async () => ({ ok: true, comment: { id: 1 } }) }; };
+  await refused.calls.problems[0].retry();
+  assert.equal(refused.calls.fetches.at(-1).body.author.ticketEmail, 'alice@company.com');
+});
+
+test('ticket problems open a dialog: the email box for "account not found", a message for anything else; creating a ticket retries by pressing its button again', () => {
+  assert.ok(app.includes('if (failure) showTicketProblem(chatId, failure, () => resubmitTicket(chatId));'));
+  assert.ok(app.includes('failure = data; if (data.needTicketEmail) s.ticketEmailNeeded = true;'));
+  const dialog = fn('showTicketProblem');
+  assert.match(dialog, /Ticket account not found/);
+  assert.match(dialog, /Save and try again/);
+  assert.match(dialog, /state\[chatId\]\.escalation\.ticketEmail = value;[\s\S]*retry\(\);/);
+  assert.match(fn('resubmitTicket'), /data-action="submitEscalation"/);
+  for (const action of ['sendTicketComment', 'replyTicketComment', 'cancelReplyTicketComment']) assert.ok(app.includes(`btn.dataset.action === "${action}"`), action);
+});

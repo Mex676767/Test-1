@@ -95,3 +95,12 @@ text column **Ticket Email** (add it once). Fill it for an agent on either of th
 as that ticket-system account. Without it the LiveChat email is used, which only works when it happens to be the ticket account's email.
 The widget shows who a ticket was raised as, or why it fell back, above the ticket.
 A typed email is used and saved on the agent's row (once, and only if neither of their rows has a Ticket Email), and remembered in that browser. An email an admin set in Lark always wins, and an agent cannot change it, so nobody can raise tickets as someone else by typing their email; a wrong admin-set email shows "Ask your admin to correct it" instead of the box.
+
+**Update (2026-10-15): no fallback, and comments.** With `TICKETS_ON_BEHALF_OF=1` a ticket or comment is never raised under the key's
+owner: if the ticket system refuses to act as the agent, nothing is created and a dialog says why. "Ticket account not found" asks for the
+ticket account email in a box (saved once, see above); "the API key may not act on behalf of other people yet" means the key's role is
+missing `api-keys:act-on-behalf` (ask the ticket team); a senior account the key cannot act for is named. Comments: the ticket read
+(`/ticket-status`) now carries the thread (comments with replies, mentions and file names) and `/ticket-comment` posts a comment or a
+reply (`{ ref, body, parentId?, author }`) as the signed-in agent through the same `onBehalfOf` rules. The widget shows the thread
+under each ticket with a box to comment or reply. Editing a ticket's fields, status, department, market or assignees is not possible
+yet: the ticket API has no update call (it lists list, read, create and comment only).
