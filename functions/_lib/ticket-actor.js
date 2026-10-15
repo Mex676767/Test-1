@@ -43,7 +43,7 @@ export async function actingAs(env, author, { resolveEmail = true } = {}) {
 export function refusalResponse(error, email, source) {
   if (Number(error.statusCode) === 403) {
     return json(403, {
-      ok: false, keyNeedsGrant: true, triedEmail: email,
+      ok: false, keyNeedsGrant: true, triedEmail: email, detail: String(error.message || "").slice(0, 300),
       error: /outranks/i.test(String(error.message))
         ? `Your ticket account (${email}) is senior to the account the integration key belongs to, so nothing can be done as you. Nothing was created. Ask the ticket team.`
         : "The ticket system's API key may not act on behalf of other people yet (its role needs the api-keys:act-on-behalf permission). Nothing was created. Ask the ticket team.",

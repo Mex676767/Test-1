@@ -3834,7 +3834,7 @@ function showTicketProblem(chatId, failure, retry) {
   overlay.className = "settings-overlay";
   overlay.innerHTML = `<div class="settings-panel ticket-problem" role="alertdialog" aria-modal="true" aria-labelledby="ticketProblemTitle">
     <div class="settings-head"><span id="ticketProblemTitle">${askEmail ? "Ticket account not found" : "This can't be done in the ticket system"}</span></div>
-    <p class="settings-hint">${escapeHtml(failure.error || "The ticket system refused this.")}${askEmail && failure.triedEmail ? ` We tried ${escapeHtml(failure.triedEmail)}.` : ""}</p>
+    <p class="settings-hint">${escapeHtml(failure.error || "The ticket system refused this.")}${failure.detail ? ` The ticket system said: "${escapeHtml(failure.detail)}"` : ""}${askEmail && failure.triedEmail ? ` We tried ${escapeHtml(failure.triedEmail)}.` : ""}</p>
     ${askEmail ? `<input type="text" inputmode="email" autocomplete="email" class="input mono ticket-problem-email" placeholder="name@company.com" aria-label="Your ticket account email" /><div class="login-status error ticket-problem-status"></div>` : ""}
     <div class="login-actions"><button type="button" class="submit-btn" data-problem="ok">${askEmail ? "Save and try again" : "OK"}</button>${askEmail ? `<button type="button" class="secondary-btn" data-problem="cancel">Cancel</button>` : ""}</div>
   </div>`;
@@ -3857,7 +3857,7 @@ function showTicketProblem(chatId, failure, retry) {
 }
 // Is the signed-in agent known to the ticket system? Shown at the top of the Tickets tab before they raise a ticket or comment.
 // Not asked when the widget cannot say who is signed in, and again after five minutes, after an email is entered, or on demand.
-let ticketAccount = { status: "unknown", email: "", source: "", message: "", checking: false, at: 0 };
+let ticketAccount = { status: "unknown", email: "", source: "", message: "", detail: "", checking: false, at: 0 };
 const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;
 async function checkTicketAccount(chatId, { force = false } = {}) {
   const s = state[chatId];
@@ -3873,7 +3873,7 @@ async function checkTicketAccount(chatId, { force = false } = {}) {
     if (!data.ok) throw new Error(data.error || "The ticket account could not be checked");
     ticketAccount = data.enabled === false
       ? { status: "off", email: "", source: "", message: "", checking: false, at: Date.now() }
-      : { status: data.status, email: data.email || "", source: data.source || "", message: "", checking: false, at: Date.now() };
+      : { status: data.status, email: data.email || "", source: data.source || "", message: "", detail: data.detail || "", checking: false, at: Date.now() };
     if (data.status === "found" && s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
     if (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") {
       queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
@@ -3910,6 +3910,7 @@ function renderTicketAccountLine(chatId) {
   const line = (kind, html) => `<div class="ticket-account ticket-account-${kind}" role="status">${html}</div>`;
   const enter = `<button type="button" class="ticket-inbox-text-button" data-action="enterTicketEmail" data-chat="${escapeHtml(chatId)}">Enter your ticket email</button>`;
   const who = a.email ? `<strong>${escapeHtml(a.email)}</strong>` : "";
+  const said = a.detail ? `<br><span>The ticket system said: "${escapeHtml(a.detail)}"</span>` : "";
   const origin = ({ livechat: "from your LiveChat email", "ticket-email": "your saved Ticket Email", "same-agent": "your saved Ticket Email", entered: "the email you entered" })[a.source];
   if (a.checking) return line("checking", "Checking your ticket account…");
   switch (a.status) {
@@ -3917,8 +3918,8 @@ function renderTicketAccountLine(chatId) {
     case "notFound": return line("bad", `✗ Ticket account not found${who ? ` for ${who}` : ""}. ${enter}`);
     case "noEmail": return line("bad", `✗ No ticket account email for you. ${enter}`);
     case "adminEmailInvalid": return line("bad", `✗ The Ticket Email saved for you (${who}) has no ticket account. Ask your admin to correct it.`);
-    case "keyNeedsGrant": return line("warn", "⚠ The ticket system's key can't act for people yet, so tickets and comments are refused. Ask the ticket team for the api-keys:act-on-behalf permission.");
-    case "outranks": return line("warn", `⚠ Your ticket account ${who} is senior to the integration key, so tickets and comments can't be made as you. Ask the ticket team.`);
+    case "keyNeedsGrant": return line("warn", `⚠ The ticket system won't let its API key act for you, so tickets and comments are refused. Ask the ticket team to check the key: its role needs api-keys:act-on-behalf, and the key must be bound to that role.${said}`);
+    case "outranks": return line("warn", `⚠ Your ticket account ${who} is senior to the integration key, so tickets and comments can't be made as you. Ask the ticket team.${said}`);
     case "error": return line("warn", `⚠ Could not check your ticket account: ${escapeHtml(a.message || "")}`);
     default: return "";
   }

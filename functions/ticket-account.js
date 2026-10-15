@@ -14,7 +14,7 @@ import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets
 // The ticket system's answer depends only on the email, so it is remembered for a minute per email (the API allows 120 calls a minute).
 const TTL_MS = 60_000;
 const MAX_CACHED = 200;
-const cache = new Map(); // email -> { at, raw: "found" | "noAccount" | "keyNeedsGrant" | "outranks" }
+const cache = new Map(); // email -> { at, raw: "found" | "noAccount" | "keyNeedsGrant" | "outranks", detail }
 export function resetTicketAccountCache() { cache.clear(); }
 
 export async function handler(event) {
@@ -31,13 +31,15 @@ export async function handler(event) {
     let entry = cache.get(email);
     if (!entry || Date.now() - entry.at > TTL_MS) {
       let raw = "found";
+      let detail = "";
       try {
         await ticketRequest(event.env, `/markets?onBehalfOf=${encodeURIComponent(email)}`);
       } catch (err) {
         if (!isOnBehalfRefusal(err)) throw err;
+        detail = String(err.message || "").slice(0, 300);
         raw = Number(err.statusCode) === 403 ? (/outranks/i.test(String(err.message)) ? "outranks" : "keyNeedsGrant") : "noAccount";
       }
-      entry = { at: Date.now(), raw };
+      entry = { at: Date.now(), raw, detail };
       cache.set(email, entry);
       if (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value);
     }
@@ -48,7 +50,7 @@ export async function handler(event) {
       const save = rememberTicketEmail(acting.agentLogin.accountKey, acting.agentLogin.login, email);
       if (event.waitUntil) event.waitUntil(save); else await save;
     }
-    return json(200, { ok: true, enabled: true, status, email, source });
+    return json(200, { ok: true, enabled: true, status, email, source, ...(status !== "found" && entry.detail ? { detail: entry.detail } : {}) });
   } catch (err) {
     if (err instanceof SyntaxError) return json(400, { ok: false, error: "Malformed JSON" });
     return ticketError(err);

@@ -76,3 +76,16 @@ test("switched off, signed out or not configured: no probe is made", async () =>
     assert.equal(net.probes.length, 0);
   } finally { net.restore(); }
 });
+
+test("a refusal comes with the ticket system's own words, so it is clear which one it is; a found account has none", async () => {
+  resetTicketAccountCache(); resetTicketRateLimit();
+  const words = "This API key is not bound to a role, so it may not act on behalf of other people. Issue a key bound to a role.";
+  let net = network({ markets: [reply({ ok: false, error: words }, 403)] });
+  try {
+    const refused = await check();
+    assert.deepEqual([refused.body.status, refused.body.detail], ["keyNeedsGrant", words]);
+  } finally { net.restore(); }
+  resetTicketAccountCache(); resetTicketRateLimit();
+  net = network();
+  try { assert.equal("detail" in (await check()).body, false); } finally { net.restore(); }
+});

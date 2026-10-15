@@ -483,3 +483,11 @@ test('ticket account gate: it replaces every Tickets view and the automatic inbo
   const draw = app.indexOf('void checkTicketAccount(chat.chatId);');
   assert.ok(draw > 0 && draw < app.indexOf('card.innerHTML = renderAdminTicketWorkspace(chat);'), 'the check starts before the tab is drawn');
 });
+
+test('ticket account line: a refusal shows the ticket system\'s own words, in the line and in the dialog', async () => {
+  const words = 'This API key is not bound to a role, so it may not act on behalf of other people.';
+  const w = accountWorld({ reply: { ok: true, enabled: true, status: 'keyNeedsGrant', email: 'a@b.co', source: 'livechat', detail: words } });
+  await w.run('checkTicketAccount("chat")');
+  assert.match(w.run('renderTicketAccountLine("chat")'), /The ticket system said: "This API key is not bound to a role/);
+  assert.ok(app.includes('The ticket system said: "${escapeHtml(failure.detail)}"'), 'the dialog for a refused ticket or comment says it too');
+});
