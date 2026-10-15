@@ -88,3 +88,9 @@ to (the browser cannot choose) and sends that email. It needs:
 
 When the ticket system refuses for either reason, the ticket is raised under the key's owner instead (with the LiveChat id and email in
 the `TICKETS_AUTHOR_*` fields if those are set) and the agent sees why above the ticket. Any other refusal is shown as is.
+
+**Two LiveChat accounts, one ticket account.** An agent who works in both LiveChat accounts has a different email in each (checked
+2026-10-15: no email appears in both), and the ticket system finds a person by email. So the Lark table "Livechat App Agent Logins" gets a
+text column **Ticket Email** (add it once). Fill it for an agent on either of their rows: both of their LiveChat logins then raise tickets
+as that ticket-system account. Without it the LiveChat email is used, which only works when it happens to be the ticket account's email.
+The widget shows who a ticket was raised as, or why it fell back, above the ticket.

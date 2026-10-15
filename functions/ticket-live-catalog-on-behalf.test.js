@@ -4,6 +4,8 @@ import { handler as configHandler, resetTicketConfigCache } from "./ticket-confi
 import { handler as createHandler } from "./ticket-create.js";
 import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 import { resetTicketRateLimit, resetTicketReadCache } from "./_lib/tickets.js";
+import { pickTicketEmail, parseTicketEmailRows } from "./_lib/ticket-email.js";
+import { initEnv as initLarkEnv } from "./_lib/lark.js";
 
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const withFetch = async (impl, run) => { const original = globalThis.fetch; globalThis.fetch = impl; try { return await run(); } finally { globalThis.fetch = original; } };
@@ -160,4 +162,42 @@ test("switched off, nothing about the agent is sent or needed; switched on, a ti
     assert.equal(stale.statusCode, 401);
     assert.equal(net.posts.length, 0);
   } finally { net.restore(); }
+});
+
+// ---- the Ticket Email mapping (an agent with two LiveChat accounts has two different emails) ------------------
+
+const row = (account, login, name, ticketEmail = "") => ({ fields: { "LiveChat Account": account, "LiveChat Login": login, "Agent Name": name, "Ticket Email": ticketEmail } });
+
+test("Ticket Email: the login's own, then the same agent's other login, then the LiveChat email", () => {
+  const rows = parseTicketEmailRows([
+    row("lc1", "uuid-a1", "96 Teh", "Teh@Company.com"), row("lc2", "uuid-a2", "96 Teh"),
+    row("lc1", "uuid-b1", "96 Edwin"), row("lc2", "uuid-b2", "96 Edwin"),
+    row("lc1", "uuid-c1", "96 Mexha", "not an email"),
+  ]);
+  assert.deepEqual(pickTicketEmail(rows, "lc1", "uuid-a1", "teh1@lc.com"), { email: "teh@company.com", via: "ticket-email" });
+  assert.deepEqual(pickTicketEmail(rows, "lc2", "uuid-a2", "teh2@lc.com"), { email: "teh@company.com", via: "same-agent" }, "set once, used by both of the agent's logins");
+  assert.deepEqual(pickTicketEmail(rows, "lc1", "uuid-b1", "Edwin1@lc.com"), { email: "edwin1@lc.com", via: "livechat" });
+  assert.deepEqual(pickTicketEmail(rows, "lc1", "uuid-c1", "m@lc.com"), { email: "m@lc.com", via: "livechat" }, "a value that is not an email is ignored");
+  assert.deepEqual(pickTicketEmail(rows, "lc1", "nobody", "x@lc.com"), { email: "x@lc.com", via: "livechat" }, "a login with no row");
+  assert.deepEqual(pickTicketEmail([], "lc1", "x", ""), { email: "", via: "livechat" });
+});
+
+test("on behalf: the Ticket Email set in Lark is what the ticket system is asked for, whichever LiveChat account the agent used", async () => {
+  const net = network();
+  const original = globalThis.fetch;
+  const larkEnv = { LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_AGENT_LOGINS: "logins-table" };
+  const table = [row("lc1", "uuid-alice", "96 Alice"), row("lc2", "uuid-alice-two", "96 Alice", "alice@company.com")];
+  const wrapped = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) return { json: async () => ({ code: 0, tenant_access_token: "t", expire: 3600 }) };
+    if (String(url).includes("/tables/logins-table/records")) return { json: async () => ({ code: 0, data: { items: table } }) };
+    return wrapped(url, options);
+  };
+  try {
+    initLarkEnv(larkEnv);
+    const result = await createAs(larkEnv);
+    assert.equal(result.statusCode, 201);
+    assert.equal(ticketJson(net.posts[0]).onBehalfOf, "alice@company.com", "from the agent's other login's Ticket Email, not alice@x.com");
+    assert.equal(JSON.parse(result.body).actedAs, "alice@company.com");
+  } finally { globalThis.fetch = original; net.restore(); initLarkEnv({}); }
 });

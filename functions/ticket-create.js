@@ -1,6 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
+import { ticketEmailFor } from "./_lib/ticket-email.js";
 import { deleteTicketImages, isStoredImage, storeTicketImages } from "./_lib/ticket-images.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
@@ -66,6 +67,7 @@ export async function handler(event) {
     const authorEmailField = String(event.env?.TICKETS_AUTHOR_EMAIL_FIELD || "").trim();
     const onBehalf = flag(event.env?.TICKETS_ON_BEHALF_OF);
     let agentEmail = "";
+    let onBehalfEmail = ""; // the ticket-system account's email: the agent's Ticket Email in Lark if set, else their LiveChat email
     if (authorIdField || authorEmailField || onBehalf) {
       const account = LIVECHAT_ACCOUNTS.find((item) => item.key === body.author?.accountKey);
       if (!account || !String(body.author?.agentToken || "").trim()) {
@@ -77,6 +79,7 @@ export async function handler(event) {
       if (authorEmailField && !agentEmail) return json(502, { ok: false, error: "LiveChat did not return this agent's email, so the ticket was not created." });
       if (authorIdField) fields[authorIdField] = who.login;
       if (authorEmailField) fields[authorEmailField] = agentEmail;
+      if (onBehalf) onBehalfEmail = (await ticketEmailFor(account.key, who.login, agentEmail)).email;
     }
 
     // Images go to the R2 bucket and the ticket gets their links (in the remarks unless TICKETS_IMAGE_LINKS_FIELD names another
@@ -108,15 +111,15 @@ export async function handler(event) {
       let data;
       let actedAs = "";
       let warning = "";
-      if (onBehalf && agentEmail) {
+      if (onBehalf && onBehalfEmail) {
         try {
-          data = await ticketRequest(event.env, "/tickets", { method: "POST", body: buildBody(agentEmail) });
-          actedAs = agentEmail;
+          data = await ticketRequest(event.env, "/tickets", { method: "POST", body: buildBody(onBehalfEmail) });
+          actedAs = onBehalfEmail;
         } catch (err) {
           if (!isOnBehalfRefusal(err)) throw err;
           warning = Number(err.statusCode) === 403
             ? "The ticket system's key may not raise tickets for other people yet, so this ticket was raised under the integration account."
-            : `${agentEmail} has no active account in the ticket system, so this ticket was raised under the integration account.`;
+            : `${onBehalfEmail} has no active account in the ticket system, so this ticket was raised under the integration account. Ask your admin to set your Ticket Email.`;
           data = await ticketRequest(event.env, "/tickets", { method: "POST", body: buildBody("") });
         }
       } else {
