@@ -24,6 +24,8 @@ function widget() {
     renderTicketChoice: () => '<button>Choice</button>',
     renderTicketAttachments: () => '<div>Attachments</div>',
     renderTicketNotifications: () => '',
+    renderTicketAccountLine: () => '',
+    renderTicketAccountGate: () => '',
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },
   });
@@ -243,7 +245,7 @@ test('explicit reads skip the server copy; the automatic first load and the poll
   assert.ok(app.includes('async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = {}) {'));
   assert.ok(app.includes('`/ticket-status?ref=${encodeURIComponent(normalized)}${fresh ? "&fresh=1" : ""}`'));
   assert.ok(app.includes('${fresh ? "&fresh=1" : ""}`);'));
-  assert.equal((app.match(/refreshTicketInbox\([^)]*\{ fresh: false \}\)/g) || []).length, 2, 'the two automatic loads');
+  assert.equal((app.match(/refreshTicketInbox\([^)]*\{ fresh: false \}\)/g) || []).length, 3, 'the two automatic loads, and the load once the account is found');
 });
 
 test('a ticket value shows the ticket system\'s own label from /ticket-config before any built-in guess', () => {
@@ -284,6 +286,7 @@ function commentWorld(over = {}) {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
     liveChatAgentTokens: () => ({ lc1: 'tok' }), storedTicketEmail: () => '', storeTicketEmail: (account, email) => { calls.stored = [account, email]; },
     renderTicketSlot: () => { calls.renders += 1; },
+    noteTicketAccountUsed: () => {},
     loadTicketStatus: async (...args) => { calls.loads.push(args); },
     showTicketProblem: (chatId, failure, retry) => { calls.problems.push({ chatId, failure, retry }); },
     fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); return { json: async () => (over.reply || { ok: true, comment: { id: 9 } }) }; },
@@ -365,4 +368,118 @@ test('ticket problems open a dialog: the email box for "account not found", a me
   assert.match(dialog, /state\[chatId\]\.escalation\.ticketEmail = value;[\s\S]*retry\(\);/);
   assert.match(fn('resubmitTicket'), /data-action="submitEscalation"/);
   for (const action of ['sendTicketComment', 'replyTicketComment', 'cancelReplyTicketComment']) assert.ok(app.includes(`btn.dataset.action === "${action}"`), action);
+});
+
+// ---- the ticket account line -------------------------------------------------------------------------------
+function accountWorld(over = {}) {
+  const calls = { fetches: [], renders: 0, stored: null, problems: [], inbox: [] };
+  const state = { chat: { escalation: { ticketEmail: over.typed || '' } } };
+  const context = vm.createContext({
+    state, JSON, Date, Number, String, currentLiveChatAccount: 'lc1',
+    escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
+    queueMicrotask, ticketWorkspaceView: () => 'list', ticketSearchResultsByChat: new Map(), refreshTicketInbox: async (...args) => { calls.inbox.push(args); },
+    showTicketProblem: (chatId, failure, retry) => { calls.problems.push({ chatId, failure, retry }); },
+    ticketAuthor: () => (over.signedOut ? undefined : { accountKey: 'lc1', agentToken: 'tok', ticketEmail: over.typed || '' }),
+    storeTicketEmail: (account, email) => { calls.stored = [account, email]; },
+    renderTicketSlot: () => { calls.renders += 1; },
+    fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); if (over.fail) throw new Error('boom'); return { json: async () => over.reply }; },
+  });
+  vm.runInContext(['let ticketAccount = { status: "unknown", email: "", source: "", message: "", checking: false, at: 0 };', 'const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;', fn('checkTicketAccount'), fn('noteTicketAccountUsed'), fn('renderTicketAccountLine'), 'const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks"];', fn('ticketAccountBlocks'), fn('renderTicketAccountGate')].join('\n'), context);
+  return { state, calls, run: (code) => vm.runInContext(code, context) };
+}
+
+test('ticket account line: it says found with the email and where it came from, or not found with a button to enter it', async () => {
+  const found = accountWorld({ reply: { ok: true, enabled: true, status: 'found', email: 'alice@company.com', source: 'ticket-email' } });
+  await found.run('checkTicketAccount("chat")');
+  assert.equal(found.calls.fetches[0].url, '/ticket-account');
+  assert.deepEqual(found.calls.fetches[0].body, { author: { accountKey: 'lc1', agentToken: 'tok', ticketEmail: '' } });
+  let html = found.run('renderTicketAccountLine("chat")');
+  assert.match(html, /✓ Ticket account found: <strong>alice@company\.com<\/strong>[\s\S]*your saved Ticket Email/);
+  const missing = accountWorld({ reply: { ok: true, enabled: true, status: 'notFound', email: 'alice@x.com', source: 'livechat' } });
+  await missing.run('checkTicketAccount("chat")');
+  html = missing.run('renderTicketAccountLine("chat")');
+  assert.match(html, /✗ Ticket account not found for <strong>alice@x\.com<\/strong>/);
+  assert.match(html, /data-action="enterTicketEmail"/);
+  for (const [status, pattern] of [['noEmail', /No ticket account email for you/], ['adminEmailInvalid', /Ask your admin to correct it/], ['keyNeedsGrant', /api-keys:act-on-behalf/], ['outranks', /senior to the integration key/]]) {
+    const w = accountWorld({ reply: { ok: true, enabled: true, status, email: 'a@b.co', source: 'ticket-email' } });
+    await w.run('checkTicketAccount("chat")');
+    assert.match(w.run('renderTicketAccountLine("chat")'), pattern, status);
+  }
+});
+
+test('ticket account line: nothing is shown when the feature is off or nobody is signed in; a check is not repeated within five minutes; a failure is shown, not hidden', async () => {
+  const off = accountWorld({ reply: { ok: true, enabled: false } });
+  await off.run('checkTicketAccount("chat")');
+  assert.equal(off.run('renderTicketAccountLine("chat")'), '');
+  const signedOut = accountWorld({ signedOut: true, reply: {} });
+  await signedOut.run('checkTicketAccount("chat")');
+  assert.equal(signedOut.calls.fetches.length, 0);
+  const again = accountWorld({ reply: { ok: true, enabled: true, status: 'found', email: 'a@b.co', source: 'livechat' } });
+  await again.run('checkTicketAccount("chat")');
+  await again.run('checkTicketAccount("chat")');
+  assert.equal(again.calls.fetches.length, 1);
+  await again.run('checkTicketAccount("chat", { force: true })');
+  assert.equal(again.calls.fetches.length, 2, 'force asks again');
+  const broken = accountWorld({ fail: true });
+  await broken.run('checkTicketAccount("chat")');
+  assert.match(broken.run('renderTicketAccountLine("chat")'), /Could not check your ticket account: boom/);
+  const used = accountWorld({ reply: {} });
+  used.run('noteTicketAccountUsed({ actedAs: "alice@company.com" })');
+  assert.match(used.run('renderTicketAccountLine("chat")'), /✓ Ticket account found: <strong>alice@company\.com/);
+});
+
+test('ticket account line: it sits at the top of every Tickets view, is checked when the tab is drawn, and Enter your ticket email opens the dialog', () => {
+  assert.ok(app.includes('${renderTicketNotifications()}' + (app.includes('\r\n') ? '\r\n' : '\n') + '    ${renderTicketAccountLine(chatId)}'));
+  assert.ok(app.includes('void checkTicketAccount(chat.chatId);'));
+  assert.ok(app.includes('btn.dataset.action === "enterTicketEmail"'));
+  assert.ok(app.includes('() => checkTicketAccount(chatId, { force: true })'));
+});
+
+test('ticket account gate: while it checks, and when the account is missing or cannot be acted for, only the account screen shows; found, off, failed or unknown lets the tab through', async () => {
+  const gated = { notFound: /Ticket account not found/, noEmail: /No ticket account email/, adminEmailInvalid: /Ask your admin/, keyNeedsGrant: /api-keys:act-on-behalf/, outranks: /senior/ };
+  for (const [status, pattern] of Object.entries(gated)) {
+    const w = accountWorld({ reply: { ok: true, enabled: true, status, email: 'a@b.co', source: 'livechat' } });
+    await w.run('checkTicketAccount("chat")');
+    assert.equal(w.run('ticketAccountBlocks()'), true, status);
+    const html = w.run('renderTicketAccountGate("chat")');
+    assert.match(html, pattern, status);
+    assert.match(html, /data-action="recheckTicketAccount"/);
+    assert.match(html, /has to be recognised before tickets can be used here/);
+  }
+  for (const [status, extra] of [['found', {}], ['off', { enabled: false }]]) {
+    const w = accountWorld({ reply: { ok: true, enabled: status !== 'off', status, email: 'a@b.co', source: 'livechat', ...extra } });
+    await w.run('checkTicketAccount("chat")');
+    assert.equal(w.run('ticketAccountBlocks()'), false, status);
+    assert.equal(w.run('renderTicketAccountGate("chat")'), '');
+  }
+  const failed = accountWorld({ fail: true });
+  await failed.run('checkTicketAccount("chat")');
+  assert.equal(failed.run('ticketAccountBlocks()'), false, 'a failed check does not lock anyone out');
+  assert.equal(accountWorld({}).run('ticketAccountBlocks()'), false, 'nothing checked yet (nobody signed in)');
+});
+
+test('ticket account gate: the first screen is already "Checking your ticket account"; a missing account opens the email popup by itself; once found the inbox loads', async () => {
+  const w = accountWorld({ reply: { ok: true, enabled: true, status: 'notFound', email: 'alice@x.com', source: 'livechat' } });
+  const pending = w.run('checkTicketAccount("chat")');
+  assert.equal(w.run('ticketAccountBlocks()'), true, 'blocked from the moment the check starts');
+  assert.match(w.run('renderTicketAccountGate("chat")'), /Checking your ticket account…/);
+  await pending;
+  await Promise.resolve();
+  assert.equal(w.calls.problems.length, 1);
+  assert.equal(w.calls.problems[0].failure.needTicketEmail, true);
+  assert.equal(w.calls.problems[0].failure.triedEmail, 'alice@x.com');
+  assert.equal(w.calls.inbox.length, 0, 'no ticket calls while gated');
+  const found = accountWorld({ reply: { ok: true, enabled: true, status: 'found', email: 'alice@x.com', source: 'livechat' } });
+  await found.run('checkTicketAccount("chat")');
+  assert.deepEqual(JSON.parse(JSON.stringify(found.calls.inbox)), [['chat', '', 'all', { fresh: false }]]);
+  assert.equal(found.calls.problems.length, 0);
+});
+
+test('ticket account gate: it replaces every Tickets view and the automatic inbox loads wait for it', () => {
+  assert.ok(app.includes('const gate = renderTicketAccountGate(chatId);'));
+  assert.ok(app.includes('if (gate) return gate;'));
+  assert.equal((app.match(/!ticketAccountBlocks\(\)\) void refreshTicketInbox/g) || []).length, 2);
+  assert.ok(app.includes('btn.dataset.action === "recheckTicketAccount"'));
+  const draw = app.indexOf('void checkTicketAccount(chat.chatId);');
+  assert.ok(draw > 0 && draw < app.indexOf('card.innerHTML = renderAdminTicketWorkspace(chat);'), 'the check starts before the tab is drawn');
 });

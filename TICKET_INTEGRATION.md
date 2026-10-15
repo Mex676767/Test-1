@@ -104,3 +104,11 @@ missing `api-keys:act-on-behalf` (ask the ticket team); a senior account the key
 reply (`{ ref, body, parentId?, author }`) as the signed-in agent through the same `onBehalfOf` rules. The widget shows the thread
 under each ticket with a box to comment or reply. Editing a ticket's fields, status, department, market or assignees is not possible
 yet: the ticket API has no update call (it lists list, read, create and comment only).
+
+**Ticket account check (before the Tickets tab can be used).** When the Tickets tab is opened the widget asks `/ticket-account`, which
+makes one small read (the market list) as the agent's ticket email (`onBehalfOf`) and so learns, without creating anything, whether the
+ticket system knows them. Until the answer is "found" the tab shows only that screen: "Checking your ticket account…", then the result
+("✓ Ticket account found: email (from your LiveChat email / your saved Ticket Email / the email you entered)", or "✗ not found" with the
+email popup open at once, or why the key cannot act for them). The inbox and ticket calls wait for it. A failed check (ticket system
+busy) does not lock anyone out. The answer is remembered for a minute per email on the server and five minutes in the widget; "Check
+again" and entering an email check again. It only exists with `TICKETS_ON_BEHALF_OF=1`.

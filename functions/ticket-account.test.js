@@ -1,0 +1,78 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { handler, resetTicketAccountCache } from "./ticket-account.js";
+import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
+import { resetTicketRateLimit } from "./_lib/tickets.js";
+
+const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const TOKENS = { "tok-alice": { account_id: "uuid-alice", email: "alice@x.com", client_id: "c1" } };
+const onEnv = { TICKETS_API_KEY: "k", TICKETS_ON_BEHALF_OF: "1", LIVECHAT_CLIENT_ID: "c1" };
+const author = { accountKey: "lc1", agentToken: "tok-alice" };
+
+function network({ markets = [] } = {}) {
+  const original = globalThis.fetch;
+  const probes = [];
+  globalThis.fetch = async (url, options = {}) => {
+    url = String(url);
+    if (url.endsWith("/v2/info")) {
+      const info = TOKENS[String(options.headers.Authorization).replace("Bearer ", "")];
+      return info ? Response.json(info) : Response.json({ error: "invalid_token" }, { status: 401 });
+    }
+    if (url.includes("/markets")) { probes.push(new URL(url).searchParams.get("onBehalfOf")); return markets.shift() || reply({ ok: true, markets: [] }); }
+    throw new Error(`unexpected ${url}`);
+  };
+  return { probes, restore: () => { globalThis.fetch = original; } };
+}
+const check = async (env = onEnv, input = { author }) => {
+  initLiveChatEnv({ LIVECHAT_PAT: "pat-1" });
+  const result = await handler({ httpMethod: "POST", env, body: JSON.stringify(input) });
+  return { status: result.statusCode, body: JSON.parse(result.body) };
+};
+const noAccount = () => reply({ ok: false, error: 'No active account has the email "alice@x.com", so nothing can be done on their behalf.' }, 400);
+
+test("found: the ticket system acts as the agent's email; one small read, remembered for a minute", async () => {
+  resetTicketAccountCache(); resetTicketRateLimit();
+  const net = network();
+  try {
+    const first = await check();
+    assert.deepEqual(first.body, { ok: true, enabled: true, status: "found", email: "alice@x.com", source: "livechat" });
+    assert.deepEqual(net.probes, ["alice@x.com"]);
+    await check();
+    assert.equal(net.probes.length, 1, "the second check is answered from the minute's copy");
+  } finally { net.restore(); }
+});
+
+test("not found, the key's missing permission and a senior account are told apart", async () => {
+  for (const [reply1, expected] of [
+    [noAccount(), "notFound"],
+    [reply({ ok: false, error: "This API key's role may not act on behalf of other people (api-keys:act-on-behalf)." }, 403), "keyNeedsGrant"],
+    [reply({ ok: false, error: '"alice@x.com" outranks the account this API key belongs to, so nothing can be done on their behalf.' }, 403), "outranks"],
+  ]) {
+    resetTicketAccountCache(); resetTicketRateLimit();
+    const net = network({ markets: [reply1] });
+    try { assert.equal((await check()).body.status, expected); } finally { net.restore(); }
+  }
+});
+
+test("a typed email is what is checked; a wrong one that an admin saved is not something the agent can fix", async () => {
+  resetTicketAccountCache(); resetTicketRateLimit();
+  const net = network({ markets: [noAccount()] });
+  try {
+    const typed = await check(onEnv, { author: { ...author, ticketEmail: "Alice@Company.com" } });
+    assert.deepEqual([typed.body.status, typed.body.email, typed.body.source], ["notFound", "alice@company.com", "entered"]);
+    assert.deepEqual(net.probes, ["alice@company.com"]);
+  } finally { net.restore(); }
+});
+
+test("switched off, signed out or not configured: no probe is made", async () => {
+  resetTicketAccountCache(); resetTicketRateLimit();
+  const net = network();
+  try {
+    assert.deepEqual((await check({ TICKETS_API_KEY: "k" })).body, { ok: true, enabled: false });
+    assert.equal((await check(onEnv, { author: { accountKey: "lc1", agentToken: "tok-gone" } })).status, 401);
+    assert.equal((await check(onEnv, {})).status, 401);
+    assert.equal((await check({})).status, 503);
+    assert.equal((await handler({ httpMethod: "GET", env: onEnv })).statusCode, 405);
+    assert.equal(net.probes.length, 0);
+  } finally { net.restore(); }
+});
