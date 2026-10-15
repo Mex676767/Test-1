@@ -3855,6 +3855,75 @@ function showTicketProblem(chatId, failure, retry) {
   if (cancel) cancel.addEventListener("click", () => overlay.remove());
   if (input) input.addEventListener("keydown", (event) => { if (event.key === "Enter") accept(); });
 }
+// Is the signed-in agent known to the ticket system? Shown at the top of the Tickets tab before they raise a ticket or comment.
+// Not asked when the widget cannot say who is signed in, and again after five minutes, after an email is entered, or on demand.
+let ticketAccount = { status: "unknown", email: "", source: "", message: "", checking: false, at: 0 };
+const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;
+async function checkTicketAccount(chatId, { force = false } = {}) {
+  const s = state[chatId];
+  if (!s || ticketAccount.checking) return;
+  if (!force && ticketAccount.status !== "unknown" && Date.now() - ticketAccount.at < TICKET_ACCOUNT_RECHECK_MS) return;
+  const author = ticketAuthor(s);
+  if (!author) return;
+  ticketAccount = { ...ticketAccount, checking: true };
+  renderTicketSlot(chatId);
+  try {
+    const res = await fetch("/ticket-account", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author }) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "The ticket account could not be checked");
+    ticketAccount = data.enabled === false
+      ? { status: "off", email: "", source: "", message: "", checking: false, at: Date.now() }
+      : { status: data.status, email: data.email || "", source: data.source || "", message: "", checking: false, at: Date.now() };
+    if (data.status === "found" && s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
+    if (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") {
+      queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
+    }
+    if (ticketAccount.status === "found" && ticketWorkspaceView(s) === "list" && !ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId, "", "all", { fresh: false });
+  } catch (err) {
+    ticketAccount = { status: "error", email: "", source: "", message: err.message, checking: false, at: Date.now() };
+  }
+  renderTicketSlot(chatId);
+}
+// A ticket or comment that went through as the agent proves the account: the line follows without another check.
+function noteTicketAccountUsed(data) {
+  if (data?.actedAs) ticketAccount = { status: "found", email: data.actedAs, source: ticketAccount.source, message: "", checking: false, at: Date.now() };
+}
+// The Tickets tab is only usable once the ticket system knows the signed-in agent, so every ticket and comment is theirs: while the check
+// runs, and whenever it says the account is missing or cannot be acted for, the tab shows only the account line (see ticketAccountBlocks).
+// A failed check (the ticket system busy or unreachable) does not lock anyone out: the line says so and a refused ticket is explained then.
+const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks"];
+function ticketAccountBlocks() {
+  return (ticketAccount.checking && ticketAccount.status !== "found") || TICKET_ACCOUNT_BLOCKING.includes(ticketAccount.status);
+}
+function renderTicketAccountGate(chatId) {
+  if (!ticketAccountBlocks()) return "";
+  const again = `<button type="button" class="secondary-btn" data-action="recheckTicketAccount" data-chat="${escapeHtml(chatId)}">Check again</button>`;
+  return `<div class="ticket-inbox-header"><h2>Tickets</h2></div>
+    <div class="ticket-account-gate">${renderTicketAccountLine(chatId)}
+      <p class="ticket-inbox-note">Your ticket account has to be recognised before tickets can be used here, so every ticket and comment is yours.</p>
+      ${ticketAccount.checking ? "" : again}
+    </div>`;
+}
+
+function renderTicketAccountLine(chatId) {
+  const a = ticketAccount;
+  const line = (kind, html) => `<div class="ticket-account ticket-account-${kind}" role="status">${html}</div>`;
+  const enter = `<button type="button" class="ticket-inbox-text-button" data-action="enterTicketEmail" data-chat="${escapeHtml(chatId)}">Enter your ticket email</button>`;
+  const who = a.email ? `<strong>${escapeHtml(a.email)}</strong>` : "";
+  const origin = ({ livechat: "from your LiveChat email", "ticket-email": "your saved Ticket Email", "same-agent": "your saved Ticket Email", entered: "the email you entered" })[a.source];
+  if (a.checking) return line("checking", "Checking your ticket account…");
+  switch (a.status) {
+    case "found": return line("ok", `✓ Ticket account found: ${who}${origin ? ` <span>(${origin})</span>` : ""}`);
+    case "notFound": return line("bad", `✗ Ticket account not found${who ? ` for ${who}` : ""}. ${enter}`);
+    case "noEmail": return line("bad", `✗ No ticket account email for you. ${enter}`);
+    case "adminEmailInvalid": return line("bad", `✗ The Ticket Email saved for you (${who}) has no ticket account. Ask your admin to correct it.`);
+    case "keyNeedsGrant": return line("warn", "⚠ The ticket system's key can't act for people yet, so tickets and comments are refused. Ask the ticket team for the api-keys:act-on-behalf permission.");
+    case "outranks": return line("warn", `⚠ Your ticket account ${who} is senior to the integration key, so tickets and comments can't be made as you. Ask the ticket team.`);
+    case "error": return line("warn", `⚠ Could not check your ticket account: ${escapeHtml(a.message || "")}`);
+    default: return "";
+  }
+}
+
 function resubmitTicket(chatId) {
   const button = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] [data-action="submitEscalation"]`);
   if (button) button.click();
@@ -3898,6 +3967,7 @@ async function sendTicketComment(chatId) {
     });
     const data = await res.json();
     if (!data.ok) { failure = data; throw new Error(data.error || "Comment failed"); }
+    noteTicketAccountUsed(data);
     s.escalation.commentDraft = "";
     s.commentReplyTo = null;
     if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
@@ -3958,6 +4028,8 @@ function renderEscalationSection(chatId) {
   const s = state[chatId];
   const view = ticketWorkspaceView(s);
   const busy = ticketCreateInFlight.has(chatId);
+  const gate = renderTicketAccountGate(chatId);
+  if (gate) return gate;
   const primaryKeys = new Set(["memberUserId", "brand", "queries", "remarks"]);
   const primary = TICKET_FIELD_SPECS.filter(spec => primaryKeys.has(spec.stateKey));
   const extra = TICKET_FIELD_SPECS.filter(spec => !primaryKeys.has(spec.stateKey));
@@ -3967,6 +4039,7 @@ function renderEscalationSection(chatId) {
   const action = (name, label, classes = "ticket-inbox-text-button", icon = "", attrs = "") => `<button type="button" class="${classes}" data-action="${name}" data-chat="${escapeHtml(chatId)}" ${attrs}>${icon ? ticketUiIcon(icon) : ""}${label}</button>`;
   return `<div class="ticket-inbox-header"><h2>Tickets</h2><div>${action("clearTicketNotifications", `<span>${ticketNotifications.length}</span>`, "ticket-inbox-notifications", "bell", 'aria-label="Clear ticket notifications"')}${view === "list" ? action("newTicket", "New ticket", "ticket-inbox-primary", "plus") : ""}</div></div>
     ${renderTicketNotifications()}
+    ${renderTicketAccountLine(chatId)}
     ${view !== "list" ? `<div class="ticket-inbox-back">${action("ticketInbox", "All tickets", "ticket-inbox-text-button", "back")}${view === "detail" && s.ticketRecord ? action("openTicketResult", "Refresh", "ticket-inbox-text-button", "refresh", `data-ref="${escapeHtml(s.ticketRecord.ref)}"`) : ""}</div>` : ""}
     ${s.escalationError ? `<div class="record-error-banner" role="alert">${escapeHtml(s.escalationError)}</div>` : ""}
     ${view === "list" ? `<div class="ticket-search-row ticket-inbox-search">${ticketUiIcon("search")}<input type="search" class="input ticket-search-input" data-chat="${escapeHtml(chatId)}" value="${escapeHtml(s.ticketSearchQuery || "")}" placeholder="Ticket, player or agent…" aria-label="Search tickets" /><button type="button" class="secondary-btn" data-action="searchTickets" data-chat="${escapeHtml(chatId)}" ${ticketSearchResultsByChat.get(chatId)?.loading ? "disabled" : ""}>Search</button>${action("loadAllTickets", "", "ticket-inbox-refresh", "refresh", 'aria-label="Refresh ticket list"')} </div>${renderTicketExplorer(chatId)}` : view === "detail" ? renderTicketStatus(chatId) : `
@@ -4273,9 +4346,10 @@ function renderChatsInner(chats) {
     const card = document.createElement("div");
     card.className = "chat-card ticket-workspace-card";
     card.dataset.chatId = chat.chatId;
+    void checkTicketAccount(chat.chatId);
     card.innerHTML = renderAdminTicketWorkspace(chat);
     chatListEl.appendChild(card);
-    if (ticketWorkspaceView(state[chat.chatId]) === "list" && !ticketSearchResultsByChat.has(chat.chatId)) void refreshTicketInbox(chat.chatId, "", "all", { fresh: false });
+    if (ticketWorkspaceView(state[chat.chatId]) === "list" && !ticketSearchResultsByChat.has(chat.chatId) && !ticketAccountBlocks()) void refreshTicketInbox(chat.chatId, "", "all", { fresh: false });
     return;
   }
   // Default: expand exactly one chat (the first) on first load only, so
@@ -4566,7 +4640,7 @@ chatListEl.addEventListener("click", async (e) => {
       for (const key of ["ticketExplorerAgent", "ticketExplorerStatus", "ticketExplorerDepartment", "ticketExplorerMarket"]) s[key] = "all";
     }
     renderTicketSlot(chatId);
-    if (!ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId, "", "all", { fresh: false });
+    if (!ticketSearchResultsByChat.has(chatId) && !ticketAccountBlocks()) void refreshTicketInbox(chatId, "", "all", { fresh: false });
     saveState();
     return;
   }
@@ -5054,6 +5128,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.ticketRef = data.ref;
       s.ticketNotice = data.warning || "";
       s.ticketEmailNeeded = false;
+      noteTicketAccountUsed(data);
       if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
       s.ticketLookupRef = data.ref;
       s.escalationSubmitted = true;
@@ -5072,6 +5147,16 @@ chatListEl.addEventListener("click", async (e) => {
     }
     saveState();
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+  }
+
+  if (btn.dataset.action === "recheckTicketAccount") {
+    await checkTicketAccount(chatId, { force: true });
+    return;
+  }
+
+  if (btn.dataset.action === "enterTicketEmail") {
+    showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Enter the email of your ticket-system account." }, () => checkTicketAccount(chatId, { force: true }));
+    return;
   }
 
   if (btn.dataset.action === "replyTicketComment") {

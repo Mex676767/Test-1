@@ -1398,3 +1398,11 @@ body { font-size: 13px; }
 .ticket-comment-replying { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 12px; color: var(--text-muted); }
 .ticket-problem { max-width: 420px; }
 .ticket-problem-email { width: 100%; margin: 6px 0; }
+.ticket-account { margin: 0 0 10px; padding: 6px 10px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 6px; background: var(--surface); font-size: 12px; line-height: 1.5; color: var(--text); }
+.ticket-account span { color: var(--text-muted); }
+.ticket-account-ok { border-left-color: var(--teal); }
+.ticket-account-bad { border-left-color: var(--danger); }
+.ticket-account-warn { border-left-color: var(--gold); }
+.ticket-account-checking { color: var(--text-muted); }
+.ticket-account-gate { margin-top: 14px; display: grid; gap: 10px; justify-items: start; }
+.ticket-account-gate .ticket-account { width: 100%; font-size: 13px; }
