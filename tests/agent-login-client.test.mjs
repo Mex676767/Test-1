@@ -269,3 +269,104 @@ test('signing out of a QA view puts the tabs back for the next sign-in', async (
   assert.equal(h.read('qaView'), false);
   assert.equal(h.calls.tabs, 1, 'the tabs are redrawn without the QA view');
 });
+
+// ---- connectLiveChatLogin: try both LiveChat accounts, remember the one that worked ------------------------------
+const CLIENTS = [{ key: 'lc1', clientId: 'c1' }, { key: 'lc2', clientId: 'c2' }];
+const REDIRECT = 'https://app.test/blast/oauth.html';
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function loginWorld({ last = '', blockAfter = Infinity } = {}) {
+  const opened = [];
+  const popups = [];
+  const listeners = [];
+  const progress = [];
+  const store = new Map(last ? [['rc-last-livechat-account', last]] : []);
+  let n = 0;
+  const context = vm.createContext({
+    URL, URLSearchParams, Promise, Error, Number, Boolean, Array, setInterval, clearInterval, setTimeout,
+    LOGIN_POPUP_POLL_MS: 5, LOGIN_POPUP_GRACE_MS: 15, location: { origin: 'https://app.test' },
+    crypto: { randomUUID: () => `state-${++n}` },
+    localStorage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) },
+    window: {
+      addEventListener: (type, handler) => listeners.push(handler),
+      removeEventListener: (type, handler) => { const i = listeners.indexOf(handler); if (i >= 0) listeners.splice(i, 1); },
+      open: (url) => { if (opened.length >= blockAfter) return null; const popup = { closed: false }; opened.push(String(url)); popups.push(popup); return popup; },
+    },
+  });
+  vm.runInContext(['const LAST_LIVECHAT_ACCOUNT_KEY = "rc-last-livechat-account";', fn('rememberLiveChatAccount'), fn('accountsLastUsedFirst'), fn('connectLiveChatLogin')].join('\n'), context);
+  const clientOf = (url) => new URL(url).searchParams.get('client_id');
+  const stateOf = (url) => new URL(url).searchParams.get('state');
+  const reply = (index, type = 'SUCCESS', extra = {}) => listeners.slice().forEach((handler) => handler({ origin: 'https://app.test', data: { source: 'ca-livechat-oauth', state: stateOf(opened[index]), type, token: 'tok', expiresAt: 123, ...extra } }));
+  const connect = () => vm.runInContext('connectLiveChatLogin', context)(CLIENTS, REDIRECT, (text) => progress.push(text));
+  return { opened, popups, store, progress, clientOf, reply, connect, listeners };
+}
+
+test('LiveChat login: account 1 first by default; the account that signs in is remembered and tried first next time', async () => {
+  const w = loginWorld();
+  const login = w.connect();
+  assert.equal(w.clientOf(w.opened[0]), 'c1');
+  w.reply(0);
+  const result = await login;
+  assert.equal(result.accountKey, 'lc1');
+  assert.equal(w.store.get('rc-last-livechat-account'), 'lc1');
+  assert.equal(w.listeners.length, 0, 'the listener is removed');
+  const second = loginWorld({ last: 'lc2' });
+  const secondLogin = second.connect();
+  assert.equal(second.clientOf(second.opened[0]), 'c2', 'the remembered account goes first');
+  second.reply(0);
+  await secondLogin;
+});
+
+test('LiveChat login: account 1 shows its error page and the window is closed -> account 2 opens by itself and its login is used', async () => {
+  const w = loginWorld();
+  const login = w.connect();
+  w.popups[0].closed = true;
+  await wait(80);
+  assert.equal(w.opened.length, 2);
+  assert.equal(w.clientOf(w.opened[1]), 'c2');
+  assert.match(w.progress.at(-1), /other LiveChat workspace/);
+  w.reply(1);
+  const result = await login;
+  assert.equal(result.accountKey, 'lc2');
+  assert.equal(w.store.get('rc-last-livechat-account'), 'lc2');
+});
+
+test('LiveChat login: a refusal sent back to the page also moves on to the other account; a late answer from the first window is ignored', async () => {
+  const w = loginWorld();
+  const login = w.connect();
+  w.reply(0, 'ERROR', { error: 'access_denied' });
+  assert.equal(w.opened.length, 2);
+  w.reply(0); // the first window's old state no longer counts
+  w.reply(1);
+  assert.equal((await login).accountKey, 'lc2');
+});
+
+test('LiveChat login: both windows closed without a login says so; an answer arriving just after the window closes still counts', async () => {
+  const w = loginWorld();
+  const failed = w.connect();
+  w.popups[0].closed = true;
+  await wait(80);
+  w.popups[1].closed = true;
+  await assert.rejects(failed, /window was closed before the login finished/);
+  const late = loginWorld();
+  const login = late.connect();
+  late.popups[0].closed = true;
+  await wait(8); // closed, but within the grace period
+  late.reply(0);
+  assert.equal((await login).accountKey, 'lc1');
+  await wait(40);
+  assert.equal(late.opened.length, 1, 'no second window was opened');
+});
+
+test('LiveChat login: a browser that blocks the next window gets a clear message, and the next click starts with that account', async () => {
+  const w = loginWorld({ blockAfter: 1 });
+  const failed = w.connect();
+  w.popups[0].closed = true;
+  await assert.rejects(failed, /blocked the next LiveChat window\. Click Connect LiveChat to continue/);
+  assert.equal(w.store.get('rc-last-livechat-account'), 'lc2');
+  const retry = loginWorld({ last: 'lc2' });
+  const retryLogin = retry.connect();
+  assert.equal(retry.clientOf(retry.opened[0]), 'c2');
+  retry.reply(0);
+  await retryLogin;
+});

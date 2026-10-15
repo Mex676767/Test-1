@@ -602,32 +602,76 @@ function agentLoginPanel(innerHtml) {
   return overlay;
 }
 
-// Opens LiveChat's login window for each account in turn and resolves with the first that signs in.
+// Remembered across sessions in this browser: the LiveChat account that last signed in here is tried first, so a person who works in
+// account 2 is not sent to account 1's login first (LiveChat answers a stranger there with an error page, not a redirect back).
+const LAST_LIVECHAT_ACCOUNT_KEY = "rc-last-livechat-account";
+const LOGIN_POPUP_POLL_MS = 500; // how often the login window is checked for having been closed
+const LOGIN_POPUP_GRACE_MS = 800; // after it closed, how long an answer may still arrive before the next account is tried
+function rememberLiveChatAccount(accountKey) {
+  try { localStorage.setItem(LAST_LIVECHAT_ACCOUNT_KEY, accountKey); } catch (_) { /* not remembered */ }
+}
+function accountsLastUsedFirst(clients) {
+  let last = "";
+  try { last = localStorage.getItem(LAST_LIVECHAT_ACCOUNT_KEY) || ""; } catch (_) { /* no preference */ }
+  return [...clients].sort((a, b) => Number(b.key === last) - Number(a.key === last));
+}
+
+// Opens LiveChat's login window for each account in turn and resolves with the first that signs in. An account that refuses the person
+// is skipped either way LiveChat says so: by sending the refusal back, or by showing its own error page and the window being closed.
 function connectLiveChatLogin(clients, redirectUri, onProgress) {
   return new Promise((resolve, reject) => {
+    const ordered = accountsLastUsedFirst(clients);
     let callbackOrigin = location.origin;
     try { callbackOrigin = new URL(redirectUri).origin; } catch (_) { /* keep this origin */ }
     let index = -1;
     let pendingClient = null;
     let pendingState = "";
-    const finish = (settle, value) => { window.removeEventListener("message", onMessage); settle(value); };
+    let popup = null;
+    let watcher = 0;
+    let done = false; // set once the login has resolved or failed: a pending timer must then do nothing
+    const stopWatching = () => { if (watcher) { clearInterval(watcher); watcher = 0; } };
+    const finish = (settle, value) => { done = true; stopWatching(); window.removeEventListener("message", onMessage); settle(value); };
+    const watch = (state) => {
+      stopWatching();
+      watcher = setInterval(() => {
+        if (!popup || !popup.closed) return;
+        stopWatching();
+        setTimeout(() => {
+          if (done || state !== pendingState) return; // an answer arrived in the meantime
+          if (!advance()) finish(reject, new Error("The LiveChat login window was closed before the login finished."));
+        }, LOGIN_POPUP_GRACE_MS);
+      }, LOGIN_POPUP_POLL_MS);
+    };
     const next = () => {
       index += 1;
-      pendingClient = clients[index] || null;
+      pendingClient = ordered[index] || null;
       if (!pendingClient) return false;
       pendingState = crypto.randomUUID();
       onProgress(index ? "Checking your other LiveChat workspace…" : "Complete the login in the new window…");
       const url = new URL("https://accounts.livechat.com/");
       url.search = new URLSearchParams({ response_type: "token", client_id: pendingClient.clientId, redirect_uri: redirectUri, state: pendingState, prompt: "consent" }).toString();
-      return Boolean(window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720"));
+      popup = window.open(url, "livechat-agent-oauth", "popup=yes,width=560,height=720");
+      if (popup) watch(pendingState);
+      return Boolean(popup);
+    };
+    // Moves on to the next account. A browser may block a window that no click just opened: then that account is remembered as the one to
+    // try first and the person is asked to click Connect LiveChat again. Returns false when there is no next account.
+    const advance = () => {
+      const upcoming = ordered[index + 1];
+      if (!upcoming) return false;
+      if (next()) return true;
+      rememberLiveChatAccount(upcoming.key);
+      finish(reject, new Error("Your browser blocked the next LiveChat window. Click Connect LiveChat to continue."));
+      return true;
     };
     const onMessage = (event) => {
       if (event.origin !== callbackOrigin || event.data?.source !== "ca-livechat-oauth" || event.data.state !== pendingState) return;
       if (event.data.type === "SUCCESS" && pendingClient) {
+        rememberLiveChatAccount(pendingClient.key);
         finish(resolve, { accountKey: pendingClient.key, token: event.data.token, expiresAt: event.data.expiresAt });
         return;
       }
-      if (!next()) finish(reject, new Error(event.data.error || "LiveChat login was not completed."));
+      if (!advance()) finish(reject, new Error(event.data.error || "LiveChat login was not completed."));
     };
     window.addEventListener("message", onMessage);
     if (!next()) finish(reject, new Error("Your browser blocked the LiveChat login window. Allow popups and try again."));
