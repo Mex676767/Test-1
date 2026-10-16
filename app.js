@@ -3912,7 +3912,7 @@ function noteTicketAccountUsed(data) {
 // The Tickets tab is only usable once the ticket system knows the signed-in agent, so every ticket and comment is theirs: while the check
 // runs, and whenever it says the account is missing or cannot be acted for, the tab shows only the account line (see ticketAccountBlocks).
 // A failed check (the ticket system busy or unreachable) does not lock anyone out: the line says so and a refused ticket is explained then.
-const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks"];
+const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks", "keyRejected"];
 function ticketAccountBlocks() {
   return (ticketAccount.checking && ticketAccount.status !== "found") || TICKET_ACCOUNT_BLOCKING.includes(ticketAccount.status);
 }
@@ -3941,6 +3941,7 @@ function renderTicketAccountLine(chatId) {
     case "adminEmailInvalid": return line("bad", `✗ The Ticket Email saved for you (${who}) has no ticket account. Ask your admin to correct it.`);
     case "keyNeedsGrant": return line("warn", `⚠ The ticket system won't let its API key act for you, so tickets and comments are refused. Ask the ticket team to check the key: its role needs api-keys:act-on-behalf, and the key must be bound to that role.${said}`);
     case "outranks": return line("warn", `⚠ Your ticket account ${who} is senior to the integration key, so tickets and comments can't be made as you. Ask the ticket team.${said}`);
+    case "keyRejected": return line("warn", `⚠ The ticket system does not accept the integration key (it was revoked, replaced or is wrong), so nothing can be checked or sent as you. This is not about your email. Ask the ticket team for the current key; your admin then updates it.${said}`);
     case "error": return line("warn", `⚠ Could not check your ticket account: ${escapeHtml(a.message || "")}`);
     default: return "";
   }
