@@ -221,13 +221,16 @@ test('a Retention agent, or one whose department could not be found, goes throug
   }
 });
 
-test('a login marked QA goes straight to the QA view: no agent name, no panel; the QA question is asked while the login request is on its way', async () => {
+test('a login marked QA with a name keeps it for the chats they cover; without one they may choose or skip (no panel of their own)', async () => {
+  const bound = harness({ stored: { 'ca-livechat-agent-token:lc1': 'tok', 'ca-livechat-agent-token-expiry:lc1': future }, serverReplies: [{ ok: true, bound: true, name: '96 Teh' }], qa: true });
+  await bound.run();
+  assert.deepEqual(bound.calls.bound, [['96 Teh', 'lc1']]);
+  assert.deepEqual(bound.calls.qa, ['lc1']);
+  assert.deepEqual(bound.calls.picked, []);
   const h = harness({ stored: { 'ca-livechat-agent-token:lc1': 'tok', 'ca-livechat-agent-token-expiry:lc1': future }, serverReplies: [{ ok: true, bound: false, available: ['96 Mexha'] }], qa: true });
   await h.run();
-  assert.deepEqual(h.calls.qa, ['lc1']);
-  assert.deepEqual(h.calls.picked, [], 'a QA person is never asked to choose an agent name');
-  assert.deepEqual(h.calls.bound, []);
-  assert.equal(h.calls.panels.length, 0);
+  assert.deepEqual(h.calls.picked, [['lc1', 'tok', ['96 Mexha']]], 'a QA person without a name is offered the free names');
+  assert.deepEqual(h.calls.qa, ['lc1'], 'and reaches the QA view once they chose or skipped');
   assert.deepEqual(h.calls.qaChecked, [['lc1', 'tok', 0]], 'asked before the login answer came back');
 });
 

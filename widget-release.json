@@ -1,4 +1,4 @@
 {
-  "release": "20261016-1",
+  "release": "20261016-2",
   "about": "Agents see 'New version available' only when this value changes. Change it in a commit only if the commit changes what agents in the installed LiveChat widget see or do (app.js, style.css, index.html). Leave it alone for admin-preview-only and backend-only changes."
 }
