@@ -460,3 +460,11 @@ test('the QA page shows the examples only when the admin preview asks for them (
   assert.match(script, /"ca-qa-chat" \|\| PREVIEW\) return;/, 'the preview ignores the open chat');
   assert.match(app, /frame\.dataset\.src \+ \(previewMode \? "\?preview=1" : ""\)/);
 });
+
+test('a QA login without an agent name can choose one: the picker can be skipped, and Settings offers it later', () => {
+  assert.match(app, /function pickAgentName\(accountKey, token, available, \{ skippable = false \} = \{\}\)/);
+  assert.match(app, /id="agentLoginSkip"/);
+  assert.match(app, /\{ skippable: true \}\); \/\/ QA is part of the Retention team/);
+  assert.match(app, /qaView && !selectedAgent \? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name<\/button>`/);
+  assert.match(app, /async function chooseQaAgentName\(\)/);
+});

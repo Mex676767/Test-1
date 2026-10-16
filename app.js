@@ -226,7 +226,7 @@ function openSettingsPanel() {
         </div>
         ${selectedAgent || customerService ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
-      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? (selectedAgent ? `You are signed in with LiveChat as QA. The QA and Retention tabs are available to you; chats you take on Retention are recorded as ${escapeHtml(selectedAgent)}.` : "You are signed in with LiveChat as QA. The QA and Retention tabs are available to you. To record chats you cover on Retention you need an agent name: ask your admin to set one for your LiveChat login.") :"You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
+      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? (selectedAgent ? `You are signed in with LiveChat as QA. The QA and Retention tabs are available to you; chats you take on Retention are recorded as ${escapeHtml(selectedAgent)}.` : "You are signed in with LiveChat as QA. The QA and Retention tabs are available to you. To record chats you cover on Retention you need an agent name: choose it with the button below.") :"You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${qaView && !selectedAgent ? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name</button>` : ""}${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
@@ -269,6 +269,7 @@ function openSettingsPanel() {
   document.body.appendChild(overlay);
 
   document.getElementById("settingsSignOut")?.addEventListener("click", () => { signOutLiveChat(); });
+  document.getElementById("settingsQaName")?.addEventListener("click", () => { chooseQaAgentName(); });
   if (customerService) { // no Blast history and nothing to save
     overlay.querySelector(".settings-failures")?.closest(".settings-card")?.remove();
     document.getElementById("settingsSave")?.remove();
@@ -718,7 +719,7 @@ async function signOutLiveChat() {
 }
 
 // First sign-in: pick the agent name once. Resolves when it is saved.
-function pickAgentName(accountKey, token, available) {
+function pickAgentName(accountKey, token, available, { skippable = false } = {}) {
   return new Promise((resolve) => {
     const render = (names, error = "") => {
       const overlay = agentLoginPanel(`
@@ -726,9 +727,10 @@ function pickAgentName(accountKey, token, available) {
         <p class="settings-hint">This is saved to your LiveChat login and <strong>can't be changed later</strong>. If you pick the wrong one, ask your admin.</p>
         ${names.length
           ? `<select class="input settings-select" id="agentLoginSelect"><option value="">Choose your name</option>${names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("")}</select>
-             <div class="login-actions"><button type="button" class="submit-btn" id="agentLoginConfirm">Save my name</button></div>`
-          : `<p class="settings-hint">No free agent names are left on this LiveChat account — ask your admin.</p>`}
+             <div class="login-actions"><button type="button" class="submit-btn" id="agentLoginConfirm">Save my name</button>${skippable ? `<button type="button" class="secondary-btn" id="agentLoginSkip">Not now</button>` : ""}</div>`
+          : `<p class="settings-hint">No free agent names are left on this LiveChat account — ask your admin.</p>${skippable ? `<div class="login-actions"><button type="button" class="secondary-btn" id="agentLoginSkip">Continue without a name</button></div>` : ""}`}
         <div class="login-status error" id="agentLoginStatus">${escapeHtml(error)}</div>`);
+      overlay.querySelector("#agentLoginSkip")?.addEventListener("click", () => resolve());
       const confirmButton = overlay.querySelector("#agentLoginConfirm");
       if (!confirmButton) return;
       confirmButton.addEventListener("click", async () => {
@@ -796,6 +798,19 @@ function applyQaAgent(accountKey) {
   logDiagnostic("Signed in with LiveChat as QA.", "success");
 }
 
+// A QA login without an agent name chooses one later from Settings (QA is part of the Retention team and sometimes covers chats).
+async function chooseQaAgentName() {
+  const token = liveChatAgentTokens()[currentLiveChatAccount];
+  if (!token) return;
+  document.getElementById("settingsOverlay")?.remove();
+  let data;
+  try { data = await postAgentLogin(currentLiveChatAccount, token); } catch (_) { return; }
+  if (data.ok && data.bound) { applyBoundAgent(data.name, currentLiveChatAccount); syncMainTabs(); return; }
+  if (data.ok) await pickAgentName(currentLiveChatAccount, token, Array.isArray(data.available) ? data.available : [], { skippable: true });
+  document.getElementById("agentLoginOverlay")?.remove();
+  syncMainTabs();
+}
+
 // The QA tab shows how the chat that is open in LiveChat was logged: its thread id (the SDK's chat id, the id the archive and the Lark
 // links use) is sent to the QA page, which asks for it once more when it has loaded. A chat opened from the archive counts too.
 let qaOpenChat = ""; // "" when no chat is open
@@ -838,6 +853,7 @@ async function requireAgentLogin() {
       if (await qaCheck) {
         // A QA login that already has an agent name records the chats it covers under that name; one without a name is not asked for one here.
         if (data.ok && data.bound) applyBoundAgent(data.name, key);
+        else if (data.ok) await pickAgentName(key, tokens[key], Array.isArray(data.available) ? data.available : [], { skippable: true }); // QA is part of the Retention team: may choose a name, or skip
         applyQaAgent(key);
         return;
       }
