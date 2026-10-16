@@ -89,3 +89,13 @@ test("a refusal comes with the ticket system's own words, so it is clear which o
   net = network();
   try { assert.equal("detail" in (await check()).body, false); } finally { net.restore(); }
 });
+
+test("a key the ticket system does not accept at all (401 Not signed in.) is its own status, with its words, not a failed check", async () => {
+  resetTicketAccountCache(); resetTicketRateLimit();
+  const net = network({ markets: [reply({ ok: false, error: "Not signed in." }, 401)] });
+  try {
+    const result = await check();
+    assert.equal(result.status, 200);
+    assert.deepEqual([result.body.status, result.body.detail, result.body.email], ["keyRejected", "Not signed in.", "alice@x.com"]);
+  } finally { net.restore(); }
+});

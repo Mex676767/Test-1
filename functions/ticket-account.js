@@ -35,6 +35,12 @@ export async function handler(event) {
       try {
         await ticketRequest(event.env, `/markets?onBehalfOf=${encodeURIComponent(email)}`);
       } catch (err) {
+        if (Number(err.statusCode) === 401) {
+          // "Not signed in.": the ticket system does not recognise the API key itself (revoked, replaced or mistyped), whoever the agent is.
+          entry = { at: Date.now(), raw: "keyRejected", detail: String(err.message || "").slice(0, 300) };
+          cache.set(email, entry);
+          return json(200, { ok: true, enabled: true, status: "keyRejected", email, source, detail: entry.detail });
+        }
         if (!isOnBehalfRefusal(err)) throw err;
         detail = String(err.message || "").slice(0, 300);
         raw = Number(err.statusCode) === 403 ? (/outranks/i.test(String(err.message)) ? "outranks" : "keyNeedsGrant") : "noAccount";
