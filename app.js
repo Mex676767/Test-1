@@ -3905,6 +3905,45 @@ async function checkTicketAccount(chatId, { force = false } = {}) {
   }
   renderTicketSlot(chatId);
 }
+// Admin preview only, opened with ?ticketDemo=1: the Tickets tab with made-up tickets and a "found" account, to look at the screens when the
+// ticket system is not reachable. Nothing is read from or sent to the ticket system; creating a ticket or a comment says so and stops.
+function installTicketDemo() {
+  const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const person = (id, name) => ({ id, name, email: `${name.toLowerCase().replace(/[^a-z]+/g, ".")}@demo.test` });
+  const dept = (code, name) => ({ code, name });
+  const market = (code, label) => ({ code, label });
+  const ticket = (ref, fields, extra) => ({ ref, fields, raisedBy: person(1, "Demo Agent"), assignees: [], attachmentCount: 0, ...extra });
+  const tickets = [
+    ticket("TK2610160001", { member_id: "demo-player-1", member_platform: "SPIN321", query_type: "wd_delay", status: "IN_PROGRESS" }, { currentDepartment: dept("PYM", "Payment"), market: market("MYR", "Malaysia"), assignees: [person(2, "Demo Payment")], createdAt: ago(300), updatedAt: ago(12), commentCount: 2 }),
+    ticket("TK2610160002", { member_id: "demo-player-2", member_platform: "PP96", query_type: "dp_not_credited", status: "Open" }, { currentDepartment: dept("CS", "Customer Service"), market: market("IDR", "Indonesia"), createdAt: ago(200), updatedAt: ago(95), commentCount: 0 }),
+    ticket("TK2610160003", { member_id: "demo-player-3", member_platform: "MY36", query_type: "refund", status: "SOLVED" }, { currentDepartment: dept("PYM", "Payment"), market: market("THB", "Thailand"), assignees: [person(2, "Demo Payment")], createdAt: ago(1500), updatedAt: ago(700), commentCount: 1 }),
+    ticket("TK2610160004", { member_id: "demo-player-4", member_platform: "ACE33", query_type: "missing_wd", status: "CS_TO_FOLLOW_UP" }, { currentDepartment: dept("CS", "Customer Service"), market: market("PHP", "Philippines"), createdAt: ago(2600), updatedAt: ago(1300), commentCount: 0 }),
+  ];
+  const comments = {
+    TK2610160001: [
+      { id: 1, author: { id: 2, name: "Demo Payment" }, body: "We have asked the gateway to release this. Will update shortly.", createdAt: ago(60), replies: [{ id: 2, author: { id: 1, name: "Demo Agent" }, body: "Thanks, the player is waiting in chat.", createdAt: ago(12) }] },
+    ],
+    TK2610160003: [{ id: 3, author: { id: 2, name: "Demo Payment" }, body: "Refunded to the original account.", createdAt: ago(700) }],
+  };
+  const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.url, location.origin);
+    if (url.pathname === "/ticket-account") return Promise.resolve(reply({ ok: true, enabled: true, status: "found", email: "demo.agent@demo.test", source: "livechat" }));
+    if (url.pathname === "/ticket-list") {
+      const q = (url.searchParams.get("q") || "").toLowerCase();
+      const found = tickets.filter((item) => !q || JSON.stringify(item).toLowerCase().includes(q));
+      return Promise.resolve(reply({ ok: true, total: found.length, tickets: found }));
+    }
+    if (url.pathname === "/ticket-status") {
+      const found = tickets.find((item) => item.ref === url.searchParams.get("ref"));
+      return Promise.resolve(found ? reply({ ok: true, ticket: { ...found, comments: comments[found.ref] || [] } }) : reply({ ok: false, error: "Demo ticket not found" }, 404));
+    }
+    if (url.pathname === "/ticket-comment" || url.pathname === "/ticket-create") return Promise.resolve(reply({ ok: false, error: "Demo mode: nothing is sent to the ticket system." }, 400));
+    return realFetch(input, init);
+  };
+}
+if (!IS_EMBEDDED_APP && new URLSearchParams(location.search).get("ticketDemo") === "1") installTicketDemo();
 // A ticket or comment that went through as the agent proves the account: the line follows without another check.
 function noteTicketAccountUsed(data) {
   if (data?.actedAs) ticketAccount = { status: "found", email: data.actedAs, source: ticketAccount.source, message: "", checking: false, at: Date.now() };
