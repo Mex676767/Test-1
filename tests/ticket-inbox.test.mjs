@@ -292,7 +292,7 @@ function commentWorld(over = {}) {
     fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); return { json: async () => (over.reply || { ok: true, comment: { id: 9 } }) }; },
     ...over.context,
   });
-  vm.runInContext(['const ticketCommentInFlight = new Set();', 'const ticketCommentFilesByChat = new Map();', app.match(/const TICKET_IMAGE_LINK = [^\n]+;/)[0], 'const ticketImageUrls = new Map();', 'const isTicketImage = (item) => /^image\\/(png|jpe?g|webp)$/i.test(String(item?.mime || item?.mimeType || "")) && Boolean(item?.path);', 'const commentFileUrl = () => "blob:x";', 'function clearCommentFiles(chatId) { ticketCommentFilesByChat.delete(chatId); }', fn('splitImageLinks'), fn('renderTicketThumb'), fn('renderCommentFiles'), fn('ticketAuthor'), fn('renderTicketComment'), fn('renderTicketConversation'), fn('sendTicketComment')].join('\n'), context);
+  vm.runInContext(['const ticketCommentInFlight = new Set();', 'const ticketCommentFilesByChat = new Map();', app.match(/const TICKET_IMAGE_LINK = [^\n]+;/)[0], 'const ticketImageUrls = new Map();', app.match(/const isTicketImage = [^\n]+;/)[0], 'const commentFileUrl = () => "blob:x";', 'function clearCommentFiles(chatId) { ticketCommentFilesByChat.delete(chatId); }', fn('splitImageLinks'), fn('renderTicketThumb'), fn('renderCommentFiles'), fn('ticketAuthor'), fn('renderTicketComment'), fn('renderTicketConversation'), fn('sendTicketComment')].join('\n'), context);
   return { state, calls, context, run: (code) => vm.runInContext(code, context) };
 }
 
@@ -562,4 +562,24 @@ test('pictures: paste in the comment box, attach button, remove, lightbox and lo
   assert.ok(app.includes('new MutationObserver(hydrateTicketImages).observe(chatListEl'));
   assert.ok(app.includes('fetch("/ticket-attachment", { method: "POST"'));
   assert.ok(app.includes('data-problem="open"'), 'a refused duplicate offers to open the existing ticket');
+});
+
+test('pictures: an attachment is a picture by its type or, when the ticket system leaves the type blank, by its name; one without a path cannot be shown', () => {
+  const w = commentWorld();
+  const html = w.run(`renderTicketComment(${JSON.stringify({ id: 1, author: { name: 'Mike' }, body: 'done', attachments: [{ name: 'pasted-1.webp', mime: '', path: '2026-10/13/aa.webp' }, { name: 'nopath.png', mime: 'image/png', path: '' }] })}, 'chat')`);
+  assert.match(html, /data-ticket-image="2026-10\/13\/aa\.webp"/);
+  assert.match(html, /📎 nopath\.png/);
+});
+
+test('pictures: a picture that cannot be loaded says why, on the thumbnail and in the diagnostics', () => {
+  assert.ok(app.includes('thumb.classList.add("failed");'));
+  assert.ok(app.includes('note.className = "ticket-thumb-error";'));
+  assert.ok(app.includes('Could not show the picture'));
+});
+
+test('pictures: every picture is compressed before it is sent, to the same size and similar quality, and ticket and comment files all go through it', () => {
+  assert.ok(app.includes('async function compressPicture(file)'));
+  assert.equal((app.match(/map\(compressPicture\)/g) || []).length, 4, 'paste and choose, for tickets and for comments');
+  assert.ok(app.includes('const PICTURE_STEPS = [[1, 0.92]'), 'full size and high quality come first');
+  assert.ok(!app.includes('TICKET_IMAGE_MAX_BYTES'), 'no 5MB image limit any more');
 });

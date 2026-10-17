@@ -31,9 +31,12 @@ export async function handler(event) {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (response.status === 429) return json(429, { ok: false, error: "The ticket system is busy. Try again in a moment." }, { "Retry-After": "20" });
-    if (!response.ok) return json(response.status >= 400 && response.status < 600 ? (response.status === 401 ? 502 : response.status) : 502, { ok: false, error: "The ticket system did not give this picture." });
+    if (!response.ok) {
+      const redirected = response.status >= 300 && response.status < 400;
+      return json(502, { ok: false, upstreamStatus: response.status, error: redirected ? "The ticket system asks for a login to open this file." : `The ticket system answered ${response.status} for this picture.` });
+    }
     const type = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (!IMAGE_TYPES[type]) return json(415, { ok: false, error: "That file is not a picture." });
+    if (!IMAGE_TYPES[type]) return json(415, { ok: false, error: `The ticket system sent this file as ${type || "an unknown type"}, not as a picture.` });
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (!bytes.length || bytes.length > MAX_BYTES) return json(413, { ok: false, error: "That picture is too large to preview." });
     if (!(await fileMatchesType(new Blob([bytes], { type })))) return json(415, { ok: false, error: "That file is not a picture." });

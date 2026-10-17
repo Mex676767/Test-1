@@ -27,7 +27,7 @@ const commentWith = (files, input = { ref: "TK2610170001", body: "see attached" 
   const formData = new FormData();
   formData.append("comment", JSON.stringify(input));
   for (const item of files) formData.append("file", item, item.name);
-  return comment({ httpMethod: "POST", env: { ...env, TICKET_IMAGES: bucket(), ...(input.env || {}) }, headers: { host: "app.test" }, formData });
+  return comment({ httpMethod: "POST", env: { ...env, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: bucket(), ...(input.env || {}) }, headers: { host: "app.test" }, formData });
 };
 
 test("file bytes decide what a file is: a renamed text file is not an image or PDF", async () => {
@@ -49,7 +49,7 @@ test("a comment with a picture: the picture goes to the bucket and the comment c
     formData.append("comment", JSON.stringify({ ref: "TK2610170001", body: "here is the slip" }));
     formData.append("file", file(PNG, "slip.png", "image/png"), "slip.png");
     formData.append("file", file(PDF, "slip.pdf", "application/pdf"), "slip.pdf");
-    const result = await comment({ httpMethod: "POST", env: { ...env, TICKET_IMAGES: store }, headers: { host: "app.test" }, formData });
+    const result = await comment({ httpMethod: "POST", env: { ...env, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: store }, headers: { host: "app.test" }, formData });
     assert.equal(result.statusCode, 201);
     assert.equal(JSON.parse(result.body).images, 1);
     assert.deepEqual(store.puts.map((put) => put[1]), ["image/png"]);
@@ -84,7 +84,7 @@ test("a comment refuses a file that is not what it says, too many files, and no 
     const formData = new FormData();
     formData.append("comment", JSON.stringify({ ref: "TK2610170001", body: "x" }));
     formData.append("file", file(PNG, "p.png", "image/png"), "p.png");
-    const refused = await comment({ httpMethod: "POST", env: { ...env, TICKET_IMAGES: store }, headers: { host: "app.test" }, formData });
+    const refused = await comment({ httpMethod: "POST", env: { ...env, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: store }, headers: { host: "app.test" }, formData });
     assert.equal(refused.statusCode, 404);
     assert.equal(store.deleted.length, 1, "the stored picture is removed again");
   } finally { net.restore(); }
