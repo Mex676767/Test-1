@@ -1406,3 +1406,21 @@ body { font-size: 13px; }
 .ticket-account-checking { color: var(--text-muted); }
 .ticket-account-gate { margin-top: 14px; display: grid; gap: 10px; justify-items: start; }
 .ticket-account-gate .ticket-account { width: 100%; font-size: 13px; }
+
+/* Pictures on tickets and comments, and the comment box's attachments */
+.ticket-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ticket-thumb { position: relative; display: grid; gap: 4px; justify-items: start; width: 132px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-muted); font: inherit; font-size: 10px; text-align: left; cursor: zoom-in; overflow: hidden; }
+.ticket-thumb img { display: block; width: 100%; height: 96px; object-fit: cover; background: var(--surface); }
+.ticket-thumb-name { padding: 0 6px 5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-thumb.failed img { display: none; }
+.ticket-thumb.failed { cursor: default; padding-top: 6px; }
+.ticket-image-overlay { align-items: center; justify-content: center; }
+.ticket-image-view { display: grid; gap: 10px; justify-items: center; max-width: 94vw; max-height: 92vh; }
+.ticket-image-view img { max-width: 94vw; max-height: 80vh; object-fit: contain; border-radius: 8px; background: var(--surface); }
+.ticket-comment-files-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ticket-comment-file { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-muted); font-size: 11px; }
+.ticket-comment-file img { width: 40px; height: 40px; object-fit: cover; border-radius: 5px; }
+.ticket-comment-file > span:not(.ticket-thumb-pdf) { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-comment-file button { border: 0; background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; }
+.ticket-thumb-pdf { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 5px; background: var(--surface); font-size: 10px; font-weight: 700; }
+.ticket-comment-attach { justify-self: start; }

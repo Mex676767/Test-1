@@ -292,7 +292,7 @@ function commentWorld(over = {}) {
     fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); return { json: async () => (over.reply || { ok: true, comment: { id: 9 } }) }; },
     ...over.context,
   });
-  vm.runInContext(['const ticketCommentInFlight = new Set();', fn('ticketAuthor'), fn('renderTicketComment'), fn('renderTicketConversation'), fn('sendTicketComment')].join('\n'), context);
+  vm.runInContext(['const ticketCommentInFlight = new Set();', 'const ticketCommentFilesByChat = new Map();', app.match(/const TICKET_IMAGE_LINK = [^\n]+;/)[0], 'const ticketImageUrls = new Map();', 'const isTicketImage = (item) => /^image\\/(png|jpe?g|webp)$/i.test(String(item?.mime || item?.mimeType || "")) && Boolean(item?.path);', 'const commentFileUrl = () => "blob:x";', 'function clearCommentFiles(chatId) { ticketCommentFilesByChat.delete(chatId); }', fn('splitImageLinks'), fn('renderTicketThumb'), fn('renderCommentFiles'), fn('ticketAuthor'), fn('renderTicketComment'), fn('renderTicketConversation'), fn('sendTicketComment')].join('\n'), context);
   return { state, calls, context, run: (code) => vm.runInContext(code, context) };
 }
 
@@ -514,4 +514,52 @@ test('a refused read asks for the ticket email like a refused ticket does', () =
   const error = w.run('ticketReadFailure("chat", { ok: false, needTicketEmail: true, error: "Ticket account not found. Please enter your ticket account email." }, "x")');
   assert.equal(error.message, 'Ticket account not found. Please enter your ticket account email.');
   return Promise.resolve().then(() => assert.equal(problems.length, 1));
+});
+
+test('pictures: a comment shows its pictures as thumbnails (the ticket system\'s by path, this site\'s by link), the link text is hidden, other files stay names', () => {
+  const w = commentWorld();
+  const link = 'https://app.test/ticket-image?k=tickets%2F20261017%2F3f2a9c1e-0000-4000-8000-123456789abc.png';
+  const html = w.run(`renderTicketComment(${JSON.stringify({ id: 1, author: { name: 'Mike' }, body: `done team\n\nImages:\n${link}`, attachments: [{ name: 'slip.webp', mime: 'image/webp', path: '2026-10/17/aa.webp' }, { name: 'a.pdf', mime: 'application/pdf', path: '2026-10/17/a.pdf' }] })}, 'chat')`);
+  assert.match(html, /data-ticket-image="2026-10\/17\/aa\.webp"/);
+  assert.match(html, /<img src="https:\/\/app\.test\/ticket-image\?k=tickets%2F20261017/);
+  assert.match(html, /data-action="openTicketImage"/);
+  assert.ok(!html.includes('Images:'), 'the link text is replaced by the picture');
+  assert.match(html, /done team/);
+  assert.match(html, /📎 a\.pdf/);
+  assert.ok(!html.includes('data-ticket-image="2026-10/17/a.pdf"'), 'a PDF is not shown as a picture');
+});
+
+test('pictures: only this site\'s picture links are turned into pictures, never a link someone typed', () => {
+  const w = commentWorld();
+  const html = w.run(`renderTicketComment(${JSON.stringify({ id: 1, author: { name: 'X' }, body: 'see https://evil.test/track.png and https://evil.test/page' })}, 'chat')`);
+  assert.ok(!html.includes('<img'), 'nothing is fetched from an arbitrary address');
+  assert.match(html, /https:\/\/evil\.test\/track\.png/);
+});
+
+test('pictures: the comment box shows what is waiting, sends it as multipart with the text, and clears it', async () => {
+  const w = commentWorld({ context: { FormData, File } });
+  w.state.chat.ticketRecord = { ref: 'TK2610170001' };
+  w.state.chat.escalation.commentDraft = 'slip';
+  const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'p.png', { type: 'image/png' });
+  w.context.testPng = png;
+  w.run('ticketCommentFilesByChat.set("chat", [testPng])');
+  w.context.fetch = async (url, options) => { w.calls.fetches.push({ url, options }); return { json: async () => ({ ok: true, comment: { id: 9 } }) }; };
+  assert.match(w.run('renderCommentFiles("chat")'), /p\.png/);
+  await w.run('sendTicketComment("chat")');
+  const sent = w.calls.fetches[0];
+  assert.equal(sent.url, '/ticket-comment');
+  assert.ok(sent.options.body instanceof FormData);
+  assert.equal(JSON.parse(sent.options.body.get('comment')).body, 'slip');
+  assert.equal(sent.options.body.get('file').name, 'p.png');
+  assert.equal(w.run('ticketCommentFilesByChat.has("chat")'), false, 'the files are cleared after sending');
+});
+
+test('pictures: paste in the comment box, attach button, remove, lightbox and loading are wired', () => {
+  assert.ok(app.includes('event.target.closest?.(".ticket-comment-input")'));
+  assert.ok(app.includes('closest?.(".ticket-comment-file-input")'));
+  assert.ok(app.includes('btn.dataset.action === "removeCommentFile"'));
+  assert.ok(app.includes('btn.dataset.action === "openTicketImage"'));
+  assert.ok(app.includes('new MutationObserver(hydrateTicketImages).observe(chatListEl'));
+  assert.ok(app.includes('fetch("/ticket-attachment", { method: "POST"'));
+  assert.ok(app.includes('data-problem="open"'), 'a refused duplicate offers to open the existing ticket');
 });

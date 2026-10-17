@@ -49,7 +49,7 @@ test("the ticket read carries the thread: comments with replies, mentions and fi
     assert.equal(comments.length, 2);
     assert.deepEqual(comments[0].author, { id: 7, name: "Alice" });
     assert.deepEqual(comments[0].mentions, [{ userId: 8, name: "Bob" }]);
-    assert.deepEqual(comments[0].attachments, [{ name: "slip.png", mime: "image/png", size: 1200 }]);
+    assert.deepEqual(comments[0].attachments, [{ name: "slip.png", mime: "image/png", size: 1200, path: "p/1.png" }]);
     assert.equal(comments[0].replies[0].body, "Done.");
     assert.equal("replies" in comments[0].replies[0], false, "a reply has no replies of its own here");
     assert.deepEqual([comments[1].deleted, comments[1].body], [true, ""]);

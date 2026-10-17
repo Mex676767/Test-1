@@ -9,6 +9,21 @@ export const IMAGE_KEY = /^tickets\/\d{8}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 
 export const isStoredImage = (file) => Boolean(IMAGE_TYPES[file?.type]);
 
+// What a file IS, by its first bytes, not by the name or type the browser gave it: a renamed web page, script or archive is refused (the
+// ticket system checks the same). PNG, JPEG, WebP and PDF only.
+const ascii = (bytes, from, to) => String.fromCharCode(...bytes.slice(from, to));
+const SIGNATURES = {
+  "image/png": (b) => b[0] === 0x89 && ascii(b, 1, 4) === "PNG",
+  "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  "image/webp": (b) => ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 12) === "WEBP",
+  "application/pdf": (b) => ascii(b, 0, 5) === "%PDF-",
+};
+export async function fileMatchesType(file) {
+  const check = SIGNATURES[file?.type];
+  if (!check) return false;
+  return check(new Uint8Array(await file.slice(0, 16).arrayBuffer()));
+}
+
 function linkFor(env, host, key) {
   const publicBase = String(env.TICKET_IMAGES_PUBLIC_URL || "").trim().replace(/\/+$/, "");
   if (publicBase) return `${publicBase}/${key}`;

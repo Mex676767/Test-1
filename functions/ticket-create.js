@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { actingAs, flag, isOnBehalfRefusal, needTicketEmail, refusalResponse } from "./_lib/ticket-actor.js";
 import { rememberTicketEmail } from "./_lib/ticket-email.js";
-import { deleteTicketImages, isStoredImage, storeTicketImages } from "./_lib/ticket-images.js";
+import { deleteTicketImages, fileMatchesType, isStoredImage, storeTicketImages } from "./_lib/ticket-images.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
 export async function handler(event) {
@@ -46,6 +46,7 @@ export async function handler(event) {
       const limitMb = event.env?.TICKET_IMAGES && isStoredImage(file) ? 5 : 1;
       if (file.size >= limitMb * 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under ${limitMb}MB` });
       if (!allowedTypes.has(file.type)) return json(400, { ok: false, error: `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF` });
+      if (!(await fileMatchesType(file))) return json(400, { ok: false, error: `${file.name || "Attachment"} is not really a ${file.type === "application/pdf" ? "PDF" : "PNG, JPG or WEBP image"}, so it was not sent` });
     }
     if (totalSize > 10 * 1024 * 1024) return json(413, { ok: false, error: "The complete ticket request must be under 10MB" });
 

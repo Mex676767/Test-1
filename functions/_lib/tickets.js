@@ -6,6 +6,9 @@ function config(env = {}) {
   return { apiKey, baseUrl };
 }
 
+// The key and base URL, for the one call that is not JSON (a picture; see ticket-attachment.js).
+export function ticketCredentials(env = {}) { return config(env); }
+
 export function ticketSettings(env = {}) {
   const { apiKey } = config(env);
   const departmentId = Number(env.TICKETS_TO_DEPARTMENT_ID);
@@ -86,6 +89,7 @@ export async function ticketRequest(env, path, options = {}) {
   if (!response.ok || !data.ok) {
     const error = new Error(data.error || `Ticket service returned HTTP ${response.status}`);
     error.statusCode = response.status;
+    if (data.duplicateOf) error.duplicateOf = String(data.duplicateOf);
     throw error;
   }
   return data;
@@ -131,6 +135,6 @@ export function json(statusCode, body, headers) {
 export function ticketError(err) {
   const status = Number(err.statusCode);
   const retryAfter = Number(err.retryAfter);
-  return json(status >= 400 && status < 600 ? status : 500, { ok: false, error: err.message },
+  return json(status >= 400 && status < 600 ? status : 500, { ok: false, error: err.message, ...(err.duplicateOf ? { duplicateOf: err.duplicateOf } : {}) },
     retryAfter > 0 ? { "Retry-After": String(retryAfter) } : undefined);
 }

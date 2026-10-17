@@ -12,7 +12,7 @@ const mapComment = (comment) => ({
   deleted: Boolean(comment.deleted),
   createdAt: comment.createdAt || null,
   mentions: Array.isArray(comment.mentions) ? comment.mentions.map((m) => ({ userId: m.userId, name: m.name })) : [],
-  attachments: Array.isArray(comment.attachments) ? comment.attachments.map((a) => ({ name: a.originalName || a.name || "File", mime: a.mimeType || a.mime || "", size: Number(a.sizeBytes ?? a.size) || 0 })) : [],
+  attachments: Array.isArray(comment.attachments) ? comment.attachments.map((a) => ({ name: a.originalName || a.name || "File", mime: a.mimeType || a.mime || "", size: Number(a.sizeBytes ?? a.size) || 0, path: String(a.path || "") })) : [],
   ...(Array.isArray(comment.replies) ? { replies: comment.replies.map(mapComment) } : {}),
 });
 

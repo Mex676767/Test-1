@@ -63,7 +63,7 @@ test("the field lists and departments are read as the agent too, so New ticket h
     assert.equal(result.body.ok, true);
     assert.deepEqual(result.body.catalogSource, { departments: "live", markets: "live", choices: "snapshot" });
     assert.deepEqual([...new Set(net.ticketCalls.map((c) => c.onBehalfOf))], ["alice@x.com"]);
-    assert.deepEqual(net.ticketCalls.map((c) => c.path).sort(), ["/departments", "/fields/choices", "/markets", "/tickets"]);
+    assert.deepEqual(net.ticketCalls.map((c) => c.path).sort(), ["/departments", "/fields", "/fields/choices", "/markets", "/tickets"], "this fake has no real form, so the ticket list is read as before");
   } finally { net.restore(); }
 });
 
@@ -94,4 +94,34 @@ test("with acting on behalf switched off the reads are the plain calls, as befor
     assert.equal(result.statusCode, 400, "this fake key insists on onBehalfOf; the point is that none was added");
     assert.equal(net.ticketCalls[0].onBehalfOf, null);
   } finally { net.restore(); }
+});
+
+test("the ticket form itself (GET /fields) is read instead of 100 tickets when the ticket system serves it", async () => {
+  fresh();
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    url = String(url);
+    if (url.endsWith("/v2/info")) return Response.json(TOKENS[String(options.headers.Authorization).replace("Bearer ", "")]);
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace("/api/v1", "");
+    calls.push(path);
+    if (path === "/fields") return reply({ ok: true, fields: [
+      { key: "status", label: "Status", type: "SELECT", isActive: true, required: false, default: "OPEN", postable: true, choices: [{ value: "OPEN", label: "Open" }] },
+      { key: "member_id", label: "Member / User ID", type: "TEXT", isActive: true, required: true, default: null, postable: true, limits: { maxLength: 100 } },
+    ] });
+    if (path === "/markets") return reply({ ok: true, markets: [] });
+    if (path === "/departments") return reply({ ok: true, departments: [] });
+    if (path === "/fields/choices") return reply({ ok: true, fields: [] });
+    throw new Error(`unexpected ${path}`);
+  };
+  try {
+    const result = await post(config, { author: alice });
+    assert.equal(result.body.ok, true);
+    assert.equal(result.body.formSource, "live");
+    assert.deepEqual(result.body.fields.map((field) => field.key), ["status", "member_id"]);
+    assert.equal(result.body.fields[1].required, true);
+    assert.deepEqual(result.body.fields[0].options.map((option) => option.value).slice(0, 1), ["OPEN"]);
+    assert.equal(calls.includes("/tickets"), false, "no ticket list is read");
+  } finally { globalThis.fetch = original; }
 });

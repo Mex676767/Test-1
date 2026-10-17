@@ -93,7 +93,7 @@ test("create forwards attachment files in the ticket multipart request", async (
   try {
     const formData = new FormData();
     formData.append("ticket", JSON.stringify({ fields: { toDepartment: "PYM_MYR", member_id: "member123" } }));
-    formData.append("attachment", new Blob(["png"], { type: "image/png" }), "receipt.png");
+    formData.append("attachment", new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: "image/png" }), "receipt.png");
     const result = await createOnRequest({
       env,
       request: new Request("https://example.test/ticket-create", { method: "POST", body: formData }),
