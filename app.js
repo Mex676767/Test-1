@@ -3826,8 +3826,9 @@ function renderTicketStatus(chatId) {
   const assignees = (ticket.assignees || []).map(person => person?.name || person?.email).filter(Boolean).join(", ") || "Unassigned";
   const attachments = Array.isArray(ticket.fields?.attachment) ? ticket.fields.attachment : [];
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  const remarkPictures = splitImageLinks(typeof ticket.fields?.remarks === "string" ? ticket.fields.remarks : "").links;
   const rows = Object.entries(ticket.fields || {}).filter(([key]) => key !== "attachment")
-    .map(([key, value]) => `<div><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(ticketValueDisplay(key, value))}</strong></div>`).join("");
+    .map(([key, value]) => `<div><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(key === "remarks" && typeof value === "string" ? (splitImageLinks(value).text || "—") : ticketValueDisplay(key, value))}</strong></div>`).join("");
   return `<article class="ticket-inbox-detail">
     <div class="ticket-inbox-row-top"><span class="ticket-inbox-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-inbox-status ${ticketStatusTone(ticket)}">${escapeHtml(ticketStatusLabel(ticket))}</span></div>
     <h3>${escapeHtml(ticketTitle(ticket))}</h3>
@@ -3837,7 +3838,7 @@ function renderTicketStatus(chatId) {
     <details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketDetailsOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketDetailsOpen ? "open" : ""}><summary>Ticket details</summary><div class="ticket-inbox-data">
       <div><span>Created</span><strong>${escapeHtml(created)}</strong></div><div><span>Updated</span><strong>${escapeHtml(updated)}</strong></div><div><span>Raised by</span><strong>${escapeHtml(raisedBy)}</strong></div>${rows}
     </div></details>
-    ${attachments.length ? `<details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketFilesOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketFilesOpen ? "open" : ""}><summary>Attachments <span>${attachments.length}</span></summary><div class="ticket-attachment-summary">${attachments.map(item => escapeHtml(item?.name || "Attached file")).join("<br>")}</div></details>` : ""}
+    ${attachments.length || remarkPictures.length ? `<details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketFilesOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketFilesOpen ? "open" : ""}><summary>Attachments <span>${attachments.length + remarkPictures.length}</span></summary><div class="ticket-attachment-summary"><div class="ticket-thumbs">${[...attachments.filter(isTicketImage).map(item => renderTicketThumb({ path: item.path, name: item.name || "Picture", chatId })), ...remarkPictures.map(link => renderTicketThumb({ src: link, chatId }))].join("")}</div>${attachments.filter(item => !isTicketImage(item)).map(item => escapeHtml(item?.name || "Attached file")).join("<br>")}</div></details>` : ""}
     <div class="ticket-inbox-conversation"><div class="ticket-inbox-caption"><strong>Conversation</strong><span>${Number(ticket.commentCount || 0)} comments</span></div>
     ${renderTicketConversation(chatId, s, comments)}
     </div>
@@ -3865,8 +3866,9 @@ function showTicketProblem(chatId, failure, retry) {
   overlay.innerHTML = `<div class="settings-panel ticket-problem" role="alertdialog" aria-modal="true" aria-labelledby="ticketProblemTitle">
     <div class="settings-head"><span id="ticketProblemTitle">${askEmail ? "Ticket account not found" : "This can't be done in the ticket system"}</span></div>
     <p class="settings-hint">${escapeHtml(failure.error || "The ticket system refused this.")}${failure.detail ? ` The ticket system said: "${escapeHtml(failure.detail)}"` : ""}${askEmail && failure.triedEmail ? ` We tried ${escapeHtml(failure.triedEmail)}.` : ""}</p>
+    ${failure.duplicateOf ? `<p class="settings-hint">This is the ticket that already has the same details: <strong>${escapeHtml(failure.duplicateOf)}</strong></p>` : ""}
     ${askEmail ? `<input type="text" inputmode="email" autocomplete="email" class="input mono ticket-problem-email" placeholder="name@company.com" aria-label="Your ticket account email" /><div class="login-status error ticket-problem-status"></div>` : ""}
-    <div class="login-actions"><button type="button" class="submit-btn" data-problem="ok">${askEmail ? "Save and try again" : "OK"}</button>${askEmail ? `<button type="button" class="secondary-btn" data-problem="cancel">Cancel</button>` : ""}</div>
+    <div class="login-actions"><button type="button" class="submit-btn" data-problem="ok">${askEmail ? "Save and try again" : "OK"}</button>${failure.duplicateOf ? `<button type="button" class="secondary-btn" data-problem="open">Open ${escapeHtml(failure.duplicateOf)}</button>` : ""}${askEmail ? `<button type="button" class="secondary-btn" data-problem="cancel">Cancel</button>` : ""}</div>
   </div>`;
   document.body.appendChild(overlay);
   const input = overlay.querySelector(".ticket-problem-email");
@@ -3881,6 +3883,19 @@ function showTicketProblem(chatId, failure, retry) {
     retry();
   };
   overlay.querySelector('[data-problem="ok"]').addEventListener("click", accept);
+  overlay.querySelector('[data-problem="open"]')?.addEventListener("click", async () => {
+    overlay.remove();
+    const s = state[chatId];
+    if (!s) return;
+    s.ticketView = "detail";
+    s.ticketRecord = null;
+    ticketDetailInFlight.add(chatId);
+    renderTicketSlot(chatId);
+    try { await loadTicketStatus(chatId, failure.duplicateOf, { silent: true }); s.escalationError = ""; }
+    catch (err) { s.escalationError = "Ticket lookup failed: " + err.message; }
+    finally { ticketDetailInFlight.delete(chatId); }
+    renderTicketSlot(chatId);
+  });
   const cancel = overlay.querySelector('[data-problem="cancel"]');
   if (cancel) cancel.addEventListener("click", () => overlay.remove());
   if (input) input.addEventListener("keydown", (event) => { if (event.key === "Enter") accept(); });
@@ -3924,14 +3939,14 @@ function installTicketDemo() {
   const market = (code, label) => ({ code, label });
   const ticket = (ref, fields, extra) => ({ ref, fields, raisedBy: person(1, "Demo Agent"), assignees: [], attachmentCount: 0, ...extra });
   const tickets = [
-    ticket("TK2610160001", { member_id: "demo-player-1", member_platform: "SPIN321", query_type: "wd_delay", status: "IN_PROGRESS" }, { currentDepartment: dept("PYM", "Payment"), market: market("MYR", "Malaysia"), assignees: [person(2, "Demo Payment")], createdAt: ago(300), updatedAt: ago(12), commentCount: 2 }),
+    ticket("TK2610160001", { member_id: "demo-player-1", member_platform: "SPIN321", query_type: "wd_delay", status: "IN_PROGRESS", attachment: [{ name: "receipt.png", mime: "image/png", path: "2026-10/16/demo-receipt.png", size: 1200 }] }, { currentDepartment: dept("PYM", "Payment"), market: market("MYR", "Malaysia"), assignees: [person(2, "Demo Payment")], createdAt: ago(300), updatedAt: ago(12), commentCount: 2 }),
     ticket("TK2610160002", { member_id: "demo-player-2", member_platform: "PP96", query_type: "dp_not_credited", status: "Open" }, { currentDepartment: dept("CS", "Customer Service"), market: market("IDR", "Indonesia"), createdAt: ago(200), updatedAt: ago(95), commentCount: 0 }),
     ticket("TK2610160003", { member_id: "demo-player-3", member_platform: "MY36", query_type: "refund", status: "SOLVED" }, { currentDepartment: dept("PYM", "Payment"), market: market("THB", "Thailand"), assignees: [person(2, "Demo Payment")], createdAt: ago(1500), updatedAt: ago(700), commentCount: 1 }),
     ticket("TK2610160004", { member_id: "demo-player-4", member_platform: "ACE33", query_type: "missing_wd", status: "CS_TO_FOLLOW_UP" }, { currentDepartment: dept("CS", "Customer Service"), market: market("PHP", "Philippines"), createdAt: ago(2600), updatedAt: ago(1300), commentCount: 0 }),
   ];
   const comments = {
     TK2610160001: [
-      { id: 1, author: { id: 2, name: "Demo Payment" }, body: "We have asked the gateway to release this. Will update shortly.", createdAt: ago(60), replies: [{ id: 2, author: { id: 1, name: "Demo Agent" }, body: "Thanks, the player is waiting in chat.", createdAt: ago(12) }] },
+      { id: 1, author: { id: 2, name: "Demo Payment" }, body: "We have asked the gateway to release this. Will update shortly.", createdAt: ago(60), attachments: [{ name: "gateway-slip.png", mime: "image/png", path: "2026-10/17/demo-slip.png" }], replies: [{ id: 2, author: { id: 1, name: "Demo Agent" }, body: "Thanks, the player is waiting in chat.", createdAt: ago(12) }] },
     ],
     TK2610160003: [{ id: 3, author: { id: 2, name: "Demo Payment" }, body: "Refunded to the original account.", createdAt: ago(700) }],
   };
@@ -3949,11 +3964,20 @@ function installTicketDemo() {
       const found = tickets.find((item) => item.ref === url.searchParams.get("ref"));
       return Promise.resolve(found ? reply({ ok: true, ticket: { ...found, comments: comments[found.ref] || [] } }) : reply({ ok: false, error: "Demo ticket not found" }, 404));
     }
+    if (url.pathname === "/ticket-attachment") {
+      const canvas = document.createElement("canvas");
+      canvas.width = 240; canvas.height = 160;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#3b4a7a"; ctx.fillRect(0, 0, 240, 160);
+      ctx.fillStyle = "#fff"; ctx.font = "20px sans-serif"; ctx.fillText("Demo picture", 50, 85);
+      return new Promise((resolve) => canvas.toBlob((blob) => resolve(new Response(blob, { headers: { "Content-Type": "image/png" } })), "image/png"));
+    }
     if (url.pathname === "/ticket-comment" || url.pathname === "/ticket-create") return Promise.resolve(reply({ ok: false, error: "Demo mode: nothing is sent to the ticket system." }, 400));
     return realFetch(input, init);
   };
 }
-if (!IS_EMBEDDED_APP && new URLSearchParams(location.search).get("ticketDemo") === "1") installTicketDemo();
+const TICKET_DEMO = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("ticketDemo") === "1";
+if (TICKET_DEMO) installTicketDemo();
 // A ticket or comment that went through as the agent proves the account: the line follows without another check.
 function noteTicketAccountUsed(data) {
   if (data?.actedAs) ticketAccount = { status: "found", email: data.actedAs, source: ticketAccount.source, message: "", checking: false, at: Date.now() };
@@ -4003,14 +4027,93 @@ function resubmitTicket(chatId) {
 
 // The conversation on a ticket: comments with their replies (the ticket API's shape; the preview's sample tickets use plain names),
 // and a box to comment or reply, posted as the signed-in agent.
+// Pictures on tickets and comments. The ticket system serves its files only to the API key, so the server reads each one (/ticket-attachment)
+// and the browser shows it from a local copy; pictures this site stored itself (a /ticket-image link in the text) are shown straight from
+// that link. A picture that cannot be loaded falls back to its file name.
+const TICKET_IMAGE_LINK = /https?:\/\/[^\s<>"]+?(?:\/ticket-image\?k=[^\s<>"]+|\/tickets\/\d{8}\/[0-9a-f-]{36}\.(?:png|jpg|webp))/gi;
+const ticketImageUrls = new Map(); // ticket-system path -> Promise of a local picture address
+const isTicketImage = (item) => /^image\/(png|jpe?g|webp)$/i.test(String(item?.mime || item?.mimeType || "")) && Boolean(item?.path);
+function splitImageLinks(text) {
+  const links = [];
+  const cleaned = String(text || "").replace(TICKET_IMAGE_LINK, (link) => { links.push(link); return ""; })
+    .replace(/^\s*Images:\s*$/gim, "").replace(/\n{3,}/g, "\n\n").trim();
+  return { text: cleaned, links };
+}
+function renderTicketThumb({ path = "", src = "", name = "Picture", chatId }) {
+  const source = path ? `data-ticket-image="${escapeHtml(path)}" data-chat="${escapeHtml(chatId)}"` : `src="${escapeHtml(src)}"`;
+  return `<button type="button" class="ticket-thumb" data-action="openTicketImage" title="${escapeHtml(name)}"><img ${source} alt="${escapeHtml(name)}" loading="lazy" /><span class="ticket-thumb-name">${escapeHtml(name)}</span></button>`;
+}
+function fetchTicketImageUrl(path, chatId) {
+  if (!ticketImageUrls.has(path)) {
+    ticketImageUrls.set(path, (async () => {
+      const author = ticketReadAuthor(state[chatId]);
+      const res = await fetch("/ticket-attachment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, author }) });
+      if (!res.ok) throw new Error("no picture");
+      return URL.createObjectURL(await res.blob());
+    })().catch((err) => { ticketImageUrls.delete(path); throw err; }));
+  }
+  return ticketImageUrls.get(path);
+}
+function hydrateTicketImages() {
+  document.querySelectorAll("img[data-ticket-image]:not([data-loading])").forEach((img) => {
+    img.dataset.loading = "1";
+    fetchTicketImageUrl(img.dataset.ticketImage, img.dataset.chat)
+      .then((url) => { img.src = url; })
+      .catch(() => { img.closest(".ticket-thumb")?.classList.add("failed"); });
+  });
+}
+function openTicketImageLightbox(src, name) {
+  document.getElementById("ticketImageOverlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "ticketImageOverlay";
+  overlay.className = "settings-overlay ticket-image-overlay";
+  overlay.innerHTML = `<div class="ticket-image-view" role="dialog" aria-modal="true" aria-label="${escapeHtml(name)}"><img src="${escapeHtml(src)}" alt="${escapeHtml(name)}" /><button type="button" class="secondary-btn">Close</button></div>`;
+  overlay.addEventListener("click", (event) => { if (event.target === overlay || event.target.closest("button")) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+// What is waiting to be sent with a comment (kept in memory only, like a ticket's attachments).
+const ticketCommentFilesByChat = new Map();
+const COMMENT_FILE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
+const COMMENT_MAX_FILES = 4;
+const commentFileUrl = (file) => { if (!file._preview) file._preview = URL.createObjectURL(file); return file._preview; };
+function addCommentFiles(chatId, added) {
+  const s = state[chatId];
+  if (!s) return;
+  const existing = ticketCommentFilesByChat.get(chatId) || [];
+  const incoming = Array.from(added || []).filter(Boolean);
+  let error = "";
+  if (existing.length + incoming.length > COMMENT_MAX_FILES) error = `A comment can carry up to ${COMMENT_MAX_FILES} files.`;
+  else {
+    const bad = incoming.find((file) => !file.size || file.size >= ticketMaxBytes(file) || !COMMENT_FILE_TYPES.has(file.type));
+    if (bad) error = !bad.size ? `${bad.name || "File"} is empty.` : !COMMENT_FILE_TYPES.has(bad.type) ? `${bad.name || "File"} must be PNG, JPG, WEBP or PDF.` : `${bad.name || "File"} must be under ${ticketMaxBytes(bad) / (1024 * 1024)}MB.`;
+  }
+  if (!error && incoming.length) ticketCommentFilesByChat.set(chatId, [...existing, ...incoming]);
+  s.commentFileError = error;
+}
+function renderCommentFiles(chatId) {
+  const files = ticketCommentFilesByChat.get(chatId) || [];
+  const error = state[chatId]?.commentFileError;
+  return `${files.map((file, index) => `<span class="ticket-comment-file">${file.type === "application/pdf"
+      ? `<span class="ticket-thumb-pdf">PDF</span>`
+      : `<img src="${escapeHtml(commentFileUrl(file))}" alt="" />`}<span>${escapeHtml(file.name || "Picture")}</span><button type="button" data-action="removeCommentFile" data-chat="${escapeHtml(chatId)}" data-index="${index}" aria-label="Remove ${escapeHtml(file.name || "file")}">×</button></span>`).join("")}${error ? `<span class="ticket-attachment-error">${escapeHtml(error)}</span>` : ""}`;
+}
+function clearCommentFiles(chatId) {
+  for (const file of ticketCommentFilesByChat.get(chatId) || []) { try { URL.revokeObjectURL(file._preview); } catch (_) { /* gone already */ } }
+  ticketCommentFilesByChat.delete(chatId);
+}
+
 function renderTicketComment(comment, chatId, isReply = false) {
   const name = typeof comment.author === "string" ? comment.author : comment.author?.name || "Unknown";
   const when = comment.time || (comment.createdAt ? new Date(comment.createdAt).toLocaleString() : "");
-  const files = (comment.attachments || []).map((file) => escapeHtml(file?.name || "File"));
-  const text = comment.deleted ? "<em>This comment was deleted.</em>" : escapeHtml(comment.body || "");
+  const shown = comment.deleted ? { text: "", links: [] } : splitImageLinks(comment.body || "");
+  const pictures = (comment.attachments || []).filter(isTicketImage);
+  const files = (comment.attachments || []).filter((file) => !isTicketImage(file)).map((file) => escapeHtml(file?.name || "File"));
+  const thumbs = [...pictures.map((file) => renderTicketThumb({ path: file.path, name: file.name || "Picture", chatId })), ...shown.links.map((link) => renderTicketThumb({ src: link, chatId }))].join("");
+  const text = comment.deleted ? "<em>This comment was deleted.</em>" : escapeHtml(shown.text);
   const reply = !isReply && !comment.deleted && comment.id
     ? `<button type="button" class="ticket-inbox-text-button" data-action="replyTicketComment" data-chat="${escapeHtml(chatId)}" data-comment="${escapeHtml(comment.id)}">Reply</button>` : "";
-  return `<article class="ticket-comment${isReply ? " ticket-comment-reply" : ""}"><span class="ticket-comment-avatar">${escapeHtml(String(name).charAt(0).toUpperCase() || "?")}</span><div><div class="ticket-comment-meta"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(comment.role || "")}</span><time>${escapeHtml(when)}</time>${reply}</div><p>${text}</p>${files.length ? `<small class="ticket-comment-files">📎 ${files.join(", ")}</small>` : ""}${(comment.replies || []).map((item) => renderTicketComment(item, chatId, true)).join("")}</div></article>`;
+  return `<article class="ticket-comment${isReply ? " ticket-comment-reply" : ""}"><span class="ticket-comment-avatar">${escapeHtml(String(name).charAt(0).toUpperCase() || "?")}</span><div><div class="ticket-comment-meta"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(comment.role || "")}</span><time>${escapeHtml(when)}</time>${reply}</div><p>${text}</p>${thumbs ? `<div class="ticket-thumbs">${thumbs}</div>` : ""}${files.length ? `<small class="ticket-comment-files">📎 ${files.join(", ")}</small>` : ""}${(comment.replies || []).map((item) => renderTicketComment(item, chatId, true)).join("")}</div></article>`;
 }
 function renderTicketConversation(chatId, s, comments) {
   const replyTo = s.commentReplyTo ? comments.find((comment) => String(comment.id) === String(s.commentReplyTo)) : null;
@@ -4019,6 +4122,9 @@ function renderTicketConversation(chatId, s, comments) {
     <div class="ticket-comment-composer">
       ${replyTo ? `<div class="ticket-comment-replying"><span>Replying to ${escapeHtml(typeof replyTo.author === "string" ? replyTo.author : replyTo.author?.name || "a comment")}</span><button type="button" class="ticket-inbox-text-button" data-action="cancelReplyTicketComment" data-chat="${escapeHtml(chatId)}">Cancel</button></div>` : ""}
       <textarea class="input esc-input ticket-comment-input" data-chat="${escapeHtml(chatId)}" data-field="commentDraft" rows="3" placeholder="Write a comment…" aria-label="Write a comment">${escapeHtml(s.escalation.commentDraft || "")}</textarea>
+      <div class="ticket-comment-files-row" data-chat="${escapeHtml(chatId)}">${renderCommentFiles(chatId)}</div>
+      <label class="ticket-file-button ticket-comment-attach"><input type="file" class="ticket-comment-file-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple /><span>📎 Attach a picture or PDF</span></label>
+      <small class="ticket-attachment-help">Click in the box and press Ctrl+V to paste a picture.</small>
       <button type="button" class="submit-btn" data-action="sendTicketComment" data-chat="${escapeHtml(chatId)}" ${busy ? "disabled" : ""}>${busy ? "Sending…" : "Send comment"}</button>
     </div>`;
 }
@@ -4027,20 +4133,28 @@ async function sendTicketComment(chatId) {
   const ref = s?.ticketRecord?.ref;
   const text = String(s?.escalation?.commentDraft || "").trim();
   if (!ref || ticketCommentInFlight.has(chatId)) return;
-  if (!text) { s.escalationError = "Write a comment first."; renderTicketSlot(chatId); return; }
+  const files = ticketCommentFilesByChat.get(chatId) || [];
+  if (!text && !files.length) { s.escalationError = "Write a comment first."; renderTicketSlot(chatId); return; }
   ticketCommentInFlight.add(chatId);
   renderTicketSlot(chatId);
   let failure = null;
   try {
-    const res = await fetch("/ticket-comment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref, body: text, parentId: s.commentReplyTo || undefined, author: ticketAuthor(s) }),
-    });
+    const payload = { ref, body: text, parentId: s.commentReplyTo || undefined, author: ticketAuthor(s) };
+    let res;
+    if (files.length) {
+      const form = new FormData();
+      form.append("comment", JSON.stringify(payload));
+      for (const file of files) form.append("file", file, file.name);
+      res = await fetch("/ticket-comment", { method: "POST", body: form });
+    } else {
+      res = await fetch("/ticket-comment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    }
     const data = await res.json();
     if (!data.ok) { failure = data; throw new Error(data.error || "Comment failed"); }
     noteTicketAccountUsed(data);
     s.escalation.commentDraft = "";
+    s.commentFileError = "";
+    clearCommentFiles(chatId);
     s.commentReplyTo = null;
     if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
     await loadTicketStatus(chatId, ref, { silent: true });
@@ -4634,6 +4748,23 @@ chatListEl.addEventListener("click", async (e) => {
   // early `return`s inside individual action blocks (e.g. lookup's
   // missing-username/brand guards).
   try {
+
+  if (btn.dataset.action === "openTicketImage") {
+    const img = btn.querySelector("img");
+    if (img && img.src) openTicketImageLightbox(img.src, img.alt || "Picture");
+    return;
+  }
+
+  if (btn.dataset.action === "removeCommentFile") {
+    const row = btn.closest(".ticket-comment-files-row");
+    const files = ticketCommentFilesByChat.get(chatId) || [];
+    const [gone] = files.splice(Number(btn.dataset.index), 1);
+    try { URL.revokeObjectURL(gone?._preview); } catch (_) { /* gone already */ }
+    if (files.length) ticketCommentFilesByChat.set(chatId, files); else ticketCommentFilesByChat.delete(chatId);
+    if (s) s.commentFileError = "";
+    if (row) row.innerHTML = renderCommentFiles(chatId);
+    return;
+  }
 
   if (btn.dataset.action === "resetPreview") {
     resetPreviewCard(chatId);
@@ -6341,7 +6472,8 @@ function runWhenIdle(task, timeout = 1500) {
 
   const optionsReady = refreshDropdownOptions();
   // Off by default. When on, the agent name comes from the LiveChat login and nothing is recorded before it arrives.
-  if (AGENT_LOGIN_LIVE) await requireAgentLogin();
+  if (TICKET_DEMO) selectedAgent = "Demo Agent"; // the ticket demo has no sign-in
+  else if (AGENT_LOGIN_LIVE) await requireAgentLogin();
   if (PREVIEW_LOGIN_GATE) {
     try {
       await requirePreviewLiveChatLogin();
@@ -6411,6 +6543,30 @@ window.addEventListener("storage", (e) => {
   renderNeedsAttentionPanel();
   scheduleNeedsAttentionRefresh(300);
 });
+
+// Ctrl+V in the comment box: a picture on the clipboard is attached to the comment (text pastes as usual).
+chatListEl.addEventListener("paste", (event) => {
+  const box = event.target.closest?.(".ticket-comment-input");
+  if (!box) return;
+  const files = Array.from(event.clipboardData?.items || []).filter((item) => item.kind === "file").map((item) => item.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  event.preventDefault();
+  const chatId = box.dataset.chat;
+  addCommentFiles(chatId, files);
+  const row = box.closest(".ticket-comment-composer")?.querySelector(".ticket-comment-files-row");
+  if (row) row.innerHTML = renderCommentFiles(chatId);
+});
+chatListEl.addEventListener("change", (event) => {
+  const input = event.target.closest?.(".ticket-comment-file-input");
+  if (!input) return;
+  const chatId = input.dataset.chat;
+  addCommentFiles(chatId, input.files);
+  input.value = "";
+  const row = input.closest(".ticket-comment-composer")?.querySelector(".ticket-comment-files-row");
+  if (row) row.innerHTML = renderCommentFiles(chatId);
+});
+// Pictures are loaded as soon as the screen that shows them is drawn.
+new MutationObserver(hydrateTicketImages).observe(chatListEl, { childList: true, subtree: true });
 
 chatListEl.addEventListener("paste", (event) => {
   const picker = event.target.closest?.(".ticket-attachment-picker");

@@ -36,8 +36,11 @@ function fakeNetwork({ ticketOk = true, tokens = { "tok-alice": { account_id: "u
 }
 
 const baseEnv = { TICKETS_API_KEY: "k" };
-const png = (name = "a.png") => new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
-const pdf = () => new File([new Uint8Array([1, 2, 3])], "a.pdf", { type: "application/pdf" });
+const PNG_HEAD = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]; // what a real PNG starts with: files are checked by their bytes
+const PDF_HEAD = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31];
+const withHead = (head, size) => { const bytes = new Uint8Array(size); bytes.set(head); return bytes; };
+const png = (name = "a.png") => new File([new Uint8Array([...PNG_HEAD, 1, 2, 3])], name, { type: "image/png" });
+const pdf = () => new File([new Uint8Array([...PDF_HEAD, 1, 2, 3])], "a.pdf", { type: "application/pdf" });
 function multipart(fields, files, author) {
   const form = new FormData();
   form.append("ticket", JSON.stringify({ fields, author }));
@@ -162,8 +165,8 @@ test("the image endpoint serves only keys this site wrote, as an image", async (
 
 test("with the bucket an image may be up to 5MB; a PDF, or an image without the bucket, stays under 1MB", async () => {
   const net = fakeNetwork();
-  const big = (type, name) => new File([new Uint8Array(3 * 1024 * 1024)], name, { type });
-  const huge = new File([new Uint8Array(5 * 1024 * 1024)], "huge.png", { type: "image/png" });
+  const big = (type, name) => new File([withHead(type === "application/pdf" ? PDF_HEAD : PNG_HEAD, 3 * 1024 * 1024)], name, { type });
+  const huge = new File([withHead(PNG_HEAD, 5 * 1024 * 1024)], "huge.png", { type: "image/png" });
   try {
     const withBucket = { ...baseEnv, TICKET_IMAGES: fakeBucket() };
     assert.equal((await call(withBucket, multipart({ toDepartment: "PYM_MYR" }, [big("image/png", "ok.png")]))).statusCode, 201);

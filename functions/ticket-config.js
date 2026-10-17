@@ -24,7 +24,7 @@ function fieldOptions(field, observedValues) {
     if (option.value === undefined || option.value === null || options.some((item) => same(item.value, option.value))) return;
     options.push(option);
   };
-  (Array.isArray(field.options) ? field.options : []).map(normalizeOption).forEach(add);
+  (Array.isArray(field.options) ? field.options : Array.isArray(field.choices) ? field.choices : []).map(normalizeOption).forEach(add);
   (TICKET_CATALOG[field.key] || []).forEach(({ value, label }) => add({ value, label, isActive: true }));
   const known = (value) => options.some((item) => same(item.value, value) || same(item.label, value));
   [...new Set(observedValues.map(String))].filter((value) => !known(value)).sort((a, b) => a.localeCompare(b))
@@ -46,16 +46,21 @@ function mergeByCode(catalogItems, observedItems, build) {
 // The ticket API's own lists (GET /markets, /departments, /fields/choices): live from its database, with real ids, labels and an active
 // flag per choice. Each is read on its own and an answer without the expected list is treated as missing, so a failure (or a ticket
 // system that does not have the call yet) falls back to the snapshot (ticket-catalog.js) for that part only.
+// GET /fields entries say whether the person may fill them (postable) and whether they are required; a ticket list's field catalog does not,
+// so only an answer that carries them is taken as the form.
+const formFields = (list) => (Array.isArray(list) && list.length && list.every((field) => field && typeof field.key === "string" && "postable" in field) ? list : null);
+
 async function readLiveCatalog(env, email) {
-  const [markets, departments, choices] = await Promise.allSettled([
+  const [markets, departments, choices, form] = await Promise.allSettled([
     ticketRequest(env, withOnBehalf("/markets", email)), ticketRequest(env, withOnBehalf("/departments", email)), ticketRequest(env, withOnBehalf("/fields/choices", email)),
+    ticketRequest(env, withOnBehalf("/fields", email)),
   ]);
   const list = (result, key) => (result.status === "fulfilled" && Array.isArray(result.value?.[key]) ? result.value[key] : null);
   const fieldList = list(choices, "fields");
   const choiceMap = fieldList
     ? new Map(fieldList.filter((field) => field && Array.isArray(field.choices)).map((field) => [field.key, field.choices.map(normalizeOption)]))
     : null;
-  return { markets: list(markets, "markets"), departments: list(departments, "departments"), choices: choiceMap && choiceMap.size ? choiceMap : null };
+  return { markets: list(markets, "markets"), departments: list(departments, "departments"), choices: choiceMap && choiceMap.size ? choiceMap : null, fields: formFields(list(form, "fields")) };
 }
 
 export async function handler(event) {
@@ -88,7 +93,10 @@ export async function handler(event) {
 
     // The list response is the API's only field-catalog endpoint. Strip all
     // ticket records here so no unrelated customer data reaches the browser.
-    const [data, live] = await Promise.all([ticketRequest(event.env, withOnBehalf("/tickets?pageSize=100", email)), readLiveCatalog(event.env, email)]);
+    // GET /fields is the ticket form itself (required, defaults, choices, limits, for this person). Only without it is a page of 100 tickets
+    // read to learn the form, as before.
+    const live = await readLiveCatalog(event.env, email);
+    const data = live.fields ? { tickets: [], fields: live.fields } : await ticketRequest(event.env, withOnBehalf("/tickets?pageSize=100", email));
     const tickets = Array.isArray(data.tickets) ? data.tickets : [];
     const uniqueById = (items) => Array.from(new Map(items
       .filter((item) => item && Number.isInteger(Number(item.id)))
@@ -125,7 +133,8 @@ export async function handler(event) {
       departments,
       markets,
       catalogSnapshot: CATALOG_SNAPSHOT_DATE,
-      catalogSource: { departments: live.departments ? "live" : "snapshot", markets: live.markets ? "live" : "snapshot", choices: live.choices ? "live" : "snapshot" },
+      catalogSource: { departments: live.departments ? "live" : "snapshot", markets: live.markets ? "live" : "snapshot", choices: live.choices ? "live" : "snapshot", },
+      formSource: live.fields ? "live" : "tickets",
       defaultDepartmentId: settings.departmentId,
       defaultMarketId: settings.marketId,
     };

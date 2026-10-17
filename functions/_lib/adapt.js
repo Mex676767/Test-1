@@ -40,7 +40,7 @@ export function adapt(handler) {
     const result = await runWithRequestStart(() => handler(event));
     // Counters this request noted go to the queue's stats after the response is on its way (best effort, never blocks it).
     try { context.waitUntil?.(flushCountersThrottled()); } catch (_) { /* no execution context */ }
-    return new Response(result.body, {
+    return new Response(result.bytes ?? result.body, {
       status: result.statusCode,
       headers: { "Content-Type": "application/json", ...(result.headers || {}) },
     });

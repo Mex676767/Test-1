@@ -104,7 +104,7 @@ test("on behalf with files: onBehalfOf rides inside the multipart ticket part", 
     initLiveChatEnv({ LIVECHAT_PAT: "pat-1" });
     const form = new FormData();
     form.append("ticket", JSON.stringify({ fields: { toDepartment: "CS" }, author: { accountKey: "lc1", agentToken: "tok-alice" } }));
-    form.append("attachment", new File([new Uint8Array([1, 2, 3])], "a.pdf", { type: "application/pdf" }), "a.pdf");
+    form.append("attachment", new File([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31])], "a.pdf", { type: "application/pdf" }), "a.pdf");
     const result = await createHandler({ httpMethod: "POST", env: onEnv, formData: form, headers: {} });
     assert.equal(result.statusCode, 201);
     assert.ok(net.posts[0] instanceof FormData);
