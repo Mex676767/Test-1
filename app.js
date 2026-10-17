@@ -3466,8 +3466,41 @@ const watchedTicketSnapshots = new Map();
 let ticketNotifications = [];
 const TICKET_ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
 const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024; // PDFs: they are attached to the ticket, whose service sets this limit
-const TICKET_IMAGE_MAX_BYTES = 5 * 1024 * 1024; // images: stored in R2, only a link goes to the ticket
-const ticketMaxBytes = (file) => (/^image\//.test(file.type) ? TICKET_IMAGE_MAX_BYTES : TICKET_ATTACHMENT_MAX_BYTES);
+// Every picture is compressed before it is sent: same size, similar quality, a lighter file. The ticket system takes files under 1MB and
+// a screenshot is often 2 to 4MB. WebP is tried first (smaller at the same quality), JPEG where the browser cannot write WebP. A picture
+// is replaced only by a result that is smaller than it AND under 1MB; the quality is lowered a little at a time, and only a picture that
+// still does not fit is made smaller in size (never below 40%).
+const PICTURE_FIT_BYTES = 1_000_000;
+const PICTURE_STEPS = [[1, 0.92], [1, 0.85], [1, 0.78], [0.85, 0.85], [0.85, 0.78], [0.7, 0.8], [0.55, 0.8], [0.4, 0.8]];
+async function compressPicture(file) {
+  if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 30 * 1024 * 1024) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const encode = (canvas, type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+    let canvas = null;
+    let drawnAt = 0;
+    for (const [scale, quality] of PICTURE_STEPS) {
+      if (scale !== drawnAt) {
+        canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff"; // a transparent picture becomes white instead of black
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        drawnAt = scale;
+      }
+      for (const type of ["image/webp", "image/jpeg"]) {
+        const blob = await encode(canvas, type, quality);
+        if (!blob || blob.type !== type) continue; // this browser cannot write that type
+        if (blob.size < PICTURE_FIT_BYTES && blob.size < file.size) return new File([blob], `${String(file.name || "picture").replace(/\.\w+$/, "")}.${type === "image/webp" ? "webp" : "jpg"}`, { type });
+        break;
+      }
+    }
+  } catch (_) { /* left as it is: the size check below tells the agent */ }
+  return file;
+}
+const ticketMaxBytes = () => TICKET_ATTACHMENT_MAX_BYTES;
 
 function ticketAttachmentField() {
   return ticketFields.find((field) => field.type === "ATTACHMENT") || null;
@@ -3491,7 +3524,7 @@ function renderTicketAttachments(chatId) {
         <input type="file" class="ticket-attachment-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple />
         <span>${files.length ? "+ Add more files" : "Choose files"}</span>
       </label>
-      <div class="ticket-attachment-help">PNG, JPG or WEBP under 5MB · PDF under 1MB · up to 6 files · click here and press Ctrl+V to paste</div>
+      <div class="ticket-attachment-help">Pictures are shrunk to fit · PDF under 1MB · up to 6 files · click here and press Ctrl+V to paste</div>
       ${rows ? `<div class="ticket-attachment-list">${rows}</div>` : ""}
       ${s?.ticketAttachmentError ? `<div class="ticket-attachment-error">${escapeHtml(s.ticketAttachmentError)}</div>` : ""}
     </div>`;
@@ -4032,7 +4065,7 @@ function resubmitTicket(chatId) {
 // that link. A picture that cannot be loaded falls back to its file name.
 const TICKET_IMAGE_LINK = /https?:\/\/[^\s<>"]+?(?:\/ticket-image\?k=[^\s<>"]+|\/tickets\/\d{8}\/[0-9a-f-]{36}\.(?:png|jpg|webp))/gi;
 const ticketImageUrls = new Map(); // ticket-system path -> Promise of a local picture address
-const isTicketImage = (item) => /^image\/(png|jpe?g|webp)$/i.test(String(item?.mime || item?.mimeType || "")) && Boolean(item?.path);
+const isTicketImage = (item) => (/^image\/(png|jpe?g|webp)$/i.test(String(item?.mime || item?.mimeType || "")) || /\.(png|jpe?g|webp)$/i.test(String(item?.name || item?.originalName || item?.path || ""))) && Boolean(item?.path);
 function splitImageLinks(text) {
   const links = [];
   const cleaned = String(text || "").replace(TICKET_IMAGE_LINK, (link) => { links.push(link); return ""; })
@@ -4048,7 +4081,11 @@ function fetchTicketImageUrl(path, chatId) {
     ticketImageUrls.set(path, (async () => {
       const author = ticketReadAuthor(state[chatId]);
       const res = await fetch("/ticket-attachment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, author }) });
-      if (!res.ok) throw new Error("no picture");
+      if (!res.ok) {
+        let reason = `the ticket system could not give it (${res.status})`;
+        try { reason = (await res.json()).error || reason; } catch (_) { /* keep the status */ }
+        throw new Error(reason);
+      }
       return URL.createObjectURL(await res.blob());
     })().catch((err) => { ticketImageUrls.delete(path); throw err; }));
   }
@@ -4059,7 +4096,17 @@ function hydrateTicketImages() {
     img.dataset.loading = "1";
     fetchTicketImageUrl(img.dataset.ticketImage, img.dataset.chat)
       .then((url) => { img.src = url; })
-      .catch(() => { img.closest(".ticket-thumb")?.classList.add("failed"); });
+      .catch((err) => {
+        const thumb = img.closest(".ticket-thumb");
+        if (!thumb) return;
+        thumb.classList.add("failed");
+        thumb.title = `${img.alt}: ${err.message}`;
+        const note = document.createElement("span");
+        note.className = "ticket-thumb-error";
+        note.textContent = err.message;
+        thumb.appendChild(note);
+        logDiagnostic(`Could not show the picture ${img.alt}: ${err.message}`, "warn");
+      });
   });
 }
 function openTicketImageLightbox(src, name) {
@@ -5730,8 +5777,11 @@ chatListEl.addEventListener("change", (e) => {
   const attachmentInput = e.target.closest(".ticket-attachment-input");
   if (attachmentInput) {
     const chatId = attachmentInput.dataset.chat;
-    addTicketAttachments(chatId, attachmentInput.files);
-    attachmentInput.closest(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    const slot = attachmentInput.closest(".escalation-slot");
+    Promise.all(Array.from(attachmentInput.files).map(compressPicture)).then((prepared) => {
+      addTicketAttachments(chatId, prepared);
+      slot.innerHTML = renderEscalationSection(chatId);
+    });
     return;
   }
   // Claim Secret: auto-ticked on claim, but editable. If the record was
@@ -6552,18 +6602,23 @@ chatListEl.addEventListener("paste", (event) => {
   if (!files.length) return;
   event.preventDefault();
   const chatId = box.dataset.chat;
-  addCommentFiles(chatId, files);
   const row = box.closest(".ticket-comment-composer")?.querySelector(".ticket-comment-files-row");
-  if (row) row.innerHTML = renderCommentFiles(chatId);
+  Promise.all(files.map(compressPicture)).then((prepared) => {
+    addCommentFiles(chatId, prepared);
+    if (row) row.innerHTML = renderCommentFiles(chatId);
+  });
 });
 chatListEl.addEventListener("change", (event) => {
   const input = event.target.closest?.(".ticket-comment-file-input");
   if (!input) return;
   const chatId = input.dataset.chat;
-  addCommentFiles(chatId, input.files);
+  const picked = Array.from(input.files);
   input.value = "";
   const row = input.closest(".ticket-comment-composer")?.querySelector(".ticket-comment-files-row");
-  if (row) row.innerHTML = renderCommentFiles(chatId);
+  Promise.all(picked.map(compressPicture)).then((prepared) => {
+    addCommentFiles(chatId, prepared);
+    if (row) row.innerHTML = renderCommentFiles(chatId);
+  });
 });
 // Pictures are loaded as soon as the screen that shows them is drawn.
 new MutationObserver(hydrateTicketImages).observe(chatListEl, { childList: true, subtree: true });
@@ -6578,8 +6633,11 @@ chatListEl.addEventListener("paste", (event) => {
   if (!files.length) return;
   event.preventDefault();
   const chatId = picker.dataset.chat;
-  addTicketAttachments(chatId, files);
-  picker.closest(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+  const slot = picker.closest(".escalation-slot");
+  Promise.all(files.map(compressPicture)).then((prepared) => {
+    addTicketAttachments(chatId, prepared);
+    slot.innerHTML = renderEscalationSection(chatId);
+  });
 });
 
 document.addEventListener("click", (event) => {

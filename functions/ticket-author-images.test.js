@@ -54,7 +54,7 @@ test("images go to R2 and the ticket gets their links; PDFs stay attachments", a
   const net = fakeNetwork();
   const bucket = fakeBucket();
   try {
-    const result = await call({ ...baseEnv, TICKET_IMAGES: bucket }, multipart({ toDepartment: "PYM_MYR", remarks: "slip attached" }, [png(), pdf()]));
+    const result = await call({ ...baseEnv, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: bucket }, multipart({ toDepartment: "PYM_MYR", remarks: "slip attached" }, [png(), pdf()]));
     assert.equal(result.statusCode, 201);
     assert.equal(JSON.parse(result.body).images, 1);
     assert.equal(bucket.objects.size, 1);
@@ -72,7 +72,7 @@ test("only images: the ticket is sent as plain JSON; a public bucket address and
   const net = fakeNetwork();
   const bucket = fakeBucket();
   try {
-    const env = { ...baseEnv, TICKET_IMAGES: bucket, TICKET_IMAGES_PUBLIC_URL: "https://img.example.com/", TICKETS_IMAGE_LINKS_FIELD: "image_links" };
+    const env = { ...baseEnv, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: bucket, TICKET_IMAGES_PUBLIC_URL: "https://img.example.com/", TICKETS_IMAGE_LINKS_FIELD: "image_links" };
     await call(env, multipart({ toDepartment: "PYM_MYR" }, [png(), png("b.png")]));
     assert.equal(typeof net.tickets[0], "string");
     const links = sentFields(net.tickets[0]).image_links.split("\n").slice(1);
@@ -95,7 +95,7 @@ test("a ticket the service refuses leaves no image behind", async () => {
   const net = fakeNetwork({ ticketOk: false });
   const bucket = fakeBucket();
   try {
-    const result = await call({ ...baseEnv, TICKET_IMAGES: bucket }, multipart({ toDepartment: "PYM_MYR" }, [png()]));
+    const result = await call({ ...baseEnv, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: bucket }, multipart({ toDepartment: "PYM_MYR" }, [png()]));
     assert.equal(result.statusCode, 422);
     assert.equal(bucket.objects.size, 0);
   } finally { net.restore(); }
@@ -124,7 +124,7 @@ test("with author fields set, a ticket without a valid LiveChat login is refused
   const bucket = fakeBucket();
   initLiveChatEnv({ LIVECHAT_PAT: "pat-1" });
   try {
-    const env = { ...authorEnv, TICKET_IMAGES: bucket };
+    const env = { ...authorEnv, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: bucket };
     const none = await call(env, multipart({ toDepartment: "PYM_MYR" }, [png()]));
     assert.equal(none.statusCode, 401);
     const stale = await call(env, multipart({ toDepartment: "PYM_MYR" }, [png()], { accountKey: "lc1", agentToken: "tok-gone" }));
@@ -149,7 +149,7 @@ test("the image endpoint serves only keys this site wrote, as an image", async (
   const key = "tickets/20261012/0b9f6a3e-1c7d-4a52-9e0b-2f4d8c1a7b66.png";
   bucket.objects.set(key, { body: new Uint8Array([1, 2, 3]), httpMetadata: { contentType: "image/png" } });
   bucket.objects.set("secret.txt", { body: "x", httpMetadata: { contentType: "text/plain" } });
-  const get = (k, env = { TICKET_IMAGES: bucket }) => imageOnRequest({ env, request: new Request(`https://x.test/ticket-image?k=${encodeURIComponent(k)}`) });
+  const get = (k, env = { TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: bucket }) => imageOnRequest({ env, request: new Request(`https://x.test/ticket-image?k=${encodeURIComponent(k)}`) });
 
   const ok = await get(key);
   assert.equal(ok.status, 200);
@@ -159,7 +159,7 @@ test("the image endpoint serves only keys this site wrote, as an image", async (
   assert.equal((await get("../secret.txt")).status, 404);
   assert.equal((await get("tickets/20261012/00000000-0000-4000-8000-000000000000.png")).status, 404);
   assert.equal((await get(key, {})).status, 404);
-  const post = await imageOnRequest({ env: { TICKET_IMAGES: bucket }, request: new Request(`https://x.test/ticket-image?k=${key}`, { method: "POST" }) });
+  const post = await imageOnRequest({ env: { TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: bucket }, request: new Request(`https://x.test/ticket-image?k=${key}`, { method: "POST" }) });
   assert.equal(post.status, 405);
 });
 
@@ -168,7 +168,7 @@ test("with the bucket an image may be up to 5MB; a PDF, or an image without the 
   const big = (type, name) => new File([withHead(type === "application/pdf" ? PDF_HEAD : PNG_HEAD, 3 * 1024 * 1024)], name, { type });
   const huge = new File([withHead(PNG_HEAD, 5 * 1024 * 1024)], "huge.png", { type: "image/png" });
   try {
-    const withBucket = { ...baseEnv, TICKET_IMAGES: fakeBucket() };
+    const withBucket = { ...baseEnv, TICKET_IMAGES_VIA_R2: "1", TICKET_IMAGES: fakeBucket() };
     assert.equal((await call(withBucket, multipart({ toDepartment: "PYM_MYR" }, [big("image/png", "ok.png")]))).statusCode, 201);
     const tooBig = await call(withBucket, multipart({ toDepartment: "PYM_MYR" }, [huge]));
     assert.equal(tooBig.statusCode, 400);

@@ -9,6 +9,10 @@ export const IMAGE_KEY = /^tickets\/\d{8}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 
 export const isStoredImage = (file) => Boolean(IMAGE_TYPES[file?.type]);
 
+// Off by default: pictures are attached to the ticket or comment itself (under 1MB each, the ticket system's limit). Only with the bucket
+// bound AND TICKET_IMAGES_VIA_R2 switched on do pictures go to the bucket and a link is sent instead.
+export const useImageBucket = (env) => Boolean(env?.TICKET_IMAGES) && ["1", "true", "on", "yes"].includes(String(env?.TICKET_IMAGES_VIA_R2 ?? "").trim().toLowerCase());
+
 // What a file IS, by its first bytes, not by the name or type the browser gave it: a renamed web page, script or archive is refused (the
 // ticket system checks the same). PNG, JPEG, WebP and PDF only.
 const ascii = (bytes, from, to) => String.fromCharCode(...bytes.slice(from, to));

@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { actingAs, flag, isOnBehalfRefusal, needTicketEmail, refusalResponse } from "./_lib/ticket-actor.js";
 import { rememberTicketEmail } from "./_lib/ticket-email.js";
-import { deleteTicketImages, fileMatchesType, isStoredImage, storeTicketImages } from "./_lib/ticket-images.js";
+import { deleteTicketImages, fileMatchesType, isStoredImage, storeTicketImages, useImageBucket } from "./_lib/ticket-images.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
 export async function handler(event) {
@@ -43,7 +43,7 @@ export async function handler(event) {
       if (counts.get(field) > 6) return json(400, { ok: false, error: `${field} allows at most 6 files` });
       if (!file.size) return json(400, { ok: false, error: `${file.name || "Attachment"} is empty` });
       // An image goes to R2 and may be larger; anything attached to the ticket stays within the ticket service's 1MB.
-      const limitMb = event.env?.TICKET_IMAGES && isStoredImage(file) ? 5 : 1;
+      const limitMb = useImageBucket(event.env) && isStoredImage(file) ? 5 : 1;
       if (file.size >= limitMb * 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under ${limitMb}MB` });
       if (!allowedTypes.has(file.type)) return json(400, { ok: false, error: `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF` });
       if (!(await fileMatchesType(file))) return json(400, { ok: false, error: `${file.name || "Attachment"} is not really a ${file.type === "application/pdf" ? "PDF" : "PNG, JPG or WEBP image"}, so it was not sent` });
@@ -72,7 +72,7 @@ export async function handler(event) {
     // field). Without the bucket binding they are attached as before. PDFs are always attached.
     let imageKeys = [];
     let sent = attachments;
-    if (event.env?.TICKET_IMAGES && attachments.some(({ file }) => isStoredImage(file))) {
+    if (useImageBucket(event.env) && attachments.some(({ file }) => isStoredImage(file))) {
       const images = attachments.filter(({ file }) => isStoredImage(file));
       const host = String(event.headers?.host || "");
       const stored = await storeTicketImages(event.env, host, images.map(({ file }) => file));

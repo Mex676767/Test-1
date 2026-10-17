@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { actingAs, flag, isOnBehalfRefusal, needTicketEmail, refusalResponse } from "./_lib/ticket-actor.js";
 import { rememberTicketEmail } from "./_lib/ticket-email.js";
-import { deleteTicketImages, fileMatchesType, isStoredImage, storeTicketImages } from "./_lib/ticket-images.js";
+import { deleteTicketImages, fileMatchesType, isStoredImage, storeTicketImages, useImageBucket } from "./_lib/ticket-images.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
 // Posts a comment (or a reply) on a ticket, as the signed-in agent when TICKETS_ON_BEHALF_OF is on (see ticket-actor.js). The ticket API
@@ -34,7 +34,7 @@ export async function handler(event) {
     for (const file of files) {
       totalSize += Number(file.size) || 0;
       if (!file.size) return json(400, { ok: false, error: `${file.name || "Attachment"} is empty` });
-      const limitMb = event.env?.TICKET_IMAGES && isStoredImage(file) ? 5 : 1; // images may go to R2 (a link is sent); the rest is attached
+      const limitMb = useImageBucket(event.env) && isStoredImage(file) ? 5 : 1; // images may go to R2 (a link is sent); the rest is attached
       if (file.size >= limitMb * 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under ${limitMb}MB` });
       if (!TYPES.has(file.type)) return json(400, { ok: false, error: `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF` });
       if (!(await fileMatchesType(file))) return json(400, { ok: false, error: `${file.name || "Attachment"} is not really a ${file.type === "application/pdf" ? "PDF" : "PNG, JPG or WEBP image"}, so it was not sent` });
@@ -57,7 +57,7 @@ export async function handler(event) {
     // are attached to the comment.
     let imageKeys = [];
     let sent = files;
-    if (event.env?.TICKET_IMAGES && files.some(isStoredImage)) {
+    if (useImageBucket(event.env) && files.some(isStoredImage)) {
       const images = files.filter(isStoredImage);
       const stored = await storeTicketImages(event.env, String(event.headers?.host || ""), images);
       imageKeys = stored.keys;
