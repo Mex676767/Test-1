@@ -5665,6 +5665,7 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   // A chat on the agent's unrecorded list that they mark Unknown is written off in Lark right away, so it cannot come back
   // from there (an incognito window forgets the tick, Lark does not).
   if (value && unrecordedChats.some((chat) => chat.threadId === chatId)) resolveUnrecorded(chatId, "Ignored");
+  if (value) removeStaleRecordsForChat(chatId, silent);
   if (!s.isUnknown || !s.caRecordId) return;
 
   if (previewMode) {
@@ -5717,6 +5718,36 @@ function setUnknown(chatId, value, { silent = false } = {}) {
     restore();
     if (!silent) setStatus("Couldn't reach Lark to remove the record.", "error");
   });
+}
+
+// Rows a Look up left in Lark for this chat that Needs Attention lists, even when this card does not remember them (the browser forgot
+// the chat, or it was opened again from Open ↗): ticking Unknown removes them too, like the card's own row below. The server re-checks that
+// the row is this agent's and that Inquiry and Status are still empty, so a filled-in row is never deleted; a claimed bonus keeps it.
+function removeStaleRecordsForChat(chatId, silent) {
+  const s = state[chatId];
+  if (previewMode || !selectedAgent || !s) return;
+  if (Object.values(s.claimedPrograms || {}).some(Boolean)) return;
+  const link = String(s.chatUrl || "").match(/\/(?:chats\/[^/?#]+\/|archives\/)([^/?#]+)/);
+  const threads = new Set([String(chatId), link ? link[1] : ""].filter(Boolean));
+  const rows = staleRecords.filter((r) => r.threadId && threads.has(String(r.threadId)) && r.recordId !== s.caRecordId);
+  for (const row of rows) {
+    rememberDeletedRecord(row.recordId);
+    fetch("/lark-stale-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentName: selectedAgent, deleteRecordId: row.recordId }),
+    }).then((res) => res.json()).then((data) => {
+      if (!data.ok) throw new Error(data.error || "Remove failed");
+      staleRecords = staleRecords.filter((r) => r.recordId !== row.recordId);
+      renderNeedsAttentionPanel();
+      if (!silent) setStatus("Unknown player — the leftover record was removed from Lark Base.", "success");
+    }).catch((err) => {
+      forgetDeletedRecord(row.recordId); // lets a re-tick retry
+      logDiagnostic(`Failed to remove the leftover record for this Unknown-marked chat: ${err.message}`, "warn");
+      if (!silent) setStatus("Couldn't remove the leftover record from Lark Base: " + err.message, "error");
+    });
+  }
+  if (rows.length) renderNeedsAttentionPanel();
 }
 
 // Inquiry and Status both use this same merged box + search pattern now

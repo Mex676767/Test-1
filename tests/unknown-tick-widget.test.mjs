@@ -90,3 +90,52 @@ test('every way a bonus is claimed or unclaimed reports it: the normal claim, th
   assert.match(app, /s\.unclaimInFlight = false;\s*\n\s*reportClaim\(chatId, null\);/);
   assert.match(app, /amount: riskClaim\?\.valid \? riskClaim\.formattedClaim : programHasAmount\(programKey\) \? extractAmountNumber\(claimedSource\?\.display\) : ""/);
 });
+
+// ---- ticking Unknown also removes the leftover Lark row Needs Attention lists for this chat ------------------------
+function leftoverHarness({ staleRecords, chatUrl = '', claimed = {}, caRecordId = null, deleteReply = { ok: true }, selectedAgent = '96 Mexha', previewMode = false }) {
+  const calls = { fetched: [], remembered: [], forgotten: [], rendered: 0, status: [] };
+  const context = vm.createContext({
+    state: { THREAD: { chatUrl, claimedPrograms: claimed, caRecordId } },
+    staleRecords, selectedAgent, previewMode,
+    rememberDeletedRecord: (id) => calls.remembered.push(id),
+    forgetDeletedRecord: (id) => calls.forgotten.push(id),
+    renderNeedsAttentionPanel: () => { calls.rendered += 1; },
+    setStatus: (text, kind) => calls.status.push([text, kind]),
+    logDiagnostic() {}, Set, String, Object, Error, JSON,
+    fetch: async (url, options) => { calls.fetched.push([url, JSON.parse(options.body)]); return { json: async () => deleteReply }; },
+  });
+  vm.runInContext(app.match(/function removeStaleRecordsForChat\(chatId, silent\) \{[\s\S]*?\n\}/)[0], context);
+  return { context, calls, run: (silent = false) => { vm.runInContext(`removeStaleRecordsForChat('THREAD', ${silent})`, context); return new Promise((resolve) => setTimeout(resolve, 5)); } };
+}
+
+test('Unknown removes the leftover Lark row of this chat even though the card does not remember it', async () => {
+  const h = leftoverHarness({ staleRecords: [{ recordId: 'rec-1', threadId: 'THREAD' }, { recordId: 'rec-2', threadId: 'OTHER' }] });
+  await h.run();
+  assert.deepEqual(h.calls.fetched, [['/lark-stale-records', { agentName: '96 Mexha', deleteRecordId: 'rec-1' }]], 'only this chat\'s row, as this agent');
+  assert.deepEqual(h.calls.remembered, ['rec-1']);
+  assert.deepEqual(vm.runInContext('staleRecords.map((r) => r.recordId)', h.context), ['rec-2'], 'it leaves Needs Attention');
+  assert.equal(h.calls.status.at(-1)[1], 'success');
+});
+
+test('the chat is also found by the link of a chat opened from the archive', async () => {
+  const h = leftoverHarness({ staleRecords: [{ recordId: 'rec-9', threadId: 'ARCH' }], chatUrl: 'https://my.livechatinc.com/archives/ARCH' });
+  await h.run();
+  assert.deepEqual(h.calls.fetched.map((c) => c[1].deleteRecordId), ['rec-9']);
+});
+
+test('nothing is removed when a bonus is claimed, in the preview, with no agent, or for the card\'s own row; a refusal is taken back', async () => {
+  const rows = [{ recordId: 'rec-1', threadId: 'THREAD' }];
+  for (const options of [{ claimed: { topPnl: true } }, { previewMode: true }, { selectedAgent: '' }, { caRecordId: 'rec-1' }]) {
+    const h = leftoverHarness({ staleRecords: [...rows], ...options });
+    await h.run();
+    assert.equal(h.calls.fetched.length, 0, JSON.stringify(options));
+  }
+  const refused = leftoverHarness({ staleRecords: [...rows], deleteReply: { ok: false, error: 'This record has already been filled in — not removed.' } });
+  await refused.run();
+  assert.deepEqual(refused.calls.forgotten, ['rec-1'], 'a failed delete can be retried');
+  assert.equal(vm.runInContext('staleRecords.length', refused.context), 1, 'and the row stays listed');
+});
+
+test('setUnknown calls it for every tick', () => {
+  assert.match(app, /if \(value\) removeStaleRecordsForChat\(chatId, silent\);/);
+});
