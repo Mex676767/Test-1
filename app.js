@@ -4103,8 +4103,9 @@ function hydrateTicketImages() {
         thumb.title = `${img.alt}: ${err.message}`;
         const note = document.createElement("span");
         note.className = "ticket-thumb-error";
-        note.textContent = err.message;
+        note.textContent = `${err.message} Click to open it in the ticket system (you need to be signed in there).`;
         thumb.appendChild(note);
+        thumb.dataset.fallbackUrl = `https://tickets.96ghq.com/api/attachments/${String(img.dataset.ticketImage).split("/").map(encodeURIComponent).join("/")}?access=1`;
         logDiagnostic(`Could not show the picture ${img.alt}: ${err.message}`, "warn");
       });
   });
@@ -4798,7 +4799,8 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "openTicketImage") {
     const img = btn.querySelector("img");
-    if (img && img.src) openTicketImageLightbox(img.src, img.alt || "Picture");
+    if (btn.dataset.fallbackUrl) window.open(btn.dataset.fallbackUrl, "_blank", "noopener"); // the picture could not be loaded here: the ticket system's own page
+    else if (img && img.src) openTicketImageLightbox(img.src, img.alt || "Picture");
     return;
   }
 

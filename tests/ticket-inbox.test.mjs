@@ -583,3 +583,9 @@ test('pictures: every picture is compressed before it is sent, to the same size 
   assert.ok(app.includes('const PICTURE_STEPS = [[1, 0.92]'), 'full size and high quality come first');
   assert.ok(!app.includes('TICKET_IMAGE_MAX_BYTES'), 'no 5MB image limit any more');
 });
+
+test('pictures: one the key cannot load opens in the ticket system instead (the agent is signed in there), and works with the lightbox otherwise', () => {
+  assert.ok(app.includes('thumb.dataset.fallbackUrl = `https://tickets.96ghq.com/api/attachments/'));
+  assert.ok(app.includes('if (btn.dataset.fallbackUrl) window.open(btn.dataset.fallbackUrl, "_blank", "noopener")'));
+  assert.ok(app.includes('else if (img && img.src) openTicketImageLightbox'));
+});
