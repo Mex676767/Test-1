@@ -100,7 +100,7 @@ test("a ticket's attached picture is read through the key as the agent and retur
     assert.deepEqual([...result.bytes], PNG);
     assert.equal(result.headers["Content-Type"], "image/png");
     assert.equal(result.headers["X-Content-Type-Options"], "nosniff");
-    assert.equal(net.calls[0].url, "https://tickets.96ghq.com/api/attachments/2026-09/21/3f9a-c1.png");
+    assert.equal(net.calls[0].url, "https://tickets.96ghq.com/api/attachments/2026-09/21/3f9a-c1.png?access=1");
     assert.equal(net.calls[0].options.headers.Authorization, "Bearer k");
     assert.equal(net.calls[0].options.redirect, "manual");
   } finally { net.restore(); }
@@ -131,4 +131,22 @@ test("a refused duplicate carries the ticket it duplicates", async () => {
     assert.equal(result.statusCode, 409);
     assert.equal(JSON.parse(result.body).duplicateOf, "TK2610170009");
   } finally { net.restore(); }
+});
+
+test("a picture the ticket system does not find at the first address is tried at the next forms, and a real 404 on all says so", async () => {
+  resetTicketRateLimit();
+  const png = new Uint8Array(PNG);
+  const net = ticketApi((url) => (url.endsWith("/a/b.png") ? new Response(png, { headers: { "Content-Type": "image/png" } }) : new Response("Not found", { status: 404 })));
+  try {
+    const result = await attachment({ httpMethod: "POST", env, body: JSON.stringify({ path: "a/b.png" }) });
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(net.calls.map((call) => call.url.split("b.png")[1]), ["?access=1", ""], "stops at the first form that works");
+  } finally { net.restore(); }
+  const none = ticketApi(() => new Response("Not found", { status: 404 }));
+  try {
+    const result = await attachment({ httpMethod: "POST", env, body: JSON.stringify({ path: "a/b.png" }) });
+    assert.equal(result.statusCode, 502);
+    assert.match(JSON.parse(result.body).error, /answered 404/);
+    assert.equal(none.calls.length, 3);
+  } finally { none.restore(); }
 });
