@@ -175,10 +175,19 @@ function mergeTicketChoices(live, fallback) {
 const ticketEmailKey = (accountKey) => `rc-ticket-email:${accountKey || ""}`;
 function storedTicketEmail(accountKey) { try { return localStorage.getItem(ticketEmailKey(accountKey)) || ""; } catch (_) { return ""; } }
 function storeTicketEmail(accountKey, email) { try { localStorage.setItem(ticketEmailKey(accountKey), String(email || "").trim().toLowerCase()); } catch (_) { /* not remembered */ } }
+// Who a read is made as, from this browser alone (no card needed): the signed-in LiveChat login and the ticket email remembered here.
+function ticketReadAuthor(s) {
+  const agentToken = liveChatAgentTokens()[currentLiveChatAccount];
+  if (!agentToken || !currentLiveChatAccount) return undefined;
+  return { accountKey: currentLiveChatAccount, agentToken, ticketEmail: s?.escalation?.ticketEmail || storedTicketEmail(currentLiveChatAccount) };
+}
 async function fetchTicketConfig({ fresh = false } = {}) {
   if (!ESCALATION_TICKET_ENABLED) return;
   try {
-    const res = await fetch(fresh ? "/ticket-config?fresh=1" : "/ticket-config", fresh ? { cache: "no-store" } : undefined);
+    const author = ticketReadAuthor();
+    const res = author
+      ? await fetch("/ticket-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author, fresh }) })
+      : await fetch(fresh ? "/ticket-config?fresh=1" : "/ticket-config", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Ticket integration is unavailable");
     ticketFields = data.fields || [];
@@ -3896,6 +3905,7 @@ async function checkTicketAccount(chatId, { force = false } = {}) {
       ? { status: "off", email: "", source: "", message: "", checking: false, at: Date.now() }
       : { status: data.status, email: data.email || "", source: data.source || "", message: "", detail: data.detail || "", checking: false, at: Date.now() };
     if (data.status === "found" && s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
+    if (data.status === "found" && (ticketConfigError || !ticketFields.length)) await fetchTicketConfig({ fresh: true });
     if (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") {
       queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
     }
@@ -4044,13 +4054,23 @@ async function sendTicketComment(chatId) {
   renderTicketSlot(chatId);
 }
 
+// A refused read: "Ticket account not found" opens the email popup (and tries the read again once an email is saved); anything else is
+// the ticket system's message, as before.
+function ticketReadFailure(chatId, data, fallback) {
+  if (data.needTicketEmail && state[chatId]) queueMicrotask(() => showTicketProblem(chatId, data, () => checkTicketAccount(chatId, { force: true })));
+  return new Error(data.error || fallback);
+}
+
 async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = {}) {
   const s = state[chatId];
   const normalized = String(ref || "").trim().toUpperCase();
   if (!normalized) throw new Error("Enter a ticket reference");
-  const res = await fetch(`/ticket-status?ref=${encodeURIComponent(normalized)}${fresh ? "&fresh=1" : ""}`);
+  const author = ticketReadAuthor(s);
+  const res = author
+    ? await fetch("/ticket-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: normalized, fresh, author }) })
+    : await fetch(`/ticket-status?ref=${encodeURIComponent(normalized)}${fresh ? "&fresh=1" : ""}`);
   const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "Ticket status lookup failed");
+  if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket status lookup failed");
   s.ticketLookupRef = normalized;
   s.ticketRecord = data.ticket;
   rememberTicketSnapshot(data.ticket, !silent);
@@ -4061,9 +4081,12 @@ async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = 
 
 async function searchTickets(chatId, query, mode = "search", { fresh = true } = {}) {
   ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [], mode });
-  const res = await fetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}${fresh ? "&fresh=1" : ""}`);
+  const author = ticketReadAuthor(state[chatId]);
+  const res = author
+    ? await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: String(query || "").trim(), fresh, author }) })
+    : await fetch(`/ticket-list?q=${encodeURIComponent(String(query || "").trim())}${fresh ? "&fresh=1" : ""}`);
   const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "Ticket search failed");
+  if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket search failed");
   ticketSearchResultsByChat.set(chatId, { loading: false, tickets: data.tickets || [], total: data.total || 0, mode });
   return data;
 }

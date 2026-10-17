@@ -38,6 +38,16 @@ export async function actingAs(env, author, { resolveEmail = true } = {}) {
   return out;
 }
 
+// Who a read (the inbox, a ticket, the field lists) is made as: the signed-in agent when acting on behalf is switched on, else nobody.
+// { email, source } or { response } (not signed in, or no ticket email known: the popup asks for it).
+export async function readingAs(env, author) {
+  if (!flag(env?.TICKETS_ON_BEHALF_OF)) return { email: "", source: "" };
+  const acting = await actingAs(env, author);
+  if (acting.response) return acting;
+  if (!acting.email) return { response: needTicketEmail("") };
+  return acting;
+}
+
 // The ticket system refused to act for this person. 400 = no active account with that email (ask for the right one, or send the agent to
 // the admin when the email came from the Ticket Email column, which an agent cannot change); 403 = the key may not act for others.
 export function refusalResponse(error, email, source) {

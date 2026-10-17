@@ -1,5 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
-import { json, ticketError, ticketGet } from "./_lib/tickets.js";
+import { isOnBehalfRefusal, readingAs, refusalResponse } from "./_lib/ticket-actor.js";
+import { json, ticketError, ticketGet, withOnBehalf } from "./_lib/tickets.js";
 
 // A ticket read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
 const STATUS_TTL_MS = 10_000;
@@ -16,14 +17,21 @@ const mapComment = (comment) => ({
 });
 
 export async function handler(event) {
-  if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
-  const ref = String(event.queryStringParameters?.ref || "").trim().toUpperCase();
+  const post = event.httpMethod === "POST";
+  if (event.httpMethod !== "GET" && !post) return json(405, { ok: false, error: "Method not allowed" });
+  let input = {};
+  try { input = post ? JSON.parse(event.body || "{}") : {}; } catch (_) { return json(400, { ok: false, error: "Malformed JSON" }); }
+  const ref = String((post ? input.ref : event.queryStringParameters?.ref) || "").trim().toUpperCase();
+  const fresh = post ? input.fresh === true : event.queryStringParameters?.fresh === "1";
   if (!/^TK\d{10}$/.test(ref)) {
     return json(400, { ok: false, error: "Enter a ticket reference such as TK2609210007" });
   }
 
+  let reading = { email: "", source: "" };
   try {
-    const data = await ticketGet(event.env, `/tickets/${encodeURIComponent(ref)}`, { ttlMs: STATUS_TTL_MS, fresh: event.queryStringParameters?.fresh === "1" });
+    reading = await readingAs(event.env, input.author);
+    if (reading.response) return reading.response;
+    const data = await ticketGet(event.env, withOnBehalf(`/tickets/${encodeURIComponent(ref)}`, reading.email), { ttlMs: STATUS_TTL_MS, fresh });
     // The current API wraps a single record as { ticket, fields }, where
     // top-level fields is the field catalog. Older deployments returned the
     // ticket directly. Support both shapes and never mistake the catalog
@@ -50,6 +58,7 @@ export async function handler(event) {
       },
     });
   } catch (err) {
+    if (reading.email && isOnBehalfRefusal(err)) return refusalResponse(err, reading.email, reading.source);
     return ticketError(err);
   }
 }
