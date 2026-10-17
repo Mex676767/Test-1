@@ -1,6 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { CATALOG_SNAPSHOT_DATE, TICKET_CATALOG } from "./_lib/ticket-catalog.js";
-import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
+import { actingAs, flag, needTicketEmail } from "./_lib/ticket-actor.js";
+import { json, ticketError, ticketRequest, ticketSettings, withOnBehalf } from "./_lib/tickets.js";
 
 // The catalog is the same for every agent and changes rarely, but every open widget refetched it (a 100-ticket
 // list) on its options timer. Cache the successful result per isolate for 5 minutes; the manual Refresh button
@@ -45,9 +46,9 @@ function mergeByCode(catalogItems, observedItems, build) {
 // The ticket API's own lists (GET /markets, /departments, /fields/choices): live from its database, with real ids, labels and an active
 // flag per choice. Each is read on its own and an answer without the expected list is treated as missing, so a failure (or a ticket
 // system that does not have the call yet) falls back to the snapshot (ticket-catalog.js) for that part only.
-async function readLiveCatalog(env) {
+async function readLiveCatalog(env, email) {
   const [markets, departments, choices] = await Promise.allSettled([
-    ticketRequest(env, "/markets"), ticketRequest(env, "/departments"), ticketRequest(env, "/fields/choices"),
+    ticketRequest(env, withOnBehalf("/markets", email)), ticketRequest(env, withOnBehalf("/departments", email)), ticketRequest(env, withOnBehalf("/fields/choices", email)),
   ]);
   const list = (result, key) => (result.status === "fulfilled" && Array.isArray(result.value?.[key]) ? result.value[key] : null);
   const fieldList = list(choices, "fields");
@@ -58,11 +59,13 @@ async function readLiveCatalog(env) {
 }
 
 export async function handler(event) {
-  if (event.httpMethod !== "GET") return json(405, { ok: false, error: "Method not allowed" });
+  const post = event.httpMethod === "POST";
+  if (event.httpMethod !== "GET" && !post) return json(405, { ok: false, error: "Method not allowed" });
   try {
     const settings = ticketSettings(event.env);
     const cacheKey = String(event.env?.TICKETS_API_KEY || "") + "|" + String(event.env?.TICKETS_API_BASE_URL || "");
-    const fresh = event.queryStringParameters?.fresh === "1";
+    const input = post ? JSON.parse(event.body || "{}") : {};
+    const fresh = post ? input.fresh === true : event.queryStringParameters?.fresh === "1";
     if (!fresh && cachedConfig && cachedConfig.key === cacheKey && Date.now() - cachedConfig.at < CONFIG_TTL_MS) {
       return json(200, cachedConfig.body);
     }
@@ -74,9 +77,18 @@ export async function handler(event) {
       });
     }
 
+    // A key that acts for others needs the person's email on every read: the signed-in agent's, when the widget sends who that is.
+    let email = "";
+    if (flag(event.env?.TICKETS_ON_BEHALF_OF) && input.author) {
+      const acting = await actingAs(event.env, input.author);
+      if (acting.response) return acting.response;
+      if (!acting.email) return needTicketEmail("");
+      email = acting.email;
+    }
+
     // The list response is the API's only field-catalog endpoint. Strip all
     // ticket records here so no unrelated customer data reaches the browser.
-    const [data, live] = await Promise.all([ticketRequest(event.env, "/tickets?pageSize=100"), readLiveCatalog(event.env)]);
+    const [data, live] = await Promise.all([ticketRequest(event.env, withOnBehalf("/tickets?pageSize=100", email)), readLiveCatalog(event.env, email)]);
     const tickets = Array.isArray(data.tickets) ? data.tickets : [];
     const uniqueById = (items) => Array.from(new Map(items
       .filter((item) => item && Number.isInteger(Number(item.id)))
@@ -120,6 +132,7 @@ export async function handler(event) {
     cachedConfig = { key: cacheKey, at: Date.now(), body };
     return json(200, body);
   } catch (err) {
+    if (err instanceof SyntaxError) return json(400, { ok: false, error: "Malformed JSON" });
     return ticketError(err);
   }
 }

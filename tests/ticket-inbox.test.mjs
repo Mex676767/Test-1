@@ -11,7 +11,7 @@ function widget() {
   const context = vm.createContext({
     state, Map, Set, Date, Number, String,
     previewMode: true, ticketConfigError: '', ticketDepartments: [], ticketMarkets: [], ticketNotifications: [],
-    ticketFields: [{ key: 'member_id' }],
+    ticketFields: [{ key: 'member_id' }], liveChatAgentTokens: () => ({}), currentLiveChatAccount: '', storedTicketEmail: () => '', queueMicrotask, showTicketProblem() {},
     TICKET_FIELD_SPECS: [{ stateKey: 'memberUserId' }, { stateKey: 'remarks' }, { stateKey: 'amount' }],
     ticketCreateInFlight: new Set(), ticketDetailInFlight: new Set(), ticketSearchResultsByChat: new Map(),
     ticketPeople: t => [t.raisedBy?.name, ...(t.assignees || []).map(p => p.name)].filter(Boolean),
@@ -29,7 +29,7 @@ function widget() {
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },
   });
-  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
+  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'ticketReadAuthor', 'ticketReadFailure', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
   context.renderTicketSlot = () => {};
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
@@ -375,7 +375,7 @@ function accountWorld(over = {}) {
   const calls = { fetches: [], renders: 0, stored: null, problems: [], inbox: [] };
   const state = { chat: { escalation: { ticketEmail: over.typed || '' } } };
   const context = vm.createContext({
-    state, JSON, Date, Number, String, currentLiveChatAccount: 'lc1',
+    state, JSON, Date, Number, String, currentLiveChatAccount: 'lc1', ticketConfigError: '', ticketFields: [{ key: 'member_id' }], fetchTicketConfig: async () => { calls.config = (calls.config || 0) + 1; },
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
     queueMicrotask, ticketWorkspaceView: () => 'list', ticketSearchResultsByChat: new Map(), refreshTicketInbox: async (...args) => { calls.inbox.push(args); },
     showTicketProblem: (chatId, failure, retry) => { calls.problems.push({ chatId, failure, retry }); },
@@ -490,4 +490,28 @@ test('ticket account line: a refusal shows the ticket system\'s own words, in th
   await w.run('checkTicketAccount("chat")');
   assert.match(w.run('renderTicketAccountLine("chat")'), /The ticket system said: "This API key is not bound to a role/);
   assert.ok(app.includes('The ticket system said: "${escapeHtml(failure.detail)}"'), 'the dialog for a refused ticket or comment says it too');
+});
+
+test('reads are made as the signed-in agent: the list, a ticket and the field lists send who they are; signed out they use the plain call', async () => {
+  const w = widget();
+  Object.assign(w.context, { liveChatAgentTokens: () => ({ lc1: 'tok' }), currentLiveChatAccount: 'lc1', storedTicketEmail: () => 'me@x.com' });
+  const seen = [];
+  w.context.fetch = async (url, options) => { seen.push([url, options && options.method, options && JSON.parse(options.body)]); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; };
+  await w.run('searchTickets("chat", "abc", "search", { fresh: true })');
+  assert.deepEqual(seen[0], ['/ticket-list', 'POST', { q: 'abc', fresh: true, author: { accountKey: 'lc1', agentToken: 'tok', ticketEmail: 'me@x.com' } }]);
+  Object.assign(w.context, { liveChatAgentTokens: () => ({}) });
+  await w.run('searchTickets("chat", "abc", "search", { fresh: false })');
+  assert.equal(seen[1][0], '/ticket-list?q=abc');
+  assert.ok(app.includes('? await fetch("/ticket-status", { method: "POST"'));
+  assert.ok(app.includes('? await fetch("/ticket-config", { method: "POST"'));
+  assert.ok(app.includes('if (data.status === "found" && (ticketConfigError || !ticketFields.length)) await fetchTicketConfig({ fresh: true });'));
+});
+
+test('a refused read asks for the ticket email like a refused ticket does', () => {
+  const w = widget();
+  const problems = [];
+  Object.assign(w.context, { showTicketProblem: (...args) => problems.push(args), checkTicketAccount: async () => {} });
+  const error = w.run('ticketReadFailure("chat", { ok: false, needTicketEmail: true, error: "Ticket account not found. Please enter your ticket account email." }, "x")');
+  assert.equal(error.message, 'Ticket account not found. Please enter your ticket account email.');
+  return Promise.resolve().then(() => assert.equal(problems.length, 1));
 });

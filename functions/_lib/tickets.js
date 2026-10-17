@@ -118,6 +118,12 @@ export async function ticketGet(env, path, { ttlMs = 0, fresh = false } = {}) {
   return pending;
 }
 
+// A read as the signed-in agent: the ticket API takes the person's email as onBehalfOf on any GET (keys that act for others require it
+// on every request). It is part of the path, so each person's reads are cached on their own.
+export function withOnBehalf(path, email) {
+  return email ? `${path}${path.includes("?") ? "&" : "?"}onBehalfOf=${encodeURIComponent(email)}` : path;
+}
+
 export function json(statusCode, body, headers) {
   return { statusCode, body: JSON.stringify(body), ...(headers ? { headers } : {}) };
 }
