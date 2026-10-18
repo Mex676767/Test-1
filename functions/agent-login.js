@@ -58,7 +58,7 @@ export function claimWinner(rows, account, name) {
 
 // cached: a copy up to a minute old, shared by every request -- enough to recognise a login that is already in the table, which
 // is nearly every sign-in, without a Lark read each time. Anything that decides who owns a name reads the table as it is now.
-async function readBindings({ cached = false } = {}) {
+export async function readBindings({ cached = false } = {}) {
   return parseBindings(await listRecords(TABLE_AGENT_LOGINS, 500, cached ? { sharedCacheMs: 60_000 } : { force: true }));
 }
 
