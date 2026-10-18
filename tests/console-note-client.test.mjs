@@ -15,7 +15,7 @@ const SOURCE = [
 ].join('\n');
 
 // The note box driven with fakes: no server, no LiveChat, no console.
-function harness({ state = {}, tokens = { lc1: 'tok' }, account = 'lc1', reply, previewMode = false } = {}) {
+function harness({ state = {}, tokens = { lc1: 'tok' }, account = 'lc1', reply, previewMode = true } = {}) {
   const posted = [];
   const slot = { innerHTML: '' };
   const context = vm.createContext({
@@ -43,6 +43,12 @@ test('the note box appears only after a player has been looked up', () => {
   const shown = harness({ state: looked() }).renderNoteSection('c1');
   assert.match(shown, /note-input/);
   assert.match(shown, /data-action="saveNote"/);
+});
+
+test('for now the box is in the admin preview only: the installed widget (not preview) shows nothing', () => {
+  const installed = harness({ state: looked(), previewMode: false });
+  assert.equal(installed.renderNoteSection('c1'), '');
+  assert.match(harness({ state: looked(), previewMode: true }).renderNoteSection('c1'), /note-input/);
 });
 
 test('without a username or brand, or for an unknown player, the box is disabled and says why', () => {

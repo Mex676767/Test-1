@@ -3347,8 +3347,8 @@ function consoleNoteBlocker(s) {
 
 function renderNoteSection(chatId) {
   const s = state[chatId];
-  // Only once a player has been looked up.
-  if (!s || !s.matchedRow) return "";
+  // Admin preview only for now (the installed widget does not show it), and only once a player has been looked up.
+  if (!previewMode || !s || !s.matchedRow) return "";
   const ui = noteUi(chatId);
   const blocker = consoleNoteBlocker(s);
   const off = !!blocker || ui.busy;
