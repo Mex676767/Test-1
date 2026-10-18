@@ -3588,7 +3588,6 @@ const ticketDetailInFlight = new Set();
 const claimWriteInFlight = new Set();
 const ticketSearchResultsByChat = new Map();
 const watchedTicketSnapshots = new Map();
-let ticketNotifications = [];
 const TICKET_ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
 const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024; // PDFs: they are attached to the ticket, whose service sets this limit
 // Every picture is compressed before it is sent: same size, similar quality, a lighter file. The ticket system takes files under 1MB and
@@ -3683,33 +3682,290 @@ function ticketStatusValue(ticket) {
   return String(ticket?.fields?.status || "");
 }
 
-function renderTicketNotifications() {
-  if (!ticketNotifications.length) return "";
-  return `<div class="ticket-notification-panel">
-    ${ticketNotifications.slice(0, 5).map((item) => `<div><strong>${escapeHtml(item.ref)}</strong><span>${escapeHtml(item.message)}</span><small>${escapeHtml(new Date(item.time).toLocaleTimeString())}</small></div>`).join("")}
-  </div>`;
-}
-
-function rememberTicketSnapshot(ticket, notify = true) {
+// The ticket list the open detail view refreshes every 30 s (pollTicketUpdates) only needs to know which tickets are open.
+function rememberTicketSnapshot(ticket) {
   if (!ticket?.ref) return;
-  const next = {
+  watchedTicketSnapshots.set(ticket.ref, {
     updatedAt: ticket.updatedAt || "",
     status: ticketStatusValue(ticket),
     commentCount: Number(ticket.commentCount || 0),
     attachmentCount: Number(ticket.attachmentCount || 0),
-  };
-  const previous = watchedTicketSnapshots.get(ticket.ref);
-  watchedTicketSnapshots.set(ticket.ref, next);
-  if (!notify || !previous || JSON.stringify(previous) === JSON.stringify(next)) return;
-  const changes = [];
-  if (previous.status !== next.status) changes.push(`status changed to ${next.status ? ticketChoiceDisplayLabel("status", next.status) : "blank"}`);
-  if (next.commentCount > previous.commentCount) changes.push(`${next.commentCount - previous.commentCount} new comment${next.commentCount - previous.commentCount === 1 ? "" : "s"}`);
-  if (next.attachmentCount > previous.attachmentCount) changes.push(`${next.attachmentCount - previous.attachmentCount} new file${next.attachmentCount - previous.attachmentCount === 1 ? "" : "s"}`);
-  if (!changes.length) changes.push("ticket details were updated");
-  ticketNotifications.unshift({ ref: ticket.ref, message: changes.join(" · "), time: Date.now() });
-  ticketNotifications = ticketNotifications.slice(0, 20);
-  setStatus(`${ticket.ref}: ${changes.join(" · ")}`, "success");
+  });
 }
+
+// ---- Ticket notifications: the bell on the Tickets tab ---------------------------------------------------------------------------
+// The ticket system's own bell is not in its API, so this one is rebuilt from what the widget can read: the inbox list (one call a poll)
+// and, for the few tickets that changed, their thread. It tells the agent about tickets that are theirs (raised by them, assigned to
+// them, or commented on through the widget) and about any ticket where they are @mentioned. Their own comments never notify. What has
+// been seen and what is unread is kept in this browser (localStorage), per LiveChat account.
+const TICKET_NOTE_MAX = 60;
+const TICKET_NOTE_KEEP_SEEN = 300;
+const TICKET_NOTE_READS_PER_POLL = 3; // thread reads per poll: the ticket API allows each key 120 calls a minute, shared by every agent
+const TICKET_NOTE_POLL_MS = 60_000;
+let ticketNoteStore = null;
+let ticketNoteStoreKey = "";
+let ticketNoteTab = "all";
+let ticketBellOpen = false;
+let ticketNotePolling = false;
+let ticketNoteAudio = null;
+
+function ticketNoteLoad() {
+  const key = `rc-ticket-notes:${currentLiveChatAccount || ""}`;
+  if (ticketNoteStore && ticketNoteStoreKey === key) return ticketNoteStore;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { saved = null; }
+  ticketNoteStore = { me: { email: "", id: null }, seen: {}, mine: [], items: [], sound: true, startedAt: 0, ...(saved && typeof saved === "object" ? saved : {}) };
+  ticketNoteStoreKey = key;
+  return ticketNoteStore;
+}
+
+function ticketNoteSave() {
+  if (!ticketNoteStore) return;
+  try { localStorage.setItem(ticketNoteStoreKey, JSON.stringify(ticketNoteStore)); } catch (_) { /* kept for this page only */ }
+}
+
+function ticketNotePeople(ticket) {
+  return [ticket?.raisedBy, ...(Array.isArray(ticket?.assignees) ? ticket.assignees : [])].filter(Boolean);
+}
+
+function ticketNoteIsMine(store, ticket) {
+  const email = store.me.email;
+  return store.mine.includes(ticket.ref) || (Boolean(email) && ticketNotePeople(ticket).some((person) => String(person.email || "").toLowerCase() === email));
+}
+
+// The agent's ticket-system user id is what comments and @mentions carry; it is read off any ticket that names their email.
+function ticketNoteLearnMe(store, tickets) {
+  if (store.me.id != null || !store.me.email) return;
+  for (const ticket of tickets) {
+    const me = ticketNotePeople(ticket).find((person) => person.id != null && String(person.email || "").toLowerCase() === store.me.email);
+    if (me) { store.me.id = me.id; return; }
+  }
+}
+
+// A ticket the agent commented on through the widget becomes theirs. `authorId` is the id the ticket system gave their comment, if it said.
+function ticketNoteRemember(ref, authorId) {
+  const store = ticketNoteLoad();
+  if (ref && !store.mine.includes(ref)) store.mine = [ref, ...store.mine].slice(0, TICKET_NOTE_KEEP_SEEN);
+  if (authorId != null && store.me.id == null) store.me.id = authorId;
+  ticketNoteSave();
+}
+
+function ticketNoteSnapshot(ticket, at) {
+  return { updatedAt: ticket.updatedAt || "", commentCount: Number(ticket.commentCount || 0), status: String(ticket.fields?.status || ""), at };
+}
+
+function ticketNoteAdd(store, item) {
+  if (store.items.some((existing) => existing.id === item.id)) return 0;
+  store.items = [{ ...item, read: false }, ...store.items].slice(0, TICKET_NOTE_MAX);
+  return 1;
+}
+
+function ticketNoteSnippet(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length > 90 ? `${clean.slice(0, 89)}…` : clean;
+}
+
+function ticketNoteFlatten(comments) {
+  return (Array.isArray(comments) ? comments : []).flatMap((comment) => [comment, ...ticketNoteFlatten(comment.replies)]);
+}
+
+function ticketNoteStatusItem(ticket, status, now) {
+  return { id: `${ticket.ref}:s${ticket.updatedAt || now}`, ref: ticket.ref, title: ticketTitle(ticket), kind: "status", by: "", text: `Status changed to ${status ? ticketChoiceDisplayLabel("status", status) : "blank"}`, at: now };
+}
+
+// The first poll only records what is there (nothing is "new" yet). After that this works through the inbox list: a change on a ticket
+// that is the agent's is settled here when it needs no thread (a status change) and otherwise returned to be read; a ticket that is not
+// theirs is read only when it gained a comment (it may mention them). Returns the refs to read, the agent's own tickets first.
+function ticketNoteDue(store, tickets, now) {
+  ticketNoteLearnMe(store, tickets);
+  if (!store.startedAt) {
+    // "Now" is the ticket system's newest change, not this PC's clock, so a clock that is a little off cannot hide or repeat a comment.
+    store.startedAt = tickets.reduce((newest, ticket) => Math.max(newest, Date.parse(ticket.updatedAt) || 0), 0) || now;
+    for (const ticket of tickets) store.seen[ticket.ref] = ticketNoteSnapshot(ticket, Date.parse(ticket.updatedAt) || store.startedAt);
+    return { due: [], added: 0 };
+  }
+  const mineDue = [];
+  const otherDue = [];
+  let added = 0;
+  for (const ticket of tickets) {
+    const prev = store.seen[ticket.ref];
+    const next = ticketNoteSnapshot(ticket, prev ? prev.at : store.startedAt);
+    const changed = prev ? prev.updatedAt !== next.updatedAt : Date.parse(next.updatedAt) > store.startedAt;
+    if (!changed) { if (!prev) store.seen[ticket.ref] = next; continue; }
+    const moreComments = next.commentCount > (prev ? prev.commentCount : 0);
+    if (ticketNoteIsMine(store, ticket)) {
+      if (moreComments) { mineDue.push(ticket.ref); continue; }
+      if (prev && prev.status !== next.status) added += ticketNoteAdd(store, ticketNoteStatusItem(ticket, next.status, now));
+    } else if (moreComments && store.me.id != null) {
+      otherDue.push(ticket.ref);
+      continue;
+    }
+    store.seen[ticket.ref] = next;
+  }
+  const keep = Object.keys(store.seen);
+  if (keep.length > TICKET_NOTE_KEEP_SEEN) {
+    const listed = new Set(tickets.map((ticket) => ticket.ref));
+    for (const ref of keep) if (!listed.has(ref)) delete store.seen[ref];
+  }
+  return { due: [...mineDue, ...otherDue], added };
+}
+
+// Turns what is new in one ticket's thread into notifications, then moves the stored picture of that ticket forward.
+function ticketNoteApplyThread(store, ticket, now) {
+  const prev = store.seen[ticket.ref];
+  const cutoff = prev ? prev.at : store.startedAt;
+  const mine = ticketNoteIsMine(store, ticket);
+  const title = ticketTitle(ticket);
+  let added = 0;
+  let latest = cutoff;
+  for (const comment of ticketNoteFlatten(ticket.comments)) {
+    const when = Date.parse(comment.createdAt) || 0;
+    latest = Math.max(latest, when);
+    if (comment.deleted || when <= cutoff) continue;
+    if (store.me.id != null && String(comment.author?.id) === String(store.me.id)) continue;
+    const mentioned = store.me.id != null && (comment.mentions || []).some((mention) => String(mention.userId) === String(store.me.id));
+    if (!mentioned && !mine) continue;
+    added += ticketNoteAdd(store, {
+      id: `${ticket.ref}:c${comment.id}`, ref: ticket.ref, title, kind: mentioned ? "mention" : "comment",
+      by: comment.author?.name || "Someone", text: ticketNoteSnippet(comment.body) || (comment.attachments?.length ? "Sent a file" : "Comment added"), at: when || now,
+    });
+  }
+  const next = ticketNoteSnapshot(ticket, latest);
+  if (mine && prev && prev.status !== next.status) added += ticketNoteAdd(store, ticketNoteStatusItem(ticket, next.status, now));
+  store.seen[ticket.ref] = next;
+  return added;
+}
+
+function ticketNoteMarkRead(ref) {
+  const store = ticketNoteLoad();
+  let changed = false;
+  for (const item of store.items) {
+    if (!item.read && (!ref || item.ref === ref)) { item.read = true; changed = true; }
+  }
+  if (changed) ticketNoteSave();
+  return changed;
+}
+
+function ticketNoteUnread(store) {
+  return store.items.filter((item) => !item.read).length;
+}
+
+// The same three views as the ticket system's bell: everything, only @mentions, and comments (mentions included).
+function ticketNoteVisible(store, tab) {
+  return store.items.filter((item) => tab === "mentions" ? item.kind === "mention" : tab === "comments" ? item.kind === "comment" || item.kind === "mention" : true);
+}
+
+// A short "ti-ding" made in the browser (no sound file). Browsers keep sound off until the page has been clicked once, so this is
+// prepared on the first click anywhere in the widget.
+function ticketNoteAudioReady() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    ticketNoteAudio = ticketNoteAudio || new Ctx();
+    if (ticketNoteAudio.state === "suspended") ticketNoteAudio.resume();
+    return ticketNoteAudio;
+  } catch (_) { return null; }
+}
+
+function ticketNoteChime() {
+  const ctx = ticketNoteAudioReady();
+  if (!ctx) return;
+  try {
+    for (const [frequency, delay] of [[880, 0], [1318.5, 0.16]]) {
+      const start = ctx.currentTime + delay;
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = frequency;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.18, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.5);
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      oscillator.start(start);
+      oscillator.stop(start + 0.55);
+    }
+  } catch (_) { /* a browser that blocks sound: the bell still shows */ }
+}
+document.addEventListener("pointerdown", () => { ticketNoteAudioReady(); }, { once: true });
+
+function renderTicketBell(chatId) {
+  const store = ticketNoteLoad();
+  const unread = ticketNoteUnread(store);
+  const count = unread > 99 ? "99+" : String(unread);
+  const button = `<button type="button" class="ticket-inbox-notifications" data-action="toggleTicketBell" data-chat="${escapeHtml(chatId)}" aria-label="Ticket notifications, ${unread} unread" aria-expanded="${ticketBellOpen}">${ticketUiIcon("bell")}${unread ? `<span class="ticket-bell-count">${count}</span>` : ""}</button>`;
+  if (!ticketBellOpen) return button;
+  const items = ticketNoteVisible(store, ticketNoteTab);
+  const tabs = [["all", "All"], ["mentions", "@ Mentions"], ["comments", "Comments"]];
+  const row = (item) => `<button type="button" class="ticket-bell-row ${item.read ? "" : "unread"}" data-action="openTicketResult" data-chat="${escapeHtml(chatId)}" data-ref="${escapeHtml(item.ref)}">
+      <span class="ticket-bell-top"><span class="ticket-inbox-ref">${escapeHtml(item.ref)}</span><small>${escapeHtml(ticketUpdatedLabel({ updatedAt: new Date(item.at).toISOString() }))}</small></span>
+      <strong>${escapeHtml(item.title)}</strong>
+      <span class="ticket-bell-text">${item.by ? `${escapeHtml(item.by)}: ` : ""}${item.kind === "mention" ? "mentioned you · " : ""}${escapeHtml(item.text)}</span>
+    </button>`;
+  return `${button}<div class="ticket-bell-panel" role="dialog" aria-label="Ticket notifications">
+    <div class="ticket-bell-tabs">${tabs.map(([value, label]) => `<button type="button" class="ticket-inbox-filter ${ticketNoteTab === value ? "selected" : ""}" aria-pressed="${ticketNoteTab === value}" data-action="ticketNoteTab" data-chat="${escapeHtml(chatId)}" data-value="${value}">${label}</button>`).join("")}</div>
+    <div class="ticket-bell-list">${items.length ? items.map(row).join("") : '<p class="ticket-inbox-empty">No notifications yet. You will see comments on your tickets and anywhere you are mentioned.</p>'}</div>
+    <div class="ticket-bell-foot"><button type="button" class="ticket-inbox-text-button" data-action="ticketNoteReadAll" data-chat="${escapeHtml(chatId)}" ${unread ? "" : "disabled"}>Mark all read</button><button type="button" class="ticket-inbox-text-button" data-action="ticketNoteSound" data-chat="${escapeHtml(chatId)}" aria-pressed="${store.sound !== false}">Sound: ${store.sound !== false ? "on" : "off"}</button></div>
+  </div>`;
+}
+
+function paintTicketsTabBadge() {
+  const tab = document.getElementById("ticketsTab");
+  if (!tab) return;
+  const unread = ticketNoteUnread(ticketNoteLoad());
+  let badge = tab.querySelector(".tab-badge");
+  if (!unread) { badge?.remove(); return; }
+  if (!badge) { badge = document.createElement("span"); badge.className = "tab-badge"; tab.appendChild(badge); }
+  badge.textContent = unread > 99 ? "99+" : String(unread);
+}
+
+function repaintTicketBell() {
+  document.querySelectorAll(".ticket-bell").forEach((element) => { element.innerHTML = renderTicketBell(element.dataset.chat); });
+  paintTicketsTabBadge();
+}
+
+// A ticket opened or refreshed in the detail view is being read, so what it holds is not news: it is recorded and marked read.
+function ticketNoteAbsorb(ticket) {
+  if (!ticket?.ref) return;
+  const store = ticketNoteLoad();
+  if (!store.startedAt) return;
+  ticketNoteLearnMe(store, [ticket]);
+  ticketNoteApplyThread(store, ticket, Date.now());
+  ticketNoteMarkRead(ticket.ref);
+  ticketNoteSave();
+  repaintTicketBell();
+}
+
+async function pollTicketNotifications() {
+  if (document.hidden || ticketNotePolling || ticketAccount.status !== "found" || !ticketAccount.email) return;
+  const author = ticketReadAuthor(null);
+  if (!author) return;
+  ticketNotePolling = true;
+  try {
+    const store = ticketNoteLoad();
+    store.me.email = String(ticketAccount.email).trim().toLowerCase();
+    const list = await (await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: "", fresh: false, author }) })).json();
+    if (!list.ok) return;
+    const { due, added: fromList } = ticketNoteDue(store, list.tickets || [], Date.now());
+    let added = fromList;
+    for (const ref of due.slice(0, TICKET_NOTE_READS_PER_POLL)) {
+      const thread = await (await fetch("/ticket-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref, fresh: false, author }) })).json();
+      if (thread.ok) added += ticketNoteApplyThread(store, thread.ticket, Date.now());
+    }
+    ticketNoteSave();
+    repaintTicketBell();
+    if (added && store.sound !== false) ticketNoteChime();
+  } catch (_) { /* a poll that fails is tried again next minute; nobody needs to be told */ }
+  finally { ticketNotePolling = false; }
+}
+setInterval(pollTicketNotifications, TICKET_NOTE_POLL_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketNotifications(); });
+document.addEventListener("click", (event) => {
+  // The bell is redrawn by the click itself, which detaches the clicked button, so the path recorded at the click is what says where it was.
+  if (!ticketBellOpen || event.composedPath().some((element) => element.classList?.contains("ticket-bell"))) return;
+  ticketBellOpen = false;
+  repaintTicketBell();
+});
 
 function ticketFieldFor(spec) {
   return ticketFields.find((field) => spec.keys.includes(field.key))
@@ -4082,6 +4338,7 @@ async function checkTicketAccount(chatId, { force = false } = {}) {
     if (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") {
       queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
     }
+    if (ticketAccount.status === "found") void pollTicketNotifications();
     if (ticketAccount.status === "found" && ticketWorkspaceView(s) === "list" && !ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId, "", "all", { fresh: false });
   } catch (err) {
     ticketAccount = { status: "error", email: "", source: "", message: err.message, checking: false, at: Date.now() };
@@ -4325,6 +4582,7 @@ async function sendTicketComment(chatId) {
     const data = await res.json();
     if (!data.ok) { failure = data; throw new Error(data.error || "Comment failed"); }
     noteTicketAccountUsed(data);
+    ticketNoteRemember(ref, data.comment?.author?.id ?? null);
     s.escalation.commentDraft = "";
     s.commentFileError = "";
     clearCommentFiles(chatId);
@@ -4360,7 +4618,8 @@ async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = 
   if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket status lookup failed");
   s.ticketLookupRef = normalized;
   s.ticketRecord = data.ticket;
-  rememberTicketSnapshot(data.ticket, !silent);
+  rememberTicketSnapshot(data.ticket);
+  ticketNoteAbsorb(data.ticket);
   s.escalationError = "";
   saveState();
   return data.ticket;
@@ -4409,8 +4668,7 @@ function renderEscalationSection(chatId) {
   const departmentId = String(s.escalation.departmentId || "");
   const marketId = String(s.escalation.marketId || "");
   const action = (name, label, classes = "ticket-inbox-text-button", icon = "", attrs = "") => `<button type="button" class="${classes}" data-action="${name}" data-chat="${escapeHtml(chatId)}" ${attrs}>${icon ? ticketUiIcon(icon) : ""}${label}</button>`;
-  return `<div class="ticket-inbox-header"><h2>Tickets</h2><div>${action("clearTicketNotifications", `<span>${ticketNotifications.length}</span>`, "ticket-inbox-notifications", "bell", 'aria-label="Clear ticket notifications"')}${view === "list" ? action("newTicket", "New ticket", "ticket-inbox-primary", "plus") : ""}</div></div>
-    ${renderTicketNotifications()}
+  return `<div class="ticket-inbox-header"><h2>Tickets</h2><div><span class="ticket-bell" data-chat="${escapeHtml(chatId)}">${renderTicketBell(chatId)}</span>${view === "list" ? action("newTicket", "New ticket", "ticket-inbox-primary", "plus") : ""}</div></div>
     ${renderTicketAccountLine(chatId)}
     ${view !== "list" ? `<div class="ticket-inbox-back">${action("ticketInbox", "All tickets", "ticket-inbox-text-button", "back")}${view === "detail" && s.ticketRecord ? action("openTicketResult", "Refresh", "ticket-inbox-text-button", "refresh", `data-ref="${escapeHtml(s.ticketRecord.ref)}"`) : ""}</div>` : ""}
     ${s.escalationError ? `<div class="record-error-banner" role="alert">${escapeHtml(s.escalationError)}</div>` : ""}
@@ -5028,9 +5286,27 @@ chatListEl.addEventListener("click", async (e) => {
     return;
   }
 
-  if (btn.dataset.action === "clearTicketNotifications") {
-    ticketNotifications = [];
-    renderChats(activeChats);
+  if (btn.dataset.action === "toggleTicketBell") {
+    ticketBellOpen = !ticketBellOpen;
+    repaintTicketBell();
+    return;
+  }
+  if (btn.dataset.action === "ticketNoteTab") {
+    ticketNoteTab = ["mentions", "comments"].includes(btn.dataset.value) ? btn.dataset.value : "all";
+    repaintTicketBell();
+    return;
+  }
+  if (btn.dataset.action === "ticketNoteReadAll") {
+    ticketNoteMarkRead("");
+    repaintTicketBell();
+    return;
+  }
+  if (btn.dataset.action === "ticketNoteSound") {
+    const store = ticketNoteLoad();
+    store.sound = store.sound === false;
+    ticketNoteSave();
+    if (store.sound) ticketNoteChime();
+    repaintTicketBell();
     return;
   }
 
@@ -5079,6 +5355,9 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "openTicketResult") {
     if (ticketDetailInFlight.has(chatId)) return;
+    ticketBellOpen = false;
+    ticketNoteMarkRead(btn.dataset.ref);
+    paintTicketsTabBadge();
     s.ticketView = "detail";
     if (s.ticketRecord?.ref !== btn.dataset.ref) s.ticketRecord = null;
     ticketDetailInFlight.add(chatId);

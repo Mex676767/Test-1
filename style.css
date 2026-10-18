@@ -958,12 +958,6 @@ body {
 .ticket-workspace-card { align-self: flex-start; width: 100%; flex: 0 0 auto; }
 .ticket-workspace-head { margin-bottom: 12px; }
 .ticket-head-actions { display: flex; align-items: center; gap: 8px; }
-.ticket-notification-button { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 10px; cursor: pointer; }
-.ticket-notification-button span { min-width: 14px; color: var(--blue); font-weight: 700; }
-.ticket-notification-panel { display: flex; flex-direction: column; gap: 5px; margin: -4px 0 12px; }
-.ticket-notification-panel > div { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--blue) 8%, var(--surface)); font-size: 10px; }
-.ticket-notification-panel span { color: var(--text-muted); }
-.ticket-notification-panel small { color: var(--text-faint); }
 .ticket-live-badge { color: var(--gold); background: var(--gold-soft); }
 .ticket-admin-warning {
   margin-bottom: 14px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
@@ -1344,7 +1338,20 @@ body { font-size: 13px; }
 .ticket-inbox-notifications span { font-weight: 600; }
 .ticket-inbox-notifications:hover, .ticket-inbox-refresh:hover, .ticket-inbox-filter-toggle:hover { background: var(--surface-2); color: var(--text); }
 .ticket-inbox-workspace button:focus-visible, .ticket-inbox-workspace summary:focus-visible, .ticket-inbox-workspace input:focus-visible, .ticket-inbox-workspace textarea:focus-visible, .ticket-inbox-workspace select:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.ticket-inbox-workspace .ticket-notification-panel { margin: 0 0 12px; }
+.ticket-bell { position: relative; display: inline-flex; }
+.ticket-bell-count, .main-tab .tab-badge { min-width: 16px; padding: 1px 5px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
+.main-tab .tab-badge { display: inline-block; margin-left: 5px; }
+.ticket-bell-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.ticket-bell-tabs { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
+.ticket-bell-list { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; }
+.ticket-bell-list .ticket-inbox-empty { margin: 0; padding: 16px 12px; }
+.ticket-bell-row { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px 12px 8px 22px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; position: relative; }
+.ticket-bell-row:hover { background: var(--surface-2); }
+.ticket-bell-row.unread::before { content: ""; position: absolute; left: 9px; top: 14px; width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
+.ticket-bell-top { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--text-muted); }
+.ticket-bell-row strong { font-size: 11px; font-weight: 600; }
+.ticket-bell-text { font-size: 11px; color: var(--text-muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ticket-bell-foot { display: flex; justify-content: space-between; padding: 6px 8px; border-top: 1px solid var(--border); }
 .ticket-inbox-search { align-items: center; gap: 7px; padding: 3px 5px 3px 10px; margin-bottom: 0; border-radius: 8px; background: var(--surface-2); color: var(--text-muted); }
 .ticket-inbox-search .input { min-height: 34px; padding: 6px 0; font-size: 12px; }
 .ticket-inbox-search .secondary-btn { padding: 6px 9px; border-radius: 6px; font-size: 11px; }
