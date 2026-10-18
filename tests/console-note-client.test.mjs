@@ -46,10 +46,13 @@ test('the note box appears only after a player has been looked up', () => {
   assert.match(shown, /data-action="saveNote"/);
 });
 
-test('for now the box is in the admin preview only: the installed widget (not preview) shows nothing', () => {
-  const installed = harness({ state: looked(), previewMode: false });
-  assert.equal(installed.renderNoteSection('c1'), '');
-  assert.match(harness({ state: looked(), previewMode: true }).renderNoteSection('c1'), /note-input/);
+test('the box is shown to every agent: the installed widget and the admin preview (only the preview adds the test-mode line)', () => {
+  const installed = harness({ state: looked(), previewMode: false }).renderNoteSection('c1');
+  assert.match(installed, /note-input/);
+  assert.ok(!/Test mode/.test(installed));
+  const preview = harness({ state: looked(), previewMode: true }).renderNoteSection('c1');
+  assert.match(preview, /note-input/);
+  assert.match(preview, /Test mode/);
 });
 
 test('without a username or brand, or for an unknown player, the box is disabled and says why', () => {
