@@ -1413,7 +1413,7 @@ body { font-size: 13px; }
 .ticket-thumb img { display: block; width: 100%; height: 96px; object-fit: cover; background: var(--surface); }
 .ticket-thumb-name { padding: 0 6px 5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ticket-thumb.failed img { display: none; }
-.ticket-thumb.failed { cursor: default; padding-top: 6px; }
+.ticket-thumb.failed { cursor: pointer; padding-top: 6px; width: 190px; }
 .ticket-image-overlay { align-items: center; justify-content: center; }
 .ticket-image-view { display: grid; gap: 10px; justify-items: center; max-width: 94vw; max-height: 92vh; }
 .ticket-image-view img { max-width: 94vw; max-height: 80vh; object-fit: contain; border-radius: 8px; background: var(--surface); }
