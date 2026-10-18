@@ -10,7 +10,7 @@ function widget() {
   const requests = [];
   const context = vm.createContext({
     state, Map, Set, Date, Number, String,
-    previewMode: true, ticketConfigError: '', ticketDepartments: [], ticketMarkets: [], ticketNotifications: [],
+    previewMode: true, ticketConfigError: '', ticketDepartments: [], ticketMarkets: [], 
     ticketFields: [{ key: 'member_id' }], liveChatAgentTokens: () => ({}), currentLiveChatAccount: '', storedTicketEmail: () => '', queueMicrotask, showTicketProblem() {},
     TICKET_FIELD_SPECS: [{ stateKey: 'memberUserId' }, { stateKey: 'remarks' }, { stateKey: 'amount' }],
     ticketCreateInFlight: new Set(), ticketDetailInFlight: new Set(), ticketSearchResultsByChat: new Map(),
@@ -23,7 +23,7 @@ function widget() {
     renderTicketInput: (_id, spec) => `<input data-field="${spec.stateKey}">`,
     renderTicketChoice: () => '<button>Choice</button>',
     renderTicketAttachments: () => '<div>Attachments</div>',
-    renderTicketNotifications: () => '',
+    renderTicketBell: () => '',
     renderTicketAccountLine: () => '',
     renderTicketAccountGate: () => '',
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
@@ -286,7 +286,7 @@ function commentWorld(over = {}) {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
     liveChatAgentTokens: () => ({ lc1: 'tok' }), storedTicketEmail: () => '', storeTicketEmail: (account, email) => { calls.stored = [account, email]; },
     renderTicketSlot: () => { calls.renders += 1; },
-    noteTicketAccountUsed: () => {},
+    noteTicketAccountUsed: () => {}, ticketNoteRemember: () => {}, ticketNoteRemember: () => {},
     loadTicketStatus: async (...args) => { calls.loads.push(args); },
     showTicketProblem: (chatId, failure, retry) => { calls.problems.push({ chatId, failure, retry }); },
     fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); return { json: async () => (over.reply || { ok: true, comment: { id: 9 } }) }; },
@@ -377,11 +377,11 @@ function accountWorld(over = {}) {
   const context = vm.createContext({
     state, JSON, Date, Number, String, currentLiveChatAccount: 'lc1', ticketConfigError: '', ticketFields: [{ key: 'member_id' }], fetchTicketConfig: async () => { calls.config = (calls.config || 0) + 1; },
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
-    queueMicrotask, ticketWorkspaceView: () => 'list', ticketSearchResultsByChat: new Map(), refreshTicketInbox: async (...args) => { calls.inbox.push(args); },
+    pollTicketNotifications: async () => {}, queueMicrotask, ticketWorkspaceView: () => 'list', ticketSearchResultsByChat: new Map(), refreshTicketInbox: async (...args) => { calls.inbox.push(args); },
     showTicketProblem: (chatId, failure, retry) => { calls.problems.push({ chatId, failure, retry }); },
     ticketAuthor: () => (over.signedOut ? undefined : { accountKey: 'lc1', agentToken: 'tok', ticketEmail: over.typed || '' }),
     storeTicketEmail: (account, email) => { calls.stored = [account, email]; },
-    renderTicketSlot: () => { calls.renders += 1; },
+    renderTicketSlot: () => { calls.renders += 1; }, pollTicketNotifications: async () => {},
     fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); if (over.fail) throw new Error('boom'); return { json: async () => over.reply }; },
   });
   vm.runInContext(['let ticketAccount = { status: "unknown", email: "", source: "", message: "", checking: false, at: 0 };', 'const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;', fn('checkTicketAccount'), fn('noteTicketAccountUsed'), fn('renderTicketAccountLine'), 'const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks"];', fn('ticketAccountBlocks'), fn('renderTicketAccountGate')].join('\n'), context);
@@ -429,7 +429,8 @@ test('ticket account line: nothing is shown when the feature is off or nobody is
 });
 
 test('ticket account line: it sits at the top of every Tickets view, is checked when the tab is drawn, and Enter your ticket email opens the dialog', () => {
-  assert.ok(app.includes('${renderTicketNotifications()}' + (app.includes('\r\n') ? '\r\n' : '\n') + '    ${renderTicketAccountLine(chatId)}'));
+  assert.ok(app.includes('${renderTicketBell(chatId)}</span>'));
+  assert.ok(app.includes('${renderTicketAccountLine(chatId)}'));
   assert.ok(app.includes('void checkTicketAccount(chat.chatId);'));
   assert.ok(app.includes('btn.dataset.action === "enterTicketEmail"'));
   assert.ok(app.includes('() => checkTicketAccount(chatId, { force: true })'));
