@@ -3324,6 +3324,110 @@ function renderCollapsedCard(chat) {
   `;
 }
 
+/* ============================================================
+   NOTES FOR THE VIP RETENTION CONSOLE
+   An agent writes a note about the player they looked up; it appears in that player's "Relationship notes" in the console.
+   The server (functions/console-note.js) works out WHO wrote it from the LiveChat login sent here, never from a name in the
+   request. A failure here only shows a message in this box: lookups, claims and recording never wait on it.
+   The draft and the messages live in this map, not in the saved chat state.
+   ============================================================ */
+const CONSOLE_NOTE_MAX = 2000;
+const noteUiByChat = new Map(); // chatId -> { draft, busy, msg, kind, notes, notesBusy }
+function noteUi(chatId) {
+  if (!noteUiByChat.has(chatId)) noteUiByChat.set(chatId, { draft: "", busy: false, msg: "", kind: "", notes: null, notesBusy: false });
+  return noteUiByChat.get(chatId);
+}
+
+// Why a note cannot be written for this chat yet, or "" when it can.
+function consoleNoteBlocker(s) {
+  if (s.isUnknown) return "Unknown player: notes need a real player in the console.";
+  if (!String(s.username || "").trim() || !String(s.brand || "").trim()) return "Notes need the player's username and brand. Look the player up first.";
+  return "";
+}
+
+function renderNoteSection(chatId) {
+  const s = state[chatId];
+  // Admin preview only for now (the installed widget does not show it), and only once a player has been looked up.
+  if (!previewMode || !s || !s.matchedRow) return "";
+  const ui = noteUi(chatId);
+  const blocker = consoleNoteBlocker(s);
+  const off = !!blocker || ui.busy;
+  const notes = Array.isArray(ui.notes)
+    ? (ui.notes.length
+      ? `<ul class="note-list">${ui.notes.map((n) => `<li><div class="note-text">${escapeHtml(n.note)}</div><div class="note-meta">${escapeHtml(n.by)}${n.at ? ` · ${escapeHtml(n.at)}` : ""}</div></li>`).join("")}</ul>`
+      : `<div class="note-empty">No notes in the console for this player yet.</div>`)
+    : "";
+  return `
+    <section class="ca-section ca-note-section">
+      <div class="ca-section-head"><div><strong>Console note</strong></div></div>
+      <textarea class="input note-input" data-chat="${escapeHtml(chatId)}" rows="3" maxlength="${CONSOLE_NOTE_MAX}" placeholder="Write a note about this player. It appears in the console under Relationship notes." ${off ? "disabled" : ""}>${escapeHtml(ui.draft)}</textarea>
+      <div class="note-row">
+        <span class="note-count">${ui.draft.length} / ${CONSOLE_NOTE_MAX}</span>
+        <button type="button" class="note-secondary-btn" data-action="loadNotes" data-chat="${escapeHtml(chatId)}" ${blocker || ui.notesBusy ? "disabled" : ""}>${ui.notesBusy ? "Loading…" : ui.notes ? "Refresh notes" : "Show console notes"}</button>
+        <button type="button" class="note-save-btn" data-action="saveNote" data-chat="${escapeHtml(chatId)}" ${off ? "disabled" : ""}>${ui.busy ? "Saving…" : "Add note"}</button>
+      </div>
+      ${blocker ? `<div class="note-msg note-error">${escapeHtml(blocker)}</div>` : ui.msg ? `<div class="note-msg ${ui.kind === "ok" ? "note-ok" : ui.kind === "error" ? "note-error" : ""}">${escapeHtml(ui.msg)}</div>` : ""}
+      ${previewMode ? `<div class="note-msg">Test mode: a note added here really is saved to the console.</div>` : ""}
+      ${notes}
+    </section>`;
+}
+
+function paintNoteSection(chatId) {
+  const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .note-slot`);
+  if (slot) slot.innerHTML = renderNoteSection(chatId);
+}
+
+// The one request both buttons make. Resolves with the server's answer, or an error answer when it cannot be reached.
+async function postConsoleNote(s, extra) {
+  const accountKey = currentLiveChatAccount;
+  const agentToken = liveChatAgentTokens()[accountKey];
+  if (!accountKey || !agentToken) return { ok: false, error: "Connect LiveChat first: a note has to say which agent wrote it." };
+  try {
+    const response = await fetch("/console-note", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountKey, agentToken, username: String(s.username).trim(), brand: String(s.brand).trim(), ...extra }),
+      ...(typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(20_000) } : {}),
+    });
+    return await response.json();
+  } catch (_) {
+    return { ok: false, unsure: true, error: "The widget server did not answer. If you were adding a note, it may or may not have been saved: check the player's console notes before sending it again." };
+  }
+}
+
+async function saveConsoleNote(chatId) {
+  const s = state[chatId];
+  const ui = noteUi(chatId);
+  if (!s || ui.busy || consoleNoteBlocker(s)) return;
+  const note = ui.draft.trim();
+  if (!note) { ui.msg = "Write the note first."; ui.kind = "error"; paintNoteSection(chatId); return; }
+  if (note.length > CONSOLE_NOTE_MAX) { ui.msg = `The note is too long (${note.length} of ${CONSOLE_NOTE_MAX} characters).`; ui.kind = "error"; paintNoteSection(chatId); return; }
+  ui.busy = true; ui.msg = ""; ui.kind = "";
+  paintNoteSection(chatId);
+  const answer = await postConsoleNote(s, { note });
+  ui.busy = false;
+  if (answer && answer.ok && answer.saved) {
+    ui.draft = ""; ui.msg = "Saved"; ui.kind = "ok";
+    ui.notes = null; // the list shown before is out of date now
+  } else {
+    ui.msg = (answer && answer.error) || "The note could not be saved."; ui.kind = "error"; // the draft stays so nothing typed is lost
+  }
+  paintNoteSection(chatId);
+}
+
+async function loadConsoleNotes(chatId) {
+  const s = state[chatId];
+  const ui = noteUi(chatId);
+  if (!s || ui.notesBusy || consoleNoteBlocker(s)) return;
+  ui.notesBusy = true; ui.msg = ""; ui.kind = "";
+  paintNoteSection(chatId);
+  const answer = await postConsoleNote(s, { list: true });
+  ui.notesBusy = false;
+  if (answer && answer.ok && Array.isArray(answer.notes)) ui.notes = answer.notes;
+  else { ui.msg = (answer && answer.error) || "The notes could not be loaded."; ui.kind = "error"; }
+  paintNoteSection(chatId);
+}
+
 function renderExpandedCard(chat) {
   const s = state[chat.chatId];
   return `
@@ -3371,6 +3475,8 @@ function renderExpandedCard(chat) {
       </div>
       <div class="toggle-row"><label class="field-label">Telegram chat <span class="auto-tag">auto</span></label><label class="switch"><input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} /><span class="slider"></span></label></div>
     </section>
+
+    <div class="note-slot">${renderNoteSection(chat.chatId)}</div>
 
     ${s.autoRecordError && !previewMode ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
@@ -4506,6 +4612,7 @@ function focusableFieldSelector(el) {
   if (el.classList.contains("username-input")) return ".username-input";
   if (el.classList.contains("inquiry-search")) return ".inquiry-search";
   if (el.classList.contains("amount-input")) return ".amount-input";
+  if (el.classList.contains("note-input")) return ".note-input";
   if (el.classList.contains("status-search")) return ".status-search";
   if (el.classList.contains("brand-search")) return ".brand-search";
   if (el.classList.contains("dob-cal-month-search")) return ".dob-cal-month-search";
@@ -4690,6 +4797,18 @@ chatListEl.addEventListener("toggle", (event) => {
 }, true);
 
 chatListEl.addEventListener("input", (e) => {
+  const noteBox = e.target.closest(".note-input");
+  if (noteBox) {
+    const id = noteBox.closest(".chat-card")?.dataset.chatId;
+    if (id) {
+      const ui = noteUi(id);
+      ui.draft = noteBox.value;
+      if (ui.kind === "ok") { ui.msg = ""; ui.kind = ""; }
+      const counter = noteBox.closest(".ca-note-section")?.querySelector(".note-count");
+      if (counter) counter.textContent = `${ui.draft.length} / ${CONSOLE_NOTE_MAX}`;
+    }
+    return;
+  }
   const input = e.target.closest(".username-input");
   if (!input) return;
   const id = input.closest(".chat-card")?.dataset.chatId;
@@ -4954,6 +5073,11 @@ chatListEl.addEventListener("click", async (e) => {
       ticketDetailInFlight.delete(chatId);
     }
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "saveNote" || btn.dataset.action === "loadNotes") {
+    if (btn.dataset.action === "saveNote") await saveConsoleNote(chatId); else await loadConsoleNotes(chatId);
     return;
   }
 
