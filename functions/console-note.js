@@ -37,6 +37,23 @@ function tooMany(login, now = Date.now()) {
 }
 export function resetNoteLimits() { recent.clear(); }
 
+// The widget's Brand is Lark's short code (FUN, VS, SPIN); the console names brands in full (FUN36, VS96, SPIN321). The console's own list
+// (TEAM_BRANDS in its worker) is copied here; the short code is the full name without its trailing digits. Anything not in the list is
+// passed on as typed, and the console answers "not found" for it. If the console gains a brand, add it here (or it still works once the
+// console accepts short codes itself).
+const CONSOLE_BRANDS = [
+  "JOM99", "EZ96", "PP96", "BIG321", "FUN36", "JUS22", "YES82", "SA",
+  "LPK777", "BM69", "HOT321", "RM68", "SK69", "ACE33", "JK32", "ZAS36",
+  "SPIN321", "MY36", "VS96", "ONG66", "RUSH33", "MAX39", "OMG67", "AC69", "OG",
+];
+const SHORT_TO_FULL = new Map(CONSOLE_BRANDS.map((full) => [full.replace(/\d+$/, ""), full]));
+export function consoleBrand(raw) {
+  const text = clean(raw);
+  const upper = text.toUpperCase();
+  if (CONSOLE_BRANDS.includes(upper)) return upper;
+  return SHORT_TO_FULL.get(upper) || text;
+}
+
 function withTimeout(promise, ms, message) {
   let timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
@@ -100,7 +117,7 @@ export async function handler(event) {
     try { input = JSON.parse(event.body || "{}"); } catch (_) { input = null; }
     if (!input || typeof input !== "object" || Array.isArray(input)) return reply(400, { ok: false, error: "Bad request." });
     const username = clean(input.username).toLowerCase();
-    const brand = clean(input.brand);
+    const brand = consoleBrand(input.brand);
     if (!username || !brand || brand.length > 60) return reply(400, { ok: false, error: "A player username and brand are needed to add a note." });
     // "relationship" = the customer's personal facts (console: Relationship notes); "action" = the next action (console: Action log).
     // Each has its own console route, so a console that does not know the action route can never file an action as a relationship note.

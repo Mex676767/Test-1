@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handler, consoleBase, resetNoteLimits } from "./console-note.js";
+import { handler, consoleBase, consoleBrand, resetNoteLimits } from "./console-note.js";
 import { initEnv as initLarkEnv } from "./_lib/lark.js";
 import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 
@@ -253,4 +253,28 @@ test("listing the Action log reads /api/ext/actions", async (t) => {
   assert.equal(out.notes.length, 1);
   assert.deepEqual(Object.keys(out.notes[0]).sort(), ["at", "by", "note"]);
   assert.equal(w.log.console[0].url, `${CONSOLE}/api/ext/actions?player_key=swecin&brand=SPIN321`);
+});
+
+test("Lark's short brand code is turned into the console's full brand, for notes, actions and lists", async (t) => {
+  const w = world();
+  t.after(w.restore);
+  await call({ ...good, brand: "FUN" });
+  await call({ ...good, brand: "vs", type: "action" });
+  await call({ ...good, brand: "SPIN", note: undefined, list: true });
+  await call({ ...good, brand: "FUN36" });
+  await call({ ...good, brand: "Hot321" });
+  await call({ ...good, brand: "Zzz" });
+  assert.equal(w.log.console[0].body.brand, "FUN36");
+  assert.equal(w.log.console[1].body.brand, "VS96");
+  assert.ok(w.log.console[2].url.endsWith("player_key=swecin&brand=SPIN321"));
+  assert.equal(w.log.console[3].body.brand, "FUN36", "a full name stays as it is");
+  assert.equal(w.log.console[4].body.brand, "HOT321", "case does not matter");
+  assert.equal(w.log.console[5].body.brand, "Zzz", "an unknown brand is passed on as typed");
+});
+
+test("every short code is unique, so the mapping never picks the wrong brand", () => {
+  const shorts = ["FUN", "VS", "SPIN", "PP", "MY", "AC", "OG", "SA", "RM", "JK", "BM", "SK"];
+  const fulls = shorts.map((s) => consoleBrand(s));
+  assert.equal(new Set(fulls).size, shorts.length);
+  assert.deepEqual(fulls, ["FUN36", "VS96", "SPIN321", "PP96", "MY36", "AC69", "OG", "SA", "RM68", "JK32", "BM69", "SK69"]);
 });
