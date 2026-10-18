@@ -214,3 +214,43 @@ test("one agent cannot flood the console: the 21st note inside a minute is held 
   assert.match(last.error, /Too many notes/);
   assert.equal(w.log.console.length, 20);
 });
+
+test("an action-log entry goes to its own console route with the same verified author; a wrong type is refused", async (t) => {
+  const w = world();
+  t.after(w.restore);
+  const out = await call({ ...good, type: "action", note: "Call back Friday" });
+  assert.equal(out.ok, true);
+  const sent = w.log.console[0];
+  assert.equal(sent.url, `${CONSOLE}/api/ext/action`);
+  assert.equal(sent.headers["x-widget-token"], KEY);
+  assert.deepEqual(sent.body, { player_key: "swecin", brand: "SPIN321", note: "Call back Friday", author: "96 Raven - VIP RTN SNR MY" });
+  const relationship = await call({ ...good, type: "relationship" });
+  assert.equal(relationship.ok, true);
+  assert.equal(w.log.console[1].url, `${CONSOLE}/api/ext/note`, "an explicit relationship type still goes to the notes route");
+  const bad = await call({ ...good, type: "status" });
+  assert.equal(bad.status, 400);
+  assert.equal(w.log.console.length, 2, "nothing was sent for the bad type");
+});
+
+test("an action entry the console did not confirm is never reported as saved, and the unsure message names the Action log", async (t) => {
+  const w = world({ consoleReply: { status: 200, body: {} } });
+  t.after(w.restore);
+  const notSaved = await call({ ...good, type: "action" });
+  assert.equal(notSaved.ok, false);
+  w.restore();
+  const w2 = world({ consoleThrows: new Error("timed out") });
+  t.after(w2.restore);
+  const unsure = await call({ ...good, type: "action" });
+  assert.equal(unsure.unsure, true);
+  assert.match(unsure.error, /Action log/);
+});
+
+test("listing the Action log reads /api/ext/actions", async (t) => {
+  const w = world({ consoleReply: { status: 200, body: { actions: [{ note: "[widget · raven · 10:00] call", status: null, created_by: "raven (widget)", created_at: "2026-10-18 10:00:00", snapshot_date: "2026-10-18" }] } } });
+  t.after(w.restore);
+  const out = await call({ ...good, type: "action", note: undefined, list: true });
+  assert.equal(out.ok, true);
+  assert.equal(out.notes.length, 1);
+  assert.deepEqual(Object.keys(out.notes[0]).sort(), ["at", "by", "note"]);
+  assert.equal(w.log.console[0].url, `${CONSOLE}/api/ext/actions?player_key=swecin&brand=SPIN321`);
+});

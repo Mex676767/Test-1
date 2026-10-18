@@ -3,7 +3,7 @@ import { identifyAgent } from "./_lib/livechat-identity.js";
 import { TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { bindingFor, readBindings } from "./agent-login.js";
 
-// Notes from the widget to the VIP Retention Console ("Relationship notes" of a player).
+// Notes from the widget to the VIP Retention Console: type "relationship" (default) -> the player's Relationship notes, type "action" -> the player's Action log.
 //
 // The browser sends the player, the brand, the note and the agent's LiveChat login. This function asks LiveChat who that login
 // is and which Agent Name the "Livechat App Agent Logins" table bound to it, and sends THAT name to the console as the author.
@@ -102,6 +102,10 @@ export async function handler(event) {
     const username = clean(input.username).toLowerCase();
     const brand = clean(input.brand);
     if (!username || !brand || brand.length > 60) return reply(400, { ok: false, error: "A player username and brand are needed to add a note." });
+    // "relationship" = the customer's personal facts (console: Relationship notes); "action" = the next action (console: Action log).
+    // Each has its own console route, so a console that does not know the action route can never file an action as a relationship note.
+    const type = input.type === undefined || input.type === "relationship" ? "relationship" : input.type === "action" ? "action" : "";
+    if (!type) return reply(400, { ok: false, error: "Bad request." });
     const list = input.list === true;
     const note = clean(input.note);
     if (!list) {
@@ -119,23 +123,24 @@ export async function handler(event) {
 
     const headers = { "x-widget-token": clean(event.env.CONSOLE_NOTE_TOKEN) };
     if (list) {
-      const result = await callConsole(`${base}/api/ext/notes?${new URLSearchParams({ player_key: username, brand })}`, { method: "GET", headers });
+      const result = await callConsole(`${base}${type === "action" ? "/api/ext/actions" : "/api/ext/notes"}?${new URLSearchParams({ player_key: username, brand })}`, { method: "GET", headers });
       if (result.unknown) return reply(200, { ok: false, error: "The console did not answer. Notes are not shown right now." });
       if (result.status !== 200) return reply(200, { ok: false, notFound: result.status === 404, error: consoleProblem(result.status, "") });
-      const notes = (Array.isArray(result.data?.notes) ? result.data.notes : []).slice(0, LIST_LIMIT)
+      const listed = type === "action" ? result.data?.actions : result.data?.notes;
+      const notes = (Array.isArray(listed) ? listed : []).slice(0, LIST_LIMIT)
         .map((item) => ({ note: String(item?.note ?? "").slice(0, NOTE_MAX), by: String(item?.created_by ?? "").slice(0, 80), at: String(item?.created_at ?? "").slice(0, 40) }));
       return reply(200, { ok: true, notes });
     }
 
     if (tooMany(agent.login)) return reply(429, { ok: false, error: "Too many notes in a minute. Wait a little and try again." });
     // The author is the Agent Name exactly as the widget has it; the console shortens it itself.
-    const result = await callConsole(`${base}/api/ext/note`, {
+    const result = await callConsole(`${base}${type === "action" ? "/api/ext/action" : "/api/ext/note"}`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ player_key: username, brand, note, author: agent.name }),
     });
     if (result.unknown) {
-      return reply(200, { ok: false, unsure: true, error: "The console did not answer, so the note may or may not have been saved. Check the player's notes before sending it again." });
+      return reply(200, { ok: false, unsure: true, error: `The console did not answer, so the note may or may not have been saved. Check the player's ${type === "action" ? "Action log" : "Relationship notes"} before sending it again.` });
     }
     if (result.status === 200 && result.data?.saved === true) return reply(200, { ok: true, saved: true });
     return reply(200, { ok: false, error: consoleProblem(result.status, clean(result.data?.error)) });
