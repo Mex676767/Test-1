@@ -1005,6 +1005,18 @@ function extractAmountNumber(str) {
   return match ? match[0] : "";
 }
 
+// The amount of an activated Grace Period claim. The real text from Lark is "Activated : 2026-10-17 14:35 - Pass - 58": the amount
+// is the last number, after "Pass - " (the date holds other numbers, so a first-number grab would record 2026). "Bonus N" is
+// still read first. Admin preview only for now: the installed widget keeps reading "Bonus N" alone, as before.
+function graceClaimAmount(display) {
+  const text = String(display || "");
+  const bonus = text.match(/Bonus\s*[:\-]?\s*(-?\d+(?:\.\d+)?)/i);
+  if (bonus) return bonus[1];
+  if (!previewMode) return "";
+  const afterPass = text.match(/Pass\s*-\s*(-?\d+(?:\.\d+)?)\s*$/i);
+  return afterPass ? afterPass[1] : "";
+}
+
 const RISK_PLAYER_CAPS = { 20: 188, 30: 288, 40: 388 };
 
 function riskPlayerCalculation(display, reloadAmount) {
@@ -5160,9 +5172,9 @@ chatListEl.addEventListener("click", async (e) => {
     // and neither follows the generic claim flow below at all: "Pass ..."
     // just activates the offer — Inquiry/Status only, no amount/claim
     // secret, and it doesn't consume the one-claim-per-case slot. "Activated
-    // : ... - Bonus N" is the real claim — amount comes from the number
-    // after "Bonus" specifically (not "Deposit"), and it behaves like any
-    // other claim (locks the rest, Claim Secret ticked).
+    // : 2026-10-17 14:35 - Pass - 58" is the real claim — amount comes from
+    // graceClaimAmount() (the last number, not the date's), and it behaves
+    // like any other claim (locks the rest, Claim Secret ticked).
     if (programKey === "gracePeriod") {
       const display = r.gracePeriod || "";
       if (/^\s*pass\b/i.test(display)) {
@@ -5170,8 +5182,7 @@ chatListEl.addEventListener("click", async (e) => {
         s.inquiry = ["Grace Period"];
         s.status = "Activated";
       } else {
-        const amountMatch = display.match(/Bonus\s*[:\-]?\s*(-?\d+(?:\.\d+)?)/i);
-        const amount = amountMatch ? amountMatch[1] : "";
+        const amount = graceClaimAmount(display);
         s.claimedPrograms.gracePeriod = true;
         s.inquiry = ["Grace Period"];
         s.status = "Given";
