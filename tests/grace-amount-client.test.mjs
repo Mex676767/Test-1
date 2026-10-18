@@ -10,7 +10,7 @@ const amountFor = (previewMode, display) => vm.runInContext(`${fn('graceClaimAmo
 
 const REAL = 'Activated : 2026-10-17 14:35 - Pass - 58';
 
-test('admin preview: the amount of a real activated Grace text is the number after "Pass - ", not the date', () => {
+test('the amount of a real activated Grace text is the number after "Pass - ", not the date', () => {
   assert.equal(amountFor(true, REAL), '58');
   assert.equal(amountFor(true, 'Activated : 2026-10-17 14:35 - Pass - 108.5  '), '108.5');
   assert.equal(amountFor(true, 'Activated : 2026-10-17 14:35 - Pass - 1000'), '1000');
@@ -21,8 +21,9 @@ test('the older "Bonus N" text is still read first, in preview and in the instal
   assert.equal(amountFor(false, 'Activated: Pass - Deposit 1000 Bonus 108'), '108');
 });
 
-test('installed widget: behaviour is unchanged for now (no amount from the real text; the claim falls back to the whole text as before)', () => {
-  assert.equal(amountFor(false, REAL), '');
+test('installed widget: the same amount is read as in the admin preview', () => {
+  assert.equal(amountFor(false, REAL), '58');
+  assert.equal(amountFor(false, 'Activated : 2026-10-17 14:35 - Pass - 108.5  '), '108.5');
 });
 
 test('text with no amount gives nothing, so the claim keeps its old fallback', () => {

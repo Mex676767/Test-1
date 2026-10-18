@@ -1007,12 +1007,11 @@ function extractAmountNumber(str) {
 
 // The amount of an activated Grace Period claim. The real text from Lark is "Activated : 2026-10-17 14:35 - Pass - 58": the amount
 // is the last number, after "Pass - " (the date holds other numbers, so a first-number grab would record 2026). "Bonus N" is
-// still read first. Admin preview only for now: the installed widget keeps reading "Bonus N" alone, as before.
+// still read first. The same for every agent (installed widget and admin preview).
 function graceClaimAmount(display) {
   const text = String(display || "");
   const bonus = text.match(/Bonus\s*[:\-]?\s*(-?\d+(?:\.\d+)?)/i);
   if (bonus) return bonus[1];
-  if (!previewMode) return "";
   const afterPass = text.match(/Pass\s*-\s*(-?\d+(?:\.\d+)?)\s*$/i);
   return afterPass ? afterPass[1] : "";
 }
