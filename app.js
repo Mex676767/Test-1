@@ -3344,9 +3344,14 @@ function renderCollapsedCard(chat) {
    The draft and the messages live in this map, not in the saved chat state.
    ============================================================ */
 const CONSOLE_NOTE_MAX = 2000;
-const noteUiByChat = new Map(); // chatId -> { draft, busy, msg, kind, notes, notesBusy }
+const noteUiByChat = new Map(); // chatId -> { type, draft, busy, msg, kind, notes, notesBusy }
+// "relationship" = the customer's personal info (console: Relationship notes); "action" = the next action (console: Action log).
+const CONSOLE_NOTE_TYPES = {
+  relationship: { label: "Relationship note", where: "Relationship notes", hint: "The customer's personal info. It resurfaces every time anyone contacts them.", placeholder: "A personal fact about this customer (e.g. prefers Telegram, birthday in March)…", add: "Add note" },
+  action: { label: "Action log", where: "Action log", hint: "The next action for this player.", placeholder: "What should happen next, or what was done (e.g. call back Friday about the VIP trip)…", add: "Add action" },
+};
 function noteUi(chatId) {
-  if (!noteUiByChat.has(chatId)) noteUiByChat.set(chatId, { draft: "", busy: false, msg: "", kind: "", notes: null, notesBusy: false });
+  if (!noteUiByChat.has(chatId)) noteUiByChat.set(chatId, { type: "relationship", draft: "", busy: false, msg: "", kind: "", notes: null, notesBusy: false });
   return noteUiByChat.get(chatId);
 }
 
@@ -3364,19 +3369,21 @@ function renderNoteSection(chatId) {
   const ui = noteUi(chatId);
   const blocker = consoleNoteBlocker(s);
   const off = !!blocker || ui.busy;
+  const typeDef = CONSOLE_NOTE_TYPES[ui.type] || CONSOLE_NOTE_TYPES.relationship;
   const notes = Array.isArray(ui.notes)
     ? (ui.notes.length
       ? `<ul class="note-list">${ui.notes.map((n) => `<li><div class="note-text">${escapeHtml(n.note)}</div><div class="note-meta">${escapeHtml(n.by)}${n.at ? ` · ${escapeHtml(n.at)}` : ""}</div></li>`).join("")}</ul>`
-      : `<div class="note-empty">No notes in the console for this player yet.</div>`)
+      : `<div class="note-empty">Nothing in the console's ${escapeHtml(typeDef.where)} for this player yet.</div>`)
     : "";
   return `
-    <section class="ca-section ca-note-section">
-      <div class="ca-section-head"><div><strong>Console note</strong></div></div>
-      <textarea class="input note-input" data-chat="${escapeHtml(chatId)}" rows="3" maxlength="${CONSOLE_NOTE_MAX}" placeholder="Write a note about this player. It appears in the console under Relationship notes." ${off ? "disabled" : ""}>${escapeHtml(ui.draft)}</textarea>
+    <section class="ca-note-section">
+      <div class="note-types" role="group" aria-label="Where the note goes">${Object.entries(CONSOLE_NOTE_TYPES).map(([key, def]) => `<button type="button" class="note-type-btn ${ui.type === key ? "active" : ""}" data-action="noteType" data-type="${key}" data-chat="${escapeHtml(chatId)}" ${ui.busy ? "disabled" : ""}>${escapeHtml(def.label)}</button>`).join("")}</div>
+      <div class="note-hint">${escapeHtml(typeDef.hint)} Goes to the console's ${escapeHtml(typeDef.where)}.</div>
+      <textarea class="input note-input" data-chat="${escapeHtml(chatId)}" rows="3" maxlength="${CONSOLE_NOTE_MAX}" placeholder="${escapeHtml(typeDef.placeholder)}" ${off ? "disabled" : ""}>${escapeHtml(ui.draft)}</textarea>
       <div class="note-row">
         <span class="note-count">${ui.draft.length} / ${CONSOLE_NOTE_MAX}</span>
-        <button type="button" class="note-secondary-btn" data-action="loadNotes" data-chat="${escapeHtml(chatId)}" ${blocker || ui.notesBusy ? "disabled" : ""}>${ui.notesBusy ? "Loading…" : ui.notes ? "Refresh notes" : "Show console notes"}</button>
-        <button type="button" class="note-save-btn" data-action="saveNote" data-chat="${escapeHtml(chatId)}" ${off ? "disabled" : ""}>${ui.busy ? "Saving…" : "Add note"}</button>
+        <button type="button" class="note-secondary-btn" data-action="loadNotes" data-chat="${escapeHtml(chatId)}" ${blocker || ui.notesBusy ? "disabled" : ""}>${ui.notesBusy ? "Loading…" : ui.notes ? "Refresh" : `Show ${escapeHtml(typeDef.where.toLowerCase())}`}</button>
+        <button type="button" class="note-save-btn" data-action="saveNote" data-chat="${escapeHtml(chatId)}" ${off ? "disabled" : ""}>${ui.busy ? "Saving…" : escapeHtml(typeDef.add)}</button>
       </div>
       ${blocker ? `<div class="note-msg note-error">${escapeHtml(blocker)}</div>` : ui.msg ? `<div class="note-msg ${ui.kind === "ok" ? "note-ok" : ui.kind === "error" ? "note-error" : ""}">${escapeHtml(ui.msg)}</div>` : ""}
       ${previewMode ? `<div class="note-msg">Test mode: a note added here really is saved to the console.</div>` : ""}
@@ -3416,10 +3423,11 @@ async function saveConsoleNote(chatId) {
   if (note.length > CONSOLE_NOTE_MAX) { ui.msg = `The note is too long (${note.length} of ${CONSOLE_NOTE_MAX} characters).`; ui.kind = "error"; paintNoteSection(chatId); return; }
   ui.busy = true; ui.msg = ""; ui.kind = "";
   paintNoteSection(chatId);
-  const answer = await postConsoleNote(s, { note });
+  const type = ui.type;
+  const answer = await postConsoleNote(s, { note, type });
   ui.busy = false;
   if (answer && answer.ok && answer.saved) {
-    ui.draft = ""; ui.msg = "Saved"; ui.kind = "ok";
+    ui.draft = ""; ui.msg = `Saved to the ${(CONSOLE_NOTE_TYPES[type] || CONSOLE_NOTE_TYPES.relationship).where}`; ui.kind = "ok";
     ui.notes = null; // the list shown before is out of date now
   } else {
     ui.msg = (answer && answer.error) || "The note could not be saved."; ui.kind = "error"; // the draft stays so nothing typed is lost
@@ -3433,7 +3441,7 @@ async function loadConsoleNotes(chatId) {
   if (!s || ui.notesBusy || consoleNoteBlocker(s)) return;
   ui.notesBusy = true; ui.msg = ""; ui.kind = "";
   paintNoteSection(chatId);
-  const answer = await postConsoleNote(s, { list: true });
+  const answer = await postConsoleNote(s, { list: true, type: ui.type });
   ui.notesBusy = false;
   if (answer && answer.ok && Array.isArray(answer.notes)) ui.notes = answer.notes;
   else { ui.msg = (answer && answer.error) || "The notes could not be loaded."; ui.kind = "error"; }
@@ -3465,6 +3473,7 @@ function renderExpandedCard(chat) {
       </div>
       <label class="unknown-toggle"><input type="checkbox" class="unknown-check" data-chat="${chat.chatId}" ${s.isUnknown ? "checked" : ""} /><span>Unknown player</span></label>
       <div class="player-info-slot">${renderPlayerInfo(chat.chatId)}</div>
+      <div class="note-slot">${renderNoteSection(chat.chatId)}</div>
     </section>
 
     <section class="ca-section ca-bonus-section">
@@ -3487,8 +3496,6 @@ function renderExpandedCard(chat) {
       </div>
       <div class="toggle-row"><label class="field-label">Telegram chat <span class="auto-tag">auto</span></label><label class="switch"><input type="checkbox" class="tg-check" data-chat="${chat.chatId}" ${s.telegram ? "checked" : ""} /><span class="slider"></span></label></div>
     </section>
-
-    <div class="note-slot">${renderNoteSection(chat.chatId)}</div>
 
     ${s.autoRecordError && !previewMode ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
@@ -5088,6 +5095,11 @@ chatListEl.addEventListener("click", async (e) => {
     return;
   }
 
+  if (btn.dataset.action === "noteType") {
+    const ui = noteUi(chatId);
+    if (!ui.busy && CONSOLE_NOTE_TYPES[btn.dataset.type]) { ui.type = btn.dataset.type; ui.msg = ""; ui.kind = ""; ui.notes = null; paintNoteSection(chatId); }
+    return;
+  }
   if (btn.dataset.action === "saveNote" || btn.dataset.action === "loadNotes") {
     if (btn.dataset.action === "saveNote") await saveConsoleNote(chatId); else await loadConsoleNotes(chatId);
     return;

@@ -10,6 +10,7 @@ const line = (re) => app.match(re)[0];
 const SOURCE = [
   line(/const CONSOLE_NOTE_MAX = \d+;/),
   line(/const noteUiByChat = new Map\(\);[^\n]*/),
+  line(/const CONSOLE_NOTE_TYPES = \{[\s\S]*?\n\};/),
   ...['noteUi', 'consoleNoteBlocker', 'renderNoteSection', 'paintNoteSection', 'postConsoleNote', 'saveConsoleNote', 'loadConsoleNotes'].map(fn),
   '({ noteUi, consoleNoteBlocker, renderNoteSection, saveConsoleNote, loadConsoleNotes, noteUiByChat })',
 ].join('\n');
@@ -70,11 +71,11 @@ test('a note is sent with the LiveChat login and no agent name; Saved clears the
   assert.equal(h.posted.length, 1);
   const { url, body, signal } = h.posted[0];
   assert.equal(url, '/console-note');
-  assert.deepEqual(body, { accountKey: 'lc1', agentToken: 'tok', username: 'SweCin', brand: 'SPIN321', note: 'Wants a call back' });
+  assert.deepEqual(body, { accountKey: 'lc1', agentToken: 'tok', username: 'SweCin', brand: 'SPIN321', note: 'Wants a call back', type: 'relationship' });
   assert.ok(!('agent' in body) && !('author' in body) && !('agentName' in body), 'the browser never names the author');
   assert.ok(signal, 'the browser gives up on a stuck server');
   assert.equal(h.noteUi('c1').draft, '');
-  assert.equal(h.noteUi('c1').msg, 'Saved');
+  assert.equal(h.noteUi('c1').msg, 'Saved to the Relationship notes');
   assert.match(h.slot.innerHTML, /note-ok">Saved/);
 });
 
@@ -132,8 +133,8 @@ test('existing console notes are shown escaped, and a failure only shows a messa
 
 test('the note box is wired in beside the case, and claiming, looking up and recording never wait on it', () => {
   const card = app.slice(app.indexOf('function renderExpandedCard'), app.indexOf('function renderAdminTicketWorkspace'));
-  assert.ok(card.indexOf('Case details') < card.indexOf('note-slot'), 'after the case details');
-  assert.ok(card.indexOf('note-slot') < card.indexOf('submit-btn'), 'before the Record button');
+  assert.ok(card.indexOf('player-info-slot') < card.indexOf('note-slot'), 'under the customer lookup');
+  assert.ok(card.indexOf('note-slot') < card.indexOf('Available bonuses'), 'still inside the Customer section');
   assert.match(app, /btn\.dataset\.action === "saveNote" \|\| btn\.dataset\.action === "loadNotes"/);
   for (const name of ['runLookup', 'submitCase', 'recordCase']) {
     const m = app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
@@ -141,4 +142,28 @@ test('the note box is wired in beside the case, and claiming, looking up and rec
   }
   const claim = app.slice(app.indexOf('if (btn.dataset.action === "claim")'), app.indexOf('if (btn.dataset.action === "unclaim")'));
   assert.ok(!/ConsoleNote|noteUi/.test(claim), 'claiming does not touch notes');
+});
+
+test('the box offers Relationship note and Action log; the choice decides where the note is sent', async () => {
+  const h = harness({ state: looked(), reply: { ok: true, saved: true } });
+  const html = h.renderNoteSection('c1');
+  assert.match(html, /data-type="relationship"[^>]*>Relationship note</);
+  assert.match(html, /data-type="action"[^>]*>Action log</);
+  assert.match(html, /note-type-btn active" data-action="noteType" data-type="relationship"/, 'relationship is the default');
+  h.noteUi('c1').type = 'action';
+  h.noteUi('c1').draft = 'Call back Friday';
+  assert.match(h.renderNoteSection('c1'), /Add action/);
+  await h.saveConsoleNote('c1');
+  assert.deepEqual(h.posted[0].body.type, 'action');
+  assert.equal(h.posted[0].body.note, 'Call back Friday');
+  assert.equal(h.noteUi('c1').msg, 'Saved to the Action log');
+});
+
+test('the type buttons are part of the box, and listing follows the chosen type', async () => {
+  const h = harness({ state: looked(), reply: { ok: true, notes: [{ note: 'x', by: 'raven (widget)', at: '' }] } });
+  h.noteUi('c1').type = 'action';
+  assert.match(h.renderNoteSection('c1'), /Show action log/);
+  await h.loadConsoleNotes('c1');
+  assert.deepEqual({ list: h.posted[0].body.list, type: h.posted[0].body.type }, { list: true, type: 'action' });
+  assert.match(app, /btn\.dataset\.action === "noteType"/);
 });
