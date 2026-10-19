@@ -2,12 +2,12 @@
 // Pages environment; the browser only receives the fields it needs.
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
-// Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge) are on in the admin
-// preview only. DEPARTMENT_TABS_LIVE puts them in the installed LiveChat widget too; keep it off until rollout is approved.
-const DEPARTMENT_TABS_LIVE = false;
-// Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team (see "Auto ticket on claim"). Admin preview
-// only; AUTO_TICKET_LIVE puts it in the installed LiveChat widget too. Keep it off until rollout is approved.
-const AUTO_TICKET_LIVE = false;
+// Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge). DEPARTMENT_TABS_LIVE
+// puts them in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
+const DEPARTMENT_TABS_LIVE = true;
+// Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team (see "Auto ticket on claim").
+// AUTO_TICKET_LIVE puts it in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
+const AUTO_TICKET_LIVE = true;
 const BLAST_LIVE = true;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
@@ -3799,7 +3799,10 @@ async function loadDefaultMarket(s) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Your default market could not be read.");
   if (data.market) agentDefaultMarket = { account: author.accountKey, code: data.market };
-  return { code: data.market || "", locked: !!data.market };
+  // None saved on the server yet: offer the one remembered in this browser (see saveDefaultMarket), not locked.
+  let remembered = "";
+  if (!data.market) { try { remembered = localStorage.getItem(DEFAULT_MARKET_LOCAL_KEY) || ""; } catch (_) { /* not remembered */ } }
+  return { code: data.market || remembered, locked: !!data.market };
 }
 
 // Saves the market chosen in the dialog (only ever the first time) and returns the one that applies: the saved one wins over a stale choice.
@@ -3811,7 +3814,13 @@ async function saveDefaultMarket(s, code) {
   }
   const res = await fetch("/agent-market", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author, market: code }) });
   const data = await res.json();
-  if (!data.ok || !data.market) throw new Error(data.error || "Your default market could not be saved.");
+  if (!data.ok && data.loginExpired) throw new Error(data.error || "Your LiveChat login expired. Connect LiveChat again.");
+  if (!data.ok || !data.market) {
+    // The market could not be stored on the server (the Default Market column is missing, Lark is unreachable): the claim must not be blocked
+    // for that, so it is remembered in this browser, used for this ticket and offered again next time.
+    try { localStorage.setItem(DEFAULT_MARKET_LOCAL_KEY, code); } catch (_) { /* not remembered */ }
+    return code;
+  }
   agentDefaultMarket = { account: author.accountKey, code: data.market };
   return data.market;
 }
@@ -5336,7 +5345,7 @@ function renderTicketConversation(chatId, s, comments) {
       <textarea class="input esc-input ticket-comment-input" data-chat="${escapeHtml(chatId)}" data-field="commentDraft" rows="3" placeholder="Write a comment…" aria-label="Write a comment">${escapeHtml(s.escalation.commentDraft || "")}</textarea>
       <div class="ticket-comment-files-row" data-chat="${escapeHtml(chatId)}">${renderCommentFiles(chatId)}</div>
       <label class="ticket-file-button ticket-comment-attach"><input type="file" class="ticket-comment-file-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple /><span>📎 Attach a picture or PDF</span></label>
-      <small class="ticket-attachment-help">Click in the box and press Ctrl+V to paste a picture.</small>
+      <small class="ticket-attachment-help">Enter sends · Shift+Enter for a new line · click in the box and press Ctrl+V to paste a picture.</small>
       <button type="button" class="submit-btn" data-action="sendTicketComment" data-chat="${escapeHtml(chatId)}" ${busy ? "disabled" : ""}>${busy ? "Sending…" : "Send comment"}</button>
     </div>`;
 }
@@ -5953,6 +5962,14 @@ chatListEl.addEventListener("keydown", (event) => {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
   const target = event.target;
   const card = target.closest?.(".chat-card");
+
+  // The comment box on a ticket: Enter posts the comment, Shift+Enter starts a new line (an empty box with no picture just says so, as the button does).
+  if (event.key === "Enter" && !event.shiftKey && target.matches?.(".ticket-comment-input")) {
+    event.preventDefault();
+    const button = card?.querySelector('button[data-action="sendTicketComment"]');
+    if (button && !button.disabled) button.click();
+    return;
+  }
 
   // The primary text lookups should submit like a normal search field.
   if (event.key === "Enter" && target.matches?.(".username-input, .ticket-search-input")) {

@@ -1,7 +1,32 @@
 const DEFAULT_BASE_URL = "https://tickets.96ghq.com/api/v1";
 
-function config(env = {}) {
-  const apiKey = String(env.TICKETS_API_KEY || "").trim();
+// reads: the key for the polling reads (ticket list, one ticket, the agent roster). TICKETS_API_KEY_READS, when set, is a second key of the same kind
+// used only for those, because the ticket system's limit (120 calls a minute) is per key: with reads on their own key, agents polling for news can
+// never use up the calls a claim, an edit or a comment needs. Unset: everything uses TICKETS_API_KEY as before.
+// The read keys: TICKETS_API_KEY_READS (one key, or several separated by commas) and any numbered variables TICKETS_API_KEY_READS_1, _2 ... or
+// TICKETS_API_KEY1, TICKETS_API_KEY2 ... (TICKETS_API_KEY itself, without a number, is the key for everything that writes and is never one of them).
+// The agents are spread over them by a stable hash of their email (one agent always uses the same key, so their reads stay cached together), so
+// every key carries a share of the polling and the total limit is the sum. Numbered ones are taken in numeric order, so the spread is stable.
+export function readKeys(env = {}) {
+  const numbered = Object.keys(env)
+    .map((name) => ({ name, match: /^TICKETS_API_KEY(?:_READS_?)?(\d+)$/.exec(name) }))
+    .filter(({ match }) => match)
+    .sort((a, b) => Number(a.match[1]) - Number(b.match[1]) || a.name.localeCompare(b.name))
+    .map(({ name }) => String(env[name] || "").trim());
+  const listed = String(env.TICKETS_API_KEY_READS || "").split(",").map((key) => key.trim());
+  return [...new Set([...listed, ...numbered].filter(Boolean))];
+}
+function readKeyFor(env, path = "") {
+  const keys = readKeys(env);
+  if (!keys.length) return "";
+  if (keys.length === 1) return keys[0];
+  const who = new URLSearchParams(String(path).split("?")[1] || "").get("onBehalfOf") || "";
+  let hash = 5381;
+  for (const character of who.toLowerCase()) hash = ((hash * 33) ^ character.charCodeAt(0)) >>> 0;
+  return keys[hash % keys.length];
+}
+function config(env = {}, { reads = false, path = "" } = {}) {
+  const apiKey = String((reads && readKeyFor(env, path)) || env.TICKETS_API_KEY || "").trim();
   const baseUrl = String(env.TICKETS_API_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
   return { apiKey, baseUrl };
 }
@@ -31,8 +56,8 @@ const TICKET_UPLOAD_TIMEOUT_MS = 30_000;
 // The ticket API allows each key 120 requests a minute, shared by every agent, and answers 429 with Retry-After (seconds to the next
 // minute). After a 429 this isolate stops calling for that long: more calls would only be refused too and push the count up again.
 const DEFAULT_RETRY_AFTER_S = 20;
-let rateLimitedUntil = 0;
-export function resetTicketRateLimit() { rateLimitedUntil = 0; }
+const rateLimitedUntil = new Map(); // api key -> time until which this isolate stops calling with it (each key has its own limit)
+export function resetTicketRateLimit() { rateLimitedUntil.clear(); }
 
 function busyError(seconds) {
   const wait = Math.max(1, Math.ceil(seconds));
@@ -43,11 +68,13 @@ function busyError(seconds) {
 }
 
 export async function ticketRequest(env, path, options = {}) {
-  const { apiKey, baseUrl } = config(env);
+  const { reads = false, ...callOptions } = options;
+  const { apiKey, baseUrl } = config(env, { reads, path });
   if (!apiKey) throw new Error("Ticket API key is not configured");
-  if (rateLimitedUntil > Date.now()) throw busyError((rateLimitedUntil - Date.now()) / 1000);
-  const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
-  const { timeoutMs, signal: callerSignal, ...fetchOptions } = options;
+  const pausedUntil = rateLimitedUntil.get(apiKey) || 0;
+  if (pausedUntil > Date.now()) throw busyError((pausedUntil - Date.now()) / 1000);
+  const isMultipart = typeof FormData !== "undefined" && callOptions.body instanceof FormData;
+  const { timeoutMs, signal: callerSignal, ...fetchOptions } = callOptions;
   const limit = Number(timeoutMs) > 0 ? Number(timeoutMs) : (isMultipart ? TICKET_UPLOAD_TIMEOUT_MS : TICKET_TIMEOUT_MS);
   const deadline = AbortSignal.timeout(limit);
   const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
@@ -75,7 +102,7 @@ export async function ticketRequest(env, path, options = {}) {
   if (response.status === 429) {
     const seconds = Number(response.headers?.get?.("retry-after"));
     const wait = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 120) : DEFAULT_RETRY_AFTER_S;
-    rateLimitedUntil = Date.now() + wait * 1000;
+    rateLimitedUntil.set(apiKey, Date.now() + wait * 1000);
     throw busyError(wait);
   }
 
@@ -108,12 +135,12 @@ const readsInFlight = new Map(); // key -> Promise
 export function resetTicketReadCache() { readCache.clear(); readsInFlight.clear(); }
 
 export async function ticketGet(env, path, { ttlMs = 0, fresh = false } = {}) {
-  const { apiKey, baseUrl } = config(env);
+  const { apiKey, baseUrl } = config(env, { reads: true, path });
   const key = `${baseUrl}|${apiKey}|${path}`;
   const stored = readCache.get(key);
   if (!fresh && ttlMs > 0 && stored && Date.now() - stored.at < ttlMs) return stored.data;
   if (readsInFlight.has(key)) return readsInFlight.get(key);
-  const pending = ticketRequest(env, path)
+  const pending = ticketRequest(env, path, { reads: true })
     .then((data) => {
       if (ttlMs > 0) {
         readCache.set(key, { at: Date.now(), data });

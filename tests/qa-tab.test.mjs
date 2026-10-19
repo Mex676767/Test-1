@@ -288,7 +288,7 @@ test('the QA view is wired in the widget: on by default, with an off switch, Tic
   assert.match(app, /const customerService = isCustomerServiceView\(\) \|\| qaView;/);
   assert.match(app, /const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;/, 'Tickets and Knowledge are not live for QA yet');
   assert.match(app, /\.get\("department"\)/, 'the department views are untouched');
-  assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/, 'the department switch stays off');
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/, 'the department switch is on (rolled out 2026-10-19)');
 });
 
 // ---- one chat -------------------------------------------------------------------------------------------------------------

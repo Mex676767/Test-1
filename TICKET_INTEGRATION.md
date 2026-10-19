@@ -29,8 +29,8 @@ The admin preview opens with a compact inbox. All, Active and Solved filters
 share one list; the filter button exposes agent, status, department and market
 filters. Opening a ticket and creating a new ticket each use their own view.
 Additional form fields and ticket details are collapsible, and form drafts and
-chosen attachments remain available when returning to the inbox. Tickets stay
-hidden in the installed LiveChat widget (`DEPARTMENT_TABS_LIVE = false`).
+chosen attachments remain available when returning to the inbox. Tickets are
+in the installed LiveChat widget since the 2026-10-19 rollout (`DEPARTMENT_TABS_LIVE = true`; set it back to `false` to hide them again).
 
 The ticket API supports list, read, create, comment and (since 2026-10-19) update (`PATCH /tickets/<ref>`, see "Editing a ticket" below).
 It does not expose history or log entries; the app links to the dashboard for those.
@@ -102,7 +102,7 @@ missing `api-keys:act-on-behalf` (ask the ticket team); a senior account the key
 reply (`{ ref, body, parentId?, author }`) as the signed-in agent through the same `onBehalfOf` rules. The widget shows the thread
 under each ticket with a box to comment or reply.
 
-## Editing a ticket (admin preview only)
+## Editing a ticket
 
 `POST /ticket-update` (`PATCH` also accepted) `{ ref, author, fields?, toDepartment?, market?, assignees?, expect? }` makes one atomic
 `PATCH /tickets/<ref>` as the signed-in agent (same `onBehalfOf` rules as comments). `fields` are field keys to new values (`null` clears);
@@ -158,7 +158,7 @@ it is made: a choice when it is picked, typed text when the box is left or Enter
 refusal or a ticket someone else changed first shows its message and the box goes back to the real value. The detail refreshes every 30 s
 (a copy older than a save just made is ignored). **Needs on the ticket side:** the API key's "Update tickets" access switched on (off on every key until an administrator ticks it; a
 refusal shows as "This API key is not allowed to update tickets") and `tickets:update` on the role of each agent's ticket account. The Tickets
-tab is still admin preview only (`DEPARTMENT_TABS_LIVE = false`), so nothing changes in the installed widget.
+tab is in the installed widget since the 2026-10-19 rollout (`DEPARTMENT_TABS_LIVE = true`).
 
 **Ticket account check (before the Tickets tab can be used).** When the Tickets tab is opened the widget asks `/ticket-account`, which
 makes one small read (the market list) as the agent's ticket email (`onBehalfOf`) and so learns, without creating anything, whether the
@@ -168,13 +168,52 @@ email popup open at once, or why the key cannot act for them). The inbox and tic
 busy) does not lock anyone out. The answer is remembered for a minute per email on the server and five minutes in the widget; "Check
 again" and entering an email check again. It only exists with `TICKETS_ON_BEHALF_OF=1`.
 
-## Auto ticket on claim and the default market (admin preview only)
+## Auto ticket on claim and the default market
 
 Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket (department `PYM_MYR`, level VVIP, query type = the ticket query
 type that contains the bonus keyword, amount = the amount claimed, random 32-character transaction id, status / gateway / remarks / manual
-deposit left empty) and asks the agent for the proof; the claim only goes through once the ticket exists. It runs only in the admin preview
-(`AUTO_TICKET_LIVE = false` in `app.js`; set it to `true` to roll out).
+deposit left empty) and asks the agent for the proof; the claim only goes through once the ticket exists. It runs in the installed
+widget since the 2026-10-19 rollout (`AUTO_TICKET_LIVE = true` in `app.js`; set it to `false` to switch it off without touching anything else).
+If the market cannot be saved on the server (the Default Market column is missing) the claim still goes ahead and the market is remembered in that browser.
 
 **Default market.** Add a text column **Default Market** to the Lark table "Livechat App Agent Logins" (once). The agent picks their market
 the first time they claim; `/agent-market` saves its code on their row (and a second login of the same agent shares it). From then on only an
 admin changes it, by editing that cell in Lark (the admin panel will do it later). Without the column the agent is asked every time.
+
+## Capacity (stress test, 2026-10-19)
+
+`node scripts/stress-tickets.mjs` runs the real Functions against a fake ticket system that enforces the real limit (120 calls a minute **per key**) with
+virtual agents that poll, claim, edit and comment like the widget. Nothing is sent to the real ticket system, LiveChat or Lark. Worst case (no read
+shared between agents; production is somewhere between that and fully shared), one key, bell every 15 s, open ticket every 8 s:
+
+| agents | calls/min | 429s in 6 min | claims failed |
+|---|---|---|---|
+| 5 | 38 | 0 | 0/6 |
+| 10 | 84 | 0 | 0/12 |
+| 15 | 120 | 19 | 1/20 |
+| 20 | 146 | 156 | 8/28 |
+| 30 | 169 | 295 | 25/39 |
+| 50 | 209 | 531 | 57/75 |
+
+So one key carries about 10 agents; beyond that claims, edits and comments start to fail because polling uses the calls they need. Two measures:
+
+1. **A second key for the polling reads**: `TICKETS_API_KEY_READS` (same kind of key and role as `TICKETS_API_KEY`; ask the ticket team for it). List, ticket and
+   roster reads use it, everything that writes uses `TICKETS_API_KEY`; each key has its own limit and its own "busy" pause. Result at 50 agents:
+   claims, edits and comments 0 failed (polling slows down instead). Unset: one key as before.
+2. **Slower polling** (`TICKET_NOTE_POLL_MS`, `TICKET_OPEN_POLL_MS`, and how often everyone's newest are read in `pollTicketNotifications`): with two keys,
+   bell 30 s / open ticket 15 s / everyone's every 8th poll keeps the reads key under the limit up to about 25 agents; 45 s / 20 s up to about 35.
+   **Setting it up in Cloudflare** (Pages project > Settings > Variables and Secrets > Production): keep `TICKETS_API_KEY` as it is (the writing key) and add the extra
+   keys as encrypted variables named `TICKETS_API_KEY1`, `TICKETS_API_KEY2` ... (or `TICKETS_API_KEY_READS_1` ..., or one `TICKETS_API_KEY_READS` with the keys separated by commas),
+   then redeploy. The un-numbered `TICKETS_API_KEY` is never one of the read keys.
+   **For 50 to 100 agents** (bell 30 s / open ticket 15 s / everyone's every 8th, worst case): about 220 calls a minute at 50 agents, 320 at 75, 430 at 100, of
+   which about 70 are writes. Either ask the ticket team to raise the limit of the key(s) to about 600 a minute, or give `TICKETS_API_KEY_READS` several keys
+   separated by commas (agents are spread over them by a hash of their email): 2 read keys for 50 agents, 3 for 75 to 100 (at 100 agents with 3 read keys
+   claims, edits and comments failed 0 times and a little polling backed off). The catalog and account-check reads are on the read keys too.
+   Try other values with `--bell-s`, `--open-s`, `--everyone-every`, `--read-key`, `--agents`, `--minutes`, `--mode shared|none`.
+
+## Rollout checklist (2026-10-19)
+
+Things the installed widget depends on, all outside the code: the Lark column **Default Market** in "Livechat App Agent Logins"; an active ticket-system
+account for every agent (their LiveChat email, or **Ticket Email** in Lark); `TICKETS_ON_BEHALF_OF=1` in Cloudflare; the API key's role holding
+`api-keys:act-on-behalf`, and its "Update tickets" switch on; and the 120 calls a minute shared by all agents (see "Near real time"). Rolling back: set
+`DEPARTMENT_TABS_LIVE` and `AUTO_TICKET_LIVE` to `false` and bump `widget-release.json`.

@@ -48,7 +48,7 @@ test('the installed widget: Retention keeps all four tabs, Customer Service gets
   assert.deepEqual(tabs({ departmentKnown: false }), all, 'until LiveChat says, nothing is hidden');
   assert.equal(tabs({ currentDepartment: 'rtn', departmentKnown: true, BLAST_LIVE: false }).blast, false, 'the Blast switch still wins');
   assert.deepEqual(tabs({ DEPARTMENT_TABS_LIVE: false }), { customer: true, tickets: false, blast: true, knowledge: false }, 'with the rollout switch off the installed widget is as before');
-  assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
   assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = true;/);
 });
 
@@ -636,4 +636,13 @@ test('pictures: one the key cannot load opens in the ticket system instead (the 
   assert.ok(app.includes('thumb.dataset.fallbackUrl = `https://tickets.96ghq.com/api/attachments/'));
   assert.ok(app.includes('if (btn.dataset.fallbackUrl) window.open(btn.dataset.fallbackUrl, "_blank", "noopener")'));
   assert.ok(app.includes('else if (img && img.src) openTicketImageLightbox'));
+});
+
+test('comment box: Enter posts the comment, Shift+Enter makes a new line, and the help line says so', () => {
+  assert.ok(app.includes('if (event.key === "Enter" && !event.shiftKey && target.matches?.(".ticket-comment-input")) {'));
+  const handler = app.slice(app.indexOf('chatListEl.addEventListener("keydown"'));
+  assert.ok(handler.indexOf('".ticket-comment-input"') < handler.indexOf('".username-input, .ticket-search-input"'), 'handled before the other Enter shortcuts');
+  assert.match(handler.slice(0, 400), /event\.isComposing/, 'a key press that confirms text typed with an input method never sends');
+  assert.match(handler, /event\.preventDefault\(\);\s+const button = card\?\.querySelector\('button\[data-action="sendTicketComment"\]'\);\s+if \(button && !button\.disabled\) button\.click\(\);/, 'sends through the button, so a send already running is not started twice');
+  assert.ok(app.includes('Enter sends · Shift+Enter for a new line'));
 });
