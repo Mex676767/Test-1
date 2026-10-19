@@ -9,7 +9,8 @@ const DEPARTMENT_TABS_LIVE = true;
 // AUTO_TICKET_LIVE puts it in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
 const AUTO_TICKET_LIVE = true;
 const BLAST_LIVE = true;
-// The Knowledge tab is switched off for everyone (the agents only need Tickets). Set it to true to bring it back for Retention and Customer Service.
+// The Knowledge tab is switched off for the agents in the installed widget (they only need Tickets); the admin preview still has it.
+// Set it to true to bring it back for Retention and Customer Service in the installed widget too.
 const KNOWLEDGE_TAB_ENABLED = false;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
@@ -1257,7 +1258,7 @@ function mainTabAvailability() {
     return { customer: true, tickets: false, blast: BLAST_LIVE, knowledge: false };
   }
   if (!DEPARTMENT_SEPARATION_ENABLED) {
-    return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: previewMode || BLAST_LIVE, knowledge: KNOWLEDGE_TAB_ENABLED };
+    return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: previewMode || BLAST_LIVE, knowledge: previewMode || KNOWLEDGE_TAB_ENABLED };
   }
   // Retention keeps everything; Customer Service gets Tickets (and Knowledge when it is enabled). Until the department is known nothing is hidden.
   const rtn = !departmentKnown || currentDepartment === "rtn";
@@ -1265,7 +1266,7 @@ function mainTabAvailability() {
     customer: rtn,
     tickets: ESCALATION_TICKET_ENABLED,
     blast: rtn && (previewMode || BLAST_LIVE),
-    knowledge: KNOWLEDGE_TAB_ENABLED,
+    knowledge: previewMode || KNOWLEDGE_TAB_ENABLED,
   };
 }
 
