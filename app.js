@@ -9,6 +9,8 @@ const DEPARTMENT_TABS_LIVE = true;
 // AUTO_TICKET_LIVE puts it in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
 const AUTO_TICKET_LIVE = true;
 const BLAST_LIVE = true;
+// The Knowledge tab is switched off for everyone (the agents only need Tickets). Set it to true to bring it back for Retention and Customer Service.
+const KNOWLEDGE_TAB_ENABLED = false;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
 // Temporary preview fallback. Turn this back on after agents--my:ro has
@@ -1255,15 +1257,15 @@ function mainTabAvailability() {
     return { customer: true, tickets: false, blast: BLAST_LIVE, knowledge: false };
   }
   if (!DEPARTMENT_SEPARATION_ENABLED) {
-    return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: previewMode || BLAST_LIVE, knowledge: true };
+    return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: previewMode || BLAST_LIVE, knowledge: KNOWLEDGE_TAB_ENABLED };
   }
-  // Retention keeps everything; Customer Service gets Tickets and Knowledge. Until the department is known nothing is hidden.
+  // Retention keeps everything; Customer Service gets Tickets (and Knowledge when it is enabled). Until the department is known nothing is hidden.
   const rtn = !departmentKnown || currentDepartment === "rtn";
   return {
     customer: rtn,
     tickets: ESCALATION_TICKET_ENABLED,
     blast: rtn && (previewMode || BLAST_LIVE),
-    knowledge: true,
+    knowledge: KNOWLEDGE_TAB_ENABLED,
   };
 }
 
@@ -4285,6 +4287,7 @@ async function pollTicketNotifications() {
   try {
     // The account is checked here too, quietly, so notifications arrive on whatever tab the agent is on, not only after the Tickets tab was opened.
     if (ticketAccount.status === "unknown" && !ticketAccount.checking) {
+      if (!Object.keys(state).length) ensureChatState(ticketsOnlyChat()); // no chat open yet: the account is checked on the Tickets tab's own stand-in
       const chatId = Object.keys(state)[0];
       if (chatId) await checkTicketAccount(chatId, { quiet: true });
     }
@@ -5192,6 +5195,7 @@ function ticketAccountSettingsVisible() {
 }
 // Settings has no chat of its own; a check needs one only for its state.
 function ticketAccountSettingsChat() {
+  if (!activeChats[0] && !Object.keys(state).length) ensureChatState(ticketsOnlyChat());
   return activeChats[0]?.chatId || Object.keys(state)[0] || "";
 }
 function renderTicketAccountSettings() {
@@ -5825,12 +5829,22 @@ function renderChats(chats) {
   restoreFocus(focusCapture);
 }
 
+// The Tickets tab does not need a conversation: with none open it works on this stand-in "chat" (no player, no brand, nothing filled in), so an
+// agent can read, open, edit and raise tickets between chats. Its state lives in state[] like any chat's, because the Tickets tab is built on it.
+const TICKETS_ONLY_CHAT_ID = "tickets-only";
+function ticketsOnlyChat() {
+  return { chatId: TICKETS_ONLY_CHAT_ID, groupName: "", link: "", isTelegram: false };
+}
 function renderChatsInner(chats) {
   chatListEl.innerHTML = "";
 
   if (!chats.length) {
-    chatListEl.innerHTML = `<div class="empty-state">No chat currently open — select a conversation in LiveChat to see it here.</div>`;
-    return;
+    if ((previewMode || DEPARTMENT_TABS_LIVE) && activeMainTab === "tickets") {
+      chats = [ticketsOnlyChat()];
+    } else {
+      chatListEl.innerHTML = `<div class="empty-state">No chat currently open — select a conversation in LiveChat to see it here.</div>`;
+      return;
+    }
   }
 
   // Pass 1: make sure every chat has state before deciding defaults below —
