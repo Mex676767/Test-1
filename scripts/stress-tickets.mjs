@@ -36,7 +36,11 @@ const SEED = Number(args.get("seed") || 1);
 const AGENT_COUNTS = args.has("agents") ? [Number(args.get("agents"))] : [5, 10, 15, 20, 30, 50];
 const MODES = args.has("mode") ? [String(args.get("mode"))] : ["shared", "none"];
 const KEY_LIMIT = Number(args.get("limit") || 120);
+const READ_KEY = args.has("read-key"); // a second key used only for the polling reads (TICKETS_API_KEY_READS)
 const OPEN_SHARE = Number(args.get("open-share") || 0.3); // share of agents with a ticket open in the widget at any time
+const BELL_S = Number(args.get("bell-s") || 15); // seconds between bell polls (TICKET_NOTE_POLL_MS)
+const OPEN_S = Number(args.get("open-s") || 8); // seconds between polls of an open ticket (TICKET_OPEN_POLL_MS)
+const EVERYONE_EVERY = Number(args.get("everyone-every") || 4); // everyone's newest are read on every Nth bell poll
 const CLAIM_EVERY_S = Number(args.get("claim-every") || 180); // one claim per agent per 3 minutes on average
 
 // ---- virtual clock and a small seeded random ------------------------------------------------------------------------------------
@@ -47,7 +51,7 @@ let seed = SEED;
 const random = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
 
 // ---- the fake ticket system ---------------------------------------------------------------------------------------------------
-const stats = { perMinute: new Map(), refused: 0, served: 0 };
+const stats = { perMinute: new Map(), total: new Map(), refused: 0, served: 0 };
 const NOW_ISO = () => new Date(now).toISOString();
 const ticketOf = (n) => ({ id: n, ref: `TK26101900${String(n).padStart(2, "0")}`, fields: { status: "OPEN", member_id: `p${n}` }, raisedBy: { id: 1, name: "A", email: "a@x.com" }, assignees: [], currentDepartment: { id: 3, code: "PYM" }, market: { id: 1, code: "MYR" }, createdAt: NOW_ISO(), updatedAt: NOW_ISO(), commentCount: 2, attachmentCount: 0 });
 const LIST = (size) => Array.from({ length: size }, (_, i) => ticketOf(i + 1));
@@ -55,8 +59,11 @@ let created = 0;
 function ticketSystem(url, options = {}) {
   const parsed = new URL(url);
   const minute = Math.floor(now / 60_000);
-  const used = (stats.perMinute.get(minute) || 0) + 1;
-  stats.perMinute.set(minute, used);
+  const bucket = String(options.headers?.Authorization || ""); // the limit is per key
+  const perKey = `${bucket}|${minute}`;
+  const used = (stats.perMinute.get(perKey) || 0) + 1;
+  stats.perMinute.set(perKey, used);
+  stats.total.set(minute, (stats.total.get(minute) || 0) + 1);
   if (used > KEY_LIMIT) {
     stats.refused += 1;
     const retry = Math.max(1, 60 - Math.floor((now % 60_000) / 1000));
@@ -78,7 +85,7 @@ function ticketSystem(url, options = {}) {
   return json({ ok: false, error: `unexpected ${path}` }, 404);
 }
 
-const ENV = { TICKETS_API_KEY: "k", TICKETS_ON_BEHALF_OF: "1", LIVECHAT_CLIENT_ID: "c1" };
+const ENV = { TICKETS_API_KEY: "k", TICKETS_ON_BEHALF_OF: "1", LIVECHAT_CLIENT_ID: "c1", ...(READ_KEY ? { TICKETS_API_KEY_READS: "k-reads" } : {}) };
 const TOKENS = new Map();
 globalThis.fetch = async (url, options = {}) => {
   url = String(url);
@@ -103,7 +110,7 @@ function makeAgent(index) {
   TOKENS.set(token, { account_id: `uuid-${index}`, email: `agent${index}@x.com`, client_id: "c1" });
   return {
     index, author: { accountKey: "lc1", agentToken: token },
-    pausedUntil: 0, pollRound: 0, nextBell: now + random() * 15_000, nextOpen: now + random() * 8_000, nextClaim: now + random() * CLAIM_EVERY_S * 2 * 1000,
+    pausedUntil: 0, pollRound: 0, nextBell: now + random() * BELL_S * 1000, nextOpen: now + random() * OPEN_S * 1000, nextClaim: now + random() * CLAIM_EVERY_S * 2 * 1000,
     nextConfig: now + random() * 600_000, nextEdit: now + 60_000 + random() * 240_000, nextComment: now + 90_000 + random() * 300_000, hasOpenTicket: random() < OPEN_SHARE,
   };
 }
@@ -117,9 +124,9 @@ const backoff = (agent, response) => {
 async function step(agent, tally) {
   const read = (extra = {}) => call(listHandler, { q: "", fresh: false, author: agent.author, ...extra });
   if (now >= agent.nextBell) {
-    agent.nextBell += 15_000;
+    agent.nextBell += BELL_S * 1000;
     if (now >= agent.pausedUntil) {
-      const everyone = agent.pollRound % 4 === 0;
+      const everyone = agent.pollRound % EVERYONE_EVERY === 0;
       agent.pollRound += 1;
       const results = await Promise.all([read({ mine: true, size: 250, sort: "created" }), everyone ? read() : null]);
       results.filter(Boolean).forEach((r) => backoff(agent, r));
@@ -127,7 +134,7 @@ async function step(agent, tally) {
     }
   }
   if (agent.hasOpenTicket && now >= agent.nextOpen) {
-    agent.nextOpen += 8_000;
+    agent.nextOpen += OPEN_S * 1000;
     if (now >= agent.pausedUntil) { backoff(agent, await call(statusHandler, { ref: "TK2610190001", fresh: false, author: agent.author })); tally.polls += 1; }
   }
   if (now >= agent.nextConfig) { agent.nextConfig += 600_000; backoff(agent, await call(configHandler, { author: agent.author, fresh: false })); }
@@ -153,7 +160,7 @@ async function step(agent, tally) {
 }
 
 async function run(agentCount, mode) {
-  stats.perMinute.clear(); stats.refused = 0; stats.served = 0; created = 0; TOKENS.clear(); seed = SEED;
+  stats.perMinute.clear(); stats.total.clear(); stats.refused = 0; stats.served = 0; created = 0; TOKENS.clear(); seed = SEED;
   now = Date.UTC(2026, 9, 19, 10, 0, 0);
   initLiveChatEnv({ LIVECHAT_PAT: "pat" });
   resetTicketReadCache(); resetTicketRateLimit(); resetTicketConfigCache();
@@ -168,11 +175,12 @@ async function run(agentCount, mode) {
     }
     now += 1000;
   }
-  const minutes = [...stats.perMinute.entries()].sort((a, b) => a[0] - b[0]).map(([, count]) => count);
-  const whole = minutes.slice(0, MINUTES); // minute buckets over the run
+  const minutes = [...stats.total.entries()].sort((a, b) => a[0] - b[0]).map(([, count]) => count);
+  const whole = minutes.slice(0, MINUTES); // minute buckets over the run, all keys together
+  const perKeyPeak = Math.max(...stats.perMinute.values());
   const peak = Math.max(...whole);
   const average = whole.reduce((sum, n) => sum + n, 0) / Math.max(1, whole.length);
-  return { agentCount, mode, peak, average, refused: stats.refused, served: stats.served, ...tally, seconds: (now - start) / 1000 };
+  return { agentCount, mode, peak, perKeyPeak, average, refused: stats.refused, served: stats.served, ...tally, seconds: (now - start) / 1000 };
 }
 
 const rows = [];
@@ -180,10 +188,10 @@ for (const mode of MODES) for (const count of AGENT_COUNTS) rows.push(await run(
 Date.now = realNow;
 
 const pad = (value, width) => String(value).padEnd(width);
-console.log(`Fake ticket system limit: ${KEY_LIMIT} calls a minute for the key. ${MINUTES} virtual minutes per run, ${Math.round(OPEN_SHARE * 100)}% of agents with a ticket open, a claim per agent every ~${CLAIM_EVERY_S} s.\n`);
-console.log([pad("cache", 7), pad("agents", 7), pad("calls/min avg", 14), pad("peak", 6), pad("refused(429)", 13), pad("claims failed", 14), pad("edits failed", 13), "comments failed"].join(""));
+console.log(`Fake ticket system limit: ${KEY_LIMIT} calls a minute PER KEY, bell every ${BELL_S} s, open ticket every ${OPEN_S} s, everyone's newest every ${EVERYONE_EVERY}th bell poll (${READ_KEY ? "two keys: reads on their own key" : "one key for everything"}). ${MINUTES} virtual minutes per run, ${Math.round(OPEN_SHARE * 100)}% of agents with a ticket open, a claim per agent every ~${CLAIM_EVERY_S} s.\n`);
+console.log([pad("cache", 7), pad("agents", 7), pad("calls/min avg", 14), pad("peak", 6), pad("busiest key", 12), pad("refused(429)", 13), pad("claims failed", 14), pad("edits failed", 13), "comments failed"].join(""));
 for (const r of rows) {
-  console.log([pad(r.mode, 7), pad(r.agentCount, 7), pad(r.average.toFixed(0), 14), pad(r.peak, 6), pad(r.refused, 13), pad(`${r.claimsFailed}/${r.claims}`, 14), pad(`${r.editsFailed}/${r.edits}`, 13), `${r.commentsFailed}/${r.comments}`].join(""));
+  console.log([pad(r.mode, 7), pad(r.agentCount, 7), pad(r.average.toFixed(0), 14), pad(r.peak, 6), pad(r.perKeyPeak, 12), pad(r.refused, 13), pad(`${r.claimsFailed}/${r.claims}`, 14), pad(`${r.editsFailed}/${r.edits}`, 13), `${r.commentsFailed}/${r.comments}`].join(""));
 }
 const worst = rows.filter((r) => r.mode === "none");
 const okAgents = worst.filter((r) => r.refused === 0 && r.claimsFailed === 0).map((r) => r.agentCount);

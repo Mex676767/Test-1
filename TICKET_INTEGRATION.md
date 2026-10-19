@@ -180,6 +180,30 @@ If the market cannot be saved on the server (the Default Market column is missin
 the first time they claim; `/agent-market` saves its code on their row (and a second login of the same agent shares it). From then on only an
 admin changes it, by editing that cell in Lark (the admin panel will do it later). Without the column the agent is asked every time.
 
+## Capacity (stress test, 2026-10-19)
+
+`node scripts/stress-tickets.mjs` runs the real Functions against a fake ticket system that enforces the real limit (120 calls a minute **per key**) with
+virtual agents that poll, claim, edit and comment like the widget. Nothing is sent to the real ticket system, LiveChat or Lark. Worst case (no read
+shared between agents; production is somewhere between that and fully shared), one key, bell every 15 s, open ticket every 8 s:
+
+| agents | calls/min | 429s in 6 min | claims failed |
+|---|---|---|---|
+| 5 | 38 | 0 | 0/6 |
+| 10 | 84 | 0 | 0/12 |
+| 15 | 120 | 19 | 1/20 |
+| 20 | 146 | 156 | 8/28 |
+| 30 | 169 | 295 | 25/39 |
+| 50 | 209 | 531 | 57/75 |
+
+So one key carries about 10 agents; beyond that claims, edits and comments start to fail because polling uses the calls they need. Two measures:
+
+1. **A second key for the polling reads**: `TICKETS_API_KEY_READS` (same kind of key and role as `TICKETS_API_KEY`; ask the ticket team for it). List, ticket and
+   roster reads use it, everything that writes uses `TICKETS_API_KEY`; each key has its own limit and its own "busy" pause. Result at 50 agents:
+   claims, edits and comments 0 failed (polling slows down instead). Unset: one key as before.
+2. **Slower polling** (`TICKET_NOTE_POLL_MS`, `TICKET_OPEN_POLL_MS`, and how often everyone's newest are read in `pollTicketNotifications`): with two keys,
+   bell 30 s / open ticket 15 s / everyone's every 8th poll keeps the reads key under the limit up to about 25 agents; 45 s / 20 s up to about 35.
+   Try other values with `--bell-s`, `--open-s`, `--everyone-every`, `--read-key`, `--agents`, `--minutes`, `--mode shared|none`.
+
 ## Rollout checklist (2026-10-19)
 
 Things the installed widget depends on, all outside the code: the Lark column **Default Market** in "Livechat App Agent Logins"; an active ticket-system
