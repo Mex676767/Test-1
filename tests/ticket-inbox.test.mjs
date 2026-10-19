@@ -26,12 +26,12 @@ function widget() {
     renderTicketBell: () => '',
     renderTicketAccountLine: () => '',
     renderTicketAccountGate: () => '',
-    TICKET_FILTER_ME: '@me', ticketIsMine: () => false,
+    TICKET_FILTER_ME: '@me', ticketIsMine: () => false, ticketAgentRoster: { agents: [], loading: false }, ticketBulkStatusOptions: () => [],
     ticketBulkFor: () => ({ selected: [], visibleRefs: [], running: false, summary: '', status: '' }), renderTicketBulkBar: () => '',
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },
   });
-  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'ticketActiveList', 'fetchTicketList', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'ticketReadAuthor', 'ticketReadFailure', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
+  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'ticketScopedWho', 'ticketMatchesAgent', 'ticketActiveList', 'fetchTicketList', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'ticketReadAuthor', 'ticketReadFailure', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
   context.renderTicketSlot = () => {};
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
@@ -90,9 +90,36 @@ test('the Agent filter has "Me" after "All agents": picking it lists only the ti
   ] });
   w.state.chat.ticketFiltersOpen = true;
   w.state.chat.ticketExplorerAgent = '@me';
+  const choices = [];
+  w.context.renderTicketChoice = (chat, field, value, options) => { choices.push({ field, value, options }); return `<choice ${field}>`; };
   const html = w.run('renderTicketExplorer("chat")');
-  assert.match(html, /<option value="all">All agents<\/option><option value="@me" selected>Me<\/option>/);
+  const agent = choices.find(choice => choice.field === 'filter:ticketExplorerAgent');
+  assert.equal(agent.value, '@me', 'the filter is the custom dropdown and shows Me as picked');
+  assert.deepEqual(JSON.parse(JSON.stringify(agent.options.slice(0, 2))), [{ value: 'all', label: 'All agents' }, { value: '@me', label: 'Me' }]);
+  assert.deepEqual(choices.map(choice => choice.field), ['filter:ticketExplorerAgent', 'filter:ticketExplorerStatus', 'filter:ticketExplorerDepartment', 'filter:ticketExplorerMarket'], 'all four filters are custom dropdowns');
+  assert.doesNotMatch(html, /<select/);
   assert.match(html, /data-ref="TK3"/);
+  assert.doesNotMatch(html, /data-ref="TK1"/);
+});
+
+test('the Agent filter lists every agent of the roster by name (picked by id) once it is loaded, and a roster agent filters the loaded tickets by id meanwhile', () => {
+  const w = widget();
+  w.context.ticketBulkFor = () => ({ selected: [], visibleRefs: [], running: false, summary: '', status: '' });
+  w.context.renderTicketBulkBar = () => '';
+  w.context.ticketAgentRoster = { agents: [{ id: 44, name: 'Ann' }, { id: 31, name: 'Bob' }, { id: 7, name: 'Abby' }], loading: false };
+  w.context.ticketSearchResultsByChat.set('chat', { mode: 'all', total: 2, tickets: [
+    { ref: 'TK1', raisedBy: { id: 31, name: 'Bob' }, assignees: [], fields: { status: 'OPEN' } },
+    { ref: 'TK2', raisedBy: { id: 9, name: 'Zed' }, assignees: [{ id: 44, name: 'Ann' }], fields: { status: 'OPEN' } },
+  ] });
+  w.state.chat.ticketFiltersOpen = true;
+  w.state.chat.ticketExplorerAgent = '#44';
+  const choices = [];
+  w.context.renderTicketChoice = (chat, field, value, options) => { choices.push({ field, value, options }); return ''; };
+  const html = w.run('renderTicketExplorer("chat")');
+  const agent = choices.find(choice => choice.field === 'filter:ticketExplorerAgent');
+  assert.deepEqual([...agent.options.map(option => option.label)], ['All agents', 'Me', 'Abby', 'Ann', 'Bob'], 'sorted by name, including people on no loaded ticket');
+  assert.deepEqual([...agent.options.map(option => option.value)], ['all', '@me', '#7', '#44', '#31']);
+  assert.match(html, /data-ref="TK2"/);
   assert.doesNotMatch(html, /data-ref="TK1"/);
 });
 

@@ -106,14 +106,14 @@ test('Me filter: tickets the agent raised or is assigned to, by their ticket acc
 });
 
 test('Me filter: "Me" is the first choice after All agents, and picking it lists only my tickets', () => {
-  assert.ok(app.includes('<option value="all">All agents</option><option value="${TICKET_FILTER_ME}"'));
-  assert.ok(app.includes('s.ticketExplorerAgent === TICKET_FILTER_ME ? ticketIsMine(ticket)'));
+  assert.ok(app.includes('filterChoice("ticketExplorerAgent", "All agents", agents, agentLabel, [{ value: TICKET_FILTER_ME, label: "Me" }])'));
+  assert.ok(app.includes('if (agent === TICKET_FILTER_ME) return ticketIsMine(ticket);'));
 });
 
 // ---- bulk status edit -----------------------------------------------------------------------------------------
 const BULK_SOURCE = [
   line(/const TICKET_BULK_MAX = \d+;/), 'const ticketBulkByChat = new Map();',
-  ...['ticketActiveList', 'ticketBulkFor', 'ticketBulkStatusOptions', 'ticketBulkToggle', 'ticketBulkSelectAll', 'ticketNoteSeen', 'applyBulkStatus', 'renderTicketBulkBar'].map(fn),
+  ...['ticketScopedWho', 'ticketActiveList', 'ticketBulkFor', 'ticketBulkStatusOptions', 'ticketBulkToggle', 'ticketBulkSelectAll', 'ticketNoteSeen', 'applyBulkStatus', 'renderTicketBulkBar'].map(fn),
 ].join('\n');
 
 const row = (ref, status = 'OPEN') => ({ ref, fields: { status }, commentCount: 0, assignees: [], raisedBy: null });
@@ -127,6 +127,7 @@ function bulkWorld({ tickets, reply } = {}) {
     ticketFieldFor: () => ({ key: 'status' }),
     ticketFieldOptions: () => [{ value: 'OPEN', label: 'Open' }, { value: 'IN_PROGRESS', label: 'PYM PROCESSING' }, { value: 'SOLVED', label: 'CS TEAM SOLVED' }],
     ticketChoiceDisplayLabel: (_key, value) => ({ IN_PROGRESS: 'PYM PROCESSING', OPEN: 'Open', SOLVED: 'CS TEAM SOLVED' })[value] || value,
+    renderTicketChoice: (_chat, field, value, options, config) => `<choice field="${field}" value="${value}" placeholder="${config.placeholder}" options="${options.map((option) => option.value + ':' + option.label).join(',')}">`,
     ticketAuthor: () => ({ accountKey: 'lc1', agentToken: 't' }), noteTicketAccountUsed: () => { calls.used += 1; },
     renderTicketSlot: () => { calls.renders += 1; },
     ticketNoteLoad: () => ({ startedAt: 1, seen: {} }), ticketNoteSnapshot: (ticket) => ({ ref: ticket.ref }), ticketNoteSave: () => { calls.seen.push('saved'); },
@@ -162,11 +163,12 @@ test('bulk: the bar offers Select all always, and the status and the Update butt
   const w = bulkWorld();
   const empty = w.run('renderTicketBulkBar("chat", [{ ref: "TK1" }, { ref: "TK2" }])');
   assert.match(empty, /data-action="bulkSelectAll"[^>]*>Select all</);
-  assert.doesNotMatch(empty, /ticket-bulk-status/);
+  assert.doesNotMatch(empty, /bulk:status/);
   w.run('ticketBulkToggle("chat", "TK1", true)');
   let html = w.run('renderTicketBulkBar("chat", [{ ref: "TK1" }, { ref: "TK2" }])');
   assert.match(html, /1 selected/);
-  assert.match(html, /<option value="IN_PROGRESS" >PYM PROCESSING<\/option>/, 'any status the ticket system offers');
+  assert.match(html, /<choice field="bulk:status" value="" placeholder="Set status to…" options="OPEN:Open,IN_PROGRESS:PYM PROCESSING,SOLVED:CS TEAM SOLVED">/, 'the custom dropdown, with any status the ticket system offers');
+  assert.doesNotMatch(html, /<select/);
   assert.match(html, /data-action="bulkApplyStatus"[^>]*disabled/, 'nothing happens until a status is chosen');
   w.run('ticketBulkFor("chat").status = "IN_PROGRESS"; ticketBulkToggle("chat", "TK2", true)');
   html = w.run('renderTicketBulkBar("chat", [{ ref: "TK1" }, { ref: "TK2" }])');
@@ -234,7 +236,7 @@ test('bulk: the list rows have tick boxes, and the page wires the ticks, the sta
   assert.ok(app.includes('class="ticket-bulk-tick"'));
   assert.ok(app.includes('data-ref="${escapeHtml(ticket.ref)}" ${ticketBulkFor(chatId).selected.includes(ticket.ref) ? "checked" : ""}'));
   assert.ok(app.includes('ticketBulkToggle(bulkTick.dataset.chat, bulkTick.dataset.ref, bulkTick.checked)'));
-  assert.ok(app.includes('ticketBulkFor(bulkStatus.dataset.chat).status = bulkStatus.value'));
+  assert.ok(app.includes('ticketBulkFor(chatId).status = btn.dataset.value || ""'));
   assert.ok(app.includes('btn.dataset.action === "bulkSelectAll"') && app.includes('btn.dataset.action === "bulkApplyStatus"'));
 });
 
@@ -245,17 +247,17 @@ function meWorld({ agent = '@me', author = true, mineFails = false } = {}) {
   const context = vm.createContext({
     Map, Promise, String, Object, Error,
     state: { chat: { ticketExplorerAgent: agent } }, ticketSearchResultsByChat: results,
-    TICKET_FILTER_ME: '@me', ticketReadAuthor: () => (author ? { accountKey: 'lc1', agentToken: 't' } : undefined),
+    TICKET_FILTER_ME: '@me', renderTicketSlot: () => { calls.push({ rendered: true }); }, saveState: () => {}, refreshTicketInbox: async (...args) => { calls.push({ refresh: args }); }, ticketReadAuthor: () => (author ? { accountKey: 'lc1', agentToken: 't' } : undefined),
     ticketReadFailure: (_id, data, fallback) => new Error(data.error || fallback),
     fetch: async (url, options) => {
       const body = options?.body ? JSON.parse(options.body) : null;
       calls.push({ url, body });
-      const mine = body ? body.mine === true : String(url).includes('mine=1');
+      const mine = body ? body.mine === true || body.agent !== undefined : /mine=1|agent=/.test(String(url));
       if (mine && mineFails) return { json: async () => ({ ok: false, error: 'mine broke' }) };
       return { json: async () => ({ ok: true, total: mine ? 216 : 500, tickets: [{ ref: mine ? 'TK-MINE' : 'TK-ALL' }] }) };
     },
   });
-  vm.runInContext(['fetchTicketList', 'ticketActiveList', 'searchTickets'].map(fn).join('\n'), context);
+  vm.runInContext(['fetchTicketList', 'ticketScopedWho', 'ticketActiveList', 'searchTickets', 'applyTicketFilter'].map(fn).join('\n'), context);
   return { calls, results, run: (code) => vm.runInContext(code, context) };
 }
 
@@ -263,6 +265,7 @@ test('Me: the list is read twice at once, everyone\'s newest and mine as the tic
   const w = meWorld();
   await w.run('searchTickets("chat", "hong", "search", { fresh: true })');
   assert.deepEqual(w.calls.map((call) => [call.url, call.body.mine === true, call.body.q]), [['/ticket-list', false, 'hong'], ['/ticket-list', true, 'hong']]);
+  assert.equal(plain(w.results.get('chat')).mineFor, '@me');
   const entry = plain(w.results.get('chat'));
   assert.deepEqual([entry.tickets[0].ref, entry.mine.tickets[0].ref, entry.mine.total, entry.query], ['TK-ALL', 'TK-MINE', 216, 'hong']);
   assert.equal(w.run('ticketActiveList("chat")').tickets[0].ref, 'TK-MINE');
@@ -288,18 +291,88 @@ test('Me: if my own tickets cannot be read the search fails with the reason inst
 });
 
 test('Me: the explorer lists what the ticket system says is mine without filtering it again, and picking Me the first time reads the list again', () => {
-  assert.ok(app.includes('const serverMine = s.ticketExplorerAgent === TICKET_FILTER_ME && Boolean(result?.mine);'));
-  assert.ok(app.includes('|| serverMine || (s.ticketExplorerAgent === TICKET_FILTER_ME ? ticketIsMine(ticket)'));
-  assert.ok(app.includes('picked && loaded && !loaded.loading && !loaded.mine && !loaded.error'));
+  assert.ok(app.includes('const serverMine = Boolean(ticketScopedWho(s.ticketExplorerAgent) && result?.mine && result.mineFor === s.ticketExplorerAgent);'));
+  assert.ok(app.includes('(serverMine || ticketMatchesAgent(ticket, s.ticketExplorerAgent))'));
+  assert.ok(app.includes('loaded.mineFor !== value'));
   assert.ok(app.includes('const result = ticketActiveList(chatId);'), 'the bulk update works on the list that is shown');
 });
 
 test('bulk with Me picked: the tickets of the "mine" list are the ones changed, and a ticket in both lists is right in both', async () => {
   const w = bulkWorld();
   w.results.get('chat').mine = { tickets: [row('TK1'), row('TK9')], total: 2 };
+  w.results.get('chat').mineFor = '@me';
   w.run('state.chat.ticketExplorerAgent = "@me"; ticketBulkFor("chat").selected = ["TK1", "TK9"]; ticketBulkFor("chat").status = "IN_PROGRESS"');
   await w.run('applyBulkStatus("chat")');
   assert.deepEqual(w.calls.fetches.map((call) => call.body.ref), ['TK1', 'TK9'], 'TK9 is only in the mine list');
   assert.equal(w.results.get('chat').tickets[0].fields.status, 'IN_PROGRESS', 'everyone\'s list is kept right too');
   assert.deepEqual(w.results.get('chat').mine.tickets.map((ticket) => ticket.fields.status), ['IN_PROGRESS', 'IN_PROGRESS']);
+});
+
+test('an agent picked from the roster is asked of the ticket system by id; the list is read again the first time, and the filter value is the id', async () => {
+  const w = meWorld({ agent: '#44' });
+  await w.run('searchTickets("chat", "", "all", { fresh: true })');
+  const sent = w.calls.filter((call) => call.url).map((call) => call.body);
+  assert.deepEqual(sent.map((body) => body.agent ?? null), [null, '44']);
+  assert.equal(plain(w.results.get('chat')).mineFor, '#44');
+  assert.equal(w.run('ticketActiveList("chat")').tickets[0].ref, 'TK-MINE');
+  w.run('state.chat.ticketExplorerAgent = "#45"');
+  assert.equal(w.run('ticketActiveList("chat")').tickets[0].ref, 'TK-ALL', 'another agent is not shown the list read for #44');
+  assert.deepEqual([w.run('ticketScopedWho("@me")'), w.run('ticketScopedWho("#7")'), w.run('ticketScopedWho("Ann")'), w.run('ticketScopedWho("all")')], ['me', '7', '', '']);
+});
+
+test('picking a filter in the custom dropdown applies it; a person is read again only when that list is not loaded yet', () => {
+  const w = meWorld({ agent: 'all' });
+  w.results.set('chat', { loading: false, tickets: [], mode: 'all', query: 'abc' });
+  w.run('applyTicketFilter("chat", "ticketExplorerAgent", "@me")');
+  assert.equal(w.run('state.chat.ticketExplorerAgent'), '@me');
+  assert.deepEqual(JSON.parse(JSON.stringify(w.calls.find((call) => call.refresh).refresh)), ['chat', 'abc', 'all', { fresh: false }]);
+  w.calls.length = 0;
+  w.results.set('chat', { loading: false, tickets: [], mine: { tickets: [] }, mineFor: '@me', mode: 'all' });
+  w.run('applyTicketFilter("chat", "ticketExplorerAgent", "@me")');
+  assert.equal(w.calls.some((call) => call.refresh), false, 'already loaded');
+  w.run('applyTicketFilter("chat", "ticketExplorerStatus", "OPEN")');
+  assert.equal(w.run('state.chat.ticketExplorerStatus'), 'OPEN');
+  assert.equal(w.calls.some((call) => call.refresh), false, 'a status is filtered on the loaded tickets');
+  w.run('applyTicketFilter("chat", "nope", "x")');
+  assert.equal(w.run('state.chat.nope'), undefined, 'only the four filters can be set');
+});
+
+test('the filters and the bulk status are custom dropdowns wired through the shared choice handler', () => {
+  assert.ok(app.includes('btn.dataset.field.startsWith("filter:")') && app.includes('applyTicketFilter(chatId, btn.dataset.field.slice(7), btn.dataset.value || "all")'));
+  assert.ok(app.includes('btn.dataset.field === "bulk:status"'));
+  assert.doesNotMatch(app, /<select class="input ticket-explorer-filter"/);
+  assert.doesNotMatch(app, /<select class="input ticket-bulk-status"/);
+  assert.ok(app.includes('loadTicketAgentRoster(chatId); // every agent for the Agent filter'));
+});
+
+test('status, department and market offer every choice, not only those on the loaded tickets; a left-over filter value that is no longer offered is not applied', () => {
+  assert.ok(app.includes('unique([...ticketBulkStatusOptions().map(option => String(option.value)), ...tickets.map(ticketStatusValue)])'));
+  assert.ok(app.includes('unique([...ticketDepartments.map(item => item.name || item.code)'));
+  assert.ok(app.includes('unique([...ticketMarkets.map(item => item.label || item.code)'));
+  assert.ok(app.includes('const effective = (key, values) =>'));
+});
+
+// ---- the agent roster ------------------------------------------------------------------------------------------
+test('roster: loaded once when the filters open, kept ten minutes, and a failure leaves the filter working', async () => {
+  const source = [line(/let ticketAgentRoster = [^;]+;/), line(/const TICKET_ROSTER_MAX_AGE_MS = [^;]+;/), fn('loadTicketAgentRoster')].join('\n');
+  let calls = 0;
+  const make = (reply) => {
+    const context = vm.createContext({ Date, Object, Array, state: { chat: {} }, renderTicketSlot: () => {}, ticketReadAuthor: () => ({ accountKey: 'lc1', agentToken: 't' }), ticketReadFailure: (_id, data) => new Error(data.error),
+      fetch: async (url) => { calls += 1; return { json: async () => reply, url }; } });
+    vm.runInContext(source, context);
+    return { run: (code) => vm.runInContext(code, context) };
+  };
+  const ok = make({ ok: true, agents: [{ id: 1, name: 'Ann' }] });
+  await ok.run('loadTicketAgentRoster("chat")');
+  assert.deepEqual(plain(ok.run('ticketAgentRoster.agents')), [{ id: 1, name: 'Ann' }]);
+  await ok.run('loadTicketAgentRoster("chat")');
+  assert.equal(calls, 1, 'not asked again within ten minutes');
+  ok.run('ticketAgentRoster.at = Date.now() - 11 * 60_000');
+  await ok.run('loadTicketAgentRoster("chat")');
+  assert.equal(calls, 2);
+  const bad = make({ ok: false, error: 'busy' });
+  await bad.run('loadTicketAgentRoster("chat")');
+  assert.equal(bad.run('ticketAgentRoster.error'), 'busy');
+  assert.equal(bad.run('ticketAgentRoster.loading'), false);
+  assert.deepEqual(plain(bad.run('ticketAgentRoster.agents')), []);
 });
