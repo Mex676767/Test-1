@@ -21,7 +21,7 @@ const iso = (minutes) => new Date(T0 + minutes * 60_000).toISOString();
 
 function world({ fetchPlan, sound, preview = true, account = { status: 'found', email: ME.email }, checkResult } = {}) {
   const storage = new Map();
-  const calls = { fetches: [], chimes: 0, repaints: 0, checks: [] };
+  const calls = { fetches: [], chimes: 0, repaints: 0, checks: [], toasts: [] };
   const context = vm.createContext({
     Date, JSON, Number, String, Boolean, Array, Object, Set, Math, Promise,
     currentLiveChatAccount: 'lc1',
@@ -36,6 +36,7 @@ function world({ fetchPlan, sound, preview = true, account = { status: 'found', 
     ticketUpdatedLabel: () => '5 min ago',
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
     repaintTicketBell: () => { calls.repaints += 1; },
+    showChatToast: (text, kind) => { calls.toasts.push({ text, kind }); },
     ticketNoteChime: () => { calls.chimes += 1; },
     fetch: async (url, options) => {
       const body = JSON.parse(options.body);
@@ -308,4 +309,30 @@ test('open tickets are polled every 8 s and notifications every 15 s, each waits
   assert.ok(app.includes('document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketUpdates(); });'));
   assert.match(fn('pollTicketUpdates'), /Date\.now\(\) < ticketPollPausedUntil/);
   assert.match(fn('pollTicketUpdates'), /ticketPollBackoff\(err\)/);
+});
+
+test('news is shown as a message on whatever tab the agent is on, with the ticket, who and what; several arriving at once say how many', async () => {
+  const list = { tickets: [] };
+  const w = world({ fetchPlan: (url, body) => (url === '/ticket-list' ? { ok: true, tickets: list.tickets } : { ok: true, ticket: { ...list.tickets.find((t) => t.ref === body.ref), comments: [comment(1, OTHER, 30, { body: 'please check' })] } }) });
+  const mine = (n, extra = {}) => ticket(`TK261019000${n}`, { raisedBy: ME, updatedAt: iso(0), ...extra });
+  list.tickets = [mine(1), mine(2)];
+  await w.run('pollTicketNotifications()');
+  assert.equal(w.calls.toasts.length, 0, 'the first look says nothing');
+  list.tickets = [mine(1, { updatedAt: iso(20), commentCount: 1 })];
+  await w.run('pollTicketNotifications()');
+  assert.equal(w.calls.toasts.length, 1);
+  assert.match(w.calls.toasts[0].text, /^TK2610190001 · Ashton: please check$/);
+  assert.equal(w.calls.chimes, 1);
+  list.tickets = [mine(1), mine(2, { updatedAt: iso(40), commentCount: 1 }), mine(3, { updatedAt: iso(41), commentCount: 1 })];
+  await w.run('pollTicketNotifications()');
+  assert.match(w.calls.toasts.at(-1).text, /^2 new ticket notifications · /);
+  const quiet = world({ sound: false, fetchPlan: () => ({ ok: true, tickets: [] }) });
+  await quiet.run('pollTicketNotifications()');
+  assert.equal(quiet.calls.toasts.length, 0);
+});
+
+test('a ticket opened earlier and left behind in the list view is not read in the background, so its news is not marked read before the bell shows it', () => {
+  const poll = fn('pollTicketUpdates');
+  assert.match(poll, /ticketWorkspaceView\(state\[chatId\]\) !== "detail"\) continue;/);
+  assert.ok(poll.indexOf('!== "detail") continue;') < poll.indexOf('loadTicketStatus('), 'the view is checked before the ticket is read');
 });

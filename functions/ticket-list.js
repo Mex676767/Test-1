@@ -65,8 +65,9 @@ export async function handler(event) {
       if (conditions.length > 1) query.set("match", match);
       return ticketGet(event.env, withOnBehalf(`/tickets?${query}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
     };
-    if (who && narrowing.length) {
-      // "Raised by or assigned to" is an OR and the narrowing an AND, which one request cannot say: read each side with the narrowing and merge.
+    if (who && (narrowing.length || q)) {
+      // "Raised by or assigned to" is an OR and the narrowing (and the search text) an AND, which one request cannot say: read each side with
+      // them and merge. With one condition and a search the ticket system ANDs them, as its own page does (createdBy|is|me together with q).
       const raised = await read([`createdBy|is|${who}`, ...narrowing]);
       let assigned = null;
       try {

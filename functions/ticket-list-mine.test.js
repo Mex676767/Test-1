@@ -43,10 +43,10 @@ test("mine keeps the search text, and without mine nothing about 'me' is asked",
   const net = network();
   try {
     await list({ author, mine: true, q: "hong126" });
-    assert.equal(net.urls[0].searchParams.get("q"), "hong126");
+    assert.ok(net.urls.length === 2 && net.urls.every((url) => url.searchParams.get("q") === "hong126"), "each side is read with the search text");
     await list({ author });
-    assert.deepEqual(net.urls[1].searchParams.getAll("c"), []);
-    assert.equal(net.urls[1].searchParams.get("match"), null);
+    assert.deepEqual(net.urls.at(-1).searchParams.getAll("c"), []);
+    assert.equal(net.urls.at(-1).searchParams.get("match"), null);
   } finally { net.restore(); }
 });
 
