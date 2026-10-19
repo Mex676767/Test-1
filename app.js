@@ -5083,6 +5083,11 @@ function hideTicketAccountLineLater() {
 async function checkTicketAccount(chatId, { force = false, quiet = false } = {}) {
   const s = state[chatId];
   if (!s || ticketAccount.checking) return;
+  // The background check (quiet) found no account and showed nothing; the first time the agent is on the Tickets tab they are asked for their email.
+  if (!quiet && !force && (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") && !ticketAccount.asked) {
+    ticketAccount.asked = true;
+    queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
+  }
   if (!force && ticketAccount.status !== "unknown" && Date.now() - ticketAccount.at < TICKET_ACCOUNT_RECHECK_MS) return;
   const author = ticketAuthor(s);
   if (!author) return;
