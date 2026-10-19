@@ -336,3 +336,26 @@ test('a ticket opened earlier and left behind in the list view is not read in th
   assert.match(poll, /ticketWorkspaceView\(state\[chatId\]\) !== "detail"\) continue;/);
   assert.ok(poll.indexOf('!== "detail") continue;') < poll.indexOf('loadTicketStatus('), 'the view is checked before the ticket is read');
 });
+
+test('a comment is noticed by the comment count even though the ticket\'s updatedAt did not move (the ticket system does not bump it for a comment)', async () => {
+  const list = { mine: [] };
+  const w = world({ fetchPlan: (url, body) => (url === '/ticket-list' ? { ok: true, tickets: body.mine ? list.mine : [] } : { ok: true, ticket: { ...list.mine[0], comments: [comment(5, OTHER, 30, { body: 'moshi moshi' })] } }) });
+  const mineTicket = (extra = {}) => ticket('TK2610170260', { raisedBy: ME, updatedAt: iso(-2000), ...extra });
+  list.mine = [mineTicket({ commentCount: 5 })];
+  await w.run('pollTicketNotifications()');
+  list.mine = [mineTicket({ commentCount: 6 })]; // updatedAt unchanged
+  await w.run('pollTicketNotifications()');
+  assert.equal(items(w).length, 1);
+  assert.match(w.calls.toasts.at(-1).text, /TK2610170260 · Ashton: moshi moshi/);
+  assert.equal(w.calls.chimes, 1);
+  await w.run('pollTicketNotifications()');
+  assert.equal(items(w).length, 1, 'once');
+});
+
+test('the poll reads all of my tickets (up to 250, by creation date), not the 100 most recently updated, which bulk changes can fill with other tickets', async () => {
+  const w = world({ fetchPlan: () => ({ ok: true, tickets: [] }) });
+  await w.run('pollTicketNotifications()');
+  const mine = w.calls.fetches.find((f) => f.body.mine === true);
+  assert.deepEqual([mine.body.size, mine.body.sort], [250, 'created']);
+  assert.equal(w.calls.fetches.find((f) => f.body.mine !== true).body.size, undefined, 'everyone\'s newest stay the 100 most recently updated');
+});

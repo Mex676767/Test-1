@@ -119,6 +119,12 @@ roughly ten agents working at once reach the limit. When the ticket system answe
 lookups show "The ticket system is busy". If that happens with more agents, raise the two intervals (or ask the ticket team for a higher limit).
 Notifications use the ticket system's own "raised by or assigned to me" list, so a ticket counts as the agent's whatever email it carries.
 
+**A comment does not move `updatedAt`.** Checked on a live ticket: `updatedAt` stayed on the day it was raised while comments arrived days later, and
+the ticket system holds thousands of tickets (13,802 when checked) of which a list returns the 100 most recently updated. So the 100 newest cannot
+show a comment: bulk status changes fill them with other tickets. Notifications therefore (1) detect a comment by the ticket's comment count, not
+`updatedAt`, and (2) read the agent's own tickets as up to 250 by creation date (`/ticket-list` with `mine`, `size: 250`, `sort: "created"`), one
+call per poll. A mention on someone else's ticket is only seen while that ticket is among the 100 most recently updated.
+
 **Notifications run on every tab.** The bell is polled (and 8 s after the page opens) while the widget is visible. The poll used to
 need the Tickets tab to have been opened once, because only that checked the ticket account; it now checks the account quietly itself (no popup).
 Settings → Ticket account says whether notifications are being watched ("watching N tickets, last checked …") or why not (account missing,

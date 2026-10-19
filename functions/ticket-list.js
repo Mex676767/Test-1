@@ -55,7 +55,11 @@ export async function handler(event) {
   try {
     reading = await readingAs(event.env, input.author);
     if (reading.response) return reading.response;
-    const params = new URLSearchParams({ pageSize: "100", sort: "updatedAt:desc" });
+    // size 250 and sort=created are for the notification poll: a new comment does not move a ticket's updatedAt, so the 100 most recently updated
+    // tickets can miss the one a comment came in on; the agent's tickets by creation date (up to 250) hold every ticket they are waiting on.
+    const size = pick("size") === "250" ? 250 : 100;
+    const orderKey = pick("sort") === "created" ? "createdAt" : "updatedAt";
+    const params = new URLSearchParams({ pageSize: String(size), sort: pick("sort") === "created" ? "createdAt:desc" : "updatedAt:desc" });
     if (q) params.set("q", q);
     let data;
     // One read of the list with these conditions; the conditions are combined with "all" unless a caller asks for "any".
@@ -77,7 +81,7 @@ export async function handler(event) {
       }
       const byRef = new Map();
       for (const ticket of [...(raised.tickets || []), ...(assigned?.tickets || [])]) if (!byRef.has(ticket.ref)) byRef.set(ticket.ref, ticket);
-      const merged = [...byRef.values()].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).slice(0, 100);
+      const merged = [...byRef.values()].sort((a, b) => String(b[orderKey] || "").localeCompare(String(a[orderKey] || ""))).slice(0, size);
       data = { total: Math.max(Number(raised.total || 0), Number(assigned?.total || 0), merged.length), tickets: merged };
     } else if (who) {
       const raisedOrAssigned = new URLSearchParams(params);

@@ -120,3 +120,22 @@ test("a search with a person is read for each side separately, so the search nar
     assert.deepEqual(JSON.parse(result.body).tickets.map((item) => item.ref), ["TK2610170260"]);
   } finally { net.restore(); }
 });
+
+test("size 250 and sort by creation date are asked of the ticket system (for the notification poll); anything else is the 100 most recently updated", async () => {
+  const net = network();
+  try {
+    await list({ mine: true, size: "250", sort: "created" });
+    assert.deepEqual([net.urls[0].searchParams.get("pageSize"), net.urls[0].searchParams.get("sort")], ["250", "createdAt:desc"]);
+    await list({ size: "5000", sort: "nope" });
+    assert.deepEqual([net.urls.at(-1).searchParams.get("pageSize"), net.urls.at(-1).searchParams.get("sort")], ["100", "updatedAt:desc"]);
+  } finally { net.restore(); }
+});
+
+test("the two sides of my tickets are merged by the sort that was asked, up to the size asked", async () => {
+  const mk = (ref, createdAt) => ({ ref, createdAt, updatedAt: "2026-10-19T10:00:00.000Z", fields: {} });
+  const net = network((url) => reply({ ok: true, total: 3, tickets: conditions(url)[0].startsWith("createdBy") ? [mk("A", "2026-10-03T00:00:00.000Z"), mk("B", "2026-10-01T00:00:00.000Z")] : [mk("C", "2026-10-02T00:00:00.000Z")] }));
+  try {
+    const result = await list({ mine: true, size: "250", sort: "created", q: "x" });
+    assert.deepEqual(JSON.parse(result.body).tickets.map((item) => item.ref), ["A", "C", "B"], "newest created first");
+  } finally { net.restore(); }
+});
