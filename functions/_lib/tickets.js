@@ -3,10 +3,21 @@ const DEFAULT_BASE_URL = "https://tickets.96ghq.com/api/v1";
 // reads: the key for the polling reads (ticket list, one ticket, the agent roster). TICKETS_API_KEY_READS, when set, is a second key of the same kind
 // used only for those, because the ticket system's limit (120 calls a minute) is per key: with reads on their own key, agents polling for news can
 // never use up the calls a claim, an edit or a comment needs. Unset: everything uses TICKETS_API_KEY as before.
-// TICKETS_API_KEY_READS may hold several keys separated by commas: the agents are spread over them by a stable hash of their email (one agent
-// always uses the same key, so their reads stay cached together), so every key carries a share of the polling and the total limit is the sum.
+// The read keys: TICKETS_API_KEY_READS (one key, or several separated by commas) and any numbered variables TICKETS_API_KEY_READS_1, _2 ... or
+// TICKETS_API_KEY1, TICKETS_API_KEY2 ... (TICKETS_API_KEY itself, without a number, is the key for everything that writes and is never one of them).
+// The agents are spread over them by a stable hash of their email (one agent always uses the same key, so their reads stay cached together), so
+// every key carries a share of the polling and the total limit is the sum. Numbered ones are taken in numeric order, so the spread is stable.
+export function readKeys(env = {}) {
+  const numbered = Object.keys(env)
+    .map((name) => ({ name, match: /^TICKETS_API_KEY(?:_READS_?)?(\d+)$/.exec(name) }))
+    .filter(({ match }) => match)
+    .sort((a, b) => Number(a.match[1]) - Number(b.match[1]) || a.name.localeCompare(b.name))
+    .map(({ name }) => String(env[name] || "").trim());
+  const listed = String(env.TICKETS_API_KEY_READS || "").split(",").map((key) => key.trim());
+  return [...new Set([...listed, ...numbered].filter(Boolean))];
+}
 function readKeyFor(env, path = "") {
-  const keys = String(env.TICKETS_API_KEY_READS || "").split(",").map((key) => key.trim()).filter(Boolean);
+  const keys = readKeys(env);
   if (!keys.length) return "";
   if (keys.length === 1) return keys[0];
   const who = new URLSearchParams(String(path).split("?")[1] || "").get("onBehalfOf") || "";

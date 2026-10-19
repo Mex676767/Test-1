@@ -107,3 +107,22 @@ test("catalog and account-check reads use the read keys too, so they never take 
   assert.equal((config.match(/\{ reads: true \}/g) || []).length, 5);
   assert.match(account, /\/markets\?onBehalfOf=\$\{encodeURIComponent\(email\)\}`, \{ reads: true \}/);
 });
+
+test("numbered variables are read keys too: TICKETS_API_KEY1..5 and TICKETS_API_KEY_READS_1..5; the un-numbered TICKETS_API_KEY stays the writing key", async () => {
+  const { readKeys } = await import("./_lib/tickets.js");
+  const env = { TICKETS_API_KEY: "main", TICKETS_API_KEY2: "b", TICKETS_API_KEY1: "a", TICKETS_API_KEY10: "j", TICKETS_API_KEY_READS_3: "c", TICKETS_API_KEY_READS: "x, y", OTHER_KEY1: "no", TICKETS_API_KEYS: "no" };
+  assert.deepEqual(readKeys(env), ["x", "y", "a", "b", "c", "j"], "the comma list first, then the numbered ones in numeric order, never the main key");
+  assert.deepEqual(readKeys({ TICKETS_API_KEY: "main" }), []);
+  assert.deepEqual(readKeys({ TICKETS_API_KEY1: "a", TICKETS_API_KEY_READS: "a" }), ["a"], "a key given twice counts once");
+  assert.deepEqual(readKeys({ TICKETS_API_KEY1: "  ", TICKETS_API_KEY2: "" }), [], "empty variables are ignored");
+  reset();
+  const net = network();
+  try {
+    const numbered = { ...base, TICKETS_API_KEY1: "n1", TICKETS_API_KEY2: "n2" };
+    const used = new Set();
+    for (let i = 0; i < 30; i += 1) { resetTicketReadCache(); const before = net.calls.length; await ticketGet(numbered, `/tickets?onBehalfOf=agent${i}%40x.com`); used.add(net.calls[before].key); }
+    assert.deepEqual([...used].sort(), ["n1", "n2"], "reads are spread over the numbered keys");
+    await ticketRequest(numbered, "/tickets", { method: "POST", body: "{}" });
+    assert.equal(net.calls.at(-1).key, "key-main", "writes use TICKETS_API_KEY");
+  } finally { net.restore(); }
+});
