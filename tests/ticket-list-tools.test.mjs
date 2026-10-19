@@ -11,9 +11,10 @@ const escapeHtml = (value) => String(value ?? '').replaceAll('&', '&amp;').repla
 
 // ---- the ticket account line: shown for a few seconds, then it lives in Settings ----------------------------
 const ACCOUNT_SOURCE = [
+  'let ticketNotePollInfo = { at: 0, watching: 0, error: "" };',
   'let ticketAccount = { status: "unknown", email: "", source: "", message: "", detail: "", checking: false, at: 0, shownUntil: 0 };',
   line(/const TICKET_ACCOUNT_RECHECK_MS = [^;]+;/), line(/const TICKET_ACCOUNT_FOUND_SHOWN_MS = [^;]+;/),
-  ...['hideTicketAccountLineLater', 'checkTicketAccount', 'noteTicketAccountUsed', 'renderTicketAccountLine', 'ticketAccountSettingsVisible', 'ticketAccountSettingsChat', 'renderTicketAccountSettings'].map(fn),
+  ...['hideTicketAccountLineLater', 'checkTicketAccount', 'noteTicketAccountUsed', 'renderTicketAccountLine', 'ticketAccountSettingsVisible', 'ticketAccountSettingsChat', 'renderTicketAccountSettings', 'renderTicketNotesStatus'].map(fn),
 ].join('\n');
 
 function accountWorld({ reply = { ok: true, enabled: true, status: 'found', email: 'alice@company.com', source: 'livechat' }, preview = true, live = false } = {}) {

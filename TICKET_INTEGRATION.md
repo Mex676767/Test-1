@@ -111,6 +111,12 @@ under each ticket with a box to comment or reply.
 nothing saved) instead of overwritten. The answer is `{ ok, ref, changed, visible, ticket, actedAs }`; `visible: false` means the change moved
 the ticket out of what the agent may see. Errors keep the ticket API's `code`, `problems` and `mismatched`. Files cannot be added or removed yet.
 
+**Notifications run on every tab.** The bell is polled every minute (and 8 s after the page opens) while the widget is visible. The poll used to
+need the Tickets tab to have been opened once, because only that checked the ticket account; it now checks the account quietly itself (no popup).
+Settings → Ticket account says whether notifications are being watched ("watching N tickets, last checked …") or why not (account missing,
+ticket list refused, a failed call). A ticket notifies only if it is the agent's: raised by their ticket account email, assigned to them, or
+raised from this widget. A mention on someone else's ticket needs the ticket to be among the 100 most recently updated ones.
+
 **Status, department and market are asked of the ticket system.** `/ticket-list` takes `status` (a choice value), `department` and `market` (ids) and
 sends them as `f:status|is|…`, `dept|is|…`, `market|is|…` (all must hold), so they narrow every ticket and not only the 100 newest that one
 read returns. With a person picked as well ("raised by or assigned to" is an OR), the two sides are each read with the narrowing and merged.

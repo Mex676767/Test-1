@@ -7,10 +7,10 @@ const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 const line = (re) => app.match(re)[0];
 
-const NAMES = ['ticketNoteLoad', 'ticketNoteSave', 'ticketNotePeople', 'ticketNoteIsMine', 'ticketNoteLearnMe', 'ticketNoteRemember', 'ticketNoteSnapshot', 'ticketNoteAdd', 'ticketNoteSnippet', 'ticketNoteFlatten', 'ticketNoteStatusItem', 'ticketNoteDue', 'ticketNoteApplyThread', 'ticketNoteMarkRead', 'ticketNoteUnread', 'ticketNoteVisible', 'renderTicketBell', 'pollTicketNotifications', 'ticketNoteAbsorb'];
+const NAMES = ['ticketNoteLoad', 'ticketNoteSave', 'ticketNotePeople', 'ticketNoteIsMine', 'ticketNoteLearnMe', 'ticketNoteRemember', 'ticketNoteSnapshot', 'ticketNoteAdd', 'ticketNoteSnippet', 'ticketNoteFlatten', 'ticketNoteStatusItem', 'ticketNoteDue', 'ticketNoteApplyThread', 'ticketNoteMarkRead', 'ticketNoteUnread', 'ticketNoteVisible', 'renderTicketBell', 'pollTicketNotifications', 'ticketNoteAbsorb', 'renderTicketNotesStatus'];
 const SOURCE = [
   line(/const TICKET_NOTE_MAX = \d+;/), line(/const TICKET_NOTE_KEEP_SEEN = \d+;/), line(/const TICKET_NOTE_READS_PER_POLL = \d+;/),
-  'let ticketNoteStore = null; let ticketNoteStoreKey = ""; let ticketNoteTab = "all"; let ticketBellOpen = false; let ticketNotePolling = false;',
+  'let ticketNoteStore = null; let ticketNoteStoreKey = ""; let ticketNoteTab = "all"; let ticketBellOpen = false; let ticketNotePolling = false; let ticketNotePollInfo = { at: 0, watching: 0, error: "" };',
   ...NAMES.map(fn),
 ].join('\n');
 
@@ -19,15 +19,16 @@ const OTHER = { id: 9, name: 'Ashton', email: 'ashton@company.com' };
 const T0 = Date.parse('2026-10-19T10:00:00Z');
 const iso = (minutes) => new Date(T0 + minutes * 60_000).toISOString();
 
-function world({ fetchPlan, sound } = {}) {
+function world({ fetchPlan, sound, preview = true, account = { status: 'found', email: ME.email }, checkResult } = {}) {
   const storage = new Map();
-  const calls = { fetches: [], chimes: 0, repaints: 0 };
+  const calls = { fetches: [], chimes: 0, repaints: 0, checks: [] };
   const context = vm.createContext({
     Date, JSON, Number, String, Boolean, Array, Object, Set, Math, Promise,
     currentLiveChatAccount: 'lc1',
     localStorage: { getItem: (key) => (storage.has(key) ? storage.get(key) : null), setItem: (key, value) => storage.set(key, String(value)) },
     document: { hidden: false },
-    ticketAccount: { status: 'found', email: ME.email },
+    ticketAccount: { ...account }, previewMode: preview, DEPARTMENT_TABS_LIVE: false, state: { chat: {} },
+    checkTicketAccount: async (chatId, options) => { calls.checks.push({ chatId, options }); if (checkResult) context.ticketAccount = { ...checkResult }; },
     ticketReadAuthor: () => ({ accountKey: 'lc1', agentToken: 'tok' }),
     ticketTitle: (ticket) => ticket.fields?.query_type || 'Ticket',
     ticketChoiceDisplayLabel: (_key, value) => value,
@@ -232,4 +233,39 @@ test('every thread the agent opens is recorded and marked read, and a sent comme
   assert.ok(app.includes('ticketNoteAbsorb(data.ticket);'));
   assert.ok(app.includes('ticketNoteRemember(ref, data.comment?.author?.id ?? null);'));
   assert.ok(app.includes('ticketNoteMarkRead(btn.dataset.ref);'));
+});
+
+test('polling works on any tab: an account never checked is checked quietly first, then the poll goes on; a quiet check opens no popup', async () => {
+  const w = world({ account: { status: 'unknown', email: '' }, checkResult: { status: 'found', email: ME.email }, fetchPlan: () => ({ ok: true, tickets: [ticket('TK2610190001', { raisedBy: ME })] }) });
+  await w.run('pollTicketNotifications()');
+  assert.deepEqual(JSON.parse(JSON.stringify(w.calls.checks.map((c) => c.options))), [{ quiet: true }]);
+  assert.equal(w.calls.fetches.length, 1, 'the ticket list was read once the account was found');
+  const info = JSON.parse(w.run('JSON.stringify(ticketNotePollInfo)'));
+  assert.equal(info.error, '');
+  assert.equal(info.watching, 1);
+  assert.match(w.run('renderTicketNotesStatus()'), /Notifications: watching 1 ticket, last checked/);
+  assert.ok(/if \(!quiet && \(ticketAccount\.status === "notFound"/.test(app), 'the email popup is only for a check the agent asked for');
+});
+
+test('polling says why it cannot work: account missing, ticket list refused, a failed call', async () => {
+  const missing = world({ account: { status: 'unknown', email: '' }, checkResult: { status: 'notFound', email: 'x@y.co' }, fetchPlan: () => ({ ok: true, tickets: [] }) });
+  await missing.run('pollTicketNotifications()');
+  assert.equal(missing.calls.fetches.length, 0);
+  assert.match(missing.run('renderTicketNotesStatus()'), /Notifications: not working\. The ticket account is not available/);
+  const refused = world({ fetchPlan: () => ({ ok: false, error: 'The ticket system is busy (request limit reached). Try again in 20 s.' }) });
+  await refused.run('pollTicketNotifications()');
+  assert.match(refused.run('renderTicketNotesStatus()'), /Notifications: not working\. The ticket system is busy/);
+  const broken = world({ fetchPlan: () => { throw new Error('network down'); } });
+  await broken.run('pollTicketNotifications()');
+  assert.match(broken.run('renderTicketNotesStatus()'), /not working\. network down/);
+  assert.match(world().run('renderTicketNotesStatus()'), /waiting for the first check/);
+});
+
+test('polling does not run where the Tickets tab does not exist (the installed widget), and a first look is taken soon after the page opens', async () => {
+  const w = world({ preview: false, fetchPlan: () => ({ ok: true, tickets: [] }) });
+  await w.run('pollTicketNotifications()');
+  assert.equal(w.calls.fetches.length, 0);
+  assert.equal(w.calls.checks.length, 0);
+  assert.ok(app.includes('setTimeout(() => void pollTicketNotifications(), 8000);'));
+  assert.ok(app.includes('id="settingsTicketNotes"'), 'Settings shows whether notifications are being watched');
 });
