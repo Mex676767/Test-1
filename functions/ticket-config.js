@@ -52,8 +52,8 @@ const formFields = (list) => (Array.isArray(list) && list.length && list.every((
 
 async function readLiveCatalog(env, email) {
   const [markets, departments, choices, form] = await Promise.allSettled([
-    ticketRequest(env, withOnBehalf("/markets", email)), ticketRequest(env, withOnBehalf("/departments", email)), ticketRequest(env, withOnBehalf("/fields/choices", email)),
-    ticketRequest(env, withOnBehalf("/fields", email)),
+    ticketRequest(env, withOnBehalf("/markets", email), { reads: true }), ticketRequest(env, withOnBehalf("/departments", email), { reads: true }), ticketRequest(env, withOnBehalf("/fields/choices", email), { reads: true }),
+    ticketRequest(env, withOnBehalf("/fields", email), { reads: true }),
   ]);
   const list = (result, key) => (result.status === "fulfilled" && Array.isArray(result.value?.[key]) ? result.value[key] : null);
   const fieldList = list(choices, "fields");
@@ -96,7 +96,7 @@ export async function handler(event) {
     // GET /fields is the ticket form itself (required, defaults, choices, limits, for this person). Only without it is a page of 100 tickets
     // read to learn the form, as before.
     const live = await readLiveCatalog(event.env, email);
-    const data = live.fields ? { tickets: [], fields: live.fields } : await ticketRequest(event.env, withOnBehalf("/tickets?pageSize=100", email));
+    const data = live.fields ? { tickets: [], fields: live.fields } : await ticketRequest(event.env, withOnBehalf("/tickets?pageSize=100", email), { reads: true });
     const tickets = Array.isArray(data.tickets) ? data.tickets : [];
     const uniqueById = (items) => Array.from(new Map(items
       .filter((item) => item && Number.isInteger(Number(item.id)))

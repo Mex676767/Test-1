@@ -3,8 +3,19 @@ const DEFAULT_BASE_URL = "https://tickets.96ghq.com/api/v1";
 // reads: the key for the polling reads (ticket list, one ticket, the agent roster). TICKETS_API_KEY_READS, when set, is a second key of the same kind
 // used only for those, because the ticket system's limit (120 calls a minute) is per key: with reads on their own key, agents polling for news can
 // never use up the calls a claim, an edit or a comment needs. Unset: everything uses TICKETS_API_KEY as before.
-function config(env = {}, { reads = false } = {}) {
-  const apiKey = String((reads && env.TICKETS_API_KEY_READS) || env.TICKETS_API_KEY || "").trim();
+// TICKETS_API_KEY_READS may hold several keys separated by commas: the agents are spread over them by a stable hash of their email (one agent
+// always uses the same key, so their reads stay cached together), so every key carries a share of the polling and the total limit is the sum.
+function readKeyFor(env, path = "") {
+  const keys = String(env.TICKETS_API_KEY_READS || "").split(",").map((key) => key.trim()).filter(Boolean);
+  if (!keys.length) return "";
+  if (keys.length === 1) return keys[0];
+  const who = new URLSearchParams(String(path).split("?")[1] || "").get("onBehalfOf") || "";
+  let hash = 5381;
+  for (const character of who.toLowerCase()) hash = ((hash * 33) ^ character.charCodeAt(0)) >>> 0;
+  return keys[hash % keys.length];
+}
+function config(env = {}, { reads = false, path = "" } = {}) {
+  const apiKey = String((reads && readKeyFor(env, path)) || env.TICKETS_API_KEY || "").trim();
   const baseUrl = String(env.TICKETS_API_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
   return { apiKey, baseUrl };
 }
@@ -47,7 +58,7 @@ function busyError(seconds) {
 
 export async function ticketRequest(env, path, options = {}) {
   const { reads = false, ...callOptions } = options;
-  const { apiKey, baseUrl } = config(env, { reads });
+  const { apiKey, baseUrl } = config(env, { reads, path });
   if (!apiKey) throw new Error("Ticket API key is not configured");
   const pausedUntil = rateLimitedUntil.get(apiKey) || 0;
   if (pausedUntil > Date.now()) throw busyError((pausedUntil - Date.now()) / 1000);
@@ -113,7 +124,7 @@ const readsInFlight = new Map(); // key -> Promise
 export function resetTicketReadCache() { readCache.clear(); readsInFlight.clear(); }
 
 export async function ticketGet(env, path, { ttlMs = 0, fresh = false } = {}) {
-  const { apiKey, baseUrl } = config(env, { reads: true });
+  const { apiKey, baseUrl } = config(env, { reads: true, path });
   const key = `${baseUrl}|${apiKey}|${path}`;
   const stored = readCache.get(key);
   if (!fresh && ttlMs > 0 && stored && Date.now() - stored.at < ttlMs) return stored.data;

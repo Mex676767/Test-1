@@ -202,6 +202,10 @@ So one key carries about 10 agents; beyond that claims, edits and comments start
    claims, edits and comments 0 failed (polling slows down instead). Unset: one key as before.
 2. **Slower polling** (`TICKET_NOTE_POLL_MS`, `TICKET_OPEN_POLL_MS`, and how often everyone's newest are read in `pollTicketNotifications`): with two keys,
    bell 30 s / open ticket 15 s / everyone's every 8th poll keeps the reads key under the limit up to about 25 agents; 45 s / 20 s up to about 35.
+   **For 50 to 100 agents** (bell 30 s / open ticket 15 s / everyone's every 8th, worst case): about 220 calls a minute at 50 agents, 320 at 75, 430 at 100, of
+   which about 70 are writes. Either ask the ticket team to raise the limit of the key(s) to about 600 a minute, or give `TICKETS_API_KEY_READS` several keys
+   separated by commas (agents are spread over them by a hash of their email): 2 read keys for 50 agents, 3 for 75 to 100 (at 100 agents with 3 read keys
+   claims, edits and comments failed 0 times and a little polling backed off). The catalog and account-check reads are on the read keys too.
    Try other values with `--bell-s`, `--open-s`, `--everyone-every`, `--read-key`, `--agents`, `--minutes`, `--mode shared|none`.
 
 ## Rollout checklist (2026-10-19)

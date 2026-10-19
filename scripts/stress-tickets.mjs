@@ -36,7 +36,8 @@ const SEED = Number(args.get("seed") || 1);
 const AGENT_COUNTS = args.has("agents") ? [Number(args.get("agents"))] : [5, 10, 15, 20, 30, 50];
 const MODES = args.has("mode") ? [String(args.get("mode"))] : ["shared", "none"];
 const KEY_LIMIT = Number(args.get("limit") || 120);
-const READ_KEY = args.has("read-key"); // a second key used only for the polling reads (TICKETS_API_KEY_READS)
+const READ_KEYS = Number(args.get("read-keys") || (args.has("read-key") ? 1 : 0)); // keys used only for the polling reads (TICKETS_API_KEY_READS)
+const READ_KEY = READ_KEYS > 0;
 const OPEN_SHARE = Number(args.get("open-share") || 0.3); // share of agents with a ticket open in the widget at any time
 const BELL_S = Number(args.get("bell-s") || 15); // seconds between bell polls (TICKET_NOTE_POLL_MS)
 const OPEN_S = Number(args.get("open-s") || 8); // seconds between polls of an open ticket (TICKET_OPEN_POLL_MS)
@@ -85,7 +86,7 @@ function ticketSystem(url, options = {}) {
   return json({ ok: false, error: `unexpected ${path}` }, 404);
 }
 
-const ENV = { TICKETS_API_KEY: "k", TICKETS_ON_BEHALF_OF: "1", LIVECHAT_CLIENT_ID: "c1", ...(READ_KEY ? { TICKETS_API_KEY_READS: "k-reads" } : {}) };
+const ENV = { TICKETS_API_KEY: "k", TICKETS_ON_BEHALF_OF: "1", LIVECHAT_CLIENT_ID: "c1", ...(READ_KEY ? { TICKETS_API_KEY_READS: Array.from({ length: READ_KEYS }, (_, i) => `k-reads-${i + 1}`).join(",") } : {}) };
 const TOKENS = new Map();
 globalThis.fetch = async (url, options = {}) => {
   url = String(url);
@@ -188,7 +189,7 @@ for (const mode of MODES) for (const count of AGENT_COUNTS) rows.push(await run(
 Date.now = realNow;
 
 const pad = (value, width) => String(value).padEnd(width);
-console.log(`Fake ticket system limit: ${KEY_LIMIT} calls a minute PER KEY, bell every ${BELL_S} s, open ticket every ${OPEN_S} s, everyone's newest every ${EVERYONE_EVERY}th bell poll (${READ_KEY ? "two keys: reads on their own key" : "one key for everything"}). ${MINUTES} virtual minutes per run, ${Math.round(OPEN_SHARE * 100)}% of agents with a ticket open, a claim per agent every ~${CLAIM_EVERY_S} s.\n`);
+console.log(`Fake ticket system limit: ${KEY_LIMIT} calls a minute PER KEY, bell every ${BELL_S} s, open ticket every ${OPEN_S} s, everyone's newest every ${EVERYONE_EVERY}th bell poll (${READ_KEY ? `${READ_KEYS} read key${READ_KEYS === 1 ? "" : "s"} + 1 for everything that writes` : "one key for everything"}). ${MINUTES} virtual minutes per run, ${Math.round(OPEN_SHARE * 100)}% of agents with a ticket open, a claim per agent every ~${CLAIM_EVERY_S} s.\n`);
 console.log([pad("cache", 7), pad("agents", 7), pad("calls/min avg", 14), pad("peak", 6), pad("busiest key", 12), pad("refused(429)", 13), pad("claims failed", 14), pad("edits failed", 13), "comments failed"].join(""));
 for (const r of rows) {
   console.log([pad(r.mode, 7), pad(r.agentCount, 7), pad(r.average.toFixed(0), 14), pad(r.peak, 6), pad(r.perKeyPeak, 12), pad(r.refused, 13), pad(`${r.claimsFailed}/${r.claims}`, 14), pad(`${r.editsFailed}/${r.edits}`, 13), `${r.commentsFailed}/${r.comments}`].join(""));

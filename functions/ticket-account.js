@@ -33,7 +33,7 @@ export async function handler(event) {
       let raw = "found";
       let detail = "";
       try {
-        await ticketRequest(event.env, `/markets?onBehalfOf=${encodeURIComponent(email)}`);
+        await ticketRequest(event.env, `/markets?onBehalfOf=${encodeURIComponent(email)}`, { reads: true }); // a read: on the reads key, so checking an account never takes a write's calls
       } catch (err) {
         if (Number(err.statusCode) === 401) {
           // "Not signed in.": the ticket system does not recognise the API key itself (revoked, replaced or mistyped), whoever the agent is.

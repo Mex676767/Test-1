@@ -83,3 +83,27 @@ test("the read cache keeps reads of the two keys apart, and the low-level helper
     assert.equal(net.calls.at(-1).key, "key-reads");
   } finally { net.restore(); }
 });
+
+test("several read keys: an agent always gets the same one, the agents are spread over all of them, and writes still use the main key", async () => {
+  reset();
+  const env = { ...base, TICKETS_API_KEY_READS: "r1, r2 ,r3" };
+  const net = network();
+  try {
+    const keyOf = async (email) => { const before = net.calls.length; resetTicketReadCache(); await ticketGet(env, `/tickets?onBehalfOf=${encodeURIComponent(email)}`); return net.calls[before].key; };
+    const first = await keyOf("agent1@x.com");
+    assert.equal(await keyOf("agent1@x.com"), first, "the same agent, the same key");
+    const used = new Set();
+    for (let i = 0; i < 60; i += 1) used.add(await keyOf(`agent${i}@x.com`));
+    assert.deepEqual([...used].sort(), ["r1", "r2", "r3"], "60 agents land on all three keys");
+    await ticketRequest(env, "/tickets", { method: "POST", body: "{}" });
+    assert.equal(net.calls.at(-1).key, "key-main");
+    assert.equal(await keyOf("AGENT1@X.COM"), first, "case does not move an agent to another key");
+  } finally { net.restore(); }
+});
+
+test("catalog and account-check reads use the read keys too, so they never take a write's calls", async () => {
+  const config = (await import("node:fs")).readFileSync(new URL("./ticket-config.js", import.meta.url), "utf8");
+  const account = (await import("node:fs")).readFileSync(new URL("./ticket-account.js", import.meta.url), "utf8");
+  assert.equal((config.match(/\{ reads: true \}/g) || []).length, 5);
+  assert.match(account, /\/markets\?onBehalfOf=\$\{encodeURIComponent\(email\)\}`, \{ reads: true \}/);
+});
