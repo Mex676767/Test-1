@@ -4253,16 +4253,25 @@ function ticketNoteAbsorb(ticket) {
   repaintTicketBell();
 }
 
+// What the last poll did, for Settings: when it ran, how many tickets it looked at, or why it could not.
+let ticketNotePollInfo = { at: 0, watching: 0, error: "" };
 async function pollTicketNotifications() {
-  if (document.hidden || ticketNotePolling || ticketAccount.status !== "found" || !ticketAccount.email) return;
+  if (document.hidden || ticketNotePolling || !(previewMode || DEPARTMENT_TABS_LIVE)) return;
   const author = ticketReadAuthor(null);
   if (!author) return;
   ticketNotePolling = true;
   try {
+    // The account is checked here too, quietly, so notifications arrive on whatever tab the agent is on, not only after the Tickets tab was opened.
+    if (ticketAccount.status === "unknown" && !ticketAccount.checking) {
+      const chatId = Object.keys(state)[0];
+      if (chatId) await checkTicketAccount(chatId, { quiet: true });
+    }
+    if (ticketAccount.status !== "found" || !ticketAccount.email) { ticketNotePollInfo = { at: Date.now(), watching: 0, error: ticketAccount.status === "unknown" ? "The ticket account has not been checked yet." : "The ticket account is not available, so tickets cannot be watched." }; return; }
     const store = ticketNoteLoad();
     store.me.email = String(ticketAccount.email).trim().toLowerCase();
     const list = await (await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: "", fresh: false, author }) })).json();
-    if (!list.ok) return;
+    if (!list.ok) { ticketNotePollInfo = { at: Date.now(), watching: 0, error: list.error || "The ticket list could not be read." }; return; }
+    ticketNotePollInfo = { at: Date.now(), watching: (list.tickets || []).length, error: "" };
     const { due, added: fromList } = ticketNoteDue(store, list.tickets || [], Date.now());
     let added = fromList;
     for (const ref of due.slice(0, TICKET_NOTE_READS_PER_POLL)) {
@@ -4272,10 +4281,11 @@ async function pollTicketNotifications() {
     ticketNoteSave();
     repaintTicketBell();
     if (added && store.sound !== false) ticketNoteChime();
-  } catch (_) { /* a poll that fails is tried again next minute; nobody needs to be told */ }
+  } catch (err) { ticketNotePollInfo = { at: Date.now(), watching: 0, error: err.message || "The poll failed." }; /* tried again next minute; Settings says why */ }
   finally { ticketNotePolling = false; }
 }
 setInterval(pollTicketNotifications, TICKET_NOTE_POLL_MS);
+setTimeout(() => void pollTicketNotifications(), 8000); // the first look soon after the page opens, not a minute later
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketNotifications(); });
 document.addEventListener("click", (event) => {
   // The bell is redrawn by the click itself, which detaches the clicked button, so the path recorded at the click is what says where it was.
@@ -5023,7 +5033,8 @@ const TICKET_ACCOUNT_FOUND_SHOWN_MS = 6000;
 function hideTicketAccountLineLater() {
   setTimeout(() => { for (const id of Object.keys(state)) renderTicketSlot(id); }, TICKET_ACCOUNT_FOUND_SHOWN_MS + 100);
 }
-async function checkTicketAccount(chatId, { force = false } = {}) {
+// quiet: the check made in the background for notifications (see pollTicketNotifications): no email popup and no inbox load from it.
+async function checkTicketAccount(chatId, { force = false, quiet = false } = {}) {
   const s = state[chatId];
   if (!s || ticketAccount.checking) return;
   if (!force && ticketAccount.status !== "unknown" && Date.now() - ticketAccount.at < TICKET_ACCOUNT_RECHECK_MS) return;
@@ -5042,11 +5053,12 @@ async function checkTicketAccount(chatId, { force = false } = {}) {
     if (ticketAccount.status === "found" && ticketAccount.shownUntil > Date.now()) hideTicketAccountLineLater();
     if (data.status === "found" && s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
     if (data.status === "found" && (ticketConfigError || !ticketFields.length)) await fetchTicketConfig({ fresh: true });
-    if (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") {
+    if (quiet && ticketAccount.status === "found") ticketAccount.shownUntil = 0; // a background check does not flash the green line
+    if (!quiet && (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail")) {
       queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
     }
     if (ticketAccount.status === "found") void pollTicketNotifications();
-    if (ticketAccount.status === "found" && ticketWorkspaceView(s) === "list" && !ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId, "", "all", { fresh: false });
+    if (!quiet && ticketAccount.status === "found" && ticketWorkspaceView(s) === "list" && !ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId, "", "all", { fresh: false });
   } catch (err) {
     ticketAccount = { status: "error", email: "", source: "", message: err.message, checking: false, at: Date.now(), shownUntil: 0 };
   }
@@ -5121,6 +5133,16 @@ function renderTicketAccountGate(chatId) {
     </div>`;
 }
 
+// Settings: are ticket notifications being watched? (see pollTicketNotifications; it runs every minute while the widget is visible)
+function renderTicketNotesStatus() {
+  const info = ticketNotePollInfo;
+  if (!info.at) return "Notifications: waiting for the first check (every minute while this page is open and visible).";
+  const when = new Date(info.at).toLocaleTimeString();
+  return info.error
+    ? `Notifications: not working. ${escapeHtml(info.error)} (tried ${escapeHtml(when)})`
+    : `Notifications: watching ${info.watching} ticket${info.watching === 1 ? "" : "s"}, last checked ${escapeHtml(when)}. New comments, mentions and status changes on your tickets appear on the bell.`;
+}
+
 // The Settings card for the ticket account: wherever the Tickets tab exists and the ticket system is acting as the agent.
 function ticketAccountSettingsVisible() {
   return ESCALATION_TICKET_ENABLED && (previewMode || DEPARTMENT_TABS_LIVE) && ticketAccount.status !== "off";
@@ -5134,7 +5156,8 @@ function renderTicketAccountSettings() {
   const line = renderTicketAccountLine(chatId, { always: true });
   return `<div class="settings-section-title"><span>Ticket account</span></div>
     <p class="settings-hint">The ticket-system account your tickets, comments and edits are made as.</p>
-    ${line || '<p class="settings-hint">Not checked yet. It is checked when you open the Tickets tab.</p>'}
+    ${line || '<p class="settings-hint">Not checked yet.</p>'}
+    <p class="settings-hint" id="settingsTicketNotes">${renderTicketNotesStatus()}</p>
     ${ticketAccount.checking ? "" : '<button type="button" class="secondary-btn" data-settings-ticket-recheck>Check again</button>'}`;
 }
 
