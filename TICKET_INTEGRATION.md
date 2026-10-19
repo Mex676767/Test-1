@@ -211,6 +211,10 @@ So one key carries about 10 agents; beyond that claims, edits and comments start
    claims, edits and comments failed 0 times and a little polling backed off). The catalog and account-check reads are on the read keys too.
    Try other values with `--bell-s`, `--open-s`, `--everyone-every`, `--read-key`, `--agents`, `--minutes`, `--mode shared|none`.
 
+**Tickets without a chat; no Knowledge tab.** The Tickets tab works with no conversation open: it runs on a stand-in chat (`tickets-only`) with nothing filled in, so an
+agent can read, open, edit and raise tickets between chats, and notifications are checked the same way. The Knowledge tab is off for everyone
+(`KNOWLEDGE_TAB_ENABLED = false` in `app.js`; set it to `true` to bring it back for Retention and Customer Service).
+
 ## Rollout checklist (2026-10-19)
 
 Things the installed widget depends on, all outside the code: the Lark column **Default Market** in "Livechat App Agent Logins"; an active ticket-system

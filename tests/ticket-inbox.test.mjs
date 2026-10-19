@@ -36,15 +36,17 @@ function widget() {
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
 
-test('the installed widget: Retention keeps all four tabs, Customer Service gets Tickets and Knowledge, an unknown department hides nothing', () => {
+test('the installed widget: Retention keeps Retention, Blast and Tickets, Customer Service gets Tickets, an unknown department hides nothing, and Knowledge is switched off', () => {
   const tabs = (settings) => {
-    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: true, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
+    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: true, KNOWLEDGE_TAB_ENABLED: false, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
     vm.runInContext(fn('mainTabAvailability'), context);
     return JSON.parse(JSON.stringify(vm.runInContext('mainTabAvailability()', context)));
   };
-  const all = { customer: true, tickets: true, blast: true, knowledge: true };
+  const all = { customer: true, tickets: true, blast: true, knowledge: false };
   assert.deepEqual(tabs({ currentDepartment: 'rtn', departmentKnown: true }), all);
-  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: true });
+  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: false });
+  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true, KNOWLEDGE_TAB_ENABLED: true }), { customer: false, tickets: true, blast: false, knowledge: true }, 'the switch brings Knowledge back');
+  assert.match(app, /const KNOWLEDGE_TAB_ENABLED = false;/);
   assert.deepEqual(tabs({ departmentKnown: false }), all, 'until LiveChat says, nothing is hidden');
   assert.equal(tabs({ currentDepartment: 'rtn', departmentKnown: true, BLAST_LIVE: false }).blast, false, 'the Blast switch still wins');
   assert.deepEqual(tabs({ DEPARTMENT_TABS_LIVE: false }), { customer: true, tickets: false, blast: true, knowledge: false }, 'with the rollout switch off the installed widget is as before');
@@ -192,13 +194,13 @@ test('every ticket value the widget prints reads as the ticket system shows it, 
 
 test('admin preview: the department views apply, the installed widget is untouched while the rollout switch is off', () => {
   const tabs = (settings) => {
-    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: false, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
+    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: false, KNOWLEDGE_TAB_ENABLED: false, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
     vm.runInContext(fn('mainTabAvailability'), context);
     return JSON.parse(JSON.stringify(vm.runInContext('mainTabAvailability()', context)));
   };
   assert.deepEqual(tabs({ previewMode: false, currentDepartment: 'cs', departmentKnown: true }), { customer: true, tickets: false, blast: true, knowledge: false }, 'installed widget: as before');
-  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: true });
-  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'rtn', departmentKnown: true }), { customer: true, tickets: true, blast: true, knowledge: true });
+  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: false });
+  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'rtn', departmentKnown: true }), { customer: true, tickets: true, blast: true, knowledge: false });
 });
 
 test('detectDepartment: the installed widget is never asked; the preview can force a department with ?department=', async () => {
@@ -645,4 +647,14 @@ test('comment box: Enter posts the comment, Shift+Enter makes a new line, and th
   assert.match(handler.slice(0, 400), /event\.isComposing/, 'a key press that confirms text typed with an input method never sends');
   assert.match(handler, /event\.preventDefault\(\);\s+const button = card\?\.querySelector\('button\[data-action="sendTicketComment"\]'\);\s+if \(button && !button\.disabled\) button\.click\(\);/, 'sends through the button, so a send already running is not started twice');
   assert.ok(app.includes('Enter sends · Shift+Enter for a new line'));
+});
+
+test('the Tickets tab works with no chat open: it uses a stand-in chat with nothing filled in, and only the Tickets tab (not the other tabs) does', () => {
+  assert.ok(app.includes('const TICKETS_ONLY_CHAT_ID = "tickets-only";'));
+  const stand = fn('ticketsOnlyChat');
+  assert.match(stand, /groupName: ""/);
+  assert.match(stand, /link: ""/);
+  const render = fn('renderChatsInner');
+  assert.match(render, /if \(!chats\.length\) \{\s+if \(\(previewMode \|\| DEPARTMENT_TABS_LIVE\) && activeMainTab === "tickets"\) \{\s+chats = \[ticketsOnlyChat\(\)\];\s+\} else \{\s+chatListEl\.innerHTML = `<div class="empty-state">No chat currently open/);
+  assert.ok(app.includes('if (!activeChats[0] && !Object.keys(state).length) ensureChatState(ticketsOnlyChat());'), 'Settings can check the account with no chat');
 });

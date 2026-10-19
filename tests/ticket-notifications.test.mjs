@@ -7,10 +7,10 @@ const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 const line = (re) => app.match(re)[0];
 
-const NAMES = ['ticketNoteLoad', 'ticketNoteSave', 'ticketNotePeople', 'ticketNoteIsMine', 'ticketNoteLearnMe', 'ticketNoteRemember', 'ticketNoteSnapshot', 'ticketNoteAdd', 'ticketNoteSnippet', 'ticketNoteFlatten', 'ticketNoteStatusItem', 'ticketNoteDue', 'ticketNoteApplyThread', 'ticketNoteMarkRead', 'ticketNoteUnread', 'ticketNoteVisible', 'renderTicketBell', 'pollTicketNotifications', 'ticketNoteAbsorb', 'renderTicketNotesStatus', 'ticketPollBackoff'];
+const NAMES = ['ticketNoteLoad', 'ticketNoteSave', 'ticketNotePeople', 'ticketNoteIsMine', 'ticketNoteLearnMe', 'ticketNoteRemember', 'ticketNoteSnapshot', 'ticketNoteAdd', 'ticketNoteSnippet', 'ticketNoteFlatten', 'ticketNoteStatusItem', 'ticketNoteDue', 'ticketNoteApplyThread', 'ticketNoteMarkRead', 'ticketNoteUnread', 'ticketNoteVisible', 'renderTicketBell', 'pollTicketNotifications', 'ticketNoteAbsorb', 'renderTicketNotesStatus', 'ticketPollBackoff', 'ticketsOnlyChat'];
 const SOURCE = [
   line(/const TICKET_NOTE_MAX = \d+;/), line(/const TICKET_NOTE_KEEP_SEEN = \d+;/), line(/const TICKET_NOTE_READS_PER_POLL = \d+;/),
-  'let ticketNoteStore = null; let ticketNoteStoreKey = ""; let ticketNoteTab = "all"; let ticketBellOpen = false; let ticketNotePolling = false; let ticketNotePollRound = 0; let ticketNoteMineRefs = new Set(); let ticketPollPausedUntil = 0; let ticketNotePollInfo = { at: 0, watching: 0, error: "" };',
+  'let ticketNoteStore = null; let ticketNoteStoreKey = ""; let ticketNoteTab = "all"; let ticketBellOpen = false; const TICKETS_ONLY_CHAT_ID = "tickets-only"; let ticketNotePolling = false; let ticketNotePollRound = 0; let ticketNoteMineRefs = new Set(); let ticketPollPausedUntil = 0; let ticketNotePollInfo = { at: 0, watching: 0, error: "" };',
   ...NAMES.map(fn),
 ].join('\n');
 
@@ -28,6 +28,7 @@ function world({ fetchPlan, sound, preview = true, account = { status: 'found', 
     localStorage: { getItem: (key) => (storage.has(key) ? storage.get(key) : null), setItem: (key, value) => storage.set(key, String(value)) },
     document: { hidden: false },
     ticketAccount: { ...account }, previewMode: preview, DEPARTMENT_TABS_LIVE: false, state: { chat: {} },
+    ensureChatState: (chat) => { context.state[chat.chatId] = {}; },
     checkTicketAccount: async (chatId, options) => { calls.checks.push({ chatId, options }); if (checkResult) context.ticketAccount = { ...checkResult }; },
     ticketReadAuthor: () => ({ accountKey: 'lc1', agentToken: 'tok' }),
     ticketTitle: (ticket) => ticket.fields?.query_type || 'Ticket',
@@ -363,4 +364,12 @@ test('the poll reads all of my tickets (up to 250, by creation date), not the 10
 test('the sound is unlocked at the first click or key press, and turning the sound on plays it so the agent can hear it', () => {
   assert.ok(app.includes('for (const type of ["pointerdown", "keydown"]) document.addEventListener(type, () => { ticketNoteAudioReady(); }, { once: true, passive: true });'));
   assert.match(app, /store\.sound = store\.sound === false;\s+ticketNoteSave\(\);\s+if \(store\.sound\) ticketNoteChime\(\);/);
+});
+
+test('notifications also work with no chat open: the account is checked on the Tickets tab\'s stand-in chat', async () => {
+  const w = world({ account: { status: 'unknown', email: '' }, checkResult: { status: 'found', email: ME.email }, fetchPlan: () => ({ ok: true, tickets: [] }) });
+  w.context.state = {};
+  await w.run('pollTicketNotifications()');
+  assert.deepEqual(w.calls.checks.map((c) => c.chatId), ['tickets-only']);
+  assert.equal(w.calls.fetches.length, 2, 'and the lists are read');
 });

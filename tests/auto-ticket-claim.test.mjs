@@ -247,5 +247,5 @@ test('default market: an expired LiveChat login still stops the claim with its r
 test('the rollout: Tickets, notifications and the auto-ticket are switched on for the installed widget, and the release id was bumped so agents get the update notice', () => {
   assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
   assert.match(app, /const AUTO_TICKET_LIVE = true;/);
-  assert.equal(JSON.parse(readFileSync(new URL('../widget-release.json', import.meta.url), 'utf8')).release, '20261019-1');
+  assert.equal(JSON.parse(readFileSync(new URL('../widget-release.json', import.meta.url), 'utf8')).release, '20261019-2');
 });
