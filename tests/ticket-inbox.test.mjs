@@ -26,6 +26,8 @@ function widget() {
     renderTicketBell: () => '',
     renderTicketAccountLine: () => '',
     renderTicketAccountGate: () => '',
+    TICKET_FILTER_ME: '@me', ticketIsMine: () => false,
+    ticketBulkFor: () => ({ selected: [], visibleRefs: [], running: false, summary: '', status: '' }), renderTicketBulkBar: () => '',
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },
   });
@@ -75,6 +77,23 @@ test('list filters apply to searched results too and escape ticket content', () 
   assert.match(html, /data-ref="TK1"/);
   assert.doesNotMatch(html, /data-ref="TK2"|data-ref="TK3"|<script>/);
   assert.match(html, /&lt;script>/);
+});
+
+test('the Agent filter has "Me" after "All agents": picking it lists only the tickets that are mine', () => {
+  const w = widget();
+  w.context.ticketBulkFor = () => ({ selected: [], visibleRefs: [], running: false, summary: '', status: '' });
+  w.context.renderTicketBulkBar = () => '';
+  w.context.ticketIsMine = ticket => ticket.ref === 'TK3';
+  w.context.ticketSearchResultsByChat.set('chat', { mode: 'search', total: 3, tickets: [
+    { ref: 'TK1', raisedBy: { name: 'Alya' }, fields: { status: 'OPEN' } },
+    { ref: 'TK3', raisedBy: { name: 'Other' }, fields: { status: 'OPEN' } },
+  ] });
+  w.state.chat.ticketFiltersOpen = true;
+  w.state.chat.ticketExplorerAgent = '@me';
+  const html = w.run('renderTicketExplorer("chat")');
+  assert.match(html, /<option value="all">All agents<\/option><option value="@me" selected>Me<\/option>/);
+  assert.match(html, /data-ref="TK3"/);
+  assert.doesNotMatch(html, /data-ref="TK1"/);
 });
 
 test('one main view is shown at a time and drafts survive switching back to the inbox', () => {
@@ -372,10 +391,10 @@ test('ticket problems open a dialog: the email box for "account not found", a me
 
 // ---- the ticket account line -------------------------------------------------------------------------------
 function accountWorld(over = {}) {
-  const calls = { fetches: [], renders: 0, stored: null, problems: [], inbox: [] };
+  const calls = { fetches: [], renders: 0, stored: null, problems: [], inbox: [], timers: [] };
   const state = { chat: { escalation: { ticketEmail: over.typed || '' } } };
   const context = vm.createContext({
-    state, JSON, Date, Number, String, currentLiveChatAccount: 'lc1', ticketConfigError: '', ticketFields: [{ key: 'member_id' }], fetchTicketConfig: async () => { calls.config = (calls.config || 0) + 1; },
+    state, JSON, Date, Number, String, Object, setTimeout: (callback, ms) => { calls.timers.push({ callback, ms }); }, currentLiveChatAccount: 'lc1', ticketConfigError: '', ticketFields: [{ key: 'member_id' }], fetchTicketConfig: async () => { calls.config = (calls.config || 0) + 1; },
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
     pollTicketNotifications: async () => {}, queueMicrotask, ticketWorkspaceView: () => 'list', ticketSearchResultsByChat: new Map(), refreshTicketInbox: async (...args) => { calls.inbox.push(args); },
     showTicketProblem: (chatId, failure, retry) => { calls.problems.push({ chatId, failure, retry }); },
@@ -384,7 +403,7 @@ function accountWorld(over = {}) {
     renderTicketSlot: () => { calls.renders += 1; }, pollTicketNotifications: async () => {},
     fetch: async (url, options) => { calls.fetches.push({ url, body: JSON.parse(options.body) }); if (over.fail) throw new Error('boom'); return { json: async () => over.reply }; },
   });
-  vm.runInContext(['let ticketAccount = { status: "unknown", email: "", source: "", message: "", checking: false, at: 0 };', 'const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;', fn('checkTicketAccount'), fn('noteTicketAccountUsed'), fn('renderTicketAccountLine'), 'const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks"];', fn('ticketAccountBlocks'), fn('renderTicketAccountGate')].join('\n'), context);
+  vm.runInContext(['let ticketAccount = { status: "unknown", email: "", source: "", message: "", checking: false, at: 0, shownUntil: 0 };', 'const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;', 'const TICKET_ACCOUNT_FOUND_SHOWN_MS = 6000;', fn('hideTicketAccountLineLater'), fn('checkTicketAccount'), fn('noteTicketAccountUsed'), fn('renderTicketAccountLine'), 'const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks"];', fn('ticketAccountBlocks'), fn('renderTicketAccountGate')].join('\n'), context);
   return { state, calls, run: (code) => vm.runInContext(code, context) };
 }
 
@@ -425,7 +444,8 @@ test('ticket account line: nothing is shown when the feature is off or nobody is
   assert.match(broken.run('renderTicketAccountLine("chat")'), /Could not check your ticket account: boom/);
   const used = accountWorld({ reply: {} });
   used.run('noteTicketAccountUsed({ actedAs: "alice@company.com" })');
-  assert.match(used.run('renderTicketAccountLine("chat")'), /✓ Ticket account found: <strong>alice@company\.com/);
+  assert.equal(used.run('renderTicketAccountLine("chat")'), '', 'a ticket made as the agent confirms the account without showing the line again');
+  assert.match(used.run('renderTicketAccountLine("chat", { always: true })'), /✓ Ticket account found: <strong>alice@company\.com/);
 });
 
 test('ticket account line: it sits at the top of every Tickets view, is checked when the tab is drawn, and Enter your ticket email opens the dialog', () => {

@@ -111,6 +111,13 @@ under each ticket with a box to comment or reply.
 nothing saved) instead of overwritten. The answer is `{ ok, ref, changed, visible, ticket, actedAs }`; `visible: false` means the change moved
 the ticket out of what the agent may see. Errors keep the ticket API's `code`, `problems` and `mismatched`. Files cannot be added or removed yet.
 
+**Ticket list.** The Agent filter has "Me" (tickets the agent raised or is assigned to, by their ticket account email). Every row has a tick
+box and "Select all" ticks everything shown (at most 60); with something ticked, choose a status and "Update N" sets it on each ticked ticket,
+one `/ticket-update` after another (the ticket API has no bulk call), each guarded by the status the list showed. A ticket someone else changed
+meanwhile is skipped and reported; a refusal that would repeat for every ticket (no permission, the key may not update, rate limit) stops the run.
+The green "Ticket account found" line shows for 6 s when the account is first confirmed (or "Check again" is pressed) and then lives in Settings,
+under "Ticket account"; a problem with the account stays on the Tickets tab.
+
 In the Tickets tab a ticket's detail is always editable (raise-form fields plus department, market and assignees) and every edit is saved as
 it is made: a choice when it is picked, typed text when the box is left or Enter is pressed, one request per edit, queued in order. A
 refusal or a ticket someone else changed first shows its message and the box goes back to the real value. The detail refreshes every 30 s
