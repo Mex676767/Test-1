@@ -4116,7 +4116,9 @@ function ticketNoteDue(store, tickets, now) {
   for (const ticket of tickets) {
     const prev = store.seen[ticket.ref];
     const next = ticketNoteSnapshot(ticket, prev ? prev.at : store.startedAt);
-    const changed = prev ? prev.updatedAt !== next.updatedAt : Date.parse(next.updatedAt) > store.startedAt;
+    // A new comment does NOT change the ticket's updatedAt in the ticket system (checked: updatedAt stayed on the day the ticket was raised while
+    // comments came in days later), so the comment count is what shows one. Status changes do move updatedAt.
+    const changed = prev ? (prev.updatedAt !== next.updatedAt || prev.commentCount !== next.commentCount) : Date.parse(next.updatedAt) > store.startedAt;
     if (!changed) { if (!prev) store.seen[ticket.ref] = next; continue; }
     const moreComments = next.commentCount > (prev ? prev.commentCount : 0);
     if (ticketNoteIsMine(store, ticket)) {
@@ -4286,7 +4288,9 @@ async function pollTicketNotifications() {
     const readList = async (extra) => (await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: "", fresh: false, author, ...extra }) })).json();
     const everyone = ticketNotePollRound % 4 === 0;
     ticketNotePollRound += 1;
-    const [mineList, allList] = await Promise.all([readList({ mine: true }), everyone ? readList({}) : null]);
+    // My tickets: up to 250 by creation date, not the 100 most recently updated: a new comment does not move a ticket's updatedAt, so the
+    // newest-updated 100 (often filled by bulk status changes) can miss the very ticket a comment came in on.
+    const [mineList, allList] = await Promise.all([readList({ mine: true, size: 250, sort: "created" }), everyone ? readList({}) : null]);
     const failure = (!mineList.ok && mineList.error) || (allList && !allList.ok && allList.error) || "";
     if (!mineList.ok && !(allList && allList.ok)) { ticketPollBackoff(failure); ticketNotePollInfo = { at: Date.now(), watching: 0, error: failure || "The ticket list could not be read." }; return; }
     if (mineList.ok) ticketNoteMineRefs = new Set((mineList.tickets || []).map((ticket) => ticket.ref));
@@ -4313,6 +4317,9 @@ async function pollTicketNotifications() {
 }
 setInterval(pollTicketNotifications, TICKET_NOTE_POLL_MS);
 setTimeout(() => void pollTicketNotifications(), 8000); // the first look soon after the page opens, not a minute later
+// A browser keeps sound silent until the page has had a click or a key press, so the sound is unlocked at the first one; a chime that arrives
+// minutes later, with nobody touching the page, is then audible. (A tab nobody has clicked in stays silent: that is the browser's rule.)
+for (const type of ["pointerdown", "keydown"]) document.addEventListener(type, () => { ticketNoteAudioReady(); }, { once: true, passive: true });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketNotifications(); });
 document.addEventListener("click", (event) => {
   // The bell is redrawn by the click itself, which detaches the clicked button, so the path recorded at the click is what says where it was.
