@@ -29,8 +29,8 @@ The admin preview opens with a compact inbox. All, Active and Solved filters
 share one list; the filter button exposes agent, status, department and market
 filters. Opening a ticket and creating a new ticket each use their own view.
 Additional form fields and ticket details are collapsible, and form drafts and
-chosen attachments remain available when returning to the inbox. Tickets stay
-hidden in the installed LiveChat widget (`DEPARTMENT_TABS_LIVE = false`).
+chosen attachments remain available when returning to the inbox. Tickets are
+in the installed LiveChat widget since the 2026-10-19 rollout (`DEPARTMENT_TABS_LIVE = true`; set it back to `false` to hide them again).
 
 The ticket API supports list, read, create, comment and (since 2026-10-19) update (`PATCH /tickets/<ref>`, see "Editing a ticket" below).
 It does not expose history or log entries; the app links to the dashboard for those.
@@ -102,7 +102,7 @@ missing `api-keys:act-on-behalf` (ask the ticket team); a senior account the key
 reply (`{ ref, body, parentId?, author }`) as the signed-in agent through the same `onBehalfOf` rules. The widget shows the thread
 under each ticket with a box to comment or reply.
 
-## Editing a ticket (admin preview only)
+## Editing a ticket
 
 `POST /ticket-update` (`PATCH` also accepted) `{ ref, author, fields?, toDepartment?, market?, assignees?, expect? }` makes one atomic
 `PATCH /tickets/<ref>` as the signed-in agent (same `onBehalfOf` rules as comments). `fields` are field keys to new values (`null` clears);
@@ -158,7 +158,7 @@ it is made: a choice when it is picked, typed text when the box is left or Enter
 refusal or a ticket someone else changed first shows its message and the box goes back to the real value. The detail refreshes every 30 s
 (a copy older than a save just made is ignored). **Needs on the ticket side:** the API key's "Update tickets" access switched on (off on every key until an administrator ticks it; a
 refusal shows as "This API key is not allowed to update tickets") and `tickets:update` on the role of each agent's ticket account. The Tickets
-tab is still admin preview only (`DEPARTMENT_TABS_LIVE = false`), so nothing changes in the installed widget.
+tab is in the installed widget since the 2026-10-19 rollout (`DEPARTMENT_TABS_LIVE = true`).
 
 **Ticket account check (before the Tickets tab can be used).** When the Tickets tab is opened the widget asks `/ticket-account`, which
 makes one small read (the market list) as the agent's ticket email (`onBehalfOf`) and so learns, without creating anything, whether the
@@ -168,13 +168,21 @@ email popup open at once, or why the key cannot act for them). The inbox and tic
 busy) does not lock anyone out. The answer is remembered for a minute per email on the server and five minutes in the widget; "Check
 again" and entering an email check again. It only exists with `TICKETS_ON_BEHALF_OF=1`.
 
-## Auto ticket on claim and the default market (admin preview only)
+## Auto ticket on claim and the default market
 
 Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket (department `PYM_MYR`, level VVIP, query type = the ticket query
 type that contains the bonus keyword, amount = the amount claimed, random 32-character transaction id, status / gateway / remarks / manual
-deposit left empty) and asks the agent for the proof; the claim only goes through once the ticket exists. It runs only in the admin preview
-(`AUTO_TICKET_LIVE = false` in `app.js`; set it to `true` to roll out).
+deposit left empty) and asks the agent for the proof; the claim only goes through once the ticket exists. It runs in the installed
+widget since the 2026-10-19 rollout (`AUTO_TICKET_LIVE = true` in `app.js`; set it to `false` to switch it off without touching anything else).
+If the market cannot be saved on the server (the Default Market column is missing) the claim still goes ahead and the market is remembered in that browser.
 
 **Default market.** Add a text column **Default Market** to the Lark table "Livechat App Agent Logins" (once). The agent picks their market
 the first time they claim; `/agent-market` saves its code on their row (and a second login of the same agent shares it). From then on only an
 admin changes it, by editing that cell in Lark (the admin panel will do it later). Without the column the agent is asked every time.
+
+## Rollout checklist (2026-10-19)
+
+Things the installed widget depends on, all outside the code: the Lark column **Default Market** in "Livechat App Agent Logins"; an active ticket-system
+account for every agent (their LiveChat email, or **Ticket Email** in Lark); `TICKETS_ON_BEHALF_OF=1` in Cloudflare; the API key's role holding
+`api-keys:act-on-behalf`, and its "Update tickets" switch on; and the 120 calls a minute shared by all agents (see "Near real time"). Rolling back: set
+`DEPARTMENT_TABS_LIVE` and `AUTO_TICKET_LIVE` to `false` and bump `widget-release.json`.

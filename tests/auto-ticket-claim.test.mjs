@@ -224,3 +224,28 @@ test('admin preview without a LiveChat login keeps the market in this browser on
   assert.equal(w.store.get('rc-default-market'), 'MYR');
   assert.equal(w.calls.fetches.filter((call) => call.url === '/agent-market').length, 0);
 });
+
+test('default market: if it cannot be saved on the server (the column is missing, Lark is down) the claim is not blocked: the market is remembered in this browser, used for the ticket and offered next time', async () => {
+  const w = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: (body) => (body.market ? { ok: false, error: 'The market could not be saved (is the "Default Market" column in the Agent Logins table?)' } : { ok: true, market: '' }) });
+  assert.equal(await w.run('raiseClaimTicket("chat1", "topPnl", "58")'), true);
+  assert.equal(w.store.get('rc-default-market'), 'MYR');
+  assert.equal(plain(w.calls.fetches.find((call) => call.url === '/ticket-create').body.ticket.fields).market, 'MYR');
+  w.run('state.chat1.claimTickets = {}');
+  const offered = [];
+  w.context.openClaimTicketModal = async (options) => { offered.push(options); return true; };
+  await w.run('raiseClaimTicket("chat1", "ltvTest", "20")');
+  assert.equal(offered[0].market, 'MYR', 'the remembered market is preselected');
+  assert.equal(offered[0].marketLocked, false, 'but not locked: the server has none');
+});
+
+test('default market: an expired LiveChat login still stops the claim with its reason', async () => {
+  const w = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: (body) => (body.market ? { ok: false, loginExpired: true, error: 'LiveChat login expired or invalid — connect LiveChat again.' } : { ok: true, market: '' }) });
+  assert.equal(await w.run('raiseClaimTicket("chat1", "topPnl", "58")'), false);
+  assert.equal(w.calls.fetches.some((call) => call.url === '/ticket-create'), false, 'no ticket is raised');
+});
+
+test('the rollout: Tickets, notifications and the auto-ticket are switched on for the installed widget, and the release id was bumped so agents get the update notice', () => {
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
+  assert.match(app, /const AUTO_TICKET_LIVE = true;/);
+  assert.equal(JSON.parse(readFileSync(new URL('../widget-release.json', import.meta.url), 'utf8')).release, '20261019-1');
+});

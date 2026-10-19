@@ -48,7 +48,7 @@ test('the installed widget: Retention keeps all four tabs, Customer Service gets
   assert.deepEqual(tabs({ departmentKnown: false }), all, 'until LiveChat says, nothing is hidden');
   assert.equal(tabs({ currentDepartment: 'rtn', departmentKnown: true, BLAST_LIVE: false }).blast, false, 'the Blast switch still wins');
   assert.deepEqual(tabs({ DEPARTMENT_TABS_LIVE: false }), { customer: true, tickets: false, blast: true, knowledge: false }, 'with the rollout switch off the installed widget is as before');
-  assert.match(app, /const DEPARTMENT_TABS_LIVE = false;/);
+  assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
   assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = true;/);
 });
 

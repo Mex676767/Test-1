@@ -2,12 +2,12 @@
 // Pages environment; the browser only receives the fields it needs.
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
-// Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge) are on in the admin
-// preview only. DEPARTMENT_TABS_LIVE puts them in the installed LiveChat widget too; keep it off until rollout is approved.
-const DEPARTMENT_TABS_LIVE = false;
-// Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team (see "Auto ticket on claim"). Admin preview
-// only; AUTO_TICKET_LIVE puts it in the installed LiveChat widget too. Keep it off until rollout is approved.
-const AUTO_TICKET_LIVE = false;
+// Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge). DEPARTMENT_TABS_LIVE
+// puts them in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
+const DEPARTMENT_TABS_LIVE = true;
+// Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team (see "Auto ticket on claim").
+// AUTO_TICKET_LIVE puts it in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
+const AUTO_TICKET_LIVE = true;
 const BLAST_LIVE = true;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
@@ -3799,7 +3799,10 @@ async function loadDefaultMarket(s) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Your default market could not be read.");
   if (data.market) agentDefaultMarket = { account: author.accountKey, code: data.market };
-  return { code: data.market || "", locked: !!data.market };
+  // None saved on the server yet: offer the one remembered in this browser (see saveDefaultMarket), not locked.
+  let remembered = "";
+  if (!data.market) { try { remembered = localStorage.getItem(DEFAULT_MARKET_LOCAL_KEY) || ""; } catch (_) { /* not remembered */ } }
+  return { code: data.market || remembered, locked: !!data.market };
 }
 
 // Saves the market chosen in the dialog (only ever the first time) and returns the one that applies: the saved one wins over a stale choice.
@@ -3811,7 +3814,13 @@ async function saveDefaultMarket(s, code) {
   }
   const res = await fetch("/agent-market", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author, market: code }) });
   const data = await res.json();
-  if (!data.ok || !data.market) throw new Error(data.error || "Your default market could not be saved.");
+  if (!data.ok && data.loginExpired) throw new Error(data.error || "Your LiveChat login expired. Connect LiveChat again.");
+  if (!data.ok || !data.market) {
+    // The market could not be stored on the server (the Default Market column is missing, Lark is unreachable): the claim must not be blocked
+    // for that, so it is remembered in this browser, used for this ticket and offered again next time.
+    try { localStorage.setItem(DEFAULT_MARKET_LOCAL_KEY, code); } catch (_) { /* not remembered */ }
+    return code;
+  }
   agentDefaultMarket = { account: author.accountKey, code: data.market };
   return data.market;
 }
