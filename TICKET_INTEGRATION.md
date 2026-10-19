@@ -111,7 +111,15 @@ under each ticket with a box to comment or reply.
 nothing saved) instead of overwritten. The answer is `{ ok, ref, changed, visible, ticket, actedAs }`; `visible: false` means the change moved
 the ticket out of what the agent may see. Errors keep the ticket API's `code`, `problems` and `mismatched`. Files cannot be added or removed yet.
 
-**Notifications run on every tab.** The bell is polled every minute (and 8 s after the page opens) while the widget is visible. The poll used to
+**Near real time.** The ticket API has no push or webhook, so "live" is polling: the bell every 15 s (`TICKET_NOTE_POLL_MS`), an open ticket every 8 s
+(`TICKET_OPEN_POLL_MS`), both only while the widget is visible and immediately when the agent comes back to it; the server keeps a list read 8 s
+and a ticket read 4 s. Edits made in the widget show at once. **Budget:** the key allows 120 calls a minute to all agents together. One agent
+costs about 5 a minute for notifications (their own tickets every poll, everyone's newest every fourth) plus about 8 while a ticket is open, so
+roughly ten agents working at once reach the limit. When the ticket system answers "busy" every ticket poll waits as long as it asked, and
+lookups show "The ticket system is busy". If that happens with more agents, raise the two intervals (or ask the ticket team for a higher limit).
+Notifications use the ticket system's own "raised by or assigned to me" list, so a ticket counts as the agent's whatever email it carries.
+
+**Notifications run on every tab.** The bell is polled (and 8 s after the page opens) while the widget is visible. The poll used to
 need the Tickets tab to have been opened once, because only that checked the ticket account; it now checks the account quietly itself (no popup).
 Settings → Ticket account says whether notifications are being watched ("watching N tickets, last checked …") or why not (account missing,
 ticket list refused, a failed call). A ticket notifies only if it is the agent's: raised by their ticket account email, assigned to them, or

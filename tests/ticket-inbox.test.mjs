@@ -26,7 +26,7 @@ function widget() {
     renderTicketBell: () => '',
     renderTicketAccountLine: () => '',
     renderTicketAccountGate: () => '',
-    TICKET_FILTER_ME: '@me', ticketIsMine: () => false, ticketAgentRoster: { agents: [], loading: false }, ticketBulkStatusOptions: () => [],
+    TICKET_FILTER_ME: '@me', ticketIsMine: () => false, ticketAgentRoster: { agents: [], loading: false }, ticketBulkStatusOptions: () => [], ticketPollPausedUntil: 0, ticketPollBackoff: () => {},
     ticketBulkFor: () => ({ selected: [], visibleRefs: [], running: false, summary: '', status: '' }), renderTicketBulkBar: () => '',
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },

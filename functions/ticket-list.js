@@ -3,7 +3,7 @@ import { isOnBehalfRefusal, readingAs, refusalResponse } from "./_lib/ticket-act
 import { json, ticketError, ticketGet, withOnBehalf } from "./_lib/tickets.js";
 
 // An inbox read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
-const LIST_TTL_MS = 15_000;
+const LIST_TTL_MS = 8_000;
 
 function cleanTicket(ticket) {
   return {

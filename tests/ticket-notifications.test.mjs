@@ -7,10 +7,10 @@ const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 const line = (re) => app.match(re)[0];
 
-const NAMES = ['ticketNoteLoad', 'ticketNoteSave', 'ticketNotePeople', 'ticketNoteIsMine', 'ticketNoteLearnMe', 'ticketNoteRemember', 'ticketNoteSnapshot', 'ticketNoteAdd', 'ticketNoteSnippet', 'ticketNoteFlatten', 'ticketNoteStatusItem', 'ticketNoteDue', 'ticketNoteApplyThread', 'ticketNoteMarkRead', 'ticketNoteUnread', 'ticketNoteVisible', 'renderTicketBell', 'pollTicketNotifications', 'ticketNoteAbsorb', 'renderTicketNotesStatus'];
+const NAMES = ['ticketNoteLoad', 'ticketNoteSave', 'ticketNotePeople', 'ticketNoteIsMine', 'ticketNoteLearnMe', 'ticketNoteRemember', 'ticketNoteSnapshot', 'ticketNoteAdd', 'ticketNoteSnippet', 'ticketNoteFlatten', 'ticketNoteStatusItem', 'ticketNoteDue', 'ticketNoteApplyThread', 'ticketNoteMarkRead', 'ticketNoteUnread', 'ticketNoteVisible', 'renderTicketBell', 'pollTicketNotifications', 'ticketNoteAbsorb', 'renderTicketNotesStatus', 'ticketPollBackoff'];
 const SOURCE = [
   line(/const TICKET_NOTE_MAX = \d+;/), line(/const TICKET_NOTE_KEEP_SEEN = \d+;/), line(/const TICKET_NOTE_READS_PER_POLL = \d+;/),
-  'let ticketNoteStore = null; let ticketNoteStoreKey = ""; let ticketNoteTab = "all"; let ticketBellOpen = false; let ticketNotePolling = false; let ticketNotePollInfo = { at: 0, watching: 0, error: "" };',
+  'let ticketNoteStore = null; let ticketNoteStoreKey = ""; let ticketNoteTab = "all"; let ticketBellOpen = false; let ticketNotePolling = false; let ticketNotePollRound = 0; let ticketNoteMineRefs = new Set(); let ticketPollPausedUntil = 0; let ticketNotePollInfo = { at: 0, watching: 0, error: "" };',
   ...NAMES.map(fn),
 ].join('\n');
 
@@ -183,7 +183,7 @@ test('polling: the first poll is silent; later news chimes once, reads at most t
   list.tickets = [mine(1), mine(2), mine(3), mine(4), mine(5)];
   await w.run('pollTicketNotifications()');
   assert.equal(w.calls.chimes, 0, 'nothing is new on the first look');
-  assert.equal(w.calls.fetches.length, 1);
+  assert.deepEqual(w.calls.fetches.map((f) => f.body.mine === true), [true, false], 'the first poll reads my tickets and the newest of everyone');
   list.tickets = list.tickets.map((t) => ({ ...t, updatedAt: iso(20), commentCount: 1 }));
   await w.run('pollTicketNotifications()');
   assert.equal(w.calls.fetches.filter((f) => f.url === '/ticket-status').length, 3, 'three reads a poll');
@@ -239,7 +239,7 @@ test('polling works on any tab: an account never checked is checked quietly firs
   const w = world({ account: { status: 'unknown', email: '' }, checkResult: { status: 'found', email: ME.email }, fetchPlan: () => ({ ok: true, tickets: [ticket('TK2610190001', { raisedBy: ME })] }) });
   await w.run('pollTicketNotifications()');
   assert.deepEqual(JSON.parse(JSON.stringify(w.calls.checks.map((c) => c.options))), [{ quiet: true }]);
-  assert.equal(w.calls.fetches.length, 1, 'the ticket list was read once the account was found');
+  assert.equal(w.calls.fetches.length, 2, 'the ticket lists were read once the account was found');
   const info = JSON.parse(w.run('JSON.stringify(ticketNotePollInfo)'));
   assert.equal(info.error, '');
   assert.equal(info.watching, 1);
@@ -268,4 +268,44 @@ test('polling does not run where the Tickets tab does not exist (the installed w
   assert.equal(w.calls.checks.length, 0);
   assert.ok(app.includes('setTimeout(() => void pollTicketNotifications(), 8000);'));
   assert.ok(app.includes('id="settingsTicketNotes"'), 'Settings shows whether notifications are being watched');
+});
+
+test('my tickets are the ones the ticket system lists as mine, whatever email they carry; everyone\'s newest are read only every fourth poll', async () => {
+  const list = { mine: [], all: [] };
+  const w = world({ fetchPlan: (url, body) => (url === '/ticket-list' ? { ok: true, tickets: body.mine ? list.mine : list.all } : { ok: true, ticket: { ...list.mine[0], comments: [comment(5, OTHER, 30)] } }) });
+  const mineTicket = (extra = {}) => ticket('TK2610170260', { raisedBy: { id: 1, name: '96 Mexha', email: 'another-email@x.com' }, updatedAt: iso(0), ...extra });
+  list.mine = [mineTicket()];
+  await w.run('pollTicketNotifications()');
+  assert.equal(items(w).length, 0, 'the first look is silent');
+  list.mine = [mineTicket({ updatedAt: iso(20), commentCount: 1 })];
+  await w.run('pollTicketNotifications()');
+  assert.equal(w.calls.fetches.filter((f) => f.url === '/ticket-list').length, 3, 'two lists the first time, then only mine');
+  assert.equal(items(w).length, 1, 'a comment on a ticket that is mine notifies although its email is not mine');
+  assert.equal(items(w)[0].ref, 'TK2610170260');
+  assert.equal(w.calls.chimes, 1);
+  for (let i = 0; i < 3; i += 1) await w.run('pollTicketNotifications()');
+  assert.equal(w.calls.fetches.filter((f) => f.url === '/ticket-list' && f.body.mine !== true).length, 2, 'everyone\'s newest are read again on the fourth poll');
+});
+
+test('if only one of the two lists can be read, the other still gives notifications; if neither, Settings says why and polling backs off while the ticket system is busy', async () => {
+  const half = world({ fetchPlan: (url, body) => (url === '/ticket-list' ? (body.mine ? { ok: false, error: 'no mine' } : { ok: true, tickets: [ticket('TK2610190001', { raisedBy: ME })] }) : { ok: true, ticket: ticket('TK2610190001') }) });
+  await half.run('pollTicketNotifications()');
+  assert.match(half.run('renderTicketNotesStatus()'), /Part of the list could not be read: no mine/);
+  const busy = world({ fetchPlan: () => ({ ok: false, error: 'The ticket system is busy (request limit reached). Try again in 20 s.' }) });
+  await busy.run('pollTicketNotifications()');
+  assert.match(busy.run('renderTicketNotesStatus()'), /not working\. The ticket system is busy/);
+  const paused = busy.run('ticketPollPausedUntil - Date.now()');
+  assert.ok(paused > 20_000 && paused <= 22_500, `paused for what the ticket system asked, not longer (${paused})`);
+  const calls = busy.calls.fetches.length;
+  await busy.run('pollTicketNotifications()');
+  assert.equal(busy.calls.fetches.length, calls, 'no call while paused');
+});
+
+test('open tickets are polled every 8 s and notifications every 15 s, each waits out a "busy" answer, and coming back to the page looks at once', () => {
+  assert.ok(app.includes('const TICKET_NOTE_POLL_MS = 15_000;'));
+  assert.ok(app.includes('const TICKET_OPEN_POLL_MS = 8000;'));
+  assert.ok(app.includes('setInterval(pollTicketUpdates, TICKET_OPEN_POLL_MS);'));
+  assert.ok(app.includes('document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketUpdates(); });'));
+  assert.match(fn('pollTicketUpdates'), /Date\.now\(\) < ticketPollPausedUntil/);
+  assert.match(fn('pollTicketUpdates'), /ticketPollBackoff\(err\)/);
 });

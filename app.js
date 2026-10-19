@@ -4018,7 +4018,16 @@ function rememberTicketSnapshot(ticket) {
 const TICKET_NOTE_MAX = 60;
 const TICKET_NOTE_KEEP_SEEN = 300;
 const TICKET_NOTE_READS_PER_POLL = 3; // thread reads per poll: the ticket API allows each key 120 calls a minute, shared by every agent
-const TICKET_NOTE_POLL_MS = 60_000;
+const TICKET_NOTE_POLL_MS = 15_000; // how often the bell looks for news; the ticket API allows 120 calls a minute to every agent together, see TICKET_INTEGRATION.md
+const TICKET_OPEN_POLL_MS = 8000; // how often an open ticket looks for changes
+// After the ticket system said it is busy, ticket polling waits as long as it asked (plus a moment), so polling never makes the limit worse.
+let ticketPollPausedUntil = 0;
+function ticketPollBackoff(problem) {
+  const text = String(problem?.message ?? problem ?? "");
+  if (!/busy|request limit/i.test(text)) return;
+  const seconds = Number((/Try again in (\d+) s/.exec(text) || [])[1]) || 30;
+  ticketPollPausedUntil = Date.now() + seconds * 1000 + 2000;
+}
 let ticketNoteStore = null;
 let ticketNoteStoreKey = "";
 let ticketNoteTab = "all";
@@ -4047,7 +4056,7 @@ function ticketNotePeople(ticket) {
 
 function ticketNoteIsMine(store, ticket) {
   const email = store.me.email;
-  return store.mine.includes(ticket.ref) || (Boolean(email) && ticketNotePeople(ticket).some((person) => String(person.email || "").toLowerCase() === email));
+  return ticketNoteMineRefs.has(ticket.ref) || store.mine.includes(ticket.ref) || (Boolean(email) && ticketNotePeople(ticket).some((person) => String(person.email || "").toLowerCase() === email));
 }
 
 // The agent's ticket-system user id is what comments and @mentions carry; it is read off any ticket that names their email.
@@ -4255,8 +4264,10 @@ function ticketNoteAbsorb(ticket) {
 
 // What the last poll did, for Settings: when it ran, how many tickets it looked at, or why it could not.
 let ticketNotePollInfo = { at: 0, watching: 0, error: "" };
+let ticketNotePollRound = 0; // polls made so far: every fourth also reads everyone's newest tickets
+let ticketNoteMineRefs = new Set(); // refs the ticket system listed as mine at the last poll (not saved: read again every poll)
 async function pollTicketNotifications() {
-  if (document.hidden || ticketNotePolling || !(previewMode || DEPARTMENT_TABS_LIVE)) return;
+  if (document.hidden || ticketNotePolling || Date.now() < ticketPollPausedUntil || !(previewMode || DEPARTMENT_TABS_LIVE)) return;
   const author = ticketReadAuthor(null);
   if (!author) return;
   ticketNotePolling = true;
@@ -4269,10 +4280,21 @@ async function pollTicketNotifications() {
     if (ticketAccount.status !== "found" || !ticketAccount.email) { ticketNotePollInfo = { at: Date.now(), watching: 0, error: ticketAccount.status === "unknown" ? "The ticket account has not been checked yet." : "The ticket account is not available, so tickets cannot be watched." }; return; }
     const store = ticketNoteLoad();
     store.me.email = String(ticketAccount.email).trim().toLowerCase();
-    const list = await (await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: "", fresh: false, author }) })).json();
-    if (!list.ok) { ticketNotePollInfo = { at: Date.now(), watching: 0, error: list.error || "The ticket list could not be read." }; return; }
-    ticketNotePollInfo = { at: Date.now(), watching: (list.tickets || []).length, error: "" };
-    const { due, added: fromList } = ticketNoteDue(store, list.tickets || [], Date.now());
+    // Two lists: MY tickets as the ticket system says (raised by or assigned to the person it acts as: the same "created by me" the dashboard
+    // has; read every poll), and everyone's newest (needed to see a mention on someone else's ticket; read every fourth poll to spare the
+    // 120 calls a minute shared by all agents). Matching emails alone missed tickets that are the agent's but carry another email.
+    const readList = async (extra) => (await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: "", fresh: false, author, ...extra }) })).json();
+    const everyone = ticketNotePollRound % 4 === 0;
+    ticketNotePollRound += 1;
+    const [mineList, allList] = await Promise.all([readList({ mine: true }), everyone ? readList({}) : null]);
+    const failure = (!mineList.ok && mineList.error) || (allList && !allList.ok && allList.error) || "";
+    if (!mineList.ok && !(allList && allList.ok)) { ticketPollBackoff(failure); ticketNotePollInfo = { at: Date.now(), watching: 0, error: failure || "The ticket list could not be read." }; return; }
+    if (mineList.ok) ticketNoteMineRefs = new Set((mineList.tickets || []).map((ticket) => ticket.ref));
+    const byRef = new Map();
+    for (const ticket of [...(allList?.ok ? allList.tickets || [] : []), ...(mineList.ok ? mineList.tickets || [] : [])]) if (!byRef.has(ticket.ref)) byRef.set(ticket.ref, ticket);
+    const tickets = [...byRef.values()];
+    ticketNotePollInfo = { at: Date.now(), watching: tickets.length, error: failure ? `Part of the list could not be read: ${failure}` : "" };
+    const { due, added: fromList } = ticketNoteDue(store, tickets, Date.now());
     let added = fromList;
     for (const ref of due.slice(0, TICKET_NOTE_READS_PER_POLL)) {
       const thread = await (await fetch("/ticket-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref, fresh: false, author }) })).json();
@@ -4281,7 +4303,7 @@ async function pollTicketNotifications() {
     ticketNoteSave();
     repaintTicketBell();
     if (added && store.sound !== false) ticketNoteChime();
-  } catch (err) { ticketNotePollInfo = { at: Date.now(), watching: 0, error: err.message || "The poll failed." }; /* tried again next minute; Settings says why */ }
+  } catch (err) { ticketPollBackoff(err); ticketNotePollInfo = { at: Date.now(), watching: 0, error: err.message || "The poll failed." }; /* tried again next minute; Settings says why */ }
   finally { ticketNotePolling = false; }
 }
 setInterval(pollTicketNotifications, TICKET_NOTE_POLL_MS);
@@ -5456,7 +5478,7 @@ function applyTicketFilter(chatId, key, value) {
 }
 
 async function pollTicketUpdates() {
-  if (activeMainTab !== "tickets" || !watchedTicketSnapshots.size || document.hidden) return;
+  if (activeMainTab !== "tickets" || !watchedTicketSnapshots.size || document.hidden || Date.now() < ticketPollPausedUntil) return;
   for (const ref of watchedTicketSnapshots.keys()) {
     const owner = Object.entries(state).find(([, value]) => value?.ticketRecord?.ref === ref);
     if (!owner) continue;
@@ -5465,10 +5487,11 @@ async function pollTicketUpdates() {
       await loadTicketStatus(chatId, ref, { fresh: false });
       const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .escalation-slot`);
       if (slot && ticketWorkspaceView(state[chatId]) === "detail") renderTicketSlot(chatId);
-    } catch (_) { /* a temporary poll failure should not interrupt the agent */ }
+    } catch (err) { ticketPollBackoff(err); /* a temporary poll failure should not interrupt the agent */ }
   }
 }
-setInterval(pollTicketUpdates, 30000);
+setInterval(pollTicketUpdates, TICKET_OPEN_POLL_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketUpdates(); }); // news is fetched the moment the agent comes back
 
 // Creates tickets through the C9 Tickets REST API and reads their latest
 // status. The API currently has no update route, so editing remains in the
