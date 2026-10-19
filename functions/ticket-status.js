@@ -16,6 +16,27 @@ const mapComment = (comment) => ({
   ...(Array.isArray(comment.replies) ? { replies: comment.replies.map(mapComment) } : {}),
 });
 
+// A ticket record from the ticket API as the widget gets it (ticket-update.js answers with the same shape, without the thread).
+export function mapTicket(record) {
+  const recordFields = record.fields && !Array.isArray(record.fields) ? record.fields : {};
+  return {
+    ref: record.ref,
+    fields: recordFields,
+    currentDepartment: record.currentDepartment || null,
+    raisedByDepartment: record.raisedByDepartment || null,
+    market: record.market || null,
+    raisedBy: record.raisedBy ? { id: record.raisedBy.id, name: record.raisedBy.name, email: record.raisedBy.email } : null,
+    assignees: Array.isArray(record.assignees)
+      ? record.assignees.map(({ id, name, email }) => ({ id, name, email }))
+      : [],
+    createdAt: record.createdAt || null,
+    updatedAt: record.updatedAt || null,
+    commentCount: Number(record.commentCount || 0),
+    attachmentCount: Number(record.attachmentCount || 0),
+    comments: Array.isArray(record.comments) ? record.comments.map(mapComment) : [],
+  };
+}
+
 export async function handler(event) {
   const post = event.httpMethod === "POST";
   if (event.httpMethod !== "GET" && !post) return json(405, { ok: false, error: "Method not allowed" });
@@ -37,26 +58,7 @@ export async function handler(event) {
     // ticket directly. Support both shapes and never mistake the catalog
     // array for the ticket's field-value object.
     const record = data.ticket || data.record || data;
-    const recordFields = record.fields && !Array.isArray(record.fields) ? record.fields : {};
-    return json(200, {
-      ok: true,
-      ticket: {
-        ref: record.ref,
-        fields: recordFields,
-        currentDepartment: record.currentDepartment || null,
-        raisedByDepartment: record.raisedByDepartment || null,
-        market: record.market || null,
-        raisedBy: record.raisedBy ? { id: record.raisedBy.id, name: record.raisedBy.name, email: record.raisedBy.email } : null,
-        assignees: Array.isArray(record.assignees)
-          ? record.assignees.map(({ id, name, email }) => ({ id, name, email }))
-          : [],
-        createdAt: record.createdAt || null,
-        updatedAt: record.updatedAt || null,
-        commentCount: Number(record.commentCount || 0),
-        attachmentCount: Number(record.attachmentCount || 0),
-        comments: Array.isArray(record.comments) ? record.comments.map(mapComment) : [],
-      },
-    });
+    return json(200, { ok: true, ticket: mapTicket(record) });
   } catch (err) {
     if (reading.email && isOnBehalfRefusal(err)) return refusalResponse(err, reading.email, reading.source);
     return ticketError(err);
