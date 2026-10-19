@@ -3839,23 +3839,25 @@ function openClaimTicketModal({ title, intro, rows, markets, market, marketLocke
     const marketLabel = (code) => (markets.find((item) => item.value === code) || {}).label || code;
     const overlay = document.createElement("div");
     overlay.id = "claimTicketOverlay";
-    overlay.className = "settings-overlay";
-    overlay.innerHTML = `<div class="settings-panel claim-ticket" role="dialog" aria-modal="true" aria-labelledby="claimTicketTitle">
-      <div class="settings-head"><span id="claimTicketTitle">${escapeHtml(title)}</span></div>
-      <p class="settings-hint">${intro}${previewNote ? ` <strong>${escapeHtml(previewNote)}</strong>` : ""}</p>
+    overlay.className = "claim-ticket-backdrop";
+    overlay.innerHTML = `<div class="claim-ticket-card" role="dialog" aria-modal="true" aria-labelledby="claimTicketTitle">
+      <div class="claim-ticket-head"><span class="claim-ticket-mark" aria-hidden="true">🎫</span><div><h3 id="claimTicketTitle">${escapeHtml(title)}</h3><p class="claim-ticket-intro">${intro}</p></div></div>
+      ${previewNote ? `<div class="claim-ticket-preview">${escapeHtml(previewNote)}</div>` : ""}
       <dl class="claim-ticket-summary">${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
         <dt>Market</dt><dd>${marketLocked
           ? `${escapeHtml(marketLabel(market))} <span class="claim-ticket-note">(your default market; an admin changes it)</span>`
           : `<select class="input claim-ticket-market" aria-label="Your market"><option value="">Choose your market…</option>${markets.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === market ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="claim-ticket-note">You choose this once. Only an admin can change it afterwards.</span>`}</dd></dl>
+      <div class="claim-ticket-label">Proof <span>required</span></div>
       <div class="claim-ticket-drop" tabindex="0" aria-label="Proof. Choose files, drop them here or press Ctrl+V to paste.">
-        <span>Paste or drag files here</span>
-        <label class="ticket-file-button"><input type="file" class="claim-ticket-input" accept="image/png,image/jpeg,image/webp,application/pdf" multiple /><span>+ Upload local files</span></label>
+        <span class="claim-ticket-drop-icon" aria-hidden="true">⬆</span>
+        <strong>Paste or drag a picture here</strong>
+        <label class="ticket-file-button"><input type="file" class="claim-ticket-input" accept="image/png,image/jpeg,image/webp,application/pdf" multiple /><span>or choose files</span></label>
         <small>Pictures are shrunk to fit · PDF under 1MB · up to 6 files</small>
       </div>
       <div class="ticket-attachment-list claim-ticket-files"></div>
       <div class="claim-ticket-email" hidden><input type="text" inputmode="email" autocomplete="email" class="input mono" placeholder="Your ticket account email: name@company.com" aria-label="Your ticket account email" /></div>
-      <div class="login-status error claim-ticket-status" role="alert"></div>
-      <div class="login-actions"><button type="button" class="submit-btn" data-claim-ticket="go" disabled>Raise ticket and claim</button><button type="button" class="secondary-btn" data-claim-ticket="cancel">Cancel</button></div>
+      <div class="claim-ticket-status" role="alert"></div>
+      <div class="claim-ticket-actions"><button type="button" class="secondary-btn" data-claim-ticket="cancel">Cancel</button><button type="button" class="submit-btn" data-claim-ticket="go" disabled>Raise ticket and claim</button></div>
     </div>`;
     document.body.appendChild(overlay);
     const goButton = overlay.querySelector('[data-claim-ticket="go"]');
@@ -3937,6 +3939,18 @@ function openClaimTicketModal({ title, intro, rows, markets, market, marketLocke
   });
 }
 
+// Is the agent's ticket account usable? The auto ticket only asks for proof when it is ("found", or "off" when the ticket system acts as the key's
+// owner for everybody); with any known problem (account not found, the API key refused, the ticket system not answering) the claim goes ahead as
+// it did before the auto ticket existed. "unknown" (nobody signed in to LiveChat, so nothing could be checked) is left to the dialog.
+const CLAIM_TICKET_USABLE_ACCOUNT = ["found", "off", "unknown"];
+async function ticketAccountForClaim(chatId) {
+  const problem = !CLAIM_TICKET_USABLE_ACCOUNT.includes(ticketAccount.status);
+  if (ticketAccount.status === "unknown" && !ticketAccount.checking) await checkTicketAccount(chatId, { quiet: true });
+  else if (problem && !ticketAccount.checking && Date.now() - ticketAccount.at > 60_000) await checkTicketAccount(chatId, { force: true, quiet: true }); // a fixed key or a new account is noticed within a minute
+  for (let waited = 0; ticketAccount.checking && waited < 4000; waited += 200) await new Promise((resolve) => setTimeout(resolve, 200));
+  return ticketAccount.status;
+}
+
 // Raises the claim ticket for a bonus about to be claimed. Resolves true when the claim may go ahead (ticket created, one was already raised
 // for this case's claim, or this bonus / this build does not raise one) and false when it must not (cancelled or could not be raised; the
 // reason is shown). Nothing about the claim has been changed by then.
@@ -3949,6 +3963,14 @@ async function raiseClaimTicket(chatId, programKey, amount) {
   if (s.claimTickets[programKey]) { setStatus(`Ticket ${s.claimTickets[programKey]} was already raised for this ${program.label} claim.`, "success"); return true; }
   if (claimTicketBusy.has(chatId) || ticketCreateInFlight.has(chatId)) return false;
   claimTicketBusy.add(chatId);
+  try {
+    const account = await ticketAccountForClaim(chatId);
+    if (!CLAIM_TICKET_USABLE_ACCOUNT.includes(account)) {
+      setStatus(`No ticket was raised for this ${program.label} claim (ticket account: ${account}); the claim went ahead as normal.`, "info");
+      claimTicketBusy.delete(chatId);
+      return true;
+    }
+  } catch (_) { /* the account could not be checked: carry on to the dialog, which says what is wrong if it cannot raise the ticket */ }
   try {
     if (!ticketFields.length) await fetchTicketConfig({ fresh: true });
     if (!ticketFields.length) { setStatus(`The ticket form could not be loaded (${ticketConfigError || "no fields"}). Nothing was claimed.`, "error"); return false; }
@@ -5032,13 +5054,15 @@ function showTicketProblem(chatId, failure, retry) {
   const askEmail = Boolean(failure.needTicketEmail);
   const overlay = document.createElement("div");
   overlay.id = "ticketProblemOverlay";
-  overlay.className = "settings-overlay";
-  overlay.innerHTML = `<div class="settings-panel ticket-problem" role="alertdialog" aria-modal="true" aria-labelledby="ticketProblemTitle">
-    <div class="settings-head"><span id="ticketProblemTitle">${askEmail ? "Ticket account not found" : "This can't be done in the ticket system"}</span></div>
-    <p class="settings-hint">${escapeHtml(failure.error || "The ticket system refused this.")}${failure.detail ? ` The ticket system said: "${escapeHtml(failure.detail)}"` : ""}${askEmail && failure.triedEmail ? ` We tried ${escapeHtml(failure.triedEmail)}.` : ""}</p>
-    ${failure.duplicateOf ? `<p class="settings-hint">This is the ticket that already has the same details: <strong>${escapeHtml(failure.duplicateOf)}</strong></p>` : ""}
-    ${askEmail ? `<input type="text" inputmode="email" autocomplete="email" class="input mono ticket-problem-email" placeholder="name@company.com" aria-label="Your ticket account email" /><div class="login-status error ticket-problem-status"></div>` : ""}
-    <div class="login-actions"><button type="button" class="submit-btn" data-problem="ok">${askEmail ? "Save and try again" : "OK"}</button>${failure.duplicateOf ? `<button type="button" class="secondary-btn" data-problem="open">Open ${escapeHtml(failure.duplicateOf)}</button>` : ""}${askEmail ? `<button type="button" class="secondary-btn" data-problem="cancel">Cancel</button>` : ""}</div>
+  overlay.className = "claim-ticket-backdrop";
+  overlay.innerHTML = `<div class="claim-ticket-card ticket-problem" role="alertdialog" aria-modal="true" aria-labelledby="ticketProblemTitle">
+    <div class="claim-ticket-head"><span class="claim-ticket-mark ${askEmail ? "" : "warn"}" aria-hidden="true">${askEmail ? "✉" : "⚠"}</span><div><h3 id="ticketProblemTitle">${askEmail ? "Ticket account not found" : "This can't be done in the ticket system"}</h3>
+      <p class="claim-ticket-intro">${askEmail
+        ? (failure.triedEmail ? `We couldn't find a ticket-system account for <strong>${escapeHtml(failure.triedEmail)}</strong>. Enter the email you use in the ticket system.` : "Enter the email you use in the ticket system.")
+        : `${escapeHtml(failure.error || "The ticket system refused this.")}${failure.detail ? ` The ticket system said: "${escapeHtml(failure.detail)}"` : ""}`}</p></div></div>
+    ${failure.duplicateOf ? `<div class="claim-ticket-summary ticket-problem-duplicate"><span>This is the ticket that already has the same details:</span><strong>${escapeHtml(failure.duplicateOf)}</strong></div>` : ""}
+    ${askEmail ? `<div class="claim-ticket-label">Your ticket account email</div><input type="text" inputmode="email" autocomplete="email" class="input mono ticket-problem-email" placeholder="name@company.com" aria-label="Your ticket account email" /><div class="claim-ticket-status ticket-problem-status" role="alert"></div>` : ""}
+    <div class="claim-ticket-actions">${askEmail ? `<button type="button" class="secondary-btn" data-problem="cancel">Cancel</button>` : ""}${failure.duplicateOf ? `<button type="button" class="secondary-btn" data-problem="open">Open ${escapeHtml(failure.duplicateOf)}</button>` : ""}<button type="button" class="submit-btn" data-problem="ok">${askEmail ? "Save and try again" : "OK"}</button></div>
   </div>`;
   document.body.appendChild(overlay);
   const input = overlay.querySelector(".ticket-problem-email");

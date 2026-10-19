@@ -673,3 +673,17 @@ test('the email popup is not lost: a background check that found no account show
   await Promise.resolve();
   assert.equal(w.calls.problems.length, 1, 'only once, until the agent asks again');
 });
+
+test('the "ticket account not found" dialog is the same centred card as the claim dialog, with the email box, the tried email and side-by-side buttons', () => {
+  const dialog = fn('showTicketProblem');
+  assert.match(dialog, /overlay\.className = "claim-ticket-backdrop";/);
+  assert.match(dialog, /class="claim-ticket-card ticket-problem" role="alertdialog"/);
+  assert.match(dialog, /We couldn't find a ticket-system account for <strong>/, 'says which email was tried, in plain words, not the ticket system raw sentence');
+  assert.match(dialog, /class="claim-ticket-actions"/);
+  assert.match(dialog, /data-problem="cancel"/);
+  assert.match(dialog, /data-problem="ok"/);
+  assert.match(dialog, /ticket-problem-email/);
+  assert.match(dialog, /ticket-problem-status/, 'a wrong email still gets its message');
+  const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.ok(!/^\.ticket-problem \{ max-width: 420px; \}/m.test(css), 'the old narrow top-aligned panel style is gone');
+});

@@ -8,10 +8,10 @@ const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 const line = (re) => app.match(re)[0];
 
-const NAMES = ['autoTicketEnabled', 'ticketChoiceSlug', 'randomTransactionId', 'autoTicketQueryOption', 'buildClaimTicketFields', 'loadDefaultMarket', 'saveDefaultMarket', 'raiseClaimTicket'];
+const NAMES = ['ticketAccountForClaim', 'autoTicketEnabled', 'ticketChoiceSlug', 'randomTransactionId', 'autoTicketQueryOption', 'buildClaimTicketFields', 'loadDefaultMarket', 'saveDefaultMarket', 'raiseClaimTicket'];
 const SOURCE = [
   line(/const AUTO_TICKET_DEPARTMENT = "[^"]+";/), line(/const AUTO_TICKET_LEVEL = "[^"]+";/),
-  line(/const AUTO_TICKET_PROGRAMS = \{[\s\S]*?\n\};/), line(/const DEFAULT_MARKET_LOCAL_KEY = "[^"]+";/),
+  line(/const AUTO_TICKET_PROGRAMS = \{[\s\S]*?\n\};/), line(/const DEFAULT_MARKET_LOCAL_KEY = "[^"]+";/), line(/const CLAIM_TICKET_USABLE_ACCOUNT = \[[^\]]+\];/),
   'let agentDefaultMarket = { account: "", code: "" }; const claimTicketBusy = new Set();',
   ...NAMES.map(fn),
 ].join('\n');
@@ -47,12 +47,14 @@ const SPECS = [
   { stateKey: 'vipLevel', keys: ['member_level', 'level'], labels: ['Level'] },
 ];
 
-function world({ preview = true, live = false, author, fields = FIELDS, ticketReply, marketReply, modal } = {}) {
+function world({ preview = true, live = false, author, fields = FIELDS, ticketReply, marketReply, modal, account = { status: 'found', at: Date.now(), checking: false }, checkResult } = {}) {
   const calls = { fetches: [], statuses: [], modals: 0, saves: 0 };
   const store = new Map();
   const context = vm.createContext({
     Number, String, Math, JSON, Object, Promise, Set, Map, Array, Error, FormData, File, Uint8Array,
-    crypto: webcrypto,
+    crypto: webcrypto, setTimeout,
+    ticketAccount: { ...account },
+    checkTicketAccount: async (chatId, options) => { calls.checks = [...(calls.checks || []), options]; if (checkResult) context.ticketAccount = { ...checkResult, at: Date.now(), checking: false }; },
     previewMode: preview, ESCALATION_TICKET_ENABLED: true, AUTO_TICKET_LIVE: live,
     TICKET_FIELD_SPECS: SPECS,
     ticketFields: fields,
@@ -248,4 +250,55 @@ test('the rollout: Tickets, notifications and the auto-ticket are switched on fo
   assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
   assert.match(app, /const AUTO_TICKET_LIVE = true;/);
   assert.ok(JSON.parse(readFileSync(new URL('../widget-release.json', import.meta.url), 'utf8')).release > '20261019-1', 'the release id was bumped at the rollout and has only gone up since');
+});
+
+test('claim: with no usable ticket account (not found, key refused, ticket system not answering) the claim goes ahead as before: no dialog, no ticket', async () => {
+  for (const status of ['notFound', 'noEmail', 'adminEmailInvalid', 'keyNeedsGrant', 'outranks', 'keyRejected', 'error']) {
+    const w = world({ account: { status, at: Date.now(), checking: false } });
+    assert.equal(await w.run('raiseClaimTicket("chat1", "topPnl", "58")'), true, status);
+    assert.equal(w.calls.modals, 0, status + ': no dialog');
+    assert.equal(w.calls.fetches.length, 0, status + ': nothing sent to the ticket system');
+    assert.match(w.calls.statuses.at(-1).text, new RegExp('No ticket was raised for this Top P&L claim \\(ticket account: ' + status + '\\); the claim went ahead as normal'));
+    assert.equal(plain(w.run('state.chat1.claimTickets')) && Object.keys(plain(w.run('state.chat1.claimTickets'))).length, 0, 'no ticket recorded');
+  }
+});
+
+test('claim: with a found ticket account (or the ticket system acting as the key owner) the proof dialog opens as before', async () => {
+  for (const status of ['found', 'off']) {
+    const w = world({ account: { status, at: Date.now(), checking: false } });
+    assert.equal(await w.run('raiseClaimTicket("chat1", "topPnl", "58")'), true);
+    assert.equal(w.calls.modals, 1, status);
+  }
+});
+
+test('claim: an account never checked is checked first (quietly), and the dialog follows only if it turns out usable', async () => {
+  const usable = world({ account: { status: 'unknown', at: 0, checking: false }, checkResult: { status: 'found' } });
+  await usable.run('raiseClaimTicket("chat1", "topPnl", "58")');
+  assert.deepEqual(JSON.parse(JSON.stringify(usable.calls.checks)), [{ quiet: true }]);
+  assert.equal(usable.calls.modals, 1);
+  const missing = world({ account: { status: 'unknown', at: 0, checking: false }, checkResult: { status: 'notFound' } });
+  assert.equal(await missing.run('raiseClaimTicket("chat1", "topPnl", "58")'), true);
+  assert.equal(missing.calls.modals, 0);
+  const noLogin = world({ account: { status: 'unknown', at: 0, checking: false } }); // nobody signed in: nothing could be checked, the dialog decides
+  await noLogin.run('raiseClaimTicket("chat1", "topPnl", "58")');
+  assert.equal(noLogin.calls.modals, 1);
+});
+
+test('claim: a problem is checked again after a minute, so a fixed key or a new account is noticed without waiting five minutes', async () => {
+  const stale = world({ account: { status: 'keyRejected', at: Date.now() - 90_000, checking: false }, checkResult: { status: 'found' } });
+  await stale.run('raiseClaimTicket("chat1", "topPnl", "58")');
+  assert.deepEqual(JSON.parse(JSON.stringify(stale.calls.checks)), [{ force: true, quiet: true }]);
+  assert.equal(stale.calls.modals, 1, 'the key works again, so the dialog opens');
+  const fresh = world({ account: { status: 'keyRejected', at: Date.now() - 5_000, checking: false } });
+  await fresh.run('raiseClaimTicket("chat1", "topPnl", "58")');
+  assert.equal((fresh.calls.checks || []).length, 0, 'a recent answer is trusted');
+  assert.equal(fresh.calls.modals, 0);
+});
+
+test('the proof dialog is centred in the window on a dimmed backdrop, and is a card with a header, a summary, the proof area and two buttons side by side', () => {
+  assert.ok(app.includes('overlay.className = "claim-ticket-backdrop";'));
+  const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.claim-ticket-backdrop \{[^}]*position: fixed; inset: 0;[^}]*display: flex; align-items: center; justify-content: center;/);
+  assert.match(css, /\.claim-ticket-actions \{ display: flex;/);
+  for (const part of ['claim-ticket-head', 'claim-ticket-summary', 'claim-ticket-drop', 'claim-ticket-actions']) assert.ok(app.includes(part), part);
 });
