@@ -1405,11 +1405,11 @@ body { font-size: 13px; }
 .ticket-inbox-workspace .ticket-comment-meta span, .ticket-inbox-workspace .ticket-comment-meta time { font-size: 11px; }
 .ticket-inbox-workspace .ticket-comment p { font-size: 12px; line-height: 1.55; color: var(--text); }
 .ticket-inbox-note { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-.ticket-inbox-edit-bar { display: flex; justify-content: flex-end; margin: -4px 0 4px; }
 .ticket-edit-form { padding: 4px 0 8px; }
-.ticket-edit-person { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 9px; margin-bottom: 5px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font-size: 12px; }
-.ticket-edit-person.removing span { text-decoration: line-through; color: var(--text-faint); }
-.ticket-inbox-notice { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 6px; background: var(--surface); color: var(--text); }
+.ticket-edit-state { min-height: 18px; margin-bottom: 8px; font-size: 11px; color: var(--text-faint); }
+.ticket-edit-saving { color: var(--gold); }
+.ticket-edit-saved { color: var(--teal); }
+.ticket-edit-person { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 9px; margin-bottom: 5px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font-size: 12px; }.ticket-inbox-notice { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 6px; background: var(--surface); color: var(--text); }
 .ticket-inbox-form-title { margin: 0 0 14px; font-size: 17px; font-weight: 650; }
 .ticket-inbox-preview-note { margin: -5px 0 14px; color: var(--gold); font-size: 11px; }
 .ticket-inbox-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 10px; }

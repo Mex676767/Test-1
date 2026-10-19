@@ -4527,69 +4527,74 @@ function renderTicketExplorer(chatId) {
 }
 
 /* ============================================================
-   EDITING A TICKET (/ticket-update -> the ticket API's PATCH /tickets/<ref>)
-   "Edit ticket" in the ticket detail opens the same fields as the raise form plus the department holding the ticket, the market and the
-   assignees. Only what was changed is sent, together with the value the agent saw (expect), so a ticket someone else changed in the
-   meantime is refused instead of overwritten. The ticket system applies the agent's own roles and says what it refuses.
+   EDITING A TICKET, LIVE (/ticket-update -> the ticket API's PATCH /tickets/<ref>)
+   The ticket detail is always editable: the raise-form fields plus the department holding the ticket, the market and the assignees. Every
+   edit is saved as soon as it is made (a choice when it is picked, typed text when the box is left or Enter is pressed), on its own and
+   in order. Each save carries the value the agent saw (expect), so a ticket someone else changed in the meantime is refused and reloaded
+   instead of overwritten. The ticket system applies the agent's own roles and says what it refuses; the field then shows its real value.
    ============================================================ */
-const ticketEditByChat = new Map(); // chatId -> { ref, editing, values, departmentCode, marketCode, removeIds, addPeople, busy, error, notice }
+const ticketEditByChat = new Map(); // chatId -> { ref, typing: { name: text not saved yet }, saving, error, notice }
+const ticketSaveChains = new Map(); // chatId -> Promise: the saves of one chat run one after another
+
+function ticketEditFor(chatId, ticket) {
+  let edit = ticketEditByChat.get(chatId);
+  if (!edit || edit.ref !== ticket.ref) {
+    edit = { ref: ticket.ref, typing: {}, saving: 0, error: "", notice: "" };
+    ticketEditByChat.set(chatId, edit);
+  }
+  return edit;
+}
 
 function ticketEditableSpecs() {
   return TICKET_FIELD_SPECS.map((spec) => ({ spec, field: ticketFieldFor(spec) })).filter(({ field }) => field && field.type !== "ATTACHMENT");
 }
 
-function ticketEditStart(ticket) {
-  const values = {};
-  for (const { spec, field } of ticketEditableSpecs()) {
-    const value = ticket.fields?.[field.key];
-    values[spec.stateKey] = value === undefined || value === null ? "" : String(value);
-  }
-  return {
-    ref: ticket.ref, editing: true, values,
-    departmentCode: ticket.currentDepartment?.code || "", marketCode: ticket.market?.code || "",
-    removeIds: [], addPeople: "", busy: false, error: "", notice: "",
-  };
+function ticketFieldText(ticket, field) {
+  const value = ticket.fields?.[field.key];
+  return value === undefined || value === null ? "" : String(value).trim();
 }
 
-// The request body for /ticket-update (without ref and author), or { error }. Only changed things are included; expect carries what the
-// agent saw for each changed single value, so the ticket system refuses the whole save if someone else changed it meanwhile.
-function buildTicketEdit(ticket, draft) {
-  const fields = {};
-  const expect = {};
-  for (const { spec, field } of ticketEditableSpecs()) {
-    if (!(spec.stateKey in (draft.values || {}))) continue; // the form never held this field (the field list loaded after it opened): not a clear
+// The request body for /ticket-update (without ref and author) for ONE edit, { unchanged: true } when the ticket already holds it, or
+// { error }. change: { type: "field", stateKey, value } | { type: "department", value: code } | { type: "market", value: code or "" }
+// | { type: "assigneeAdd", value: "email or name, ..." } | { type: "assigneeRemove", value: person id }.
+function buildTicketChange(ticket, change) {
+  if (change.type === "field") {
+    const spec = TICKET_FIELD_SPECS.find((item) => item.stateKey === change.stateKey);
+    const field = spec && ticketFieldFor(spec);
+    if (!field || field.type === "ATTACHMENT") return { error: "That field is not on the ticket form." };
     const before = ticket.fields?.[field.key];
-    const beforeText = before === undefined || before === null ? "" : String(before).trim();
-    const after = String(draft.values?.[spec.stateKey] ?? "").trim();
-    if (after === beforeText) continue;
+    const after = String(change.value ?? "").trim();
+    if (after === ticketFieldText(ticket, field)) return { unchanged: true };
     const numeric = field.type === "NUMBER" || field.type === "CURRENCY";
     if (numeric && after !== "" && !Number.isFinite(Number(after))) return { error: `${field.label} must be a number.` };
-    fields[field.key] = after === "" ? null : numeric ? Number(after) : after;
-    expect[field.key] = before === undefined ? null : before;
+    return { payload: { fields: { [field.key]: after === "" ? null : numeric ? Number(after) : after }, expect: { [field.key]: before === undefined ? null : before } } };
   }
-  const payload = {};
-  if (Object.keys(fields).length) payload.fields = fields;
-  const department = ticket.currentDepartment?.code || "";
-  if (draft.departmentCode && draft.departmentCode !== department) {
-    payload.toDepartment = draft.departmentCode;
-    expect.Department = department;
+  if (change.type === "department") {
+    const current = ticket.currentDepartment?.code || "";
+    if (!change.value || change.value === current) return { unchanged: true };
+    return { payload: { toDepartment: change.value, expect: { Department: current } } };
   }
-  const market = ticket.market?.code || "";
-  if ((draft.marketCode || "") !== market) {
-    payload.market = draft.marketCode || null;
-    expect.Market = market || null;
+  if (change.type === "market") {
+    const current = ticket.market?.code || "";
+    const next = change.value || "";
+    if (next === current) return { unchanged: true };
+    return { payload: { market: next || null, expect: { Market: current || null } } };
   }
-  const add = String(draft.addPeople || "").split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
-  const remove = (draft.removeIds || []).map(Number).filter((id) => Number.isInteger(id));
-  if (add.length || remove.length) payload.assignees = { add, remove };
-  if (!Object.keys(payload).length) return { error: "Nothing was changed." };
-  payload.expect = expect;
-  return { payload };
+  if (change.type === "assigneeAdd") {
+    const add = String(change.value || "").split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
+    return add.length ? { payload: { assignees: { add, remove: [] } } } : { unchanged: true };
+  }
+  if (change.type === "assigneeRemove") {
+    const id = Number(change.value);
+    if (!Number.isInteger(id) || !(ticket.assignees || []).some((person) => Number(person.id) === id)) return { unchanged: true };
+    return { payload: { assignees: { add: [], remove: [id] } } };
+  }
+  return { error: "Unknown change." };
 }
 
 // What the ticket system says it changed, for the agent: "Status: Open → PYM PROCESSING".
 function describeTicketChanges(changed) {
-  if (!Array.isArray(changed) || !changed.length) return "Nothing needed to change: the ticket already had these values.";
+  if (!Array.isArray(changed) || !changed.length) return "Nothing needed to change: the ticket already had this value.";
   return changed.map((item) => {
     if (Array.isArray(item.added) || Array.isArray(item.removed)) {
       const names = (list) => (list || []).map((person) => person.name).join(", ");
@@ -4599,93 +4604,73 @@ function describeTicketChanges(changed) {
   }).join(" · ");
 }
 
-function setTicketEditValue(chatId, name, value) {
-  const draft = ticketEditByChat.get(chatId);
-  if (!draft) return;
-  if (name === "departmentCode" || name === "marketCode" || name === "addPeople") draft[name] = value;
-  else draft.values[name] = value;
+// The box name used in the page ("edit:<name>") -> the change it makes.
+function ticketChangeFor(name, value) {
+  if (name === "departmentCode") return { type: "department", value };
+  if (name === "marketCode") return { type: "market", value };
+  if (name === "addPeople") return { type: "assigneeAdd", value };
+  return { type: "field", stateKey: name, value };
 }
 
-function renderTicketEditInput(chatId, spec, field, draft) {
-  const stateKey = `edit:${spec.stateKey}`;
-  const value = draft.values[spec.stateKey] ?? "";
-  const options = ticketFieldOptions(field);
-  const controlId = `ticket-field-${escapeHtml(chatId)}-${escapeHtml(stateKey)}`;
-  let control;
-  if (options.length) {
-    control = renderTicketChoice(chatId, stateKey, value, options, { placeholder: "Not set", allowEmpty: !(spec.required || field.required || field.isRequired) });
-  } else if (field.type === "LONGTEXT" || spec.stateKey === "remarks") {
-    control = `<textarea id="${controlId}" class="input esc-input" data-chat="${escapeHtml(chatId)}" data-field="${stateKey}" rows="3">${escapeHtml(value)}</textarea>`;
-  } else {
-    const numeric = field.type === "NUMBER" || field.type === "CURRENCY";
-    control = `<input id="${controlId}" type="text"${numeric ? ' inputmode="decimal" data-ticket-numeric="true"' : ""} class="input mono esc-input" data-chat="${escapeHtml(chatId)}" data-field="${stateKey}" value="${escapeHtml(value)}" />`;
-  }
-  return `<div class="escalation-field ${spec.stateKey === "remarks" ? "escalation-field-wide" : ""}"><label class="field-label" for="${controlId}">${escapeHtml(field.label)}</label>${control}</div>`;
+// Text typed but not saved yet is kept here, so a redraw (the 30 s refresh, another save) never wipes it.
+function ticketLiveTyping(chatId, name, value) {
+  const ticket = state[chatId]?.ticketRecord;
+  if (ticket) ticketEditFor(chatId, ticket).typing[name] = value;
 }
 
-function renderTicketEditForm(chatId, ticket, draft) {
-  const departments = ticketDepartments.map((item) => ({ value: String(item.code || item.id), label: item.name || item.code || String(item.id) }));
-  const markets = ticketMarkets.map((item) => ({ value: String(item.code || item.id), label: item.label || item.code || String(item.id) }));
-  const people = (ticket.assignees || []).map((person) => {
-    const removing = draft.removeIds.includes(Number(person.id));
-    return `<div class="ticket-edit-person ${removing ? "removing" : ""}"><span>${escapeHtml(person.name || person.email || "Someone")}</span><button type="button" class="ticket-inbox-text-button" data-action="toggleEditAssignee" data-chat="${escapeHtml(chatId)}" data-id="${escapeHtml(person.id)}">${removing ? "Keep" : "Remove"}</button></div>`;
-  }).join("");
-  return `<div class="ticket-edit-form">
-    <p class="ticket-inbox-note">Only what you change is saved. If someone else changes this ticket first, nothing is overwritten.</p>
-    ${draft.error ? `<div class="record-error-banner" role="alert">${escapeHtml(draft.error)}</div>` : ""}
-    <div class="escalation-grid ticket-inbox-form">
-      <div class="escalation-field"><label class="field-label">Department</label>${renderTicketChoice(chatId, "edit:departmentCode", draft.departmentCode, departments, { placeholder: "Please select", allowEmpty: false })}</div>
-      <div class="escalation-field"><label class="field-label">Market</label>${renderTicketChoice(chatId, "edit:marketCode", draft.marketCode, markets, { placeholder: "No market", allowEmpty: true })}</div>
-      ${ticketEditableSpecs().map(({ spec, field }) => renderTicketEditInput(chatId, spec, field, draft)).join("")}
-      <div class="escalation-field escalation-field-wide"><label class="field-label">Assigned to</label>${people || '<span class="ticket-inbox-note">Unassigned</span>'}
-        <input type="text" class="input esc-input" data-chat="${escapeHtml(chatId)}" data-field="edit:addPeople" value="${escapeHtml(draft.addPeople)}" placeholder="Add people: email or name, comma separated" aria-label="Add people" />
-        <span class="ticket-inbox-note">After a department change, take the old department's people off in the same save before adding new ones.</span></div>
-    </div>
-    <div class="ticket-inbox-form-footer"><button type="button" class="ticket-inbox-text-button" data-action="cancelTicketEdit" data-chat="${escapeHtml(chatId)}" ${draft.busy ? "disabled" : ""}>Cancel</button><button type="button" class="submit-btn ticket-inbox-primary" data-action="saveTicketEdit" data-chat="${escapeHtml(chatId)}" ${draft.busy ? "disabled" : ""}>${draft.busy ? "Saving…" : "Save changes"}</button></div>
-  </div>`;
+function ticketForgetTyping(edit, change) {
+  delete edit.typing[change.type === "field" ? change.stateKey : change.type === "department" ? "departmentCode" : change.type === "market" ? "marketCode" : change.type === "assigneeAdd" ? "addPeople" : ""];
 }
 
-async function saveTicketEdit(chatId) {
+// Saves one edit, after the ones before it. Never throws: a failure is shown on the ticket.
+function commitTicketChange(chatId, change) {
+  const next = (ticketSaveChains.get(chatId) || Promise.resolve()).then(() => saveTicketChange(chatId, change));
+  ticketSaveChains.set(chatId, next);
+  return next;
+}
+
+async function saveTicketChange(chatId, change) {
   const s = state[chatId];
-  const draft = ticketEditByChat.get(chatId);
   const ticket = s?.ticketRecord;
-  if (!draft || !ticket || draft.ref !== ticket.ref || draft.busy) return;
-  const built = buildTicketEdit(ticket, draft);
-  if (built.error) { draft.error = built.error; renderTicketSlot(chatId); return; }
-  draft.busy = true;
-  draft.error = "";
+  if (!ticket) return;
+  const edit = ticketEditFor(chatId, ticket);
+  const built = buildTicketChange(ticket, change);
+  if (built.unchanged || built.error) {
+    ticketForgetTyping(edit, change);
+    if (built.error) edit.error = built.error;
+    renderTicketSlot(chatId);
+    return;
+  }
+  edit.saving += 1;
+  edit.error = "";
   renderTicketSlot(chatId);
   try {
     const res = await fetch("/ticket-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: ticket.ref, ...built.payload, author: ticketAuthor(s) }) });
     const data = await res.json();
+    ticketForgetTyping(edit, change);
     if (!data.ok) {
       if (data.needTicketEmail) {
         s.ticketEmailNeeded = true;
-        draft.busy = false;
-        showTicketProblem(chatId, data, () => void saveTicketEdit(chatId));
-        renderTicketSlot(chatId);
-        return;
-      }
-      if (data.code === "precondition_failed") {
+        showTicketProblem(chatId, data, () => void commitTicketChange(chatId, change));
+      } else if (data.code === "precondition_failed") {
         const now = (data.mismatched || []).map((item) => `${item.name} is now ${item.actual === null || item.actual === undefined || item.actual === "" ? "empty" : item.actual}`).join(", ");
-        draft.editing = false;
-        draft.notice = `Someone changed this ticket since you opened it${now ? ` (${now})` : ""}. It was reloaded and nothing was saved: make your change again.`;
-        try { await loadTicketStatus(chatId, ticket.ref); } catch (_) { /* the notice still says what happened */ }
+        edit.notice = "";
+        edit.error = `Someone changed this ticket since you opened it${now ? ` (${now})` : ""}. It was reloaded and your edit was not saved: make it again.`;
+        try { await loadTicketStatus(chatId, ticket.ref); } catch (_) { /* the message still says what happened */ }
       } else {
-        draft.error = data.error || "The ticket could not be changed.";
+        edit.error = data.error || "The ticket could not be changed.";
       }
       return;
     }
     noteTicketAccountUsed(data);
     if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
     ticketSearchResultsByChat.delete(chatId); // the inbox list shows the old values until it is read again
-    draft.editing = false;
     if (data.visible && data.ticket) {
-      const merged = { ...data.ticket, comments: ticket.comments || [] };
+      const merged = { ...data.ticket, comments: s.ticketRecord?.comments || ticket.comments || [] };
       s.ticketRecord = merged;
       rememberTicketSnapshot(merged);
       ticketNoteAbsorb(merged);
-      draft.notice = `Saved. ${describeTicketChanges(data.changed)}`;
+      edit.notice = describeTicketChanges(data.changed);
     } else {
       // The change moved the ticket out of what this agent may see: it was saved, but there is nothing left to show.
       s.ticketRecord = null;
@@ -4694,11 +4679,51 @@ async function saveTicketEdit(chatId) {
     }
     saveState();
   } catch (err) {
-    draft.error = "The ticket could not be changed: " + err.message;
+    ticketForgetTyping(edit, change);
+    edit.error = "The ticket could not be changed: " + err.message;
   } finally {
-    draft.busy = false;
+    edit.saving -= 1;
     renderTicketSlot(chatId);
   }
+}
+
+function renderTicketEditInput(chatId, spec, field, edit, ticket) {
+  const stateKey = `edit:${spec.stateKey}`;
+  const value = edit.typing[spec.stateKey] ?? ticketFieldText(ticket, field);
+  const options = ticketFieldOptions(field);
+  const controlId = `ticket-field-${escapeHtml(chatId)}-${escapeHtml(stateKey)}`;
+  let control;
+  if (options.length) {
+    control = renderTicketChoice(chatId, stateKey, value, options, { placeholder: "Not set", allowEmpty: !(spec.required || field.required || field.isRequired) });
+  } else if (field.type === "LONGTEXT" || spec.stateKey === "remarks") {
+    control = `<textarea id="${controlId}" class="input esc-input ticket-live-input" data-chat="${escapeHtml(chatId)}" data-field="${stateKey}" rows="3">${escapeHtml(value)}</textarea>`;
+  } else {
+    const numeric = field.type === "NUMBER" || field.type === "CURRENCY";
+    control = `<input id="${controlId}" type="text"${numeric ? ' inputmode="decimal" data-ticket-numeric="true"' : ""} class="input mono esc-input ticket-live-input" data-chat="${escapeHtml(chatId)}" data-field="${stateKey}" value="${escapeHtml(value)}" />`;
+  }
+  return `<div class="escalation-field ${spec.stateKey === "remarks" ? "escalation-field-wide" : ""}"><label class="field-label" for="${controlId}">${escapeHtml(field.label)}</label>${control}</div>`;
+}
+
+function renderTicketEditForm(chatId, ticket) {
+  const edit = ticketEditFor(chatId, ticket);
+  const departments = ticketDepartments.map((item) => ({ value: String(item.code || item.id), label: item.name || item.code || String(item.id) }));
+  const markets = ticketMarkets.map((item) => ({ value: String(item.code || item.id), label: item.label || item.code || String(item.id) }));
+  const department = edit.typing.departmentCode ?? (ticket.currentDepartment?.code || "");
+  const market = edit.typing.marketCode ?? (ticket.market?.code || "");
+  const people = (ticket.assignees || []).map((person) => `<div class="ticket-edit-person"><span>${escapeHtml(person.name || person.email || "Someone")}</span><button type="button" class="ticket-inbox-text-button" data-action="removeTicketAssignee" data-chat="${escapeHtml(chatId)}" data-id="${escapeHtml(person.id)}" aria-label="Take ${escapeHtml(person.name || "this person")} off the ticket">Remove</button></div>`).join("");
+  const stateHtml = edit.saving ? '<span class="ticket-edit-saving" role="status">Saving…</span>' : edit.notice ? `<span class="ticket-edit-saved" role="status">✓ ${escapeHtml(edit.notice)}</span>` : '<span class="ticket-edit-hint">Changes save as you make them.</span>';
+  return `<div class="ticket-edit-form">
+    <div class="ticket-edit-state">${stateHtml}</div>
+    ${edit.error ? `<div class="record-error-banner" role="alert">${escapeHtml(edit.error)}</div>` : ""}
+    <div class="escalation-grid ticket-inbox-form">
+      <div class="escalation-field"><label class="field-label">Department</label>${renderTicketChoice(chatId, "edit:departmentCode", department, departments, { placeholder: "Please select", allowEmpty: false })}</div>
+      <div class="escalation-field"><label class="field-label">Market</label>${renderTicketChoice(chatId, "edit:marketCode", market, markets, { placeholder: "No market", allowEmpty: true })}</div>
+      ${ticketEditableSpecs().map(({ spec, field }) => renderTicketEditInput(chatId, spec, field, edit, ticket)).join("")}
+      <div class="escalation-field escalation-field-wide"><label class="field-label">Assigned to</label>${people || '<span class="ticket-inbox-note">Unassigned</span>'}
+        <input type="text" class="input esc-input ticket-live-input" data-chat="${escapeHtml(chatId)}" data-field="edit:addPeople" value="${escapeHtml(edit.typing.addPeople ?? "")}" placeholder="Add people: email or name, press Enter" aria-label="Add people" />
+        <span class="ticket-inbox-note">After a department change, take the old department's people off before adding new ones.</span></div>
+    </div>
+  </div>`;
 }
 
 function renderTicketStatus(chatId) {
@@ -4714,22 +4739,20 @@ function renderTicketStatus(chatId) {
   const assignees = (ticket.assignees || []).map(person => person?.name || person?.email).filter(Boolean).join(", ") || "Unassigned";
   const attachments = Array.isArray(ticket.fields?.attachment) ? ticket.fields.attachment : [];
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
-  const edit = ticketEditByChat.get(chatId)?.ref === ticket.ref ? ticketEditByChat.get(chatId) : null;
-  const editing = Boolean(edit?.editing);
+  const editableKeys = new Set(ticketEditableSpecs().map(({ field }) => field.key));
   const remarkPictures = splitImageLinks(typeof ticket.fields?.remarks === "string" ? ticket.fields.remarks : "").links;
-  const rows = Object.entries(ticket.fields || {}).filter(([key]) => key !== "attachment")
+  // Fields the edit form already shows are not listed again; any other field on the ticket stays here, read only.
+  const rows = Object.entries(ticket.fields || {}).filter(([key]) => key !== "attachment" && !editableKeys.has(key))
     .map(([key, value]) => `<div><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(key === "remarks" && typeof value === "string" ? (splitImageLinks(value).text || "—") : ticketValueDisplay(key, value))}</strong></div>`).join("");
   return `<article class="ticket-inbox-detail">
     <div class="ticket-inbox-row-top"><span class="ticket-inbox-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-inbox-status ${ticketStatusTone(ticket)}">${escapeHtml(ticketStatusLabel(ticket))}</span></div>
     <h3>${escapeHtml(ticketTitle(ticket))}</h3>
     ${s.ticketNotice && ticket.ref === s.ticketRef ? `<p class="ticket-inbox-note ticket-inbox-notice">${escapeHtml(s.ticketNotice)}</p>` : ""}
     <p class="ticket-inbox-player">${escapeHtml(ticket.fields?.member_id || "No player ID")} · ${escapeHtml(ticketValueDisplay("member_platform", ticket.fields?.member_platform || ticket.fields?.brand || ""))} · ${escapeHtml(market)}</p>
-    ${edit?.notice ? `<p class="ticket-inbox-note ticket-inbox-notice" role="status">${escapeHtml(edit.notice)}</p>` : ""}
-    ${editing ? renderTicketEditForm(chatId, ticket, edit) : `<div class="ticket-inbox-edit-bar"><button type="button" class="ticket-inbox-text-button" data-action="editTicket" data-chat="${escapeHtml(chatId)}">Edit ticket</button></div>
-    <div class="ticket-inbox-summary"><div><span>Department</span><strong>${escapeHtml(department)}</strong></div><div><span>Assigned to</span><strong>${escapeHtml(assignees)}</strong></div></div>
+    ${renderTicketEditForm(chatId, ticket)}
     <details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketDetailsOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketDetailsOpen ? "open" : ""}><summary>Ticket details</summary><div class="ticket-inbox-data">
       <div><span>Created</span><strong>${escapeHtml(created)}</strong></div><div><span>Updated</span><strong>${escapeHtml(updated)}</strong></div><div><span>Raised by</span><strong>${escapeHtml(raisedBy)}</strong></div>${rows}
-    </div></details>`}
+    </div></details>
     ${attachments.length || remarkPictures.length ? `<details class="ticket-inbox-disclosure" data-ticket-disclosure="ticketFilesOpen" data-chat="${escapeHtml(chatId)}" ${s.ticketFilesOpen ? "open" : ""}><summary>Attachments <span>${attachments.length + remarkPictures.length}</span></summary><div class="ticket-attachment-summary"><div class="ticket-thumbs">${[...attachments.filter(isTicketImage).map(item => renderTicketThumb({ path: item.path, name: item.name || "Picture", chatId })), ...remarkPictures.map(link => renderTicketThumb({ src: link, chatId }))].join("")}</div>${attachments.filter(item => !isTicketImage(item)).map(item => escapeHtml(item?.name || "Attached file")).join("<br>")}</div></details>` : ""}
     <div class="ticket-inbox-conversation"><div class="ticket-inbox-caption"><strong>Conversation</strong><span>${Number(ticket.commentCount || 0)} comments</span></div>
     ${renderTicketConversation(chatId, s, comments)}
@@ -5095,6 +5118,8 @@ async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = 
   const data = await res.json();
   if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket status lookup failed");
   s.ticketLookupRef = normalized;
+  // A refresh that may come from a copy kept a few seconds must not undo an edit just saved (the saved ticket is newer).
+  if (!fresh && s.ticketRecord?.ref === data.ticket.ref && Date.parse(data.ticket.updatedAt) < Date.parse(s.ticketRecord.updatedAt)) return s.ticketRecord;
   s.ticketRecord = data.ticket;
   rememberTicketSnapshot(data.ticket);
   ticketNoteAbsorb(data.ticket);
@@ -5759,33 +5784,21 @@ chatListEl.addEventListener("click", async (e) => {
   }
 
   if (btn.dataset.action === "selectTicketChoice") {
-    if (btn.dataset.field.startsWith("edit:")) setTicketEditValue(chatId, btn.dataset.field.slice(5), btn.dataset.value || "");
-    else s.escalation[btn.dataset.field] = btn.dataset.value || "";
+    if (btn.dataset.field.startsWith("edit:")) {
+      // The ticket detail saves a choice the moment it is picked (it shows the pick meanwhile).
+      const name = btn.dataset.field.slice(5);
+      const value = btn.dataset.value || "";
+      ticketLiveTyping(chatId, name, value);
+      void commitTicketChange(chatId, ticketChangeFor(name, value));
+      return;
+    }
+    s.escalation[btn.dataset.field] = btn.dataset.value || "";
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
 
-  if (btn.dataset.action === "editTicket" && s?.ticketRecord) {
-    ticketEditByChat.set(chatId, ticketEditStart(s.ticketRecord));
-    renderTicketSlot(chatId);
-    return;
-  }
-  if (btn.dataset.action === "cancelTicketEdit") {
-    const draft = ticketEditByChat.get(chatId);
-    if (draft && !draft.busy) { draft.editing = false; draft.error = ""; renderTicketSlot(chatId); }
-    return;
-  }
-  if (btn.dataset.action === "toggleEditAssignee") {
-    const draft = ticketEditByChat.get(chatId);
-    const id = Number(btn.dataset.id);
-    if (draft && Number.isInteger(id)) {
-      draft.removeIds = draft.removeIds.includes(id) ? draft.removeIds.filter((item) => item !== id) : [...draft.removeIds, id];
-      renderTicketSlot(chatId);
-    }
-    return;
-  }
-  if (btn.dataset.action === "saveTicketEdit") {
-    await saveTicketEdit(chatId);
+  if (btn.dataset.action === "removeTicketAssignee") {
+    void commitTicketChange(chatId, { type: "assigneeRemove", value: btn.dataset.id });
     return;
   }
 
@@ -6673,7 +6686,7 @@ chatListEl.addEventListener("input", (e) => {
         ? cleaned
         : cleaned.slice(0, decimalAt + 1) + cleaned.slice(decimalAt + 1).replaceAll(".", "");
     }
-    if (escInput.dataset.field.startsWith("edit:")) setTicketEditValue(escInput.dataset.chat, escInput.dataset.field.slice(5), escInput.value);
+    if (escInput.dataset.field.startsWith("edit:")) ticketLiveTyping(escInput.dataset.chat, escInput.dataset.field.slice(5), escInput.value);
     else if (s) s.escalation[escInput.dataset.field] = escInput.value;
     return;
   }
@@ -6707,6 +6720,13 @@ chatListEl.addEventListener("input", (e) => {
 // selectBrand action handler above, since it's a custom dropdown, not a
 // native <select>, anymore.)
 chatListEl.addEventListener("change", (e) => {
+  // A box on the ticket detail was left (or Enter pressed): that edit is saved now.
+  const liveInput = e.target.closest(".ticket-live-input");
+  if (liveInput && liveInput.dataset.field?.startsWith("edit:")) {
+    const name = liveInput.dataset.field.slice(5);
+    void commitTicketChange(liveInput.dataset.chat, ticketChangeFor(name, liveInput.value));
+    return;
+  }
   const explorerFilter = e.target.closest(".ticket-explorer-filter");
   if (explorerFilter) {
     const s = state[explorerFilter.dataset.chat];

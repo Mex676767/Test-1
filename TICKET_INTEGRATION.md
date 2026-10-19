@@ -111,8 +111,10 @@ under each ticket with a box to comment or reply.
 nothing saved) instead of overwritten. The answer is `{ ok, ref, changed, visible, ticket, actedAs }`; `visible: false` means the change moved
 the ticket out of what the agent may see. Errors keep the ticket API's `code`, `problems` and `mismatched`. Files cannot be added or removed yet.
 
-In the Tickets tab, "Edit ticket" in a ticket's detail opens the raise-form fields plus department, market and assignees; only what changed is
-sent. **Needs on the ticket side:** the API key's "Update tickets" access switched on (off on every key until an administrator ticks it; a
+In the Tickets tab a ticket's detail is always editable (raise-form fields plus department, market and assignees) and every edit is saved as
+it is made: a choice when it is picked, typed text when the box is left or Enter is pressed, one request per edit, queued in order. A
+refusal or a ticket someone else changed first shows its message and the box goes back to the real value. The detail refreshes every 30 s
+(a copy older than a save just made is ignored). **Needs on the ticket side:** the API key's "Update tickets" access switched on (off on every key until an administrator ticks it; a
 refusal shows as "This API key is not allowed to update tickets") and `tickets:update` on the role of each agent's ticket account. The Tickets
 tab is still admin preview only (`DEPARTMENT_TABS_LIVE = false`), so nothing changes in the installed widget.
 
