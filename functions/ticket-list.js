@@ -38,6 +38,19 @@ export async function handler(event) {
   const agentInput = String((post ? input.agent : event.queryStringParameters?.agent) ?? "").trim();
   if (agentInput && !/^\d{1,12}$/.test(agentInput)) return json(400, { ok: false, error: "That is not an agent id." });
   const who = agentInput || (mine ? "me" : "");
+  // status / department / market: narrowed by the ticket system itself, so they reach every ticket and not only the 100 newest ones read here.
+  // status is a choice value (PYM_SOLVED), department and market are ids.
+  const pick = (name) => String((post ? input[name] : event.queryStringParameters?.[name]) ?? "").trim();
+  const status = pick("status");
+  const department = pick("department");
+  const market = pick("market");
+  if (status && !/^[A-Za-z0-9_.-]{1,80}$/.test(status)) return json(400, { ok: false, error: "That is not a status." });
+  if ((department && !/^\d{1,9}$/.test(department)) || (market && !/^\d{1,9}$/.test(market))) return json(400, { ok: false, error: "That is not a department or market id." });
+  const narrowing = [
+    ...(status ? [`f:status|is|${status}`] : []),
+    ...(department ? [`dept|is|${department}`] : []),
+    ...(market ? [`market|is|${market}`] : []),
+  ];
   let reading = { email: "", source: "" };
   try {
     reading = await readingAs(event.env, input.author);
@@ -45,7 +58,27 @@ export async function handler(event) {
     const params = new URLSearchParams({ pageSize: "100", sort: "updatedAt:desc" });
     if (q) params.set("q", q);
     let data;
-    if (who) {
+    // One read of the list with these conditions; the conditions are combined with "all" unless a caller asks for "any".
+    const read = (conditions, match = "all") => {
+      const query = new URLSearchParams(params);
+      for (const condition of conditions) query.append("c", condition);
+      if (conditions.length > 1) query.set("match", match);
+      return ticketGet(event.env, withOnBehalf(`/tickets?${query}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
+    };
+    if (who && narrowing.length) {
+      // "Raised by or assigned to" is an OR and the narrowing an AND, which one request cannot say: read each side with the narrowing and merge.
+      const raised = await read([`createdBy|is|${who}`, ...narrowing]);
+      let assigned = null;
+      try {
+        assigned = await read([`assignee|is|${who}`, ...narrowing]);
+      } catch (err) {
+        if (Number(err.statusCode) !== 400 || isOnBehalfRefusal(err)) throw err; // a ticket system without the assignee condition: raised by only
+      }
+      const byRef = new Map();
+      for (const ticket of [...(raised.tickets || []), ...(assigned?.tickets || [])]) if (!byRef.has(ticket.ref)) byRef.set(ticket.ref, ticket);
+      const merged = [...byRef.values()].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).slice(0, 100);
+      data = { total: Math.max(Number(raised.total || 0), Number(assigned?.total || 0), merged.length), tickets: merged };
+    } else if (who) {
       const raisedOrAssigned = new URLSearchParams(params);
       raisedOrAssigned.append("c", `createdBy|is|${who}`);
       raisedOrAssigned.append("c", `assignee|is|${who}`);
@@ -60,7 +93,7 @@ export async function handler(event) {
         data = await ticketGet(event.env, withOnBehalf(`/tickets?${raisedOnly}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
       }
     } else {
-      data = await ticketGet(event.env, withOnBehalf(`/tickets?${params}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
+      data = await read(narrowing);
     }
     return json(200, {
       ok: true,
