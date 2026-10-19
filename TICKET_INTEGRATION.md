@@ -175,6 +175,7 @@ type that contains the bonus keyword, amount = the amount claimed, random 32-cha
 deposit left empty) and asks the agent for the proof; the claim only goes through once the ticket exists. It runs in the installed
 widget since the 2026-10-19 rollout (`AUTO_TICKET_LIVE = true` in `app.js`; set it to `false` to switch it off without touching anything else).
 If the market cannot be saved on the server (the Default Market column is missing) the claim still goes ahead and the market is remembered in that browser.
+A ticket raised by hand (New ticket) also starts on the agent's default market instead of "Use ticket default" (unless the agent picks a market themselves; their pick, including "Use ticket default", is kept).
 The proof dialog only opens when the agent's ticket account is usable (found, or the ticket system acting as the key owner); with the account not found, the API key refused or the ticket system
 not answering, the claim goes ahead as it did before the auto ticket, with no dialog and no ticket (the account is looked at again after a minute, so a fixed key is noticed).
 

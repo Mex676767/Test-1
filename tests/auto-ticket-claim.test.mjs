@@ -8,7 +8,7 @@ const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 const line = (re) => app.match(re)[0];
 
-const NAMES = ['ticketAccountForClaim', 'autoTicketEnabled', 'ticketChoiceSlug', 'randomTransactionId', 'autoTicketQueryOption', 'buildClaimTicketFields', 'loadDefaultMarket', 'saveDefaultMarket', 'raiseClaimTicket'];
+const NAMES = ['applyDefaultMarketToNewTicket', 'ticketAccountForClaim', 'autoTicketEnabled', 'ticketChoiceSlug', 'randomTransactionId', 'autoTicketQueryOption', 'buildClaimTicketFields', 'loadDefaultMarket', 'saveDefaultMarket', 'raiseClaimTicket'];
 const SOURCE = [
   line(/const AUTO_TICKET_DEPARTMENT = "[^"]+";/), line(/const AUTO_TICKET_LEVEL = "[^"]+";/),
   line(/const AUTO_TICKET_PROGRAMS = \{[\s\S]*?\n\};/), line(/const DEFAULT_MARKET_LOCAL_KEY = "[^"]+";/), line(/const CLAIM_TICKET_USABLE_ACCOUNT = \[[^\]]+\];/),
@@ -60,6 +60,7 @@ function world({ preview = true, live = false, author, fields = FIELDS, ticketRe
     ticketFields: fields,
     ticketDepartments: [{ id: 3, code: 'PYM_MYR', name: 'PAYMENT MYR/PHP/PKR' }, { id: 4, code: 'CS', name: 'Customer Service' }],
     ticketMarkets: [{ id: 1, code: 'MYR', label: 'Malaysia' }, { id: 2, code: 'IDR', label: 'Indonesia' }],
+    renderTicketSlot: () => { calls.renders = (calls.renders || 0) + 1; },
     ticketConfigError: '',
     ticketFieldFor: (spec) => fields.find((field) => spec.keys.includes(field.key)),
     ticketFieldOptions: (field) => field?.options || [],
@@ -301,4 +302,43 @@ test('the proof dialog is centred in the window on a dimmed backdrop, and is a c
   assert.match(css, /\.claim-ticket-backdrop \{[^}]*position: fixed; inset: 0;[^}]*display: flex; align-items: center; justify-content: center;/);
   assert.match(css, /\.claim-ticket-actions \{ display: flex;/);
   for (const part of ['claim-ticket-head', 'claim-ticket-summary', 'claim-ticket-drop', 'claim-ticket-actions']) assert.ok(app.includes(part), part);
+});
+
+test('a new ticket starts on the agent\'s default market, as the Market box value (the ticket system\'s market id)', async () => {
+  const w = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: () => ({ ok: true, market: 'IDR' }) });
+  await w.run('applyDefaultMarketToNewTicket("chat1")');
+  assert.equal(w.run('state.chat1.escalation.marketId'), '2', 'IDR is market id 2');
+  assert.equal(w.calls.renders, 1, 'the form is redrawn with it');
+});
+
+test('a new ticket does not override what the agent chose, and does nothing when there is no default market or no such market', async () => {
+  const touched = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: () => ({ ok: true, market: 'IDR' }) });
+  touched.run('state.chat1.escalation.marketId = ""; state.chat1.escalation.marketTouched = true');
+  await touched.run('applyDefaultMarketToNewTicket("chat1")');
+  assert.equal(touched.run('state.chat1.escalation.marketId'), '', 'the agent picked "Use ticket default" on purpose');
+  const none = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: () => ({ ok: true, market: '' }) });
+  await none.run('applyDefaultMarketToNewTicket("chat1")');
+  assert.equal(none.run('state.chat1.escalation.marketId || ""'), '');
+  const unknown = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: () => ({ ok: true, market: 'XXX' }) });
+  await unknown.run('applyDefaultMarketToNewTicket("chat1")');
+  assert.equal(unknown.run('state.chat1.escalation.marketId || ""'), '');
+  const failing = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: () => ({ ok: false, error: 'LiveChat login expired' }) });
+  await failing.run('applyDefaultMarketToNewTicket("chat1")');
+  assert.equal(failing.run('state.chat1.escalation.marketId || ""'), '', 'a market that cannot be read leaves the form as it is');
+});
+
+test('a default market replaces the market the form started with (the site-wide default), and without a LiveChat login the one remembered in the browser is used', async () => {
+  const replaces = world({ author: { accountKey: 'lc1', agentToken: 't' }, marketReply: () => ({ ok: true, market: 'IDR' }) });
+  replaces.run('state.chat1.escalation.marketId = "1"');
+  await replaces.run('applyDefaultMarketToNewTicket("chat1")');
+  assert.equal(replaces.run('state.chat1.escalation.marketId'), '2');
+  const local = world({ author: undefined });
+  local.store.set('rc-default-market', 'MYR');
+  await local.run('applyDefaultMarketToNewTicket("chat1")');
+  assert.equal(local.run('state.chat1.escalation.marketId'), '1');
+});
+
+test('the New ticket button applies the default market, and picking a market (or "Use ticket default") by hand is remembered so it is not put back', () => {
+  assert.match(app, /s\.ticketAttachmentError = "";\s+renderTicketSlot\(chatId\);\s+void applyDefaultMarketToNewTicket\(chatId\);/);
+  assert.ok(app.includes('if (btn.dataset.field === "marketId") s.escalation.marketTouched = true;'));
 });
