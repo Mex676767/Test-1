@@ -193,8 +193,9 @@
     .failure-link { color: #60a5fa; font: 10px 'DM Mono', monospace; word-break: break-all; text-decoration: none; }
     .failure-link:hover { text-decoration: underline; }
 
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    /* No scrollbar anywhere; scrolling still works by wheel, touch and keyboard. */
+    *, *::before, *::after { scrollbar-width: none; -ms-overflow-style: none; }
+    *::-webkit-scrollbar { width: 0; height: 0; display: none; }
   </style>
 </head>
 <body>

@@ -915,7 +915,7 @@ body {
 .ticket-choice-menu.hidden, .ticket-choice-option.hidden, .ticket-choice-empty.hidden { display: none; }
 .ticket-choice-search-wrap { padding-bottom: 5px; }
 .ticket-choice-search { width: 100%; min-height: 32px; }
-.ticket-choice-options { display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow-y: auto; scrollbar-width: thin; }
+.ticket-choice-options { display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow-y: auto; scrollbar-width: none; }
 .ticket-choice-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 11px; line-height: 1.35; text-align: left; cursor: pointer; }
 .ticket-choice-option:hover, .ticket-choice-option.selected { background: color-mix(in srgb, var(--blue) 15%, var(--surface-2)); color: var(--blue); }
 .ticket-choice-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; background: color-mix(in srgb, var(--blue) 15%, var(--surface-2)); color: var(--blue); }
