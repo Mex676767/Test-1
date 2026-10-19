@@ -199,8 +199,8 @@ test('admin preview: the department views apply, the installed widget is untouch
     return JSON.parse(JSON.stringify(vm.runInContext('mainTabAvailability()', context)));
   };
   assert.deepEqual(tabs({ previewMode: false, currentDepartment: 'cs', departmentKnown: true }), { customer: true, tickets: false, blast: true, knowledge: false }, 'installed widget: as before');
-  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: false });
-  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'rtn', departmentKnown: true }), { customer: true, tickets: true, blast: true, knowledge: false });
+  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: true }, 'the admin preview keeps Knowledge');
+  assert.deepEqual(tabs({ previewMode: true, currentDepartment: 'rtn', departmentKnown: true }), { customer: true, tickets: true, blast: true, knowledge: true }, 'the admin preview keeps Knowledge');
 });
 
 test('detectDepartment: the installed widget is never asked; the preview can force a department with ?department=', async () => {
