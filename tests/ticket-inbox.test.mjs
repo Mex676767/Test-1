@@ -658,3 +658,18 @@ test('the Tickets tab works with no chat open: it uses a stand-in chat with noth
   assert.match(render, /if \(!chats\.length\) \{\s+if \(\(previewMode \|\| DEPARTMENT_TABS_LIVE\) && activeMainTab === "tickets"\) \{\s+chats = \[ticketsOnlyChat\(\)\];\s+\} else \{\s+chatListEl\.innerHTML = `<div class="empty-state">No chat currently open/);
   assert.ok(app.includes('if (!activeChats[0] && !Object.keys(state).length) ensureChatState(ticketsOnlyChat());'), 'Settings can check the account with no chat');
 });
+
+test('the email popup is not lost: a background check that found no account shows nothing, and the first visit to the Tickets tab asks once', async () => {
+  const w = accountWorld({ reply: { ok: true, enabled: true, status: 'notFound', email: 'myrhans@protonmail.com', source: 'livechat' } });
+  await w.run('checkTicketAccount("chat", { quiet: true })');
+  await Promise.resolve();
+  assert.equal(w.calls.problems.length, 0, 'the background check opens no popup');
+  await w.run('checkTicketAccount("chat")');
+  await Promise.resolve();
+  assert.equal(w.calls.problems.length, 1, 'the first visit asks for the ticket email');
+  assert.equal(w.calls.problems[0].failure.needTicketEmail, true);
+  assert.equal(w.calls.problems[0].failure.triedEmail, 'myrhans@protonmail.com');
+  await w.run('checkTicketAccount("chat")');
+  await Promise.resolve();
+  assert.equal(w.calls.problems.length, 1, 'only once, until the agent asks again');
+});

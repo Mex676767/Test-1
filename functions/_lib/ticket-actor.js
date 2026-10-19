@@ -11,7 +11,11 @@ import { json } from "./tickets.js";
 // system's history, so a refusal is shown to the agent instead (needTicketEmail asks for their ticket account email).
 export const flag = (value) => ["1", "true", "on", "yes"].includes(String(value ?? "").trim().toLowerCase());
 export const isOnBehalfRefusal = (error) => [400, 403].includes(Number(error?.statusCode))
-  && /on behalf|onBehalfOf|No active account has the email|outranks/i.test(String(error?.message || ""));
+  && /on behalf|onBehalfOf|No active account has the email|is not an account this API key can act for|nothing can be done on their behalf|is a service account|outranks/i.test(String(error?.message || ""));
+// The ticket system words this refusal two ways, and only the first was recognised at first: 'No active account has the email "x"' and
+// '"x" is not an account this API key can act for, so nothing can be done on their behalf. Check the address, or ask whoever issued the key.'
+// (also for a deactivated, hidden, protected, role-less or senior account, which it deliberately does not tell apart; and for a service account).
+// All of them mean: ask the agent for their own ticket account email.
 
 export const needTicketEmail = (triedEmail) => json(400, {
   ok: false, needTicketEmail: true, ...(triedEmail ? { triedEmail } : {}),
