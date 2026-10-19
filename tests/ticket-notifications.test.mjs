@@ -359,3 +359,8 @@ test('the poll reads all of my tickets (up to 250, by creation date), not the 10
   assert.deepEqual([mine.body.size, mine.body.sort], [250, 'created']);
   assert.equal(w.calls.fetches.find((f) => f.body.mine !== true).body.size, undefined, 'everyone\'s newest stay the 100 most recently updated');
 });
+
+test('the sound is unlocked at the first click or key press, and turning the sound on plays it so the agent can hear it', () => {
+  assert.ok(app.includes('for (const type of ["pointerdown", "keydown"]) document.addEventListener(type, () => { ticketNoteAudioReady(); }, { once: true, passive: true });'));
+  assert.match(app, /store\.sound = store\.sound === false;\s+ticketNoteSave\(\);\s+if \(store\.sound\) ticketNoteChime\(\);/);
+});

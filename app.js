@@ -4317,6 +4317,9 @@ async function pollTicketNotifications() {
 }
 setInterval(pollTicketNotifications, TICKET_NOTE_POLL_MS);
 setTimeout(() => void pollTicketNotifications(), 8000); // the first look soon after the page opens, not a minute later
+// A browser keeps sound silent until the page has had a click or a key press, so the sound is unlocked at the first one; a chime that arrives
+// minutes later, with nobody touching the page, is then audible. (A tab nobody has clicked in stays silent: that is the browser's rule.)
+for (const type of ["pointerdown", "keydown"]) document.addEventListener(type, () => { ticketNoteAudioReady(); }, { once: true, passive: true });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketNotifications(); });
 document.addEventListener("click", (event) => {
   // The bell is redrawn by the click itself, which detaches the clicked button, so the path recorded at the click is what says where it was.
