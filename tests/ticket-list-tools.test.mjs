@@ -245,7 +245,7 @@ function meWorld({ agent = '@me', author = true, mineFails = false } = {}) {
   const calls = [];
   const results = new Map();
   const context = vm.createContext({
-    Map, Promise, String, Object, Error,
+    Map, Promise, String, Object, Error, JSON, Boolean, Array, ticketBulkStatusOptions: () => [{ value: 'PYM_SOLVED' }, { value: 'OPEN' }], ticketDepartments: [{ id: 60, name: 'Payment' }, { id: 'CS', code: 'CS' }], ticketMarkets: [{ id: 1, label: 'Malaysia' }],
     state: { chat: { ticketExplorerAgent: agent } }, ticketSearchResultsByChat: results,
     TICKET_FILTER_ME: '@me', renderTicketSlot: () => { calls.push({ rendered: true }); }, saveState: () => {}, refreshTicketInbox: async (...args) => { calls.push({ refresh: args }); }, ticketReadAuthor: () => (author ? { accountKey: 'lc1', agentToken: 't' } : undefined),
     ticketReadFailure: (_id, data, fallback) => new Error(data.error || fallback),
@@ -257,7 +257,7 @@ function meWorld({ agent = '@me', author = true, mineFails = false } = {}) {
       return { json: async () => ({ ok: true, total: mine ? 216 : 500, tickets: [{ ref: mine ? 'TK-MINE' : 'TK-ALL' }] }) };
     },
   });
-  vm.runInContext(['fetchTicketList', 'ticketScopedWho', 'ticketActiveList', 'searchTickets', 'applyTicketFilter'].map(fn).join('\n'), context);
+  vm.runInContext(['fetchTicketList', 'ticketServerFilters', 'ticketListStale', 'ticketScopedWho', 'ticketActiveList', 'searchTickets', 'applyTicketFilter'].map(fn).join('\n'), context);
   return { calls, results, run: (code) => vm.runInContext(code, context) };
 }
 
@@ -293,7 +293,7 @@ test('Me: if my own tickets cannot be read the search fails with the reason inst
 test('Me: the explorer lists what the ticket system says is mine without filtering it again, and picking Me the first time reads the list again', () => {
   assert.ok(app.includes('const serverMine = Boolean(ticketScopedWho(s.ticketExplorerAgent) && result?.mine && result.mineFor === s.ticketExplorerAgent);'));
   assert.ok(app.includes('(serverMine || ticketMatchesAgent(ticket, s.ticketExplorerAgent))'));
-  assert.ok(app.includes('loaded.mineFor !== value'));
+  assert.ok(app.includes('(Boolean(ticketScopedWho(agent)) && loaded.mineFor !== agent)'));
   assert.ok(app.includes('const result = ticketActiveList(chatId);'), 'the bulk update works on the list that is shown');
 });
 
@@ -327,12 +327,12 @@ test('picking a filter in the custom dropdown applies it; a person is read again
   assert.equal(w.run('state.chat.ticketExplorerAgent'), '@me');
   assert.deepEqual(JSON.parse(JSON.stringify(w.calls.find((call) => call.refresh).refresh)), ['chat', 'abc', 'all', { fresh: false }]);
   w.calls.length = 0;
-  w.results.set('chat', { loading: false, tickets: [], mine: { tickets: [] }, mineFor: '@me', mode: 'all' });
+  w.results.set('chat', { loading: false, tickets: [], mine: { tickets: [] }, mineFor: '@me', mode: 'all', filtersKey: '{}' });
   w.run('applyTicketFilter("chat", "ticketExplorerAgent", "@me")');
-  assert.equal(w.calls.some((call) => call.refresh), false, 'already loaded');
+  assert.equal(w.calls.some((call) => call.refresh), false, 'already loaded for Me and these filters');
   w.run('applyTicketFilter("chat", "ticketExplorerStatus", "OPEN")');
   assert.equal(w.run('state.chat.ticketExplorerStatus'), 'OPEN');
-  assert.equal(w.calls.some((call) => call.refresh), false, 'a status is filtered on the loaded tickets');
+  assert.equal(w.calls.some((call) => call.refresh), true, 'a status is asked of the ticket system, so the list is read again for it');
   w.run('applyTicketFilter("chat", "nope", "x")');
   assert.equal(w.run('state.chat.nope'), undefined, 'only the four filters can be set');
 });
@@ -375,4 +375,32 @@ test('roster: loaded once when the filters open, kept ten minutes, and a failure
   assert.equal(bad.run('ticketAgentRoster.error'), 'busy');
   assert.equal(bad.run('ticketAgentRoster.loading'), false);
   assert.deepEqual(plain(bad.run('ticketAgentRoster.agents')), []);
+});
+
+test('the status, department and market filters go to the ticket system as the ids and value it takes', () => {
+  const w = meWorld({ agent: 'all' });
+  const filters = (patch) => { w.run(`Object.assign(state.chat, ${JSON.stringify(patch)})`); return plain(w.run('ticketServerFilters("chat")')); };
+  assert.deepEqual(filters({ ticketExplorerStatus: 'PYM_SOLVED', ticketExplorerDepartment: 'Payment', ticketExplorerMarket: 'Malaysia' }), { status: 'PYM_SOLVED', department: '60', market: '1' });
+  assert.deepEqual(filters({ ticketExplorerStatus: 'all', ticketExplorerDepartment: 'all', ticketExplorerMarket: 'all' }), {});
+  assert.deepEqual(filters({ ticketExplorerDepartment: 'CS' }), {}, 'a department known only by its code cannot be asked of the ticket system; it is filtered on the loaded tickets');
+  assert.deepEqual(filters({ ticketExplorerDepartment: 'all', ticketExplorerStatus: 'GONE' }), {}, 'a status that is no longer offered is not sent');
+});
+
+test('the list is read with those filters, for everyone and for the person picked, and read again when they change or a change came in mid-read', async () => {
+  const w = meWorld({ agent: '@me' });
+  w.run('Object.assign(state.chat, { ticketExplorerStatus: "PYM_SOLVED", ticketExplorerMarket: "Malaysia" })');
+  await w.run('searchTickets("chat", "", "all", { fresh: true })');
+  const bodies = w.calls.filter((call) => call.url).map((call) => call.body);
+  assert.equal(bodies.length, 2);
+  assert.ok(bodies.every((body) => body.status === 'PYM_SOLVED' && body.market === '1'), 'both lists are narrowed');
+  assert.equal(plain(w.results.get('chat')).filtersKey, '{"status":"PYM_SOLVED","market":"1"}');
+  assert.equal(w.run('ticketListStale("chat")'), false);
+  w.run('state.chat.ticketExplorerStatus = "OPEN"');
+  assert.equal(w.run('ticketListStale("chat")'), true, 'another status than the list was read for');
+  w.run('state.chat.ticketExplorerStatus = "PYM_SOLVED"; state.chat.ticketExplorerAgent = "#44"');
+  assert.equal(w.run('ticketListStale("chat")'), true, 'another person than the list was read for');
+  const plainCall = meWorld({ agent: 'all', author: false });
+  plainCall.run('state.chat.ticketExplorerStatus = "OPEN"');
+  await plainCall.run('searchTickets("chat", "x", "search", { fresh: true })');
+  assert.equal(plainCall.calls[0].url, '/ticket-list?q=x&fresh=1&status=OPEN');
 });

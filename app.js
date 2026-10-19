@@ -4499,6 +4499,11 @@ async function refreshTicketInbox(chatId, query = "", mode = "all", { fresh = tr
     ticketSearchResultsByChat.set(chatId, { loading: false, tickets: [], error: error.message, mode });
   }
   renderTicketSlot(chatId);
+  // A filter was changed while this read was on its way: read again for the filters set now.
+  if (ticketListStale(chatId)) {
+    const loaded = ticketSearchResultsByChat.get(chatId);
+    await refreshTicketInbox(chatId, loaded.query || "", loaded.mode || "all", { fresh: false });
+  }
 }
 
 /* ============================================================
@@ -5352,12 +5357,37 @@ async function fetchTicketList(chatId, query, { fresh = true, who = "" } = {}) {
   const author = ticketReadAuthor(state[chatId]);
   const q = String(query || "").trim();
   const scope = who === "me" ? { mine: true } : who ? { agent: who } : {};
+  const narrowing = ticketServerFilters(chatId);
   const res = author
-    ? await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q, fresh, author, ...scope }) })
-    : await fetch(`/ticket-list?q=${encodeURIComponent(q)}${fresh ? "&fresh=1" : ""}${who === "me" ? "&mine=1" : who ? `&agent=${encodeURIComponent(who)}` : ""}`);
+    ? await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q, fresh, author, ...scope, ...narrowing }) })
+    : await fetch(`/ticket-list?q=${encodeURIComponent(q)}${fresh ? "&fresh=1" : ""}${who === "me" ? "&mine=1" : who ? `&agent=${encodeURIComponent(who)}` : ""}${Object.entries(narrowing).map(([key, value]) => `&${key}=${encodeURIComponent(value)}`).join("")}`);
   const data = await res.json();
   if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket search failed");
   return data;
+}
+
+// The Status, Department and Market filters as the ticket system takes them ({ status: value, department: id, market: id }), so it narrows
+// the whole list and not only the 100 tickets read here. A department or market without a real id (the built-in fallback lists have only
+// codes) and a status no longer offered are left to the filtering on the loaded tickets.
+function ticketServerFilters(chatId) {
+  const s = state[chatId] || {};
+  const out = {};
+  const set = (value) => value && value !== "all";
+  const statuses = ticketBulkStatusOptions().map((option) => String(option.value));
+  if (set(s.ticketExplorerStatus) && statuses.includes(s.ticketExplorerStatus)) out.status = s.ticketExplorerStatus;
+  const department = set(s.ticketExplorerDepartment) ? ticketDepartments.find((item) => (item.name || item.code) === s.ticketExplorerDepartment) : null;
+  if (department && /^\d+$/.test(String(department.id))) out.department = String(department.id);
+  const market = set(s.ticketExplorerMarket) ? ticketMarkets.find((item) => (item.label || item.code) === s.ticketExplorerMarket) : null;
+  if (market && /^\d+$/.test(String(market.id))) out.market = String(market.id);
+  return out;
+}
+
+// Was the loaded list read for other filters than the ones set now? Then it has to be read again.
+function ticketListStale(chatId) {
+  const loaded = ticketSearchResultsByChat.get(chatId);
+  if (!loaded || loaded.loading || loaded.error) return false;
+  const agent = state[chatId]?.ticketExplorerAgent;
+  return loaded.filtersKey !== JSON.stringify(ticketServerFilters(chatId)) || (Boolean(ticketScopedWho(agent)) && loaded.mineFor !== agent);
 }
 
 // The person an Agent filter value asks the ticket system for: "me" for "Me", a ticket-system user id for an agent picked from the roster
@@ -5379,9 +5409,10 @@ async function searchTickets(chatId, query, mode = "search", { fresh = true } = 
   ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [], mode, query: String(query || "") });
   const agent = state[chatId]?.ticketExplorerAgent;
   const who = ticketScopedWho(agent);
+  const filtersKey = JSON.stringify(ticketServerFilters(chatId));
   const [data, personData] = await Promise.all([fetchTicketList(chatId, query, { fresh }), who ? fetchTicketList(chatId, query, { fresh, who }) : null]);
   ticketSearchResultsByChat.set(chatId, {
-    loading: false, tickets: data.tickets || [], total: data.total || 0, mode, query: String(query || ""),
+    loading: false, tickets: data.tickets || [], total: data.total || 0, mode, query: String(query || ""), filtersKey,
     ...(personData ? { mine: { tickets: personData.tickets || [], total: personData.total || 0 }, mineFor: agent } : {}),
   });
   return data;
@@ -5395,9 +5426,9 @@ function applyTicketFilter(chatId, key, value) {
   s[key] = value;
   renderTicketSlot(chatId);
   saveState();
-  if (key === "ticketExplorerAgent" && ticketScopedWho(value)) {
+  if (ticketListStale(chatId)) {
     const loaded = ticketSearchResultsByChat.get(chatId);
-    if (loaded && !loaded.loading && !loaded.error && loaded.mineFor !== value) void refreshTicketInbox(chatId, loaded.query || "", loaded.mode || "all", { fresh: false });
+    void refreshTicketInbox(chatId, loaded.query || "", loaded.mode || "all", { fresh: false });
   }
 }
 
@@ -6118,6 +6149,7 @@ chatListEl.addEventListener("click", async (e) => {
     }
     renderTicketSlot(chatId);
     if (!ticketSearchResultsByChat.has(chatId) && !ticketAccountBlocks()) void refreshTicketInbox(chatId, "", "all", { fresh: false });
+    else if (btn.dataset.action === "clearTicketFilters" && ticketListStale(chatId)) void refreshTicketInbox(chatId, ticketSearchResultsByChat.get(chatId).query || "", ticketSearchResultsByChat.get(chatId).mode || "all", { fresh: false });
     saveState();
     return;
   }

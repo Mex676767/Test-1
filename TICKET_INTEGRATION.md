@@ -111,6 +111,12 @@ under each ticket with a box to comment or reply.
 nothing saved) instead of overwritten. The answer is `{ ok, ref, changed, visible, ticket, actedAs }`; `visible: false` means the change moved
 the ticket out of what the agent may see. Errors keep the ticket API's `code`, `problems` and `mismatched`. Files cannot be added or removed yet.
 
+**Status, department and market are asked of the ticket system.** `/ticket-list` takes `status` (a choice value), `department` and `market` (ids) and
+sends them as `f:status|is|…`, `dept|is|…`, `market|is|…` (all must hold), so they narrow every ticket and not only the 100 newest that one
+read returns. With a person picked as well ("raised by or assigned to" is an OR), the two sides are each read with the narrowing and merged.
+The widget re-reads the list whenever one of these filters or the person changes. A department or market that only has a code (the built-in
+fallback lists) is still filtered on the loaded tickets. The Active / Solved tabs and the search box's filters still work on what was loaded.
+
 **Filters.** The four filters (Agent, Status, Department, Market) and the bulk status are the same searchable dropdown as the ticket form. They
 list every choice the ticket system has, not only those on the loaded tickets. The Agent list is every person who raised or is assigned to one of
 the newest ~1000 tickets the agent may see (`POST /ticket-agents`: up to four pages of 250, kept 10 minutes per person; the ticket API has no list

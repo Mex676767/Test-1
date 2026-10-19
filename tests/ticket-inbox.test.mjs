@@ -31,7 +31,7 @@ function widget() {
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },
   });
-  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'ticketScopedWho', 'ticketMatchesAgent', 'ticketActiveList', 'fetchTicketList', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'ticketReadAuthor', 'ticketReadFailure', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
+  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'ticketScopedWho', 'ticketServerFilters', 'ticketListStale', 'ticketMatchesAgent', 'ticketActiveList', 'fetchTicketList', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'ticketReadAuthor', 'ticketReadFailure', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
   context.renderTicketSlot = () => {};
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
@@ -291,7 +291,7 @@ test('explicit reads skip the server copy; the automatic first load and the poll
   assert.ok(app.includes('async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = {}) {'));
   assert.ok(app.includes('`/ticket-status?ref=${encodeURIComponent(normalized)}${fresh ? "&fresh=1" : ""}`'));
   assert.ok(app.includes('${fresh ? "&fresh=1" : ""}`);'));
-  assert.equal((app.match(/refreshTicketInbox\([^)]*\{ fresh: false \}\)/g) || []).length, 4, 'the two automatic loads, the load once the account is found, and the one when "Me" is first picked');
+  assert.equal((app.match(/refreshTicketInbox\([^)]*\{ fresh: false \}\)/g) || []).length, 5, 'the two automatic loads, the load once the account is found, and the two when a filter is changed (while a read is on its way, and after it)');
 });
 
 test('a ticket value shows the ticket system\'s own label from /ticket-config before any built-in guess', () => {
