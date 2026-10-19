@@ -4302,7 +4302,12 @@ async function pollTicketNotifications() {
     }
     ticketNoteSave();
     repaintTicketBell();
-    if (added && store.sound !== false) ticketNoteChime();
+    if (added) {
+      // Seen on whatever tab the agent is on, not only by a number on the bell: a message, and a chime unless it is muted.
+      const newest = store.items[0];
+      showChatToast(`${added > 1 ? `${added} new ticket notifications · ` : ""}${newest.ref} · ${newest.by ? `${newest.by}: ` : ""}${newest.kind === "mention" ? "mentioned you · " : ""}${newest.text}`, "info");
+      if (store.sound !== false) ticketNoteChime();
+    }
   } catch (err) { ticketPollBackoff(err); ticketNotePollInfo = { at: Date.now(), watching: 0, error: err.message || "The poll failed." }; /* tried again next minute; Settings says why */ }
   finally { ticketNotePolling = false; }
 }
@@ -5482,8 +5487,12 @@ async function pollTicketUpdates() {
   for (const ref of watchedTicketSnapshots.keys()) {
     const owner = Object.entries(state).find(([, value]) => value?.ticketRecord?.ref === ref);
     if (!owner) continue;
+    const [chatId] = owner;
+    // Only a ticket that is on screen is refreshed here. Reading it counts as the agent seeing it (ticketNoteAbsorb marks its notifications
+    // read), so a ticket opened earlier and left behind in the list view must not be read in the background: its new comment would be marked
+    // read before the bell could show it. The notification poll looks after those.
+    if (ticketWorkspaceView(state[chatId]) !== "detail") continue;
     try {
-      const [chatId] = owner;
       await loadTicketStatus(chatId, ref, { fresh: false });
       const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .escalation-slot`);
       if (slot && ticketWorkspaceView(state[chatId]) === "detail") renderTicketSlot(chatId);

@@ -110,3 +110,13 @@ test("a plain GET (admin preview without a login) takes the same narrowing", asy
     assert.deepEqual(conditions(net.urls[0]), ["f:status|is|SOLVED", "market|is|2"]);
   } finally { net.restore(); }
 });
+
+test("a search with a person is read for each side separately, so the search narrows the list instead of being OR'd with the person", async () => {
+  const net = network((url) => reply({ ok: true, total: 1, tickets: conditions(url)[0].startsWith("createdBy") ? [ticket("TK2610170260", "2026-10-19T03:00:00.000Z")] : [] }));
+  try {
+    const result = await list({ mine: true, q: "TK2610170260" });
+    assert.deepEqual(net.urls.map(conditions), [["createdBy|is|me"], ["assignee|is|me"]]);
+    assert.ok(net.urls.every((url) => url.searchParams.get("q") === "TK2610170260" && url.searchParams.get("match") === null), "each side is one condition plus the search");
+    assert.deepEqual(JSON.parse(result.body).tickets.map((item) => item.ref), ["TK2610170260"]);
+  } finally { net.restore(); }
+});
