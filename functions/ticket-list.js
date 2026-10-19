@@ -33,7 +33,11 @@ export async function handler(event) {
   const fresh = post ? input.fresh === true : event.queryStringParameters?.fresh === "1";
   // mine: only the tickets the signed-in agent raised or is assigned to, asked of the ticket system itself ("me" there is the person the
   // request is made as). The 100 newest tickets of everyone would hold few or none of an agent's own.
+  // agent: a ticket-system user id (from /ticket-agents): the same, for that person. who is what the ticket system calls "me" or their id.
   const mine = post ? input.mine === true : event.queryStringParameters?.mine === "1";
+  const agentInput = String((post ? input.agent : event.queryStringParameters?.agent) ?? "").trim();
+  if (agentInput && !/^\d{1,12}$/.test(agentInput)) return json(400, { ok: false, error: "That is not an agent id." });
+  const who = agentInput || (mine ? "me" : "");
   let reading = { email: "", source: "" };
   try {
     reading = await readingAs(event.env, input.author);
@@ -41,10 +45,10 @@ export async function handler(event) {
     const params = new URLSearchParams({ pageSize: "100", sort: "updatedAt:desc" });
     if (q) params.set("q", q);
     let data;
-    if (mine) {
+    if (who) {
       const raisedOrAssigned = new URLSearchParams(params);
-      raisedOrAssigned.append("c", "createdBy|is|me");
-      raisedOrAssigned.append("c", "assignee|is|me");
+      raisedOrAssigned.append("c", `createdBy|is|${who}`);
+      raisedOrAssigned.append("c", `assignee|is|${who}`);
       raisedOrAssigned.set("match", "any");
       try {
         data = await ticketGet(event.env, withOnBehalf(`/tickets?${raisedOrAssigned}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
@@ -52,7 +56,7 @@ export async function handler(event) {
         // A ticket system that does not take the assignee condition still takes "raised by me", which is what is asked for most.
         if (Number(err.statusCode) !== 400 || isOnBehalfRefusal(err)) throw err;
         const raisedOnly = new URLSearchParams(params);
-        raisedOnly.append("c", "createdBy|is|me");
+        raisedOnly.append("c", `createdBy|is|${who}`);
         data = await ticketGet(event.env, withOnBehalf(`/tickets?${raisedOnly}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
       }
     } else {

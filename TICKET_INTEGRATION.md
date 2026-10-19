@@ -111,6 +111,13 @@ under each ticket with a box to comment or reply.
 nothing saved) instead of overwritten. The answer is `{ ok, ref, changed, visible, ticket, actedAs }`; `visible: false` means the change moved
 the ticket out of what the agent may see. Errors keep the ticket API's `code`, `problems` and `mismatched`. Files cannot be added or removed yet.
 
+**Filters.** The four filters (Agent, Status, Department, Market) and the bulk status are the same searchable dropdown as the ticket form. They
+list every choice the ticket system has, not only those on the loaded tickets. The Agent list is every person who raised or is assigned to one of
+the newest ~1000 tickets the agent may see (`POST /ticket-agents`: up to four pages of 250, kept 10 minutes per person; the ticket API has no list
+of users). Picking an agent asks the ticket system for that person's tickets by id (`/ticket-list` with `agent`: `c=createdBy|is|<id>` or
+`c=assignee|is|<id>`, falling back to `createdBy` alone), so an agent with nothing among the newest 100 still shows their tickets. A filter value
+left over from another list that is no longer offered is ignored instead of hiding every ticket.
+
 **Ticket list.** The Agent filter has "Me": the tickets the agent raised or is assigned to, asked of the ticket system itself
 (`/ticket-list` with `mine`: `c=createdBy|is|me&c=assignee|is|me&match=any`, falling back to `createdBy` alone if the assignee condition is
 refused), because the list otherwise holds only the 100 most recently updated tickets of everyone, which can hold few or none of the agent's own. Every row has a tick

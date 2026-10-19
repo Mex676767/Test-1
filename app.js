@@ -4604,6 +4604,36 @@ async function applyBulkStatus(chatId) {
 
 // The Agent filter's "Me": tickets the signed-in agent raised or is assigned to, by the ticket account email (or a ticket they raised from here).
 const TICKET_FILTER_ME = "@me";
+// The Agent filter on tickets already loaded: "Me", a roster user ("#44", by id) or a name.
+function ticketMatchesAgent(ticket, agent) {
+  if (!agent || agent === "all") return true;
+  if (agent === TICKET_FILTER_ME) return ticketIsMine(ticket);
+  if (/^#\d+$/.test(agent)) return [ticket.raisedBy, ...(Array.isArray(ticket.assignees) ? ticket.assignees : [])].some((person) => person && String(person.id) === agent.slice(1));
+  return ticketPeople(ticket).includes(agent);
+}
+
+// Everyone who raised or is assigned a ticket among the newest ~1000 the agent may see (ticket-agents.js), for the Agent filter. The ticket
+// API has no list of users; this is the nearest thing, read when the filters are opened.
+let ticketAgentRoster = { agents: [], at: 0, loading: false, error: "" };
+const TICKET_ROSTER_MAX_AGE_MS = 10 * 60_000;
+async function loadTicketAgentRoster(chatId) {
+  if (ticketAgentRoster.loading || (ticketAgentRoster.at && Date.now() - ticketAgentRoster.at < TICKET_ROSTER_MAX_AGE_MS)) return;
+  ticketAgentRoster = { ...ticketAgentRoster, loading: true, error: "" };
+  renderTicketSlot(chatId);
+  try {
+    const author = ticketReadAuthor(state[chatId]);
+    const res = author
+      ? await fetch("/ticket-agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author }) })
+      : await fetch("/ticket-agents");
+    const data = await res.json();
+    if (!data.ok) throw ticketReadFailure(chatId, data, "The agent list could not be loaded");
+    ticketAgentRoster = { agents: Array.isArray(data.agents) ? data.agents : [], at: Date.now(), loading: false, error: "" };
+  } catch (err) {
+    ticketAgentRoster = { ...ticketAgentRoster, loading: false, error: err.message }; // the filter keeps working with the people on the loaded tickets
+  }
+  renderTicketSlot(chatId);
+}
+
 function ticketIsMine(ticket) {
   const store = ticketNoteLoad();
   const email = String(ticketAccount.email || store.me.email || "").trim().toLowerCase();
@@ -4624,7 +4654,7 @@ function renderTicketBulkBar(chatId, filtered) {
   return `<div class="ticket-bulk-bar">
     <button type="button" class="ticket-inbox-text-button" data-action="bulkSelectAll" data-chat="${chat}" ${bulk.running ? "disabled" : ""}>${all && picked ? "Clear selection" : "Select all"}</button>
     ${picked ? `<span class="ticket-bulk-count">${picked} selected</span>
-    <select class="input ticket-bulk-status" data-chat="${chat}" aria-label="Status to set on the selected tickets" ${bulk.running ? "disabled" : ""}><option value="">Set status to…</option>${options.map((option) => `<option value="${escapeHtml(option.value)}" ${String(option.value) === bulk.status ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select>
+    <div class="ticket-bulk-status">${renderTicketChoice(chatId, "bulk:status", bulk.status, options, { placeholder: "Set status to…", allowEmpty: true })}</div>
     <button type="button" class="submit-btn ticket-bulk-apply" data-action="bulkApplyStatus" data-chat="${chat}" ${bulk.running || !bulk.status ? "disabled" : ""}>${bulk.running ? escapeHtml(bulk.progress || "Updating…") : `Update ${picked}`}</button>` : ""}
     ${bulk.summary && !bulk.running ? `<div class="ticket-bulk-summary" role="status">${escapeHtml(bulk.summary)}</div>` : ""}
   </div>`;
@@ -4635,32 +4665,45 @@ function renderTicketExplorer(chatId) {
   const result = ticketSearchResultsByChat.get(chatId);
   const list = ticketActiveList(chatId); // "Me" shows the tickets the ticket system lists as mine, not a slice of everyone's
   const tickets = list?.tickets || [];
-  const serverMine = s.ticketExplorerAgent === TICKET_FILTER_ME && Boolean(result?.mine);
+  const serverMine = Boolean(ticketScopedWho(s.ticketExplorerAgent) && result?.mine && result.mineFor === s.ticketExplorerAgent);
   const unique = values => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const agents = unique((result?.tickets || []).flatMap(ticketPeople));
-  const statuses = unique(tickets.map(ticketStatusValue));
-  const departments = unique(tickets.map(ticket => ticket.currentDepartment?.name || ticket.currentDepartment?.code));
-  const markets = unique(tickets.map(ticket => ticket.market?.label || ticket.market?.code));
+  // Every ticket-system user seen on the newest tickets (the roster, see /ticket-agents), else just those on the tickets loaded here.
+  const rosterNames = new Map(ticketAgentRoster.agents.map(person => [`#${person.id}`, person.name]));
+  const agents = rosterNames.size ? [...rosterNames.keys()].sort((a, b) => rosterNames.get(a).localeCompare(rosterNames.get(b))) : unique((result?.tickets || []).flatMap(ticketPeople));
+  const agentLabel = value => rosterNames.get(value) || value;
+  // Status, department and market offer every choice the ticket system has, not only those on the tickets loaded (a status nobody has among
+  // the newest tickets would otherwise be missing), plus anything the loaded tickets carry that the lists do not know.
+  const statuses = unique([...ticketBulkStatusOptions().map(option => String(option.value)), ...tickets.map(ticketStatusValue)])
+    .sort((a, b) => ticketChoiceDisplayLabel("status", a).localeCompare(ticketChoiceDisplayLabel("status", b)));
+  const departments = unique([...ticketDepartments.map(item => item.name || item.code), ...tickets.map(ticket => ticket.currentDepartment?.name || ticket.currentDepartment?.code)]);
+  const markets = unique([...ticketMarkets.map(item => item.label || item.code), ...tickets.map(ticket => ticket.market?.label || ticket.market?.code)]);
+  // A filter left over from another list that no longer offers its value is not applied: it would hide every ticket with no way to see why.
+  const effective = (key, values) => (!s[key] || s[key] === "all" || values.includes(s[key]) ? (s[key] || "all") : "all");
+  const statusFilter = effective("ticketExplorerStatus", statuses);
+  const departmentFilter = effective("ticketExplorerDepartment", departments);
+  const marketFilter = effective("ticketExplorerMarket", markets);
   const matches = (value, filter) => !filter || filter === "all" || String(value || "") === filter;
   const group = s.ticketInboxFilter || "all";
   const filtered = tickets.filter(ticket =>
     (group === "all" || (group === "solved" ? ticketStatusTone(ticket) === "solved" : ticketStatusTone(ticket) !== "solved"))
-    && (!s.ticketExplorerAgent || s.ticketExplorerAgent === "all" || serverMine || (s.ticketExplorerAgent === TICKET_FILTER_ME ? ticketIsMine(ticket) : ticketPeople(ticket).includes(s.ticketExplorerAgent)))
-    && matches(ticketStatusValue(ticket), s.ticketExplorerStatus)
-    && matches(ticket.currentDepartment?.name || ticket.currentDepartment?.code, s.ticketExplorerDepartment)
-    && matches(ticket.market?.label || ticket.market?.code, s.ticketExplorerMarket));
-  const options = (values, selected, label = value => value) => values.map(value => `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label(value))}</option>`).join("");
-  const activeFilters = [s.ticketExplorerAgent, s.ticketExplorerStatus, s.ticketExplorerDepartment, s.ticketExplorerMarket].filter(value => value && value !== "all").length;
+    && (serverMine || ticketMatchesAgent(ticket, s.ticketExplorerAgent))
+    && matches(ticketStatusValue(ticket), statusFilter)
+    && matches(ticket.currentDepartment?.name || ticket.currentDepartment?.code, departmentFilter)
+    && matches(ticket.market?.label || ticket.market?.code, marketFilter));
+  // The filters use the same searchable dropdown as the ticket form, not the browser's plain list.
+  const filterChoice = (filterKey, allLabel, values, label = value => value, lead = []) => renderTicketChoice(chatId, `filter:${filterKey}`, ({ ticketExplorerStatus: statusFilter, ticketExplorerDepartment: departmentFilter, ticketExplorerMarket: marketFilter })[filterKey] || s[filterKey] || "all",
+    [{ value: "all", label: allLabel }, ...lead, ...values.map(value => ({ value, label: label(value) }))], { allowEmpty: false });
+  const activeFilters = [s.ticketExplorerAgent, statusFilter, departmentFilter, marketFilter].filter(value => value && value !== "all").length;
   const counts = { all: tickets.length, active: tickets.filter(ticket => ticketStatusTone(ticket) !== "solved").length, solved: tickets.filter(ticket => ticketStatusTone(ticket) === "solved").length };
   return `<section class="ticket-inbox-list">
     <div class="ticket-inbox-filters" aria-label="Ticket filters">${[["all", "All"], ["active", "Active"], ["solved", "Solved"]].map(([value, label]) => `<button type="button" class="ticket-inbox-filter ${group === value ? "selected" : ""}" aria-pressed="${group === value}" data-action="filterTicketInbox" data-chat="${escapeHtml(chatId)}" data-value="${value}">${label}<span>${counts[value]}</span></button>`).join("")}
       <button type="button" class="ticket-inbox-filter-toggle" data-action="toggleTicketFilters" data-chat="${escapeHtml(chatId)}" aria-label="More ticket filters" aria-expanded="${Boolean(s.ticketFiltersOpen)}">${ticketUiIcon("filter")}${activeFilters ? `<span>${activeFilters}</span>` : ""}</button>
     </div>
     ${s.ticketFiltersOpen ? `<div class="ticket-explorer-filters">
-      <label><span>Agent</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerAgent"><option value="all">All agents</option><option value="${TICKET_FILTER_ME}" ${s.ticketExplorerAgent === TICKET_FILTER_ME ? "selected" : ""}>Me</option>${options(agents, s.ticketExplorerAgent)}</select></label>
-      <label><span>Status</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerStatus"><option value="all">All statuses</option>${options(statuses, s.ticketExplorerStatus, value => ticketChoiceDisplayLabel("status", value))}</select></label>
-      <label><span>Department</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerDepartment"><option value="all">All departments</option>${options(departments, s.ticketExplorerDepartment)}</select></label>
-      <label><span>Market</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerMarket"><option value="all">All markets</option>${options(markets, s.ticketExplorerMarket)}</select></label>
+      <div class="ticket-explorer-field"><span>Agent</span>${filterChoice("ticketExplorerAgent", "All agents", agents, agentLabel, [{ value: TICKET_FILTER_ME, label: "Me" }])}${ticketAgentRoster.loading ? '<span class="ticket-explorer-note">Loading all agents…</span>' : ""}</div>
+      <div class="ticket-explorer-field"><span>Status</span>${filterChoice("ticketExplorerStatus", "All statuses", statuses, value => ticketChoiceDisplayLabel("status", value))}</div>
+      <div class="ticket-explorer-field"><span>Department</span>${filterChoice("ticketExplorerDepartment", "All departments", departments)}</div>
+      <div class="ticket-explorer-field"><span>Market</span>${filterChoice("ticketExplorerMarket", "All markets", markets)}</div>
       <button type="button" class="ticket-inbox-text-button" data-action="clearTicketFilters" data-chat="${escapeHtml(chatId)}">Clear filters</button>
     </div>` : ""}
     ${!result || result.loading ? '<div class="ticket-inbox-empty" role="status">Loading tickets…</div>' : result.error ? `<div class="record-error-banner">${escapeHtml(result.error)}</div><button type="button" class="secondary-btn" data-action="searchTickets" data-chat="${escapeHtml(chatId)}">Try again</button>` : `
@@ -5305,33 +5348,57 @@ async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = 
 }
 
 // One read of the ticket list. mine: only the agent's own tickets, asked of the ticket system (see ticket-list.js).
-async function fetchTicketList(chatId, query, { fresh = true, mine = false } = {}) {
+async function fetchTicketList(chatId, query, { fresh = true, who = "" } = {}) {
   const author = ticketReadAuthor(state[chatId]);
   const q = String(query || "").trim();
+  const scope = who === "me" ? { mine: true } : who ? { agent: who } : {};
   const res = author
-    ? await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q, fresh, author, ...(mine ? { mine: true } : {}) }) })
-    : await fetch(`/ticket-list?q=${encodeURIComponent(q)}${fresh ? "&fresh=1" : ""}${mine ? "&mine=1" : ""}`);
+    ? await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q, fresh, author, ...scope }) })
+    : await fetch(`/ticket-list?q=${encodeURIComponent(q)}${fresh ? "&fresh=1" : ""}${who === "me" ? "&mine=1" : who ? `&agent=${encodeURIComponent(who)}` : ""}`);
   const data = await res.json();
   if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket search failed");
   return data;
 }
 
-// The list the explorer shows now: with the Agent filter on "Me", the agent's own tickets as the ticket system lists them (result.mine),
-// otherwise the newest tickets of everyone the agent may see. The 100 newest hold few of an agent's own, so "Me" asks for them directly.
+// The person an Agent filter value asks the ticket system for: "me" for "Me", a ticket-system user id for an agent picked from the roster
+// ("#44"), "" for everyone and for a name that is only filtered on the tickets already loaded.
+function ticketScopedWho(value) {
+  return value === TICKET_FILTER_ME ? "me" : /^#\d+$/.test(String(value)) ? String(value).slice(1) : "";
+}
+
+// The list the explorer shows now: with the Agent filter on "Me" or on an agent from the roster, that person's tickets as the ticket system
+// lists them (result.mine, read for the value in result.mineFor), otherwise the newest tickets of everyone the agent may see. The 100 newest
+// hold few of one person's tickets, so a person is asked for directly.
 function ticketActiveList(chatId) {
   const result = ticketSearchResultsByChat.get(chatId);
-  return state[chatId]?.ticketExplorerAgent === TICKET_FILTER_ME && result?.mine ? result.mine : result;
+  const agent = state[chatId]?.ticketExplorerAgent;
+  return ticketScopedWho(agent) && result?.mine && result.mineFor === agent ? result.mine : result;
 }
 
 async function searchTickets(chatId, query, mode = "search", { fresh = true } = {}) {
   ticketSearchResultsByChat.set(chatId, { loading: true, tickets: [], mode, query: String(query || "") });
-  const wantMine = state[chatId]?.ticketExplorerAgent === TICKET_FILTER_ME;
-  const [data, mineData] = await Promise.all([fetchTicketList(chatId, query, { fresh }), wantMine ? fetchTicketList(chatId, query, { fresh, mine: true }) : null]);
+  const agent = state[chatId]?.ticketExplorerAgent;
+  const who = ticketScopedWho(agent);
+  const [data, personData] = await Promise.all([fetchTicketList(chatId, query, { fresh }), who ? fetchTicketList(chatId, query, { fresh, who }) : null]);
   ticketSearchResultsByChat.set(chatId, {
     loading: false, tickets: data.tickets || [], total: data.total || 0, mode, query: String(query || ""),
-    ...(mineData ? { mine: { tickets: mineData.tickets || [], total: mineData.total || 0 } } : {}),
+    ...(personData ? { mine: { tickets: personData.tickets || [], total: personData.total || 0 }, mineFor: agent } : {}),
   });
   return data;
+}
+
+// A filter was picked in the ticket list's filter panel. A person (Me, or an agent from the roster) is asked of the ticket system, so the
+// list is read again with them the first time they are picked.
+function applyTicketFilter(chatId, key, value) {
+  const s = state[chatId];
+  if (!s || !["ticketExplorerAgent", "ticketExplorerStatus", "ticketExplorerDepartment", "ticketExplorerMarket"].includes(key)) return;
+  s[key] = value;
+  renderTicketSlot(chatId);
+  saveState();
+  if (key === "ticketExplorerAgent" && ticketScopedWho(value)) {
+    const loaded = ticketSearchResultsByChat.get(chatId);
+    if (loaded && !loaded.loading && !loaded.error && loaded.mineFor !== value) void refreshTicketInbox(chatId, loaded.query || "", loaded.mode || "all", { fresh: false });
+  }
 }
 
 async function pollTicketUpdates() {
@@ -5978,6 +6045,14 @@ chatListEl.addEventListener("click", async (e) => {
   }
 
   if (btn.dataset.action === "selectTicketChoice") {
+    if (btn.dataset.field.startsWith("filter:")) {
+      applyTicketFilter(chatId, btn.dataset.field.slice(7), btn.dataset.value || "all");
+      return;
+    }
+    if (btn.dataset.field === "bulk:status") {
+      if (!ticketBulkFor(chatId).running) { ticketBulkFor(chatId).status = btn.dataset.value || ""; renderTicketSlot(chatId); }
+      return;
+    }
     if (btn.dataset.field.startsWith("edit:")) {
       // The ticket detail saves a choice the moment it is picked (it shows the pick meanwhile).
       const name = btn.dataset.field.slice(5);
@@ -6033,7 +6108,10 @@ chatListEl.addEventListener("click", async (e) => {
   if (["ticketInbox", "filterTicketInbox", "toggleTicketFilters", "clearTicketFilters"].includes(btn.dataset.action)) {
     if (btn.dataset.action === "ticketInbox") { s.ticketView = "list"; s.escalationError = ""; }
     if (btn.dataset.action === "filterTicketInbox") s.ticketInboxFilter = btn.dataset.value;
-    if (btn.dataset.action === "toggleTicketFilters") s.ticketFiltersOpen = !s.ticketFiltersOpen;
+    if (btn.dataset.action === "toggleTicketFilters") {
+      s.ticketFiltersOpen = !s.ticketFiltersOpen;
+      if (s.ticketFiltersOpen && !ticketAccountBlocks()) void loadTicketAgentRoster(chatId); // every agent for the Agent filter, not only those on the loaded tickets
+    }
     if (btn.dataset.action === "clearTicketFilters") {
       s.ticketInboxFilter = "all";
       for (const key of ["ticketExplorerAgent", "ticketExplorerStatus", "ticketExplorerDepartment", "ticketExplorerMarket"]) s[key] = "all";
@@ -6935,26 +7013,6 @@ chatListEl.addEventListener("change", (e) => {
   if (bulkTick) {
     ticketBulkToggle(bulkTick.dataset.chat, bulkTick.dataset.ref, bulkTick.checked);
     renderTicketSlot(bulkTick.dataset.chat);
-    return;
-  }
-  const bulkStatus = e.target.closest(".ticket-bulk-status");
-  if (bulkStatus) {
-    ticketBulkFor(bulkStatus.dataset.chat).status = bulkStatus.value;
-    renderTicketSlot(bulkStatus.dataset.chat);
-    return;
-  }
-  const explorerFilter = e.target.closest(".ticket-explorer-filter");
-  if (explorerFilter) {
-    const s = state[explorerFilter.dataset.chat];
-    const allowed = new Set(["ticketExplorerAgent", "ticketExplorerStatus", "ticketExplorerDepartment", "ticketExplorerMarket"]);
-    if (s && allowed.has(explorerFilter.dataset.filter)) s[explorerFilter.dataset.filter] = explorerFilter.value;
-    const slot = explorerFilter.closest(".escalation-slot");
-    slot.innerHTML = renderEscalationSection(explorerFilter.dataset.chat);
-    saveState();
-    // "Me" is asked of the ticket system, so the list has to be read again with it the first time it is picked.
-    const picked = explorerFilter.dataset.filter === "ticketExplorerAgent" && explorerFilter.value === TICKET_FILTER_ME;
-    const loaded = ticketSearchResultsByChat.get(explorerFilter.dataset.chat);
-    if (picked && loaded && !loaded.loading && !loaded.mine && !loaded.error) void refreshTicketInbox(explorerFilter.dataset.chat, loaded.query || "", loaded.mode || "all", { fresh: false });
     return;
   }
   const attachmentInput = e.target.closest(".ticket-attachment-input");
