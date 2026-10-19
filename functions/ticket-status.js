@@ -3,7 +3,7 @@ import { isOnBehalfRefusal, readingAs, refusalResponse } from "./_lib/ticket-act
 import { json, ticketError, ticketGet, withOnBehalf } from "./_lib/tickets.js";
 
 // A ticket read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
-const STATUS_TTL_MS = 10_000;
+const STATUS_TTL_MS = 4_000;
 
 const mapComment = (comment) => ({
   id: comment.id,
