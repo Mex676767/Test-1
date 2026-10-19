@@ -123,3 +123,14 @@ ticket system knows them. Until the answer is "found" the tab shows only that sc
 email popup open at once, or why the key cannot act for them). The inbox and ticket calls wait for it. A failed check (ticket system
 busy) does not lock anyone out. The answer is remembered for a minute per email on the server and five minutes in the widget; "Check
 again" and entering an email check again. It only exists with `TICKETS_ON_BEHALF_OF=1`.
+
+## Auto ticket on claim and the default market (admin preview only)
+
+Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket (department `PYM_MYR`, level VVIP, query type = the ticket query
+type that contains the bonus keyword, amount = the amount claimed, random 32-character transaction id, status / gateway / remarks / manual
+deposit left empty) and asks the agent for the proof; the claim only goes through once the ticket exists. It runs only in the admin preview
+(`AUTO_TICKET_LIVE = false` in `app.js`; set it to `true` to roll out).
+
+**Default market.** Add a text column **Default Market** to the Lark table "Livechat App Agent Logins" (once). The agent picks their market
+the first time they claim; `/agent-market` saves its code on their row (and a second login of the same agent shares it). From then on only an
+admin changes it, by editing that cell in Lark (the admin panel will do it later). Without the column the agent is asked every time.

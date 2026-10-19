@@ -580,7 +580,7 @@ test('pictures: a picture that cannot be loaded says why, on the thumbnail and i
 
 test('pictures: every picture is compressed before it is sent, to the same size and similar quality, and ticket and comment files all go through it', () => {
   assert.ok(app.includes('async function compressPicture(file)'));
-  assert.equal((app.match(/map\(compressPicture\)/g) || []).length, 4, 'paste and choose, for tickets and for comments');
+  assert.equal((app.match(/map\(compressPicture\)/g) || []).length, 5, 'paste and choose, for tickets and for comments, and the proof dialog when a bonus is claimed');
   assert.ok(app.includes('const PICTURE_STEPS = [[1, 0.92]'), 'full size and high quality come first');
   assert.ok(!app.includes('TICKET_IMAGE_MAX_BYTES'), 'no 5MB image limit any more');
 });

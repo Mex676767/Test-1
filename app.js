@@ -5,6 +5,9 @@ const IS_EMBEDDED_APP = window.self !== window.top;
 // Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge) are on in the admin
 // preview only. DEPARTMENT_TABS_LIVE puts them in the installed LiveChat widget too; keep it off until rollout is approved.
 const DEPARTMENT_TABS_LIVE = false;
+// Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team (see "Auto ticket on claim"). Admin preview
+// only; AUTO_TICKET_LIVE puts it in the installed LiveChat widget too. Keep it off until rollout is approved.
+const AUTO_TICKET_LIVE = false;
 const BLAST_LIVE = true;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
@@ -2808,6 +2811,7 @@ const CASE_KEYS = [
   ...CASE_CONTENT_KEYS,
   "caseNo", "caRecordId", "matchedRow", "otherBrandMatches", "claimSecretManual",
   "logged", "autoRecordError", "loggedSnapshot", "caLinkSaved", "caOwner",
+  "claimTickets", // { programKey: ticket ref } raised when this case's bonus was claimed; kept out of CASE_CONTENT_KEYS: it is not recorded in Lark
 ];
 
 // Which agent's Lark row the open case is. After a chat transfer (PC crash
@@ -2860,6 +2864,7 @@ function loadCaseInto(s, snap) {
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
   s.riskReloadAmount = "";
+  s.claimTickets = {};
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
 }
 function usedProgramsInOtherCases(s) {
@@ -2955,6 +2960,7 @@ async function addCaseFlow(chatId) {
     s.matchedRow = row;
     s.otherBrandMatches = otherBrands;
     s.claimedPrograms = {};
+    s.claimTickets = {};
     s.gracePeriodActivated = false;
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
@@ -3155,7 +3161,8 @@ function renderTickets(chatId) {
           <div class="vs96-feedback-note">${feedbackComplete ? "✓ Both feedback answers collected" : "Fill in both feedback answers before claiming."}</div>
         </div>` : ""}
     </div>`;
-  }).join("") + `</div>` + (alreadyClaimedOne ? `<div class="ticket-note">Only 1 bonus can be claimed per case</div>` : "");
+  }).join("") + `</div>` + (alreadyClaimedOne ? `<div class="ticket-note">Only 1 bonus can be claimed per case</div>` : "")
+    + Object.entries(s.claimTickets || {}).map(([key, ref]) => `<div class="ticket-note">Ticket ${escapeHtml(ref)} raised for ${escapeHtml(AUTO_TICKET_PROGRAMS[key]?.label || key)}</div>`).join("");
 }
 
 // Grace Period's SW Check text carries the challenge date(s) inline -- wraps
@@ -3675,6 +3682,299 @@ function addTicketAttachments(chatId, addedFiles) {
   if (!error) ticketAttachmentsByChat.set(chatId, combined);
   s.ticketAttachmentError = error;
   return !error;
+}
+
+/* ============================================================
+   AUTO TICKET ON CLAIM
+   Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team, and the claim only goes through once the
+   ticket exists. The agent is asked for the proof (a picture or PDF) in a dialog and, the first time only, for their default market.
+   Ticket: Member ID = the player, Market = the agent's default market, Query type = the ticket query type whose name contains the bonus
+   keyword, Department = PYM_MYR, Level = VVIP, Transaction ID = 32 random letters/digits, Amount = the amount claimed, Status = the ticket
+   default, Payment Gateway / Remarks / Manual Dep = left empty. The market lives in the Agent Logins table (functions/agent-market.js).
+   ============================================================ */
+const AUTO_TICKET_DEPARTMENT = "PYM_MYR";
+const AUTO_TICKET_LEVEL = "VVIP";
+// keyword: the text the ticket system's query type has to contain (case and punctuation ignored): "TOP P&L" finds "VVIP TOP P&L BONUS".
+const AUTO_TICKET_PROGRAMS = {
+  topPnl: { label: "Top P&L", keyword: "TOP P&L" },
+  ltvTest: { label: "LTV", keyword: "LTV" },
+  gracePeriod: { label: "Grace Period", keyword: "Grace Period" },
+  riskPlayer: { label: "Risk Player", keyword: "Risk Player" },
+};
+const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market"; // admin preview without a LiveChat login: remembered in this browser only
+let agentDefaultMarket = { account: "", code: "" };
+const claimTicketBusy = new Set(); // chats whose claim ticket dialog is open or being sent
+
+function autoTicketEnabled() {
+  return ESCALATION_TICKET_ENABLED && (previewMode || AUTO_TICKET_LIVE);
+}
+
+function randomTransactionId(length = 32) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const limit = 256 - (256 % alphabet.length); // bytes above this are skipped so every character is equally likely
+  let id = "";
+  while (id.length < length) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(length * 2))) {
+      if (byte < limit && id.length < length) id += alphabet[byte % alphabet.length];
+    }
+  }
+  return id;
+}
+
+// The query type option whose label or value contains the keyword. With several, the "VVIP ... BONUS" ones win.
+function autoTicketQueryOption(options, keyword) {
+  const wanted = ticketChoiceSlug(keyword);
+  if (!wanted) return null;
+  const rank = (option) => {
+    const slug = ticketChoiceSlug(option.label || option.value);
+    return (slug.startsWith("vvip") ? 0 : 2) + (slug.includes("bonus") ? 0 : 1);
+  };
+  const hits = (options || []).filter((option) => [option.label, option.value].some((text) => ticketChoiceSlug(text).includes(wanted)));
+  return hits.sort((a, b) => rank(a) - rank(b))[0] || null;
+}
+
+// The fields of the claim ticket, or { error } saying why it cannot be made. market is the market code.
+function buildClaimTicketFields(s, programKey, amount, market) {
+  const program = AUTO_TICKET_PROGRAMS[programKey];
+  const need = (stateKey) => ticketFieldFor(TICKET_FIELD_SPECS.find((spec) => spec.stateKey === stateKey));
+  const memberField = need("memberUserId");
+  const brandField = need("brand");
+  const queryField = need("queries");
+  if (!memberField || !brandField || !queryField) return { error: "The ticket form is missing a field this ticket needs (Member ID, Brand or Query type)." };
+  const username = String(s.username || "").trim();
+  if (!username) return { error: "Look up the player's username first." };
+  const brand = String(s.escalation?.brand || "").trim();
+  if (!brand) return { error: "The brand of this chat is not known yet, so the ticket cannot be raised." };
+  const number = Number(String(amount ?? "").replace(/,/g, ""));
+  if (!Number.isFinite(number) || number <= 0) return { error: `The ${program.label} amount could not be read, so the ticket cannot be raised.` };
+  const query = autoTicketQueryOption(ticketFieldOptions(queryField), program.keyword);
+  if (!query) return { error: `No ticket query type contains "${program.keyword}", so no ticket can be raised. Ask your admin.` };
+  const marketCode = String(market || "").trim();
+  if (!marketCode) return { error: "Choose your market first." };
+  const fields = { [memberField.key]: username, [brandField.key]: brand, [queryField.key]: query.value };
+  const amountField = need("amount");
+  if (amountField) fields[amountField.key] = number;
+  const transactionField = need("transactionId");
+  if (transactionField) fields[transactionField.key] = randomTransactionId();
+  const levelField = need("vipLevel");
+  if (levelField) {
+    const level = ticketFieldOptions(levelField).find((option) => [option.value, option.label].some((text) => String(text).toLowerCase() === AUTO_TICKET_LEVEL.toLowerCase()));
+    fields[levelField.key] = level ? level.value : AUTO_TICKET_LEVEL;
+  }
+  const department = ticketDepartments.find((item) => String(item.code || "").toUpperCase() === AUTO_TICKET_DEPARTMENT);
+  fields.toDepartment = department?.code || AUTO_TICKET_DEPARTMENT;
+  fields.market = marketCode;
+  return { fields, query, departmentName: department?.name || AUTO_TICKET_DEPARTMENT };
+}
+
+// The agent's default market: { code, locked }. locked = already chosen (so it is only shown). Without a LiveChat login (admin preview) it
+// is remembered in this browser only. Throws when the server cannot say.
+async function loadDefaultMarket(s) {
+  const author = ticketAuthor(s);
+  if (!author) {
+    let code = "";
+    try { code = localStorage.getItem(DEFAULT_MARKET_LOCAL_KEY) || ""; } catch (_) { /* not remembered */ }
+    return { code, locked: false };
+  }
+  if (agentDefaultMarket.account === author.accountKey && agentDefaultMarket.code) return { code: agentDefaultMarket.code, locked: true };
+  const res = await fetch("/agent-market", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author }) });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Your default market could not be read.");
+  if (data.market) agentDefaultMarket = { account: author.accountKey, code: data.market };
+  return { code: data.market || "", locked: !!data.market };
+}
+
+// Saves the market chosen in the dialog (only ever the first time) and returns the one that applies: the saved one wins over a stale choice.
+async function saveDefaultMarket(s, code) {
+  const author = ticketAuthor(s);
+  if (!author) {
+    try { localStorage.setItem(DEFAULT_MARKET_LOCAL_KEY, code); } catch (_) { /* not remembered */ }
+    return code;
+  }
+  const res = await fetch("/agent-market", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author, market: code }) });
+  const data = await res.json();
+  if (!data.ok || !data.market) throw new Error(data.error || "Your default market could not be saved.");
+  agentDefaultMarket = { account: author.accountKey, code: data.market };
+  return data.market;
+}
+
+// The dialog: the proof is required, the market only when it has not been chosen yet. onSubmit({ files, market, ticketEmail }) does the work and
+// returns { ok } or { ok: false, error, needTicketEmail }; the dialog stays open on an error so it can be tried again. Resolves true once
+// onSubmit succeeded, false when the agent cancelled.
+function openClaimTicketModal({ title, intro, rows, markets, market, marketLocked, previewNote, onSubmit }) {
+  return new Promise((resolve) => {
+    document.getElementById("claimTicketOverlay")?.remove();
+    const files = [];
+    let busy = false;
+    const marketLabel = (code) => (markets.find((item) => item.value === code) || {}).label || code;
+    const overlay = document.createElement("div");
+    overlay.id = "claimTicketOverlay";
+    overlay.className = "settings-overlay";
+    overlay.innerHTML = `<div class="settings-panel claim-ticket" role="dialog" aria-modal="true" aria-labelledby="claimTicketTitle">
+      <div class="settings-head"><span id="claimTicketTitle">${escapeHtml(title)}</span></div>
+      <p class="settings-hint">${intro}${previewNote ? ` <strong>${escapeHtml(previewNote)}</strong>` : ""}</p>
+      <dl class="claim-ticket-summary">${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
+        <dt>Market</dt><dd>${marketLocked
+          ? `${escapeHtml(marketLabel(market))} <span class="claim-ticket-note">(your default market; an admin changes it)</span>`
+          : `<select class="input claim-ticket-market" aria-label="Your market"><option value="">Choose your market…</option>${markets.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === market ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="claim-ticket-note">You choose this once. Only an admin can change it afterwards.</span>`}</dd></dl>
+      <div class="claim-ticket-drop" tabindex="0" aria-label="Proof. Choose files, drop them here or press Ctrl+V to paste.">
+        <span>Paste or drag files here</span>
+        <label class="ticket-file-button"><input type="file" class="claim-ticket-input" accept="image/png,image/jpeg,image/webp,application/pdf" multiple /><span>+ Upload local files</span></label>
+        <small>Pictures are shrunk to fit · PDF under 1MB · up to 6 files</small>
+      </div>
+      <div class="ticket-attachment-list claim-ticket-files"></div>
+      <div class="claim-ticket-email" hidden><input type="text" inputmode="email" autocomplete="email" class="input mono" placeholder="Your ticket account email: name@company.com" aria-label="Your ticket account email" /></div>
+      <div class="login-status error claim-ticket-status" role="alert"></div>
+      <div class="login-actions"><button type="button" class="submit-btn" data-claim-ticket="go" disabled>Raise ticket and claim</button><button type="button" class="secondary-btn" data-claim-ticket="cancel">Cancel</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const goButton = overlay.querySelector('[data-claim-ticket="go"]');
+    const cancelButton = overlay.querySelector('[data-claim-ticket="cancel"]');
+    const select = overlay.querySelector(".claim-ticket-market");
+    const list = overlay.querySelector(".claim-ticket-files");
+    const statusLine = overlay.querySelector(".claim-ticket-status");
+    const emailRow = overlay.querySelector(".claim-ticket-email");
+    const emailInput = emailRow.querySelector("input");
+    const drop = overlay.querySelector(".claim-ticket-drop");
+    const chosenMarket = () => (select ? select.value : market);
+    const sync = () => { goButton.disabled = busy || !files.length || !chosenMarket(); cancelButton.disabled = busy; };
+    const show = (text) => { statusLine.textContent = text; };
+    const draw = () => {
+      list.innerHTML = files.map((file, index) => `<div class="ticket-attachment-item"><span title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><small>${Math.max(1, Math.ceil(file.size / 1024))}KB</small><button type="button" data-remove="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button></div>`).join("");
+      sync();
+    };
+    const problemWith = (file) => !file.size ? `${file.name || "Attachment"} is empty.`
+      : file.size >= ticketMaxBytes(file) ? `${file.name || "Attachment"} must be under ${ticketMaxBytes(file) / (1024 * 1024)}MB.`
+        : !TICKET_ATTACHMENT_TYPES.has(file.type) ? `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF.` : "";
+    const add = async (incoming) => {
+      const picked = Array.from(incoming || []).filter(Boolean);
+      if (!picked.length || busy) return;
+      const prepared = await Promise.all(picked.map(compressPicture));
+      const bad = prepared.map(problemWith).find(Boolean);
+      if (bad) { show(bad); return; }
+      if (files.length + prepared.length > 6) { show("You can attach up to 6 files."); return; }
+      files.push(...prepared);
+      show("");
+      draw();
+    };
+    const onPaste = (event) => {
+      const pasted = Array.from(event.clipboardData?.items || []).filter((item) => item.kind === "file").map((item) => item.getAsFile()).filter(Boolean);
+      if (!pasted.length) return;
+      event.preventDefault();
+      void add(pasted);
+    };
+    const onKey = (event) => { if (event.key === "Escape" && !busy) close(false); };
+    const close = (result) => {
+      document.removeEventListener("paste", onPaste);
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve(result);
+    };
+    const submit = async () => {
+      if (busy || goButton.disabled) return;
+      if (!emailRow.hidden && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailInput.value.trim())) { show("Enter your ticket account email, like name@company.com."); return; }
+      busy = true;
+      goButton.textContent = "Creating the ticket…";
+      show("");
+      sync();
+      let result;
+      try { result = await onSubmit({ files: [...files], market: chosenMarket(), ticketEmail: emailRow.hidden ? "" : emailInput.value.trim() }); }
+      catch (err) { result = { ok: false, error: err.message }; }
+      busy = false;
+      goButton.textContent = "Raise ticket and claim";
+      if (result.ok) { close(true); return; }
+      show(result.error || "The ticket could not be created.");
+      if (result.needTicketEmail) { emailRow.hidden = false; emailInput.focus(); }
+      sync();
+    };
+    document.addEventListener("paste", onPaste);
+    document.addEventListener("keydown", onKey);
+    overlay.querySelector(".claim-ticket-input").addEventListener("change", (event) => { void add(event.target.files); event.target.value = ""; });
+    drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("dragging"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("dragging"));
+    drop.addEventListener("drop", (event) => { event.preventDefault(); drop.classList.remove("dragging"); void add(event.dataTransfer?.files); });
+    list.addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-remove]");
+      if (!remove || busy) return;
+      files.splice(Number(remove.dataset.remove), 1);
+      draw();
+    });
+    if (select) select.addEventListener("change", sync);
+    goButton.addEventListener("click", submit);
+    cancelButton.addEventListener("click", () => close(false));
+    draw();
+    (select && !select.value ? select : drop).focus();
+  });
+}
+
+// Raises the claim ticket for a bonus about to be claimed. Resolves true when the claim may go ahead (ticket created, one was already raised
+// for this case's claim, or this bonus / this build does not raise one) and false when it must not (cancelled or could not be raised; the
+// reason is shown). Nothing about the claim has been changed by then.
+async function raiseClaimTicket(chatId, programKey, amount) {
+  const s = state[chatId];
+  const program = AUTO_TICKET_PROGRAMS[programKey];
+  if (!s || !program || !autoTicketEnabled()) return true;
+  s.claimTickets = s.claimTickets || {};
+  // Unclaiming does not withdraw the ticket, so claiming the same bonus again in the same case must not raise a second one.
+  if (s.claimTickets[programKey]) { setStatus(`Ticket ${s.claimTickets[programKey]} was already raised for this ${program.label} claim.`, "success"); return true; }
+  if (claimTicketBusy.has(chatId) || ticketCreateInFlight.has(chatId)) return false;
+  claimTicketBusy.add(chatId);
+  try {
+    if (!ticketFields.length) await fetchTicketConfig({ fresh: true });
+    if (!ticketFields.length) { setStatus(`The ticket form could not be loaded (${ticketConfigError || "no fields"}). Nothing was claimed.`, "error"); return false; }
+    let stored;
+    try { stored = await loadDefaultMarket(s); }
+    catch (err) { setStatus(`${err.message} Nothing was claimed.`, "error"); return false; }
+    // Check everything that does not need the agent's input first, so they are not asked for proof and then told it was never possible.
+    const check = buildClaimTicketFields(s, programKey, amount, stored.code || "-");
+    if (check.error) { setStatus(`${check.error} Nothing was claimed.`, "error"); return false; }
+    const markets = ticketMarkets.map((item) => ({ value: String(item.code || item.id), label: item.label || item.code || String(item.id) }));
+    return await openClaimTicketModal({
+      title: `Raise a ticket to claim ${program.label}`,
+      intro: `Claiming ${escapeHtml(program.label)} raises a ticket for <strong>${escapeHtml(check.departmentName)}</strong> first. Add the proof below.`,
+      rows: [["Player", s.username], ["Query type", check.query.label || check.query.value], ["Amount", String(amount)], ["Level", AUTO_TICKET_LEVEL]],
+      markets,
+      market: stored.code,
+      marketLocked: stored.locked,
+      previewNote: previewMode ? "Admin preview: this creates a real ticket." : "",
+      onSubmit: async ({ files, market, ticketEmail }) => {
+        try {
+          if (ticketEmail) s.escalation.ticketEmail = ticketEmail;
+          const marketCode = stored.locked ? stored.code : await saveDefaultMarket(s, market);
+          stored.code = marketCode;
+          stored.locked = true;
+          const built = buildClaimTicketFields(s, programKey, amount, marketCode);
+          if (built.error) return { ok: false, error: built.error };
+          const form = new FormData();
+          form.append("ticket", JSON.stringify({ fields: built.fields, author: ticketAuthor(s) }));
+          const attachmentField = ticketAttachmentField();
+          const partName = attachmentField?.key || attachmentField?.label || "Attachment";
+          for (const file of files) form.append(partName, file, file.name);
+          ticketCreateInFlight.add(chatId);
+          let data;
+          try {
+            const res = await fetch("/ticket-create", { method: "POST", body: form });
+            data = await res.json();
+          } finally {
+            ticketCreateInFlight.delete(chatId);
+          }
+          if (!data.ok) return { ok: false, error: data.error || "The ticket could not be created.", needTicketEmail: !!data.needTicketEmail };
+          s.claimTickets[programKey] = data.ref;
+          s.ticketNotice = data.warning || "";
+          noteTicketAccountUsed(data);
+          if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
+          ticketSearchResultsByChat.delete(chatId);
+          saveState();
+          setStatus(`Ticket ${data.ref} raised for ${program.label}.`, "success");
+          return { ok: true };
+        } catch (err) {
+          return { ok: false, error: err.message };
+        }
+      },
+    });
+  } finally {
+    claimTicketBusy.delete(chatId);
+  }
 }
 
 function ticketStatusValue(ticket) {
@@ -5362,7 +5662,7 @@ chatListEl.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-action]");
   if (!btn) return;
   const chatId = btn.dataset.chat;
-  const card = btn.closest(".chat-card");
+  let card = btn.closest(".chat-card");
   const s = state[chatId];
 
   // try/finally (rather than a saveState() call at the end of the function
@@ -5677,6 +5977,8 @@ chatListEl.addEventListener("click", async (e) => {
         s.status = "Activated";
       } else {
         const amount = graceClaimAmount(display);
+        if (!(await raiseClaimTicket(chatId, "gracePeriod", amount))) return;
+        card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card; // the card may have been redrawn while the dialog was open
         s.claimedPrograms.gracePeriod = true;
         s.inquiry = ["Grace Period"];
         s.status = "Given";
@@ -5703,6 +6005,14 @@ chatListEl.addEventListener("click", async (e) => {
         await submitRecord(chatId, { auto: true, reason: "Grace Period claimed" });
       }
       return;
+    }
+
+    // Top P&L / LTV / Risk Player raise a ticket for the payment team before they are claimed (Grace Period does the same in its own branch
+    // above); nothing below runs unless the ticket exists. The amount is the one the claim records.
+    if (programKey !== "gracePeriod" && AUTO_TICKET_PROGRAMS[programKey]) {
+      const ticketAmount = riskClaim?.valid ? riskClaim.formattedClaim : programHasAmount(programKey) ? extractAmountNumber(r?.[programKey]) : "";
+      if (!(await raiseClaimTicket(chatId, programKey, ticketAmount))) return;
+      card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card; // the card may have been redrawn while the dialog was open
     }
 
     // Telegram RM28 / Redeem Code / Special Reload (Ang Pao) write live to
@@ -7051,7 +7361,7 @@ async function refreshDropdownOptions({ fresh = false } = {}) {
       fetchStatusOptions({ fresh }), fetchConfiguredBonusPrograms({ fresh }),
     ]);
   }
-  if (!IS_EMBEDDED_APP || DEPARTMENT_TABS_LIVE) await fetchTicketConfig({ fresh });
+  if (!IS_EMBEDDED_APP || DEPARTMENT_TABS_LIVE || AUTO_TICKET_LIVE) await fetchTicketConfig({ fresh });
 }
 setInterval(() => {
   if (!document.hidden) refreshDropdownOptions();
