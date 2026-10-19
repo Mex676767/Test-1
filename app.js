@@ -3951,6 +3951,20 @@ async function ticketAccountForClaim(chatId) {
   return ticketAccount.status;
 }
 
+// A new ticket starts on the agent's default market (the one chosen for the auto ticket), not on "Use ticket default". Only while the Market box
+// is not one the agent chose themselves (it replaces the site-wide default the form may start with); nothing is changed when no default market is saved or the ticket system has no such market.
+async function applyDefaultMarketToNewTicket(chatId) {
+  const s = state[chatId];
+  if (!s?.escalation || s.escalation.marketTouched) return;
+  let stored;
+  try { stored = await loadDefaultMarket(s); } catch (_) { return; }
+  if (!stored?.code) return;
+  const item = ticketMarkets.find((market) => String(market.code || "").toUpperCase() === String(stored.code).toUpperCase());
+  if (!item || s.escalation.marketTouched) return; // the agent may have picked while this was loading
+  s.escalation.marketId = String(item.id);
+  renderTicketSlot(chatId);
+}
+
 // Raises the claim ticket for a bonus about to be claimed. Resolves true when the claim may go ahead (ticket created, one was already raised
 // for this case's claim, or this bonus / this build does not raise one) and false when it must not (cancelled or could not be raised; the
 // reason is shown). Nothing about the claim has been changed by then.
@@ -6216,6 +6230,7 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
     s.escalation[btn.dataset.field] = btn.dataset.value || "";
+    if (btn.dataset.field === "marketId") s.escalation.marketTouched = true; // the agent chose (even "Use ticket default"): their default market is not put back
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
@@ -6852,6 +6867,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.escalationError = "";
     s.ticketAttachmentError = "";
     renderTicketSlot(chatId);
+    void applyDefaultMarketToNewTicket(chatId);
     saveState();
   }
 
