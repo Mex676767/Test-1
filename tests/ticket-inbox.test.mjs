@@ -637,3 +637,12 @@ test('pictures: one the key cannot load opens in the ticket system instead (the 
   assert.ok(app.includes('if (btn.dataset.fallbackUrl) window.open(btn.dataset.fallbackUrl, "_blank", "noopener")'));
   assert.ok(app.includes('else if (img && img.src) openTicketImageLightbox'));
 });
+
+test('comment box: Enter posts the comment, Shift+Enter makes a new line, and the help line says so', () => {
+  assert.ok(app.includes('if (event.key === "Enter" && !event.shiftKey && target.matches?.(".ticket-comment-input")) {'));
+  const handler = app.slice(app.indexOf('chatListEl.addEventListener("keydown"'));
+  assert.ok(handler.indexOf('".ticket-comment-input"') < handler.indexOf('".username-input, .ticket-search-input"'), 'handled before the other Enter shortcuts');
+  assert.match(handler.slice(0, 400), /event\.isComposing/, 'a key press that confirms text typed with an input method never sends');
+  assert.match(handler, /event\.preventDefault\(\);\s+const button = card\?\.querySelector\('button\[data-action="sendTicketComment"\]'\);\s+if \(button && !button\.disabled\) button\.click\(\);/, 'sends through the button, so a send already running is not started twice');
+  assert.ok(app.includes('Enter sends · Shift+Enter for a new line'));
+});

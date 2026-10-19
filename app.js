@@ -5336,7 +5336,7 @@ function renderTicketConversation(chatId, s, comments) {
       <textarea class="input esc-input ticket-comment-input" data-chat="${escapeHtml(chatId)}" data-field="commentDraft" rows="3" placeholder="Write a comment…" aria-label="Write a comment">${escapeHtml(s.escalation.commentDraft || "")}</textarea>
       <div class="ticket-comment-files-row" data-chat="${escapeHtml(chatId)}">${renderCommentFiles(chatId)}</div>
       <label class="ticket-file-button ticket-comment-attach"><input type="file" class="ticket-comment-file-input" data-chat="${escapeHtml(chatId)}" accept="image/png,image/jpeg,image/webp,application/pdf" multiple /><span>📎 Attach a picture or PDF</span></label>
-      <small class="ticket-attachment-help">Click in the box and press Ctrl+V to paste a picture.</small>
+      <small class="ticket-attachment-help">Enter sends · Shift+Enter for a new line · click in the box and press Ctrl+V to paste a picture.</small>
       <button type="button" class="submit-btn" data-action="sendTicketComment" data-chat="${escapeHtml(chatId)}" ${busy ? "disabled" : ""}>${busy ? "Sending…" : "Send comment"}</button>
     </div>`;
 }
@@ -5953,6 +5953,14 @@ chatListEl.addEventListener("keydown", (event) => {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
   const target = event.target;
   const card = target.closest?.(".chat-card");
+
+  // The comment box on a ticket: Enter posts the comment, Shift+Enter starts a new line (an empty box with no picture just says so, as the button does).
+  if (event.key === "Enter" && !event.shiftKey && target.matches?.(".ticket-comment-input")) {
+    event.preventDefault();
+    const button = card?.querySelector('button[data-action="sendTicketComment"]');
+    if (button && !button.disabled) button.click();
+    return;
+  }
 
   // The primary text lookups should submit like a normal search field.
   if (event.key === "Enter" && target.matches?.(".username-input, .ticket-search-input")) {
