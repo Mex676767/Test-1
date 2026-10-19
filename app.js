@@ -253,6 +253,7 @@ function openSettingsPanel() {
         }
       </div>
       `}
+      ${ticketAccountSettingsVisible() ? `<div class="settings-card" id="settingsTicketAccountCard">${renderTicketAccountSettings()}</div>` : ""}
 
       <div class="settings-card">
         <div class="settings-section-title"><span class="settings-section-icon">↗</span><span>Blast history</span></div>
@@ -282,6 +283,23 @@ function openSettingsPanel() {
 
   document.getElementById("settingsSignOut")?.addEventListener("click", () => { signOutLiveChat(); });
   document.getElementById("settingsQaName")?.addEventListener("click", () => { chooseQaAgentName(); });
+  const accountCard = document.getElementById("settingsTicketAccountCard");
+  if (accountCard) {
+    const repaint = () => { accountCard.innerHTML = renderTicketAccountSettings(); };
+    accountCard.addEventListener("click", async (event) => {
+      const chatId = ticketAccountSettingsChat();
+      if (!chatId) return;
+      if (event.target.closest("[data-settings-ticket-recheck]")) {
+        repaint(); // "Checking…" is drawn by the check itself; the result replaces it below
+        const done = checkTicketAccount(chatId, { force: true });
+        repaint();
+        await done;
+        repaint();
+      } else if (event.target.closest('[data-action="enterTicketEmail"]')) {
+        showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Enter the email of your ticket-system account." }, async () => { await checkTicketAccount(chatId, { force: true }); repaint(); });
+      }
+    });
+  }
   if (customerService) { // no Blast history and nothing to save
     overlay.querySelector(".settings-failures")?.closest(".settings-card")?.remove();
     document.getElementById("settingsSave")?.remove();
@@ -4483,6 +4501,134 @@ async function refreshTicketInbox(chatId, query = "", mode = "all", { fresh = tr
   renderTicketSlot(chatId);
 }
 
+/* ============================================================
+   BULK STATUS EDIT (ticket list)
+   Tick tickets (or "Select all"), choose a status, and every ticked ticket is set to it, one /ticket-update after another, each guarded by
+   the status the list showed (expect), so a ticket someone else changed meanwhile is skipped and reported. The ticket API has no bulk call
+   and allows 120 requests a minute to everyone, hence the cap per run and the stop on the first problem that would repeat for every ticket.
+   ============================================================ */
+const TICKET_BULK_MAX = 60;
+const ticketBulkByChat = new Map(); // chatId -> { selected: [refs], status, running, progress, summary, visibleRefs }
+function ticketBulkFor(chatId) {
+  if (!ticketBulkByChat.has(chatId)) ticketBulkByChat.set(chatId, { selected: [], status: "", running: false, progress: "", summary: "", visibleRefs: [] });
+  return ticketBulkByChat.get(chatId);
+}
+function ticketBulkStatusOptions() {
+  const field = ticketFieldFor(TICKET_FIELD_SPECS.find((spec) => spec.stateKey === "status"));
+  return field ? ticketFieldOptions(field) : [];
+}
+function ticketBulkToggle(chatId, ref, on) {
+  const bulk = ticketBulkFor(chatId);
+  const without = bulk.selected.filter((item) => item !== ref);
+  bulk.selected = on ? [...without, ref].slice(0, TICKET_BULK_MAX) : without;
+  if (on && !bulk.selected.includes(ref)) bulk.summary = `At most ${TICKET_BULK_MAX} tickets can be changed at a time.`;
+  else bulk.summary = "";
+}
+// All the tickets the list shows now (up to the cap) or, when they are all ticked already, none.
+function ticketBulkSelectAll(chatId) {
+  const bulk = ticketBulkFor(chatId);
+  const shown = bulk.visibleRefs.slice(0, TICKET_BULK_MAX);
+  const all = shown.length > 0 && shown.every((ref) => bulk.selected.includes(ref));
+  bulk.selected = all ? [] : shown;
+  bulk.summary = !all && bulk.visibleRefs.length > TICKET_BULK_MAX ? `The first ${TICKET_BULK_MAX} of ${bulk.visibleRefs.length} tickets were ticked (the most that can be changed at a time).` : "";
+}
+// A status changed from here is not news to the agent who changed it: remember the ticket as it is now.
+function ticketNoteSeen(ticket) {
+  const store = ticketNoteLoad();
+  if (!store.startedAt || !ticket?.ref) return;
+  const prev = store.seen[ticket.ref];
+  store.seen[ticket.ref] = ticketNoteSnapshot(ticket, prev ? prev.at : store.startedAt);
+  ticketNoteSave();
+}
+async function applyBulkStatus(chatId) {
+  const s = state[chatId];
+  const bulk = ticketBulkFor(chatId);
+  const result = ticketSearchResultsByChat.get(chatId);
+  if (!s || !result?.tickets || bulk.running || !bulk.status) return;
+  const targets = bulk.selected.map((ref) => result.tickets.find((ticket) => ticket.ref === ref)).filter(Boolean);
+  if (!targets.length) return;
+  const label = ticketChoiceDisplayLabel("status", bulk.status);
+  bulk.running = true;
+  bulk.summary = "";
+  const changed = [];
+  const already = [];
+  const failed = [];
+  let stoppedBecause = "";
+  try {
+    for (const [index, ticket] of targets.entries()) {
+      const current = ticket.fields?.status;
+      if (String(current ?? "") === bulk.status) { already.push(ticket.ref); continue; }
+      bulk.progress = `Updating ${index + 1} of ${targets.length}…`;
+      renderTicketSlot(chatId);
+      let res;
+      let data;
+      try {
+        res = await fetch("/ticket-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: ticket.ref, fields: { status: bulk.status }, expect: { status: current === undefined ? null : current }, author: ticketAuthor(s) }) });
+        data = await res.json();
+      } catch (err) {
+        failed.push({ ref: ticket.ref, reason: err.message });
+        stoppedBecause = "The ticket system could not be reached.";
+        break;
+      }
+      if (!data.ok) {
+        failed.push({ ref: ticket.ref, reason: data.code === "precondition_failed" ? "someone changed it first" : (data.error || "refused") });
+        // These would be refused for every ticket, so the rest are not tried.
+        if (res.status === 429 || res.status === 401 || data.needTicketEmail || ["key_access", "key_standing", "forbidden", "field_forbidden", "validation_failed", "invalid_body"].includes(data.code)) { stoppedBecause = data.error || "The ticket system refused the change."; break; }
+        continue;
+      }
+      noteTicketAccountUsed(data);
+      changed.push(ticket.ref);
+      const at = result.tickets.findIndex((item) => item.ref === ticket.ref);
+      if (data.visible && data.ticket) {
+        const { comments: _thread, ...entry } = data.ticket; // the list keeps no conversation
+        if (at >= 0) result.tickets[at] = entry;
+        ticketNoteSeen(entry);
+      } else if (at >= 0) {
+        result.tickets.splice(at, 1);
+      }
+    }
+  } finally {
+    bulk.running = false;
+    bulk.progress = "";
+    bulk.selected = bulk.selected.filter((ref) => !changed.includes(ref) && !already.includes(ref)); // what failed stays ticked
+    bulk.summary = [
+      changed.length ? `Set ${changed.length} ticket${changed.length === 1 ? "" : "s"} to ${label}.` : "No ticket was changed.",
+      already.length ? `${already.length} already had it.` : "",
+      failed.length ? `${failed.length} not changed: ${failed.slice(0, 3).map((item) => `${item.ref} (${item.reason})`).join("; ")}${failed.length > 3 ? "…" : ""}.` : "",
+      stoppedBecause ? `Stopped: ${stoppedBecause}` : "",
+    ].filter(Boolean).join(" ");
+    renderTicketSlot(chatId);
+  }
+}
+
+// The Agent filter's "Me": tickets the signed-in agent raised or is assigned to, by the ticket account email (or a ticket they raised from here).
+const TICKET_FILTER_ME = "@me";
+function ticketIsMine(ticket) {
+  const store = ticketNoteLoad();
+  const email = String(ticketAccount.email || store.me.email || "").trim().toLowerCase();
+  return store.mine.includes(ticket.ref) || (Boolean(email) && ticketNotePeople(ticket).some((person) => String(person.email || "").toLowerCase() === email));
+}
+
+// Above the rows: Select all, and once something is ticked, the status to set them to.
+function renderTicketBulkBar(chatId, filtered) {
+  const bulk = ticketBulkFor(chatId);
+  bulk.visibleRefs = filtered.map((ticket) => ticket.ref);
+  const shown = new Set(bulk.visibleRefs);
+  bulk.selected = bulk.selected.filter((ref) => shown.has(ref)); // a ticket the filters hide is not changed behind the agent's back
+  if (!filtered.length) return "";
+  const picked = bulk.selected.length;
+  const all = bulk.visibleRefs.slice(0, TICKET_BULK_MAX).every((ref) => bulk.selected.includes(ref));
+  const options = ticketBulkStatusOptions();
+  const chat = escapeHtml(chatId);
+  return `<div class="ticket-bulk-bar">
+    <button type="button" class="ticket-inbox-text-button" data-action="bulkSelectAll" data-chat="${chat}" ${bulk.running ? "disabled" : ""}>${all && picked ? "Clear selection" : "Select all"}</button>
+    ${picked ? `<span class="ticket-bulk-count">${picked} selected</span>
+    <select class="input ticket-bulk-status" data-chat="${chat}" aria-label="Status to set on the selected tickets" ${bulk.running ? "disabled" : ""}><option value="">Set status to…</option>${options.map((option) => `<option value="${escapeHtml(option.value)}" ${String(option.value) === bulk.status ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select>
+    <button type="button" class="submit-btn ticket-bulk-apply" data-action="bulkApplyStatus" data-chat="${chat}" ${bulk.running || !bulk.status ? "disabled" : ""}>${bulk.running ? escapeHtml(bulk.progress || "Updating…") : `Update ${picked}`}</button>` : ""}
+    ${bulk.summary && !bulk.running ? `<div class="ticket-bulk-summary" role="status">${escapeHtml(bulk.summary)}</div>` : ""}
+  </div>`;
+}
+
 function renderTicketExplorer(chatId) {
   const s = state[chatId];
   const result = ticketSearchResultsByChat.get(chatId);
@@ -4496,7 +4642,7 @@ function renderTicketExplorer(chatId) {
   const group = s.ticketInboxFilter || "all";
   const filtered = tickets.filter(ticket =>
     (group === "all" || (group === "solved" ? ticketStatusTone(ticket) === "solved" : ticketStatusTone(ticket) !== "solved"))
-    && (!s.ticketExplorerAgent || s.ticketExplorerAgent === "all" || ticketPeople(ticket).includes(s.ticketExplorerAgent))
+    && (!s.ticketExplorerAgent || s.ticketExplorerAgent === "all" || (s.ticketExplorerAgent === TICKET_FILTER_ME ? ticketIsMine(ticket) : ticketPeople(ticket).includes(s.ticketExplorerAgent)))
     && matches(ticketStatusValue(ticket), s.ticketExplorerStatus)
     && matches(ticket.currentDepartment?.name || ticket.currentDepartment?.code, s.ticketExplorerDepartment)
     && matches(ticket.market?.label || ticket.market?.code, s.ticketExplorerMarket));
@@ -4508,7 +4654,7 @@ function renderTicketExplorer(chatId) {
       <button type="button" class="ticket-inbox-filter-toggle" data-action="toggleTicketFilters" data-chat="${escapeHtml(chatId)}" aria-label="More ticket filters" aria-expanded="${Boolean(s.ticketFiltersOpen)}">${ticketUiIcon("filter")}${activeFilters ? `<span>${activeFilters}</span>` : ""}</button>
     </div>
     ${s.ticketFiltersOpen ? `<div class="ticket-explorer-filters">
-      <label><span>Agent</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerAgent"><option value="all">All agents</option>${options(agents, s.ticketExplorerAgent)}</select></label>
+      <label><span>Agent</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerAgent"><option value="all">All agents</option><option value="${TICKET_FILTER_ME}" ${s.ticketExplorerAgent === TICKET_FILTER_ME ? "selected" : ""}>Me</option>${options(agents, s.ticketExplorerAgent)}</select></label>
       <label><span>Status</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerStatus"><option value="all">All statuses</option>${options(statuses, s.ticketExplorerStatus, value => ticketChoiceDisplayLabel("status", value))}</select></label>
       <label><span>Department</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerDepartment"><option value="all">All departments</option>${options(departments, s.ticketExplorerDepartment)}</select></label>
       <label><span>Market</span><select class="input ticket-explorer-filter" data-chat="${escapeHtml(chatId)}" data-filter="ticketExplorerMarket"><option value="all">All markets</option>${options(markets, s.ticketExplorerMarket)}</select></label>
@@ -4516,12 +4662,13 @@ function renderTicketExplorer(chatId) {
     </div>` : ""}
     ${!result || result.loading ? '<div class="ticket-inbox-empty" role="status">Loading tickets…</div>' : result.error ? `<div class="record-error-banner">${escapeHtml(result.error)}</div><button type="button" class="secondary-btn" data-action="searchTickets" data-chat="${escapeHtml(chatId)}">Try again</button>` : `
     <div class="ticket-inbox-caption"><span>${filtered.length} ticket${filtered.length === 1 ? "" : "s"}</span><span>Latest update</span></div>
-    <div class="ticket-inbox-rows">${filtered.length ? filtered.map(ticket => `<button type="button" class="ticket-inbox-row" data-action="openTicketResult" data-chat="${escapeHtml(chatId)}" data-ref="${escapeHtml(ticket.ref)}">
+    ${renderTicketBulkBar(chatId, filtered)}
+    <div class="ticket-inbox-rows">${filtered.length ? filtered.map(ticket => `<div class="ticket-inbox-row-wrap"><label class="ticket-bulk-check" title="Tick to change several tickets at once"><input type="checkbox" class="ticket-bulk-tick" data-chat="${escapeHtml(chatId)}" data-ref="${escapeHtml(ticket.ref)}" ${ticketBulkFor(chatId).selected.includes(ticket.ref) ? "checked" : ""} ${ticketBulkFor(chatId).running ? "disabled" : ""} aria-label="Select ${escapeHtml(ticket.ref)}" /></label><button type="button" class="ticket-inbox-row" data-action="openTicketResult" data-chat="${escapeHtml(chatId)}" data-ref="${escapeHtml(ticket.ref)}">
       <span class="ticket-inbox-row-top"><span class="ticket-inbox-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-inbox-status ${ticketStatusTone(ticket)}">${escapeHtml(ticketStatusLabel(ticket))}</span></span>
       <strong class="ticket-inbox-row-title">${escapeHtml(ticketTitle(ticket))}</strong>
       <span class="ticket-inbox-row-meta"><span>${escapeHtml(ticket.fields?.member_id || "No player ID")}${ticket.fields?.member_platform || ticket.fields?.brand ? ` · ${escapeHtml(ticketValueDisplay("member_platform", ticket.fields.member_platform || ticket.fields.brand))}` : ""}</span><span>${escapeHtml(ticket.currentDepartment?.name || ticket.currentDepartment?.code || "Unassigned")}</span></span>
       <span class="ticket-inbox-row-bottom"><span>${Number(ticket.commentCount || 0)} comment${Number(ticket.commentCount || 0) === 1 ? "" : "s"}</span><span>${escapeHtml(ticketUpdatedLabel(ticket))}</span></span>
-    </button>`).join("") : '<div class="ticket-inbox-empty">No tickets match. Try another search or clear the filters.</div>'}</div>
+    </button></div>`).join("") : '<div class="ticket-inbox-empty">No tickets match. Try another search or clear the filters.</div>'}</div>
     ${Number(result.total) > tickets.length ? `<p class="ticket-inbox-limit">Loaded ${tickets.length} of ${Number(result.total)} tickets. Search to narrow the results.</p>` : ""}`}
   </section>`;
 }
@@ -4817,8 +4964,14 @@ function showTicketProblem(chatId, failure, retry) {
 }
 // Is the signed-in agent known to the ticket system? Shown at the top of the Tickets tab before they raise a ticket or comment.
 // Not asked when the widget cannot say who is signed in, and again after five minutes, after an email is entered, or on demand.
-let ticketAccount = { status: "unknown", email: "", source: "", message: "", detail: "", checking: false, at: 0 };
+// The green "Ticket account found" line is only shown for a few seconds (shownUntil) when the account is first confirmed or checked again on
+// demand; after that it lives in Settings. A problem (not found, key refused, check failed) stays on the Tickets tab until it is fixed.
+let ticketAccount = { status: "unknown", email: "", source: "", message: "", detail: "", checking: false, at: 0, shownUntil: 0 };
 const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;
+const TICKET_ACCOUNT_FOUND_SHOWN_MS = 6000;
+function hideTicketAccountLineLater() {
+  setTimeout(() => { for (const id of Object.keys(state)) renderTicketSlot(id); }, TICKET_ACCOUNT_FOUND_SHOWN_MS + 100);
+}
 async function checkTicketAccount(chatId, { force = false } = {}) {
   const s = state[chatId];
   if (!s || ticketAccount.checking) return;
@@ -4831,9 +4984,11 @@ async function checkTicketAccount(chatId, { force = false } = {}) {
     const res = await fetch("/ticket-account", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author }) });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "The ticket account could not be checked");
+    const wasFound = ticketAccount.status === "found";
     ticketAccount = data.enabled === false
-      ? { status: "off", email: "", source: "", message: "", checking: false, at: Date.now() }
-      : { status: data.status, email: data.email || "", source: data.source || "", message: "", detail: data.detail || "", checking: false, at: Date.now() };
+      ? { status: "off", email: "", source: "", message: "", checking: false, at: Date.now(), shownUntil: 0 }
+      : { status: data.status, email: data.email || "", source: data.source || "", message: "", detail: data.detail || "", checking: false, at: Date.now(), shownUntil: data.status === "found" && (!wasFound || force) ? Date.now() + TICKET_ACCOUNT_FOUND_SHOWN_MS : (data.status === "found" ? ticketAccount.shownUntil : 0) };
+    if (ticketAccount.status === "found" && ticketAccount.shownUntil > Date.now()) hideTicketAccountLineLater();
     if (data.status === "found" && s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
     if (data.status === "found" && (ticketConfigError || !ticketFields.length)) await fetchTicketConfig({ fresh: true });
     if (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") {
@@ -4842,7 +4997,7 @@ async function checkTicketAccount(chatId, { force = false } = {}) {
     if (ticketAccount.status === "found") void pollTicketNotifications();
     if (ticketAccount.status === "found" && ticketWorkspaceView(s) === "list" && !ticketSearchResultsByChat.has(chatId)) void refreshTicketInbox(chatId, "", "all", { fresh: false });
   } catch (err) {
-    ticketAccount = { status: "error", email: "", source: "", message: err.message, checking: false, at: Date.now() };
+    ticketAccount = { status: "error", email: "", source: "", message: err.message, checking: false, at: Date.now(), shownUntil: 0 };
   }
   renderTicketSlot(chatId);
 }
@@ -4896,7 +5051,7 @@ const TICKET_DEMO = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get
 if (TICKET_DEMO) installTicketDemo();
 // A ticket or comment that went through as the agent proves the account: the line follows without another check.
 function noteTicketAccountUsed(data) {
-  if (data?.actedAs) ticketAccount = { status: "found", email: data.actedAs, source: ticketAccount.source, message: "", checking: false, at: Date.now() };
+  if (data?.actedAs) ticketAccount = { status: "found", email: data.actedAs, source: ticketAccount.source, message: "", checking: false, at: Date.now(), shownUntil: ticketAccount.shownUntil };
 }
 // The Tickets tab is only usable once the ticket system knows the signed-in agent, so every ticket and comment is theirs: while the check
 // runs, and whenever it says the account is missing or cannot be acted for, the tab shows only the account line (see ticketAccountBlocks).
@@ -4915,7 +5070,25 @@ function renderTicketAccountGate(chatId) {
     </div>`;
 }
 
-function renderTicketAccountLine(chatId) {
+// The Settings card for the ticket account: wherever the Tickets tab exists and the ticket system is acting as the agent.
+function ticketAccountSettingsVisible() {
+  return ESCALATION_TICKET_ENABLED && (previewMode || DEPARTMENT_TABS_LIVE) && ticketAccount.status !== "off";
+}
+// Settings has no chat of its own; a check needs one only for its state.
+function ticketAccountSettingsChat() {
+  return activeChats[0]?.chatId || Object.keys(state)[0] || "";
+}
+function renderTicketAccountSettings() {
+  const chatId = ticketAccountSettingsChat();
+  const line = renderTicketAccountLine(chatId, { always: true });
+  return `<div class="settings-section-title"><span>Ticket account</span></div>
+    <p class="settings-hint">The ticket-system account your tickets, comments and edits are made as.</p>
+    ${line || '<p class="settings-hint">Not checked yet. It is checked when you open the Tickets tab.</p>'}
+    ${ticketAccount.checking ? "" : '<button type="button" class="secondary-btn" data-settings-ticket-recheck>Check again</button>'}`;
+}
+
+// always: Settings shows the account whatever the time; the Tickets tab shows a confirmed account only for a few seconds (see shownUntil).
+function renderTicketAccountLine(chatId, { always = false } = {}) {
   const a = ticketAccount;
   const line = (kind, html) => `<div class="ticket-account ticket-account-${kind}" role="status">${html}</div>`;
   const enter = `<button type="button" class="ticket-inbox-text-button" data-action="enterTicketEmail" data-chat="${escapeHtml(chatId)}">Enter your ticket email</button>`;
@@ -4924,7 +5097,7 @@ function renderTicketAccountLine(chatId) {
   const origin = ({ livechat: "from your LiveChat email", "ticket-email": "your saved Ticket Email", "same-agent": "your saved Ticket Email", entered: "the email you entered" })[a.source];
   if (a.checking) return line("checking", "Checking your ticket account…");
   switch (a.status) {
-    case "found": return line("ok", `✓ Ticket account found: ${who}${origin ? ` <span>(${origin})</span>` : ""}`);
+    case "found": return always || a.shownUntil > Date.now() ? line("ok", `✓ Ticket account found: ${who}${origin ? ` <span>(${origin})</span>` : ""}`) : "";
     case "notFound": return line("bad", `✗ Ticket account not found${who ? ` for ${who}` : ""}. ${enter}`);
     case "noEmail": return line("bad", `✗ No ticket account email for you. ${enter}`);
     case "adminEmailInvalid": return line("bad", `✗ The Ticket Email saved for you (${who}) has no ticket account. Ask your admin to correct it.`);
@@ -5794,6 +5967,16 @@ chatListEl.addEventListener("click", async (e) => {
     }
     s.escalation[btn.dataset.field] = btn.dataset.value || "";
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "bulkSelectAll") {
+    ticketBulkSelectAll(chatId);
+    renderTicketSlot(chatId);
+    return;
+  }
+  if (btn.dataset.action === "bulkApplyStatus") {
+    await applyBulkStatus(chatId);
     return;
   }
 
@@ -6725,6 +6908,18 @@ chatListEl.addEventListener("change", (e) => {
   if (liveInput && liveInput.dataset.field?.startsWith("edit:")) {
     const name = liveInput.dataset.field.slice(5);
     void commitTicketChange(liveInput.dataset.chat, ticketChangeFor(name, liveInput.value));
+    return;
+  }
+  const bulkTick = e.target.closest(".ticket-bulk-tick");
+  if (bulkTick) {
+    ticketBulkToggle(bulkTick.dataset.chat, bulkTick.dataset.ref, bulkTick.checked);
+    renderTicketSlot(bulkTick.dataset.chat);
+    return;
+  }
+  const bulkStatus = e.target.closest(".ticket-bulk-status");
+  if (bulkStatus) {
+    ticketBulkFor(bulkStatus.dataset.chat).status = bulkStatus.value;
+    renderTicketSlot(bulkStatus.dataset.chat);
     return;
   }
   const explorerFilter = e.target.closest(".ticket-explorer-filter");

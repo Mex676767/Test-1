@@ -1369,6 +1369,15 @@ body { font-size: 13px; }
 .ticket-inbox-caption strong { color: var(--text); font-size: 13px; font-weight: 650; }
 .ticket-inbox-row { display: block; width: 100%; padding: 14px 0; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .ticket-inbox-row:hover { background: var(--surface); }
+.ticket-inbox-row-wrap { display: flex; align-items: flex-start; gap: 8px; }
+.ticket-inbox-row-wrap .ticket-inbox-row { flex: 1; min-width: 0; }
+.ticket-bulk-check { display: flex; align-items: center; padding: 16px 0 0; cursor: pointer; }
+.ticket-bulk-check input { width: 15px; height: 15px; margin: 0; cursor: pointer; }
+.ticket-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 6px 0 8px; border-bottom: 1px solid var(--border); }
+.ticket-bulk-count { color: var(--text-muted); font-size: 12px; }
+.ticket-bulk-status { flex: 1; min-width: 140px; max-width: 220px; padding: 5px 8px; font-size: 12px; }
+.ticket-bulk-apply { padding: 6px 12px; font-size: 12px; }
+.ticket-bulk-summary { flex-basis: 100%; color: var(--text); font-size: 12px; line-height: 1.5; }
 .ticket-inbox-row-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
 .ticket-inbox-ref { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; color: var(--text); }
 .ticket-inbox-detail .ticket-inbox-ref { font-size: 19px; line-height: 1.2; letter-spacing: 0.03em; }
