@@ -90,6 +90,10 @@ export async function ticketRequest(env, path, options = {}) {
     const error = new Error(data.error || `Ticket service returned HTTP ${response.status}`);
     error.statusCode = response.status;
     if (data.duplicateOf) error.duplicateOf = String(data.duplicateOf);
+    // An update (PATCH) answers with a machine-readable code and, when it has several problems or a failed expect, their details.
+    if (data.code) error.ticketCode = String(data.code);
+    if (data.problems && typeof data.problems === "object") error.problems = data.problems;
+    if (Array.isArray(data.mismatched)) error.mismatched = data.mismatched;
     throw error;
   }
   return data;
@@ -135,6 +139,9 @@ export function json(statusCode, body, headers) {
 export function ticketError(err) {
   const status = Number(err.statusCode);
   const retryAfter = Number(err.retryAfter);
-  return json(status >= 400 && status < 600 ? status : 500, { ok: false, error: err.message, ...(err.duplicateOf ? { duplicateOf: err.duplicateOf } : {}) },
+  return json(status >= 400 && status < 600 ? status : 500, {
+    ok: false, error: err.message, ...(err.duplicateOf ? { duplicateOf: err.duplicateOf } : {}),
+    ...(err.ticketCode ? { code: err.ticketCode } : {}), ...(err.problems ? { problems: err.problems } : {}), ...(err.mismatched ? { mismatched: err.mismatched } : {}),
+  },
     retryAfter > 0 ? { "Retry-After": String(retryAfter) } : undefined);
 }

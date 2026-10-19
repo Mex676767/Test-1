@@ -32,10 +32,8 @@ Additional form fields and ticket details are collapsible, and form drafts and
 chosen attachments remain available when returning to the inbox. Tickets stay
 hidden in the installed LiveChat widget (`DEPARTMENT_TABS_LIVE = false`).
 
-The ticket API currently supports list, read, and create. It does not expose an
-update route, comment contents, comment posting, history, or log entries. The
-app shows their counts and links to the dashboard, but those website features
-cannot be replicated until matching REST endpoints are added.
+The ticket API supports list, read, create, comment and (since 2026-10-19) update (`PATCH /tickets/<ref>`, see "Editing a ticket" below).
+It does not expose history or log entries; the app links to the dashboard for those.
 
 ## Images in R2 and the ticket author
 
@@ -102,8 +100,21 @@ ticket account email in a box (saved once, see above); "the API key may not act 
 missing `api-keys:act-on-behalf` (ask the ticket team); a senior account the key cannot act for is named. Comments: the ticket read
 (`/ticket-status`) now carries the thread (comments with replies, mentions and file names) and `/ticket-comment` posts a comment or a
 reply (`{ ref, body, parentId?, author }`) as the signed-in agent through the same `onBehalfOf` rules. The widget shows the thread
-under each ticket with a box to comment or reply. Editing a ticket's fields, status, department, market or assignees is not possible
-yet: the ticket API has no update call (it lists list, read, create and comment only).
+under each ticket with a box to comment or reply.
+
+## Editing a ticket (admin preview only)
+
+`POST /ticket-update` (`PATCH` also accepted) `{ ref, author, fields?, toDepartment?, market?, assignees?, expect? }` makes one atomic
+`PATCH /tickets/<ref>` as the signed-in agent (same `onBehalfOf` rules as comments). `fields` are field keys to new values (`null` clears);
+`toDepartment` is a department code; `market` a market code or `null`; `assignees` is `{ add: [email|name|id], remove: [id|email|name] }`;
+`expect` is the value the agent saw for each changed field, so a ticket changed by someone else meanwhile is refused (412 `precondition_failed`,
+nothing saved) instead of overwritten. The answer is `{ ok, ref, changed, visible, ticket, actedAs }`; `visible: false` means the change moved
+the ticket out of what the agent may see. Errors keep the ticket API's `code`, `problems` and `mismatched`. Files cannot be added or removed yet.
+
+In the Tickets tab, "Edit ticket" in a ticket's detail opens the raise-form fields plus department, market and assignees; only what changed is
+sent. **Needs on the ticket side:** the API key's "Update tickets" access switched on (off on every key until an administrator ticks it; a
+refusal shows as "This API key is not allowed to update tickets") and `tickets:update` on the role of each agent's ticket account. The Tickets
+tab is still admin preview only (`DEPARTMENT_TABS_LIVE = false`), so nothing changes in the installed widget.
 
 **Ticket account check (before the Tickets tab can be used).** When the Tickets tab is opened the widget asks `/ticket-account`, which
 makes one small read (the market list) as the agent's ticket email (`onBehalfOf`) and so learns, without creating anything, whether the
