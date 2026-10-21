@@ -10,7 +10,7 @@ const AUTOMATIC_DEPARTMENT_DETECTION = false;
 const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
 const AGENT_LOGIN_LIVE = new URLSearchParams(location.search).get("agentLogin") !== "0";
 const QA_VIEW_LIVE = new URLSearchParams(location.search).get("qaView") !== "0";
-const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;
+const QA_VIEW_ALSO_KNOWLEDGE = false;
 let qaView = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("department") === "qa";
 
 const root = document.documentElement;
@@ -188,7 +188,7 @@ function openSettingsPanel() {
         </div>
         ${selectedAgent || customerService ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
-      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? (selectedAgent ? `You are signed in with LiveChat as QA. The QA and Retention tabs are available to you; chats you take on Retention are recorded as ${escapeHtml(selectedAgent)}.` : "You are signed in with LiveChat as QA. The QA and Retention tabs are available to you. To record chats you cover on Retention you need an agent name: choose it with the button below.") :"You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${qaView && !selectedAgent ? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name</button>` : ""}${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
+      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? (selectedAgent ? `You are signed in with LiveChat as QA. The QA, Retention, Blast and Tickets tabs are available to you; chats you take on Retention are recorded as ${escapeHtml(selectedAgent)}.` : "You are signed in with LiveChat as QA. The QA, Retention, Blast and Tickets tabs are available to you. To record chats you cover on Retention you need an agent name: choose it with the button below.") :"You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${qaView && !selectedAgent ? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name</button>` : ""}${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
         <div class="settings-section-title"><span>Agent</span></div>
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
@@ -1085,7 +1085,7 @@ function mainTabAvailability() {
 
 function syncMainTabs() {
   const available = mainTabAvailability();
-  if (qaView) Object.assign(available, { customer: true, blast: false, tickets: QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE && ESCALATION_TICKET_ENABLED, knowledge: QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE });
+  if (qaView) Object.assign(available, { customer: true, blast: BLAST_LIVE, tickets: ESCALATION_TICKET_ENABLED, knowledge: QA_VIEW_ALSO_KNOWLEDGE });
   const { tickets: ticketsAvailable, blast: blastAvailable, knowledge: knowledgeAvailable } = available;
   if (blastRunInProgress && blastAvailable) activeMainTab = "blast";
   const unknownChatsAvailable = previewMode || qaView;
