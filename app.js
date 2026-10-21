@@ -3064,6 +3064,11 @@ function buildClaimTicketFields(s, programKey, amount, market) {
   if (amountField) fields[amountField.key] = number;
   const transactionField = need("transactionId");
   if (transactionField) fields[transactionField.key] = randomTransactionId();
+  const statusField = need("status");
+  if (statusField) {
+    const open = ticketFieldOptions(statusField).find((option) => [option.value, option.label].some((text) => String(text).trim().toLowerCase() === "open"));
+    fields[statusField.key] = statusField.defaultValue || (open ? open.value : "OPEN");
+  }
   const levelField = need("vipLevel");
   if (levelField) {
     const level = ticketFieldOptions(levelField).find((option) => [option.value, option.label].some((text) => String(text).toLowerCase() === AUTO_TICKET_LEVEL.toLowerCase()));

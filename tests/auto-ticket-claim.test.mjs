@@ -121,15 +121,22 @@ test('query type: with several matches the VVIP bonus one is used', () => {
   assert.equal(plain(w.run(`autoTicketQueryOption(${JSON.stringify(options)}, "LTV")`)).label, 'VVIP LTV 70 BONUS');
 });
 
-test('the ticket carries exactly what was asked for, and leaves status, gateway, remarks and manual deposit empty', () => {
+test('the ticket carries exactly what was asked for, with status Open, and leaves gateway, remarks and manual deposit empty', () => {
   const w = world();
   const out = plain(w.run('buildClaimTicketFields(state.chat1, "topPnl", "58", "MYR")'));
   assert.equal(out.error, undefined);
   const { fields } = out;
   assert.match(fields.transaction_id, /^[A-Z0-9]{32}$/);
   delete fields.transaction_id;
-  assert.deepEqual(fields, { member_id: 'zzplayer', member_platform: 'VS96', query_type: 'vvip_top_p_l_bonus', amount: 58, member_level: 'VVIP', toDepartment: 'PYM_MYR', market: 'MYR' });
+  assert.deepEqual(fields, { member_id: 'zzplayer', member_platform: 'VS96', query_type: 'vvip_top_p_l_bonus', status: 'OPEN', amount: 58, member_level: 'VVIP', toDepartment: 'PYM_MYR', market: 'MYR' });
   assert.equal(out.departmentName, 'PAYMENT MYR/PHP/PKR');
+});
+
+test('status: the ticket system default is used, else its Open option, so a required Status never blocks the claim', () => {
+  const status = (extra) => plain(world({ fields: FIELDS.map((field) => (field.key === 'status' ? { ...field, ...extra } : field)) }).run('buildClaimTicketFields(state.chat1, "topPnl", "58", "MYR")')).fields.status;
+  assert.equal(status({ options: [{ value: 'SOLVED', label: 'Solved' }, { value: 'open_ticket', label: 'Open' }] }), 'open_ticket');
+  assert.equal(status({ defaultValue: 'NEW', options: [{ value: 'NEW', label: 'New' }, { value: 'OPEN', label: 'Open' }] }), 'NEW');
+  assert.equal(status({}), 'OPEN');
 });
 
 test('the ticket cannot be built without a player, a brand, a readable amount, a market or a matching query type', () => {
