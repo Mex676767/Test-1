@@ -16,7 +16,7 @@ function tabs({ previewMode, activeMainTab, qaView = false, selectedAgent = '' }
   const frame = { src: '', dataset: { src: '/qa/index.html' } };
   const els = { unknownChatsTab: element(), unknownChatsView: element({ querySelector: () => frame }), chatList: element({ hidden: false }), mainTabs: element(), retentionTab: element(), ticketsTab: element(), blastTab: element(), knowledgeTab: element(), agentBadge: element({ hidden: false }) };
   const context = vm.createContext({
-    activeMainTab, previewMode, qaView, QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE: false, blastRunInProgress: false, selectedAgent, DEPARTMENT_TABS_LIVE: false, BLAST_LIVE: false, CONFIGURED_LIVECHAT_ACCOUNT: '',
+    activeMainTab, previewMode, qaView, QA_VIEW_ALSO_KNOWLEDGE: false, blastRunInProgress: false, selectedAgent, DEPARTMENT_TABS_LIVE: false, BLAST_LIVE: true, CONFIGURED_LIVECHAT_ACCOUNT: '',
     mainTabAvailability: () => ({ customer: true, blast: true, tickets: false, knowledge: false }), ESCALATION_TICKET_ENABLED: true,
     document: { getElementById: (id) => els[id] || null, querySelector: () => null, querySelectorAll: () => [] },
     URL,
@@ -255,9 +255,9 @@ test('the QA page carries the new controls: who to check and the username filter
   assert.ok(csv.includes('Ticked Unknown,player-one,,'), 'the sheet has the username already on file');
 });
 
-test('a person marked QA sees the QA and Retention tabs (to cover chats), never Blast, Tickets or Knowledge; the QA page opens first', () => {
+test('a person marked QA sees the QA, Retention, Blast and Tickets tabs (some QA still take chats), never Knowledge; the QA page opens first', () => {
   const qa = tabs({ previewMode: false, activeMainTab: 'unknownChats', qaView: true });
-  assert.deepEqual(['unknownChatsTab', 'ticketsTab', 'knowledgeTab', 'retentionTab', 'blastTab'].map((id) => qa.els[id].hidden), [false, true, true, false, true]);
+  assert.deepEqual(['unknownChatsTab', 'ticketsTab', 'knowledgeTab', 'retentionTab', 'blastTab'].map((id) => qa.els[id].hidden), [false, false, true, false, false]);
   assert.equal(qa.els.unknownChatsView.hidden, false);
   assert.equal(qa.frame.src, '/qa/index.html');
   assert.equal(qa.els.chatList.hidden, true);
@@ -267,9 +267,8 @@ test('a person marked QA sees the QA and Retention tabs (to cover chats), never 
   assert.equal(covering.els.chatList.hidden, false);
   assert.equal(covering.els.agentBadge.hidden, false, 'on Retention the badge shows, so a missing agent name is visible');
   assert.equal(tabs({ previewMode: false, activeMainTab: 'unknownChats', qaView: true, selectedAgent: '96 Edwin' }).els.agentBadge.hidden, false, 'a QA person with an agent name shows it');
-  for (const remembered of ['knowledge', 'tickets']) assert.equal(tabs({ previewMode: false, activeMainTab: remembered, qaView: true }).context.activeMainTab, 'unknownChats', remembered + ' is not available to QA yet');
-  const blast = tabs({ previewMode: false, activeMainTab: 'blast', qaView: true });
-  assert.equal(blast.context.activeMainTab, 'unknownChats', 'Blast is not available to QA');
+  assert.equal(tabs({ previewMode: false, activeMainTab: 'knowledge', qaView: true }).context.activeMainTab, 'unknownChats', 'Knowledge is not available to QA');
+  for (const open of ['tickets', 'blast']) assert.equal(tabs({ previewMode: false, activeMainTab: open, qaView: true }).context.activeMainTab, open, open + ' stays open for a QA person');
 });
 
 test('every other agent in the installed widget is unchanged by the QA view: Retention and Blast as before, no QA tab, badge untouched', () => {
@@ -278,11 +277,11 @@ test('every other agent in the installed widget is unchanged by the QA view: Ret
   assert.equal(agent.els.agentBadge.hidden, false);
 });
 
-test('the QA view is wired in the widget: on by default, with an off switch, Tickets and Knowledge held back, and it skips the agent-name step and the settings name panel', () => {
+test('the QA view is wired in the widget: on by default, with an off switch, Knowledge held back, and it skips the agent-name step and the settings name panel', () => {
   assert.match(app, /const QA_VIEW_LIVE = new URLSearchParams\(location\.search\)\.get\("qaView"\) !== "0";/);
   assert.match(app, /&& !selectedAgent && !qaView\) \{\s*\n\s*await Promise\.race\(/, 'boot does not force the agent-name panel on a QA person');
   assert.match(app, /const customerService = isCustomerServiceView\(\) \|\| qaView;/);
-  assert.match(app, /const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;/, 'Tickets and Knowledge are not live for QA yet');
+  assert.match(app, /const QA_VIEW_ALSO_KNOWLEDGE = false;/, 'Knowledge is not live for QA yet');
   assert.match(app, /\.get\("department"\)/, 'the department views are untouched');
   assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/, 'the department switch is on (rolled out 2026-10-19)');
 });
@@ -351,7 +350,7 @@ test('the admin preview stays the full admin view for a QA login, and shows the 
   assert.equal(flag(true, ''), false);
   assert.match(app, /if \(!QA_VIEW_LIVE \|\| !IS_EMBEDDED_APP\) return false;/, 'a QA login in the preview is not looked up');
   const forced = tabs({ previewMode: true, activeMainTab: 'customer', qaView: true });
-  assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab', 'ticketsTab', 'knowledgeTab'].map((id) => forced.els[id].hidden), [false, false, true, true, true]);
+  assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab', 'ticketsTab', 'knowledgeTab'].map((id) => forced.els[id].hidden), [false, false, false, false, true]);
   assert.equal(forced.context.activeMainTab, 'customer', 'Retention stays open');
   const normal = tabs({ previewMode: true, activeMainTab: 'customer', qaView: false });
   assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab'].map((id) => normal.els[id].hidden), [false, false, false], 'the preview shows everything, QA included');
