@@ -37,7 +37,7 @@ test('with the login on, an older self-chosen name is not trusted and the boot w
 
 test('once the name comes from the login, Settings shows it read-only and the Save button cannot change it', () => {
   const panel = app.slice(app.indexOf('function openSettingsPanel'), app.indexOf('function renderDiagnosticsLog'));
-  assert.match(panel, /id="agentLockedName">\$\{agentLocked \? escapeHtml\(selectedAgent\) : "Signing in with LiveChat…"\}/);
+  assert.match(panel, /id="agentLockedName"[^>]*>\$\{agentLocked \? escapeHtml\(selectedAgent\) : "Signing in with LiveChat…"\}/);
   assert.match(panel, /if \(AGENT_LOGIN_LIVE\) \{ overlay\.remove\(\); return; \}/);
 });
 
@@ -149,7 +149,7 @@ test('the sign-in request gives up after 25 s, and the waiting state starts and 
 
 test('with the LiveChat login on, Settings never offers the name list, not even before the sign-in finishes', () => {
   const panel = app.slice(app.indexOf('function openSettingsPanel'), app.indexOf('function renderDiagnosticsLog'));
-  assert.match(panel, /\$\{AGENT_LOGIN_LIVE\s*\n\s*\? `<div class="input settings-text" id="agentLockedName">/);
+  assert.match(panel, /\$\{AGENT_LOGIN_LIVE\s*\n\s*\? `<div class="input settings-text" id="agentLockedName"/);
   assert.match(panel, /Signing in with LiveChat…/);
   assert.match(panel, /if \(AGENT_LOGIN_LIVE\) \{ overlay\.remove\(\); return; \}/);
 });
