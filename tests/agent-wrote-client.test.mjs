@@ -127,7 +127,7 @@ test('sweep: once LiveChat said they did not write, the chat is left alone; "wro
 
 test('the record gate asks LiveChat only for a chat the agent did not act on, before anything is stamped or flagged', () => {
   const submit = app.slice(app.indexOf('async function submitRecordOnce'));
-  const gate = submit.indexOf('if (auto && !agentActed(s)) {');
+  const gate = submit.indexOf('if (auto && (!agentActed(s) || (AGENT_LOGIN_LIVE && caseNeverLookedUp(s)))) {');
   assert.ok(gate > -1);
   assert.ok(submit.indexOf('await agentWroteInChat(chatId)', gate) > gate);
   assert.ok(gate < submit.indexOf('s.agentName = selectedAgent'));

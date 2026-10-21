@@ -66,7 +66,7 @@ function sweepHarness({ succeedOnAttempt = Infinity } = {}) {
       else st[chatId].autoRecordError = 'Lark is throttling';
     },
   });
-  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('agentActed'), fn('agentTouchedChat'), fn('sweepPendingChats')].join('\n'), context);
+  vm.runInContext([fn('nextSweepDelay'), fn('sweepSignature'), fn('agentActed'), fn('agentTouchedChat'), 'function logCaseOrigin() {}', fn('sweepPendingChats')].join('\n'), context);
   return { clock, st, submits, context, sweep: () => vm.runInContext('sweepPendingChats()', context) };
 }
 
