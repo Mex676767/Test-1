@@ -6,7 +6,6 @@ import { handler as config, resetTicketConfigCache } from "./ticket-config.js";
 import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 import { resetTicketRateLimit, resetTicketReadCache } from "./_lib/tickets.js";
 
-// Keys that act for others refuse any request that does not say whose behalf it is on: every read carries the signed-in agent's email.
 const TOKENS = {
   "tok-alice": { account_id: "uuid-alice", email: "alice@x.com", client_id: "c1" },
   "tok-bob": { account_id: "uuid-bob", email: "bob@x.com", client_id: "c1" },

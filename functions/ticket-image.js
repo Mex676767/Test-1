@@ -1,8 +1,5 @@
 import { IMAGE_KEY, IMAGE_TYPES } from "./_lib/ticket-images.js";
 
-// Serves one ticket image from the R2 bucket (binding TICKET_IMAGES) so the ticket team can open the link in the ticket.
-// Only keys this site wrote are readable (see IMAGE_KEY), and only as an image: the bucket holds nothing else this reaches.
-// Not needed when TICKET_IMAGES_PUBLIC_URL points at a public address of the bucket.
 const text = (status, message) => new Response(message, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
 
 export async function onRequest(context) {

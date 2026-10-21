@@ -1,9 +1,3 @@
-// Stop rules for the load-test script, kept apart so they can be tested without a server.
-//
-// 1. Before a run starts the queue must NOT still be backed off from an earlier throttle: its gap (gapMs) has to equal the base gap
-//    (250 ms in production). A raised gap means Lark throttled recently; a new burst would measure the back-off, not the queue.
-// 2. After a run, stop if more than `maxNon200` requests did not answer HTTP 200, or if Lark throttled during the run
-//    (limited / retries429 / tokenLimited went up in the queue's stats).
 export const DEFAULT_BASE_GAP_MS = 250;
 export const DEFAULT_MAX_NON_200 = 2;
 

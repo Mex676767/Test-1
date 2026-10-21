@@ -9,7 +9,6 @@ const line = (re) => app.match(re)[0];
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const escapeHtml = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 
-// ---- the ticket account line: shown for a few seconds, then it lives in Settings ----------------------------
 const ACCOUNT_SOURCE = [
   'let ticketNotePollInfo = { at: 0, watching: 0, error: "" };',
   'let ticketAccount = { status: "unknown", email: "", source: "", message: "", detail: "", checking: false, at: 0, shownUntil: 0 };',
@@ -90,7 +89,6 @@ test('Settings has a Ticket account card with the line, Check again and the emai
   assert.ok(app.includes('showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Enter the email of your ticket-system account." }'), 'Enter your ticket email works from Settings too');
 });
 
-// ---- the Agent filter's "Me" ------------------------------------------------------------------------------
 test('Me filter: tickets the agent raised or is assigned to, by their ticket account email, or ones raised from here', () => {
   const source = [line(/const TICKET_FILTER_ME = "[^"]+";/), fn('ticketNotePeople'), fn('ticketIsMine')].join('\n');
   const make = (email, mine = []) => {
@@ -111,7 +109,6 @@ test('Me filter: "Me" is the first choice after All agents, and picking it lists
   assert.ok(app.includes('if (agent === TICKET_FILTER_ME) return ticketIsMine(ticket);'));
 });
 
-// ---- bulk status edit -----------------------------------------------------------------------------------------
 const BULK_SOURCE = [
   line(/const TICKET_BULK_MAX = \d+;/), 'const ticketBulkByChat = new Map();',
   ...['ticketScopedWho', 'ticketActiveList', 'ticketBulkFor', 'ticketBulkStatusOptions', 'ticketBulkToggle', 'ticketBulkSelectAll', 'ticketNoteSeen', 'applyBulkStatus', 'renderTicketBulkBar'].map(fn),
@@ -241,7 +238,6 @@ test('bulk: the list rows have tick boxes, and the page wires the ticks, the sta
   assert.ok(app.includes('btn.dataset.action === "bulkSelectAll"') && app.includes('btn.dataset.action === "bulkApplyStatus"'));
 });
 
-// ---- "Me" asks the ticket system -------------------------------------------------------------------------------
 function meWorld({ agent = '@me', author = true, mineFails = false } = {}) {
   const calls = [];
   const results = new Map();
@@ -343,7 +339,7 @@ test('the filters and the bulk status are custom dropdowns wired through the sha
   assert.ok(app.includes('btn.dataset.field === "bulk:status"'));
   assert.doesNotMatch(app, /<select class="input ticket-explorer-filter"/);
   assert.doesNotMatch(app, /<select class="input ticket-bulk-status"/);
-  assert.ok(app.includes('loadTicketAgentRoster(chatId); // every agent for the Agent filter'));
+  assert.ok(app.includes('void loadTicketAgentRoster(chatId);'));
 });
 
 test('status, department and market offer every choice, not only those on the loaded tickets; a left-over filter value that is no longer offered is not applied', () => {
@@ -353,7 +349,6 @@ test('status, department and market offer every choice, not only those on the lo
   assert.ok(app.includes('const effective = (key, values) =>'));
 });
 
-// ---- the agent roster ------------------------------------------------------------------------------------------
 test('roster: loaded once when the filters open, kept ten minutes, and a failure leaves the filter working', async () => {
   const source = [line(/let ticketAgentRoster = [^;]+;/), line(/const TICKET_ROSTER_MAX_AGE_MS = [^;]+;/), fn('loadTicketAgentRoster')].join('\n');
   let calls = 0;

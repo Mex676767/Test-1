@@ -1,23 +1,3 @@
-#!/usr/bin/env node
-// Load test for POST /lark-search: N simulated agents look up at the same moment, then the script prints timings.
-//
-//   node scripts/stress-lookup.mjs --base https://staging.example.pages.dev --agents 100 --users players.txt
-//
-// Stop guard (scripts/stress-guard.mjs): with the queue's stats key in the environment (variable name from --stats-key-env, default
-// QUEUE_STATS_KEY; the value is never printed) the script takes a /queue-stats snapshot before and after every round and
-//  * REFUSES to start a round unless the queue's gapMs equals the base gap (--base-gap-ms, default 250) and the queue is idle, i.e. it is
-//    not still backed off from an earlier throttle;
-//  * STOPS after a round with more than --max-non-200 (default 2) non-200 answers, or if limited / retries429 / tokenLimited went up
-//    (Lark throttled), prints the snapshots and exits non-zero.
-// Against the production host the stats key is REQUIRED (pass --no-queue-guard to run with only the HTTP check).
-//
-// Safe by default:
-//  * sends `preview: true` lookups, which only READ (no Customer Approaching rows are created);
-//  * refuses the production host unless you pass --allow-production-reads, because even reads spend real Lark quota;
-//  * --write sends real lookups (rows ARE created) and additionally needs --i-understand-this-writes-rows,
-//    and is meant ONLY for a staging copy that points at a separate Lark base.
-//
-// players.txt: one "username,brand" per line (brand optional, default PP). Lines are reused round-robin.
 import { readFileSync } from "node:fs";
 import { checkRunStart, checkRunEnd, DEFAULT_BASE_GAP_MS, DEFAULT_MAX_NON_200 } from "./stress-guard.mjs";
 
@@ -77,7 +57,6 @@ if (PRODUCTION_HOSTS.includes(host) && !statsKey && !args.has("no-queue-guard"))
   console.error("Refusing to load-test production without the queue stats key (set the variable named by --stats-key-env, default QUEUE_STATS_KEY): the guard cannot see throttles or a backed-off queue without it. --no-queue-guard keeps only the HTTP check.");
   process.exit(2);
 }
-// The queue's own numbers (GET /queue-stats, header x-stats-key). null when there is no key or the call fails.
 async function snapshot() {
   if (!statsKey) return null;
   try {

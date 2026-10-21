@@ -3,10 +3,8 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 
-// A lookup keeps running when the agent switches chats: its messages belong to ITS chat, a pill and one neutral toast say it finished,
-// and a widget that is recreated mid-lookup resumes it once. The real code from app.js runs here against fakes (no DOM, no network).
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const block = app.slice(app.indexOf('// ---- A lookup keeps running when the agent switches chats'), app.indexOf('function applyProfile(profile) {'));
+const block = app.slice(app.indexOf('const LOOKUP_RESUME_MAX_AGE_MS'), app.indexOf('function applyProfile(profile) {'));
 const announce = app.match(/function announceChatSwitch\(prevChatId, nextChat\) \{[\s\S]*?\n\}/)[0];
 assert.ok(block.includes('async function runLookup(') && block.includes('function resumePendingLookups('), 'found the lookup code in app.js');
 
@@ -15,7 +13,6 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 const ROW = { tier: '3' };
 const okResult = (extra = {}) => ({ row: ROW, otherBrands: [], lookupWarnings: [], caRecordId: 'rec1', caseRowError: '', notVip: false, ...extra });
 
-// One copy of the widget (an iframe). `persisted` plays localStorage's chat state; `storage` the other localStorage keys.
 function widget({ persisted = {}, agent = 'Agent A', focus = null, storage, clock, fetchBonusRow, instance = 'copy' }) {
   const calls = { status: [], toast: [], diag: [], render: 0, fetch: [], timers: [] };
   const els = new Map();
@@ -28,7 +25,7 @@ function widget({ persisted = {}, agent = 'Agent A', focus = null, storage, cloc
     setStatus: (text, kind) => calls.status.push({ text, kind }),
     showChatToast: (text, kind) => calls.toast.push({ text, kind }),
     logDiagnostic: (text, kind) => calls.diag.push({ text, kind }),
-    renderChats: () => { calls.render++; }, scheduleNeedsAttentionRefresh: () => {}, saveState: () => { const copy = JSON.parse(JSON.stringify(state)); for (const s of Object.values(copy)) { delete s.lookupInFlight; delete s.unclaimInFlight; } widgetSaved.set(instance, copy); },   // like persistableState()
+    renderChats: () => { calls.render++; }, scheduleNeedsAttentionRefresh: () => {}, saveState: () => { const copy = JSON.parse(JSON.stringify(state)); for (const s of Object.values(copy)) { delete s.lookupInFlight; delete s.unclaimInFlight; } widgetSaved.set(instance, copy); },
     setUnknown: (chatId, value) => { state[chatId].isUnknown = value; },
     chatListEl: { querySelectorAll: () => [] }, renderPlayerInfo: () => '', renderTickets: () => '', renderAutoFields: () => '',
     escapeHtml: (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]),
@@ -54,7 +51,6 @@ test('look up in chat A, switch to B before it finishes: the result is saved in 
   const running = start(w, 'A');
   assert.equal(w.state.A.lookupInFlight, true);
   assert.equal(w.pill()?.textContent || '', '', 'no pill while its own chat is in front');
-  // the agent switches to B (what applyProfile does: announce, then swap, then refresh the pill)
   w.run(`announceChatSwitch('A', { chatId: 'B', customerName: 'Bob' })`);
   w.focus('B'); w.run('refreshBackgroundLookupPill()');
   assert.deepEqual(w.calls.toast.map((t) => [t.kind, t.text]), [['info', 'Lookup for alice keeps running — results will be waiting when you come back.']], 'info, not a warning');
@@ -67,7 +63,6 @@ test('look up in chat A, switch to B before it finishes: the result is saved in 
   assert.equal(w.state.B.lookupMessage, undefined, "nothing was written onto B");
   assert.deepEqual(w.calls.toast.slice(1).map((t) => [t.kind, t.text]), [['info', 'Lookup for alice finished (other chat)']], 'exactly one neutral toast');
   assert.equal(w.pill().textContent, '✓ Lookup for alice done'); assert.match(w.pill().className, /done/);
-  // the "Found" line is only logged in Diagnostics; lookup messages are no longer drawn in the card
   assert.ok(w.calls.diag.some((x) => x.text.includes('Found alice under PP.')), 'Found line is in the diagnostics log');
   assert.doesNotMatch(app, /renderLookupMessage|lookup-message/, 'the card has no lookup message block');
 });
@@ -137,11 +132,10 @@ test('switch messages: a running lookup is information, a typed-but-not-looked-u
   ]);
 });
 
-// ---- widget reload mid-lookup -----------------------------------------------------------------------------------------------
 async function reloadScenario({ ageMs, persistedPatch = (p) => p, agent = 'Agent A', reloadAgent = 'Agent A' }) {
   const clock = { now: 20_000_000 }, storage = makeStorage();
   const first = widget({ persisted: { A: chat({ caOwner: 'Agent A' }), B: chat() }, agent, focus: 'A', storage, clock, instance: 'copy1', fetchBonusRow: () => new Promise(() => {}) });
-  void start(first, 'A');                                              // never answers: the iframe is torn down mid-request
+  void start(first, 'A');
   const persisted = persistedPatch(JSON.parse(JSON.stringify(widgetSaved.get('copy1'))));
   assert.equal(persisted.A.pendingLookup.username, 'alice', 'the running lookup was saved without secrets');
   assert.deepEqual(Object.keys(persisted.A.pendingLookup).sort(), ['agent', 'brand', 'forcing', 'link', 'previousRecordId', 'resumed', 'startedAt', 'telegram', 'username']);
@@ -151,7 +145,7 @@ async function reloadScenario({ ageMs, persistedPatch = (p) => p, agent = 'Agent
 }
 
 test('widget recreated mid-lookup (< 40 s): the lookup is resumed ONCE, exactly one search call, and the result is shown', async () => {
-  const { clock, storage, persisted } = await reloadScenario({ ageMs: 12_000 });             // the old copy's lock (10 s) has lapsed by now
+  const { clock, storage, persisted } = await reloadScenario({ ageMs: 12_000 });
   const second = widget({ persisted, focus: 'A', storage, clock, instance: 'copy2', fetchBonusRow: () => Promise.resolve(okResult({ caRecordId: 'rec-resumed' })) });
   second.run('startLookupResume()');
   await new Promise((r) => setImmediate(r)); await new Promise((r) => setImmediate(r));
@@ -160,7 +154,6 @@ test('widget recreated mid-lookup (< 40 s): the lookup is resumed ONCE, exactly 
   assert.equal(second.state.A.caRecordId, 'rec-resumed');
   assert.equal(second.state.A.lookupMessage.text, 'Found alice under PP.'); assert.equal(second.state.A.pendingLookup, null);
   assert.ok(second.calls.render >= 1, 'the Cancel button is shown while it runs');
-  // resuming again (e.g. another reload) does nothing: it already finished
   second.run('resumePendingLookups()');
   assert.equal(second.calls.fetch.length, 1);
 });
@@ -204,7 +197,6 @@ test("another agent's unfinished lookup is never resumed (and left untouched for
   other.run('startLookupResume()');
   assert.equal(other.calls.fetch.length, 0);
   assert.equal(other.state.A.pendingLookup.agent, 'Agent B', 'left in place');
-  // same agent name but the row belongs to someone else (caOwner)
   const { clock: c2, storage: s2, persisted: p2 } = await reloadScenario({ ageMs: 12_000, persistedPatch: (p) => { p.A.caOwner = 'Agent B'; return p; } });
   const owner = widget({ persisted: p2, agent: 'Agent A', focus: 'A', storage: s2, clock: c2, instance: 'copy2' });
   owner.run('startLookupResume()');
@@ -217,11 +209,10 @@ test('resuming waits until the agent name is known', async () => {
   w.run('startLookupResume()');
   assert.equal(w.calls.fetch.length, 0);
   w.context.selectedAgent = 'Agent A';
-  w.run('resumePendingLookups()');                                   // what saveAgent() does once an agent is chosen
+  w.run('resumePendingLookups()');
   assert.equal(w.calls.fetch.length, 1);
 });
 
-// ---- wiring in app.js -------------------------------------------------------------------------------------------------------
 test('the Look up button, boot and agent selection are wired to the new code; Cancel and the reload guard are unchanged', () => {
   assert.match(app, /await runLookup\(chatId, \{ username, brand, telegramNow, link: s\.chatUrl \|\| chatDef\?\.link \|\| "", previousRecordId, forcing, btn \}\);/);
   assert.match(app, /setTimeout\(startLookupResume, 1500\)/);

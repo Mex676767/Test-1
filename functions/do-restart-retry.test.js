@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { initEnv, getRecord, deleteRecord, createRecord, searchRecords, larkClientStats, flushCounters, doResetReason } from "./_lib/lark.js";
 import { handler as searchHandler } from "./lark-search.js";
 
-// The queue (a Durable Object) is restarted by a deploy: calls to it fail for a moment with errors like "Durable Object reset because
-// its code was updated". Fakes only: the stub below plays the Durable Object, fetch plays Lark.
 const ENV = { LARK_APP_ID: "restart-app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base-token", LARK_TABLE_CUSTOMER_APPROACHING: "customer-table" };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 const ok = (data) => ({ status: 200, statusText: "OK", headers: [["content-type", "application/json"]], body: JSON.stringify({ code: 0, data }) });
@@ -121,11 +119,11 @@ test("a whole lookup rides out a queue restart: the first queue call fails, is r
     LARK_TABLE_LTV_DAY: "ltv-table", LARK_TABLE_RISK_PLAYER: "risk-table", LARK_TABLE_SPECIAL_RELOAD: "reload-table", LARK_TABLE_VIP_BOOSTER: "vip-table",
     LARK_TABLE_TELEGRAM28: "telegram-table", LARK_TABLE_MOONCAKE: "mooncake-table", LARK_TABLE_VS96_FEEDBACK: "vs96-table" };
   const run = async (failures) => {
-    let attempts = 0;                                                                // attempts of ONE source (Top 10 P&L) that fail
+    let attempts = 0;
     const stub = makeQueue({ searchBatch: async (input) => { if (String(input.url).includes("top-pnl-table") && attempts++ < failures) throw resetError(); return ok({ items: [], has_more: false }); } });
     initEnv(queueEnv(stub, lookupEnv));
     let body;
-    await withFetch(() => new Promise(() => {}), async () => {                       // the direct path never answers: only the queue can
+    await withFetch(() => new Promise(() => {}), async () => {
       const result = await searchHandler({ body: JSON.stringify({ username: "player1", brand: "PP", preview: true }), env: { LOOKUP_FIRST_PASS_MS: "800", LOOKUP_BUDGET_MS: "2500", LOOKUP_RETRY_MIN_MS: "200" } });
       assert.equal(result.statusCode, 200);
       body = JSON.parse(result.body);

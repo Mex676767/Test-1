@@ -9,7 +9,6 @@ const never = () => new Promise(() => {});
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 const ok = (data) => ({ status: 200, statusText: "OK", headers: [["content-type", "application/json"]], body: JSON.stringify({ code: 0, data }) });
 
-// A stub queue that records every call it receives.
 function makeStub(overrides = {}) {
   const calls = [];
   const impls = {
@@ -37,7 +36,6 @@ async function withFetch(fn, run) {
   try { await run(seen); } finally { globalThis.fetch = original; }
 }
 
-// ---- A: every queue call carries the request's start time -------------------------------------------------------------
 test("A: calls made inside a request carry that request's start time (searches, creates, permits, queue calls); outside one they carry none", async () => {
   const stub = makeStub();
   initEnv(queueEnv(stub, { LARK_BATCH_CREATE: "1" }));
@@ -79,7 +77,6 @@ test("A: createBatch carries the request start", async () => {
   assert.equal(call.args[0].label, "create");
 });
 
-// ---- B: get / update / delete run inside the queue ---------------------------------------------------------------------
 test("B: update, get and delete go to the queue's larkCall (no permit acquired for them), with a label and a deadline", async () => {
   const stub = makeStub();
   initEnv(queueEnv(stub));
@@ -127,12 +124,11 @@ test("B: fallback — a queue without larkCall (older deploy) or without v2 mode
   assert.ok(old.calls.some((c) => c.name === "acquire" && c.args[3] === "update"), "permit labelled 'update'");
 
   const legacyMode = makeStub();
-  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => legacyMode } });         // no LARK_QUEUE_PROTOCOL
+  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => legacyMode } });
   await withFetch(() => json({ code: 0, data: { record: { record_id: "r1", fields: {} } } }), async () => { await updateRecord("customer-table", "r1", {}); });
   assert.equal(legacyMode.calls.filter((c) => c.name === "larkCall").length, 0);
 });
 
-// ---- D: shared cached reads + labels -----------------------------------------------------------------------------------
 test("D: listFields asks the queue's shared cache (30 s TTL, 6 h stale) and parses its answer; fresh forces a refresh", async () => {
   const stub = makeStub({ cachedCall: async () => ok({ items: [{ field_name: "Tier", property: { options: [{ id: "o1", name: "VIP1" }] } }] }) });
   initEnv(queueEnv(stub));
@@ -171,7 +167,7 @@ test("D: the bonus-config list uses the shared copy for 60 s, and fresh skips it
 });
 
 test("D: every permit is labelled for the queue's stats (token / fields / list / record-get / update / delete / create)", async () => {
-  const old = makeStub(); delete old.larkCall; delete old.cachedCall;            // force the permit path for everything
+  const old = makeStub(); delete old.larkCall; delete old.cachedCall;
   initEnv(queueEnv(old));
   await withFetch(() => json({ code: 0, data: { items: [], record: { record_id: "r1", fields: {} } } }), async () => {
     await listFields("t-labels");
@@ -184,7 +180,6 @@ test("D: every permit is labelled for the queue's stats (token / fields / list /
   for (const expected of ["fields", "list", "record-get", "update", "delete"]) assert.ok(labels.includes(expected), `${expected} in ${labels.join(",")}`);
 });
 
-// ---- C: ownership through a merged search -----------------------------------------------------------------------------
 const caRow = (id, agent, extra = {}) => ({ record_id: id, fields: { "Agent Name": agent, ...extra } });
 function lark({ rows = [], recordOwner = "Agent A", searchFails = false } = {}) {
   const log = { searches: 0, gets: 0, puts: 0, putBodies: [] };
@@ -241,13 +236,13 @@ const reasonDelta = (before) => Object.fromEntries(Object.entries(reasons()).map
 test("C: search says ANOTHER agent owns it -> the GET decides: true owner is me -> allowed; true owner is someone else -> refused with 409", async () => {
   initEnv({ ...ENV });
   const before = reasons();
-  const stale = lark({ rows: [caRow("rec1", "Agent B")], recordOwner: "Agent A" });        // the search is stale, Lark's truth is me
+  const stale = lark({ rows: [caRow("rec1", "Agent B")], recordOwner: "Agent A" });
   await withFetch((url, init) => stale.route(url, init), async () => {
     const result = await submit();
     assert.equal(result.statusCode, 200);
     assert.deepEqual([stale.log.searches, stale.log.gets, stale.log.puts], [1, 1, 1]);
   });
-  const real = lark({ rows: [caRow("rec1", "Agent B")], recordOwner: "Agent B" });         // both say Agent B
+  const real = lark({ rows: [caRow("rec1", "Agent B")], recordOwner: "Agent B" });
   await withFetch((url, init) => real.route(url, init), async () => {
     const result = await submit();
     assert.equal(result.statusCode, 409);
@@ -281,12 +276,12 @@ test("C: every fallback reason is counted: noUsername, noAgent, missing, searchE
   const before = reasons();
   const fake = lark({ rows: [caRow("someone-else", "Agent B")] });
   await withFetch((url, init) => fake.route(url, init), async () => {
-    await submit({ username: undefined });                        // noUsername
-    await recordHandler({ body: JSON.stringify({ recordId: "rec1", agentName: " ", picName: "", username: "player1", inquiry: ["Others"], status: "Solved" }) }).catch(() => {});   // noAgent -> rejected earlier, no search
-    await submit();                                               // missing (row not in the result)
+    await submit({ username: undefined });
+    await recordHandler({ body: JSON.stringify({ recordId: "rec1", agentName: " ", picName: "", username: "player1", inquiry: ["Others"], status: "Solved" }) }).catch(() => {});
+    await submit();
   });
   const failing = lark({ searchFails: true });
-  await withFetch((url, init) => failing.route(url, init), async () => { await submit(); });          // searchError
+  await withFetch((url, init) => failing.route(url, init), async () => { await submit(); });
   const delta = reasonDelta(before);
   assert.equal(delta.noUsername, 1);
   assert.equal(delta.missing, 1);
@@ -327,12 +322,11 @@ test("C: readOwnershipMerged answers from the search ONLY for this agent's own r
   });
 });
 
-// ---- instrumentation: counters the Pages side reports to the queue -------------------------------------------------
 test("3a: noted counters are sent to the queue's reportCounters once, with safe names; failures, a missing method and a hung queue are ignored", async () => {
   const reports = [];
   const stub = makeStub({ reportCounters: async (report) => { reports.push(report); } });
   initEnv(queueEnv(stub));
-  await flushCounters(); reports.length = 0;                      // counters left over from earlier tests
+  await flushCounters(); reports.length = 0;
   noteCounter("queueCallFallback");
   noteCounter("ownershipFallback:missing", 3);
   noteCounter("lookupWarning:Custom bonus x y!");
@@ -344,7 +338,7 @@ test("3a: noted counters are sent to the queue's reportCounters once, with safe 
 
   noteCounter("a");
   initEnv(queueEnv(makeStub({ reportCounters: undefined })));
-  await flushCounters();                                          // the method is missing: dropped quietly
+  await flushCounters();
   noteCounter("b");
   initEnv(queueEnv(makeStub({ reportCounters: () => { throw new Error("boom"); } })));
   await flushCounters();
@@ -363,7 +357,7 @@ test("3a: the queue-side events are noted: requests without a start time, queue-
   await flushCounters();
   reports.length = 0;
   await withFetch(() => json({ code: 0, data: { record: { record_id: "r1", fields: {} } } }), async () => {
-    await updateRecord("customer-table", "r1", {});                // no request context -> noRequestStart; larkCall missing -> fallback
+    await updateRecord("customer-table", "r1", {});
   });
   await flushCounters();
   assert.ok(reports[0].noRequestStart >= 1, JSON.stringify(reports[0]));
@@ -383,7 +377,6 @@ test("C: the widget sends the username with every record write (submit, edit, un
   assert.match(app, /linkOnly: true, chatLink: s\.chatUrl, agentName: selectedAgent, username: s\.username/);
 });
 
-// ---- 4: batch updates are OFF unless LARK_BATCH_UPDATE=1 -------------------------------------------------------------
 test("4: LARK_BATCH_UPDATE is off by default (updates use larkCall); on, they go to updateBatch; on with an older queue, they fall back to larkCall", async () => {
   const off = makeStub({ updateBatch: async () => ok({ record: { record_id: "r1", fields: {} } }) });
   initEnv(queueEnv(off));
@@ -408,13 +401,12 @@ test("4: LARK_BATCH_UPDATE is off by default (updates use larkCall); on, they go
   await withFetch(() => json({ code: 0, data: {} }), async () => { await updateRecord("customer-table", "r1", { Status: "Solved" }); });
   assert.equal(older.calls.filter((c) => c.name === "larkCall").length, 1, "an older queue still gets the write");
 
-  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => on }, LARK_BATCH_UPDATE: "1" });          // no v2 protocol
+  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => on }, LARK_BATCH_UPDATE: "1" });
   on.calls.length = 0;
   await withFetch(() => json({ code: 0, data: { record: { record_id: "r1", fields: {} } } }), async () => { await updateRecord("customer-table", "r1", {}); });
   assert.equal(on.calls.filter((c) => c.name === "updateBatch" || c.name === "larkCall").length, 0, "needs the v2 protocol");
 });
 
-// ---- isolate heartbeat: the queue counts distinct Pages isolates per minute ------------------------------------------------
 test("3: every report carries this isolate's random id; counters go out at once, an idle heartbeat at most every 5 s", async () => {
   const { flushCountersThrottled } = await import("./_lib/lark.js");
   const sent = [];
@@ -422,11 +414,11 @@ test("3: every report carries this isolate's random id; counters go out at once,
   initEnv(queueEnv(stub));
   await flushCounters(); sent.length = 0;
   noteCounter("failOpen");
-  await flushCountersThrottled();                                        // counters pending: sent immediately
+  await flushCountersThrottled();
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0].report, { failOpen: 1 });
   assert.match(sent[0].id, /^[0-9a-f-]{36}$/, "a random UUID, nothing identifying");
-  await flushCountersThrottled();                                        // nothing pending and a report just went out: no extra RPC
+  await flushCountersThrottled();
   assert.equal(sent.length, 1);
   const realNow = Date.now;
   Date.now = () => realNow() + 6_000;

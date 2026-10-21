@@ -1,4 +1,3 @@
-/* ---------- Tokens ---------- */
 :root[data-theme="dark"] {
   --bg: #101216;
   --surface: #191c22;
@@ -6,10 +5,6 @@
   --border: #2a2e37;
   --text: #eef0f3;
   --text-muted: #8991a1;
-  /* Was #5c6472 — measured at only ~2.6:1 contrast against surface/surface-2
-     (WCAG AA needs 4.5:1 for normal text), which made every label, hint,
-     and empty-state message hard to read against the very bright --text
-     values elsewhere. Now ~4.4-4.9:1. */
   --text-faint: #828a98;
   --gold: #e3b341;
   --gold-soft: #3a331f;
@@ -26,8 +21,6 @@
   --border: #e2e4ea;
   --text: #1b1e24;
   --text-muted: #6b7280;
-  /* Was #9aa1ad — same low-contrast issue as the dark theme's faint token
-     (~2.5:1). Now ~4.3-4.6:1. */
   --text-faint: #70767f;
   --gold: #9a6b0f;
   --gold-soft: #fbf0d9;
@@ -53,11 +46,6 @@ body {
 
 .mono { font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; }
 
-/* ---------- Topbar ---------- */
-/* Two explicit rows instead of relying on flex-wrap fallback — at real
-   (narrow) sidebar widths, wrapping badge+icons as one unit still didn't
-   fit and cascaded into a messy 3rd line. The agent badge (often a long
-   name + tier tag) now always gets its own full-width row underneath. */
 .topbar {
   display: flex; flex-direction: column; gap: 8px;
   padding: 12px 16px; border-bottom: 1px solid var(--border);
@@ -117,9 +105,6 @@ body {
 :root[data-theme="light"] .theme-icon.sun { opacity: 1; transform: scale(1) rotate(0); }
 :root[data-theme="light"] .theme-icon.moon { opacity: 0; transform: scale(0.6) rotate(-45deg); }
 
-/* ---------- Status ---------- */
-/* Hidden by default — only errors interrupt the compact top area. Routine
-   confirmations are logged silently (see Settings → Diagnostics). */
 .status-bar {
   padding: 8px 16px; font-size: 12px; color: var(--text-muted);
   background: var(--surface); border-bottom: 1px solid var(--border);
@@ -128,12 +113,6 @@ body {
 .status-bar.error { color: var(--danger); }
 .status-bar.success { color: var(--teal); }
 
-/* ---------- Needs Attention ---------- */
-/* Every closed-but-incomplete chat this browser knows about, not just
-   whichever one happens to be the currently-focused card -- LiveChat's SDK
-   only ever shows this widget one real chat at a time, so a case the agent
-   already navigated away from would otherwise be invisible until they
-   happened to reopen that exact conversation. */
 .needs-attention-panel {
   border-bottom: 1px solid var(--border); background: var(--surface);
 }
@@ -168,25 +147,13 @@ body {
 }
 .na-item-ignore:hover { color: var(--text-muted); text-decoration: underline; }
 
-/* ---------- Chat list ---------- */
-/* No max-width — the widget only ever shows one chat at a time now (the
-   real active LiveChat conversation), so it should fill whatever width the
-   sidebar actually gives it instead of capping out and leaving dead space. */
-/* flex:1 so the list fills whatever height body's flex column gives it
-   (viewport minus topbar/status-bar), instead of stopping short and
-   leaving a gap of raw page background below the card. */
 .chat-list { padding: 16px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
 
 .chat-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
   padding: 20px; box-shadow: var(--shadow); transition: background 0.15s ease, border-color 0.15s ease;
-  /* Same reasoning as .chat-list — the card's background/border extends
-     down to fill available space instead of stopping at its content's
-     natural height. Collapsed cards opt out (see .chat-card.collapsed). */
   flex: 1;
 }
-/* Chat closed but a required field is still missing — meant to be
-   impossible to miss at a glance, not just the small banner text inside. */
 .chat-card.needs-attention {
   background: var(--attention-bg, color-mix(in srgb, var(--danger) 22%, var(--bg)));
   border-color: var(--danger);
@@ -219,11 +186,6 @@ body {
 }
 .chat-link:hover { color: var(--blue); }
 
-/* ---------- Collapsed card (default view — full detail is one click away
-   via toggleExpand) ---------- */
-/* Opts out of the base .chat-card's flex:1 — collapsed summary rows should
-   stay compact, not stretch to fill the card list's available height (only
-   an expanded card should visually fill the space). */
 .chat-card.collapsed { padding: 12px 16px; flex: 0 0 auto; }
 .chat-card-collapsed-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -250,13 +212,6 @@ body {
   display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text-faint); margin: 14px 0 6px;
 }
-/* Any label carrying an "auto" badge (Brand/Amount/Claim Secret in the
-   auto-grid, Telegram Chat in its toggle row) gets flex + align-items:center
-   instead of relying on vertical-align:middle -- that only nudges an inline
-   element to roughly the x-height midpoint of surrounding text, which reads
-   as visibly off-center against all-caps label text with no x-height
-   reference to align against. Flex centers it against the true line-box
-   instead, in every context this label appears in. */
 .field-label:has(.auto-tag) { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .auto-field .field-label { justify-content: space-between; }
 .hint { text-transform: none; letter-spacing: 0; color: var(--text-faint); font-size: 11px; }
@@ -266,15 +221,7 @@ body {
   margin-left: 5px;
 }
 
-/* ---------- Inquiry (searchable dropdown, replaces the old always-open
-   tag grid — same max-2 / Feedback-pairing rule, collapsed behind search
-   so the card stays short until it's actually used) ---------- */
 .inquiry-select { position: relative; }
-/* One unified box — chips and the search input live inside the same
-   bordered container, same look as .status-display, instead of a floating
-   chip row sitting above a separate input box. .inquiry-chips uses
-   `display: contents` so its children (chips, or the "empty" placeholder)
-   become direct flex items of .inquiry-box rather than a nested row. */
 .inquiry-box {
   position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   width: 100%; background: var(--surface-2); border: 1px solid var(--border);
@@ -283,18 +230,10 @@ body {
 .inquiry-box:focus-within { border-color: var(--blue); }
 .inquiry-chips { display: contents; }
 .inquiry-search {
-  /* min-width used to force 70px even once a chip already fills most of
-     the row's width, which usually pushed the search input onto its own
-     line — and with no placeholder text once a chip exists (see
-     renderInquiryChips), that wrapped line renders as a plain empty gap.
-     20px still fits a cursor comfortably, and lets it actually share the
-     line with an existing chip in the common one-chip-picked case. */
   flex: 1 1 20px; min-width: 20px; background: none; border: none; outline: none;
   color: var(--text); font-size: 13px; font-family: inherit; padding: 3px 0;
 }
 .inquiry-search::placeholder { color: var(--text-faint); opacity: 1; }
-/* Matches .status-caret — signals "opens a dropdown" consistently with
-   Status/Brand, even though this trigger is a search input, not a button. */
 .inquiry-caret {
   position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
   color: var(--text-faint); font-size: 11px; pointer-events: none;
@@ -314,8 +253,6 @@ body {
   max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
   padding: 5px; box-shadow: var(--shadow);
-  /* Scroll still works with the wheel/trackpad — just no visible track/thumb,
-     since the browser's default scrollbar clashes with the dark theme. */
   scrollbar-width: none;
 }
 .inquiry-dropdown::-webkit-scrollbar { display: none; }
@@ -332,14 +269,8 @@ body {
 .inquiry-option-check { width: 13px; color: var(--blue); flex-shrink: 0; }
 .inquiry-option-empty { padding: 10px; font-size: 12px; color: var(--text-faint); text-align: center; }
 
-/* ---------- Status (rebuilt to match Inquiry's own box exactly — merged
-   chip + search input, not a separate display-button-plus-panel. Reuses
-   .inquiry-box/-chip/-caret directly via .status-box/.status-chip-slot,
-   just single-select so there's at most one chip.) ---------- */
 .status-picker { position: relative; }
-.status-box { /* same rules as .inquiry-box, kept a separate class since
-     several call sites need exactly one .status-dropdown match per card
-     and a shared trigger class risks ambiguous querySelector results */
+.status-box { 
   position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   width: 100%; background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px; padding: 7px 30px 7px 11px; cursor: text;
@@ -361,23 +292,9 @@ body {
 .status-dropdown::-webkit-scrollbar { display: none; }
 .status-dropdown.hidden { display: none; }
 
-/* ---------- Brand (custom dropdown, same look as Inquiry's list — reuses
-   .inquiry-option/.inquiry-option-check for the list itself). Still a
-   display-button-plus-panel (see renderBrandDropdown's header note) since
-   it lives in the cramped auto-fields grid, not full-width like Inquiry/
-   Status above. Used to be a native <select> — its own dropdown chrome,
-   scrollbar included, can't be restyled via CSS in any browser, which is
-   the whole reason it's a custom dropdown at all. ---------- */
 .brand-picker { position: relative; }
-/* .status-display is a shared utility class, not specific to Status
-   despite the name (kept as-is since Brand/D.O.B's own trigger buttons
-   still carry it in their markup) — the flex/cursor rule every simple
-   display-button trigger needs. */
 .status-display { display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; }
 .status-caret { color: var(--text-faint); font-size: 11px; margin-left: 6px; }
-/* Search box stays fixed at the top of the panel; only .brand-options
-   (not this outer container) scrolls, so the search input is never
-   scrolled out of view while scrolling through matches. */
 .brand-dropdown {
   position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 20;
   display: flex; flex-direction: column; gap: 5px;
@@ -396,11 +313,6 @@ body {
 }
 .brand-options::-webkit-scrollbar { display: none; }
 
-/* ---------- Auto-derived fields (Brand / D.O.B / Released Amount / Claim Secret) ---------- */
-/* 4 fields now (was 3) — forcing them into one row squeezed "Claim Secret"
-   into wrapping ("— Not / ticked") at real sidebar widths, the same
-   word-breaking bug fixed once before for the 3-column layout. Wraps to
-   2x2 instead once a row can't fit all 4 comfortably. */
 .auto-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
 .auto-field {
   flex: 1 1 140px; min-width: 140px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 8px;
@@ -408,9 +320,6 @@ body {
 .auto-value { margin-top: 4px; font-size: 12px; font-weight: 600; overflow-wrap: break-word; }
 .auto-field .input { background: var(--surface); padding: 5px 7px; font-size: 12px; margin-top: 4px; }
 
-/* ---------- D.O.B. custom calendar (replaces <input type="date"> — its
-   native popup grid is OS/browser chrome with no CSS styling hook in any
-   browser, which the icon-only fix couldn't get around) ---------- */
 .dob-picker { position: relative; }
 .dob-calendar {
   position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; width: 232px;
@@ -419,12 +328,6 @@ body {
 }
 .dob-calendar.hidden { display: none; }
 .dob-cal-header { display: flex; align-items: center; gap: 2px; margin-bottom: 8px; }
-/* Custom dropdown, not a native <select> -- see renderDobMonthDropdown's
-   header note (same reasoning as Brand: the open list is unstyleable OS
-   chrome in a native <select>). Its own option style (not .inquiry-option)
-   since there's no checkmark here -- the active option is a filled
-   highlight instead, and the list is a fixed width wider than its own
-   narrow trigger button so a full month name never clips. */
 .dob-cal-jump-picker { position: relative; flex: 1; min-width: 0; }
 .dob-cal-jump-display {
   width: 100%; text-align: center;
@@ -433,7 +336,6 @@ body {
   border-radius: 6px; padding: 3px 2px; cursor: pointer;
 }
 .dob-cal-jump-display:hover { border-color: var(--border); }
-/* Same fixed-search-box/scrolling-options split as Status/Brand above. */
 .dob-cal-jump-dropdown {
   position: absolute; left: 50%; transform: translateX(-50%); top: calc(100% + 5px); z-index: 20;
   width: 150px; display: flex; flex-direction: column; gap: 5px;
@@ -487,9 +389,6 @@ body {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit;
 }
-/* Explicit rather than relying on the browser's default placeholder dimming
-   — that default varies and doesn't necessarily match --text-faint exactly,
-   which is what Status's "Select status…" placeholder-style text uses. */
 .input::placeholder { color: var(--text-faint); opacity: 1; }
 .status-value.placeholder { color: var(--text-faint); }
 .input:focus, select:focus { outline: none; border-color: var(--blue); }
@@ -505,16 +404,12 @@ body {
 .lookup-btn.lookup-cancel-btn { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--surface-2)); }
 .lookup-btn.lookup-cancel-btn:hover:not(:disabled) { color: #fff; background: var(--danger); }
 
-/* Ticked when the customer never gave a username — see app.js's isUnknown
-   handling. Sits right under the username row so it reads as "beside" it
-   without cramming a third control into that already-tight flex row. */
 .unknown-toggle {
   display: flex; align-items: center; gap: 7px; margin-top: 8px;
   font-size: 12.5px; color: var(--text-muted); cursor: pointer; user-select: none;
 }
 .unknown-toggle input { accent-color: var(--danger); width: 14px; height: 14px; cursor: pointer; }
 
-/* ---------- Player info (auto-filled on match) ---------- */
 .player-info {
   display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px;
   font-size: 12px; color: var(--text-muted);
@@ -533,7 +428,6 @@ body {
 .player-name-copy.copied { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
 .player-name-copy svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-/* ---------- Bonus ticket ---------- */
 .ticket-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .ticket {
   position: relative; background: var(--gold-soft);
@@ -547,9 +441,6 @@ body {
 }
 .ticket::before { left: -7px; }
 .ticket::after { right: -7px; }
-/* .ticket-main wraps icon+body so the two-button Reactivate case (below)
-   can drop it to its own row above a full-width button row, without
-   changing the single-button layout every other ticket already has. */
 .ticket-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .ticket-icon { font-size: 18px; color: var(--gold); }
 .ticket-body { flex: 1; min-width: 0; }
@@ -561,11 +452,6 @@ body {
   color: var(--text); font-weight: 700; font-family: "Cascadia Mono", Consolas, monospace;
 }
 .ticket-meta .amount { font-family: "Cascadia Mono", Consolas, monospace; color: var(--gold); font-weight: 600; }
-/* Risk Player's "Date Expired" line under the ticket -- color escalates
-   the closer/past the deadline is, reusing the theme's existing accent
-   colors rather than introducing a new one: --text-faint with plenty of
-   time left, --gold inside the last 24h, --danger once it's already past
-   (see renderExpiryLine in app.js). */
 .ticket-expiry { font-size: 12.5px; margin-top: 4px; }
 .ticket-expiry-ok { color: var(--text-faint); }
 .ticket-expiry-soon { color: var(--gold); font-weight: 700; }
@@ -582,14 +468,6 @@ body {
 .claim-btn:disabled { opacity: 0.42; cursor: not-allowed; }
 .claim-btn:disabled:hover { background: none; color: var(--gold); }
 .ticket-btns { display: flex; flex-direction: row; gap: 6px; align-items: center; }
-/* Grace Period's second, always-clickable button next to Activate — lets
-   CS give the customer another attempt the same day without needing the
-   first (now-disabled/claimed) button to become clickable again. Icon+body
-   don't leave enough room for two buttons to sit inline at real sidebar
-   widths, so this drops .ticket-main to its own row above a full-width
-   button row instead — .claim-btn's flex:1 then splits that row evenly
-   between Claim/Activate and Reactivate. Single-button tickets are
-   unaffected (no .ticket-has-reactivate class, so .ticket stays row).*/
 .ticket.ticket-has-reactivate { flex-direction: column; align-items: stretch; }
 .ticket-has-reactivate .ticket-btns { width: 100%; }
 .ticket-has-reactivate .claim-btn { flex: 1; text-align: center; }
@@ -606,7 +484,6 @@ body {
   font-size: 10.5px; color: var(--text-faint); margin-top: 6px; text-align: center;
 }
 
-/* VS96 requires two written player-feedback answers before Claim unlocks. */
 .ticket.ticket-vs96 {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
   background: color-mix(in srgb, var(--danger) 9%, var(--surface));
@@ -631,8 +508,6 @@ body {
 .vs96-feedback-note { color: var(--danger); font-size: 10.5px; padding-left: 32px; }
 .feedback-complete .vs96-feedback-note { color: var(--teal); }
 
-/* Risk Player needs the customer's actual reload amount before its capped
-   percentage claim can be calculated. */
 .ticket.ticket-risk-player {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
 }
@@ -659,8 +534,6 @@ body {
 .risk-claim-preview.ready strong { color: var(--gold); }
 .risk-claim-preview small { color: var(--text-faint); font-size: 9px; white-space: nowrap; }
 
-/* Special tickets (Ang Pao / Redeem Code) — red, to visually separate
-   one-off/manual bonuses from the 5 regular recurring programs (gold). */
 .ticket.ticket-special {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--danger) 55%, transparent);
@@ -672,7 +545,6 @@ body {
 .claim-btn.special.claimed { background: var(--teal); border-color: var(--teal); color: var(--surface); }
 .ticket.empty::before, .ticket.empty::after { display: none; }
 
-/* ---------- Toggle row (Telegram) ---------- */
 .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
 .toggle-row .field-label { margin: 0; }
 .switch { position: relative; width: 38px; height: 21px; flex-shrink: 0; }
@@ -689,7 +561,6 @@ body {
 .switch input:checked + .slider::before { transform: translateX(17px); background: var(--teal); }
 .switch input:disabled + .slider { cursor: default; }
 
-/* ---------- Submit ---------- */
 .submit-btn {
   margin-top: 18px; width: 100%; background: var(--blue); color: white; border: none;
   padding: 11px; border-radius: 9px; font-size: 13.5px; font-weight: 600; cursor: pointer;
@@ -703,17 +574,13 @@ body {
   background: var(--teal-soft); color: var(--teal); font-size: 12.5px; font-weight: 600;
   padding: 9px 12px; border-radius: 9px;
 }
-/* Distinct from the normal (teal) logged state — nothing was actually
-   written to Lark, so this shouldn't read as a success confirmation. */
 .logged-badge.unknown { background: var(--surface-2); color: var(--text-muted); }
 
-/* Shown while a chat is still open — recording is deferred until it closes. */
 .record-pending-hint {
   margin-top: 18px; font-size: 11.5px; color: var(--text-faint); text-align: center;
   padding: 9px; border: 1px dashed var(--border); border-radius: 9px;
 }
 
-/* Note for the VIP Retention Console, under the case details. Its own message line: a problem here never touches the case. */
 .ca-note-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
 .note-types { display: flex; gap: 6px; margin-bottom: 6px; }
 .note-type-btn {
@@ -741,11 +608,7 @@ body {
 .note-meta { margin-top: 3px; font-size: 10.5px; color: var(--text-faint); }
 .note-empty { margin-top: 8px; font-size: 11.5px; color: var(--text-faint); }
 
-/* Shown when a chat closed but required fields weren't filled in — the
-   agent needs to complete them and click Record to Lark Base manually. */
 .record-error-banner {
-  /* Solid --surface (not a red tint) so it reads as a distinct detail panel
-     against the now-red .needs-attention card, rather than blending into it. */
   margin-top: 18px; font-size: 11.5px; color: var(--danger); line-height: 1.5;
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
@@ -757,7 +620,6 @@ body {
   padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px;
 }
 
-/* ---------- Settings overlay (full-screen) ---------- */
 .settings-overlay {
   position: fixed; inset: 0; z-index: 9999;
   background: color-mix(in srgb, var(--bg) 96%, var(--blue)); display: flex; align-items: flex-start; justify-content: center;
@@ -847,7 +709,6 @@ body {
 .login-status.error { color: var(--danger); }
 .department-choice { width: 100%; min-height: 40px; }
 
-/* LiveChat sign-in and the one-time agent name choice: one centered card. */
 .agent-login-overlay { align-items: center; padding: 16px; }
 .agent-login-card {
   width: 100%; max-width: 340px; max-height: calc(100vh - 32px); overflow-y: auto; scrollbar-width: none;
@@ -867,9 +728,6 @@ body {
 .agent-login-card .login-actions .submit-btn { width: 100%; min-height: 42px; font-size: 14px; }
 .agent-login-card .login-status { margin-top: 12px; min-height: 18px; text-align: center; }
 
-/* Replaces the old "dump state to console" link — a plain-language
-   activity log right in Settings. Routine confirmations that don't
-   interrupt the compact top bar still land here for troubleshooting. */
 .settings-diagnostics { margin-top: 14px; text-align: left; }
 .settings-diagnostics > summary { color: var(--text-faint); font-size: 10.5px; cursor: pointer; padding: 4px 2px 8px; }
 .settings-diagnostics-head {
@@ -898,7 +756,6 @@ body {
   .settings-remove-message { width: 27px; height: 28px; }
 }
 
-/* ---------- C9 Ticket System ---------- */
 .escalation-slot { margin-top: 8px; }
 .escalation-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .escalation-field { flex: 1 1 160px; min-width: 160px; }
@@ -991,7 +848,6 @@ body {
 .ticket-attachment-error { margin-top: 7px; color: var(--danger); font-size: 10.5px; }
 
 
-/* ---------- Multiple cases per chat ---------- */
 .cases-bar { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
 .case-row {
   display: flex; align-items: center; gap: 8px; padding: 7px 10px;
@@ -1011,12 +867,10 @@ body {
 .case-edit-btn:disabled, .add-case-btn:disabled, .save-case-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .cases-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
-/* Look up button once a lookup came back Not VVIP */
 .lookup-btn.force { border-color: var(--gold); color: var(--gold); }
 .lookup-btn.force:hover:not(:disabled) { background: var(--gold); color: var(--surface); }
 
 
-/* ---------- Chat-switch toast ---------- */
 #chatToast {
   position: fixed; top: 14px; left: 50%; transform: translateX(-50%) translateY(-12px);
   z-index: 9999; max-width: min(92vw, 480px); padding: 10px 16px; border-radius: 10px;
@@ -1028,11 +882,6 @@ body {
 #chatToast.warn { background: color-mix(in srgb, var(--danger) 20%, var(--surface-2)); border-color: var(--danger); color: var(--text); }
 #chatToast.info { border-color: var(--blue); }
 
-/* ============================================================
-   CARDS REDESIGN — local preview candidate
-   Visual-only layer. Existing state, lookup, claim and recording
-   handlers continue to use their original classes and data actions.
-   ============================================================ */
 :root[data-theme="dark"] {
   --bg: #0e1014;
   --surface: #14171c;
@@ -1182,8 +1031,6 @@ body { font-size: 13px; }
 .risk-amount-fields label > span, .risk-claim-preview > span { font-size: 9px; }
 .ticket.empty { margin-top: 0; min-height: 54px; border-color: var(--border); background: var(--surface); }
 
-/* Keep closed chats with missing recording fields urgent across the whole
-   card, including the redesigned sections and bonus stack. */
 .chat-card.needs-attention .chat-card-head,
 .chat-card.needs-attention .ca-section {
   border-color: color-mix(in srgb, var(--danger) 65%, var(--border));
@@ -1261,7 +1108,6 @@ body { font-size: 13px; }
   .main-tab { font-size: 11px; }
 }
 
-/* Scroll remains available by wheel, trackpad, touch and keyboard. */
 *, *::before, *::after { scrollbar-width: none; -ms-overflow-style: none; }
 *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
@@ -1291,7 +1137,6 @@ body { font-size: 13px; }
   .ticket-explorer-filters { grid-template-columns: 1fr; }
 }
 
-/* Ticket dashboard — visually separate from the Retention form. */
 .ticket-workspace-card {
   padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none;
 }
@@ -1315,20 +1160,17 @@ body { font-size: 13px; }
 .ticket-status-card { margin-top: 12px; padding: 12px; border-radius: 11px; background: var(--surface); box-shadow: 0 10px 28px rgba(0,0,0,.13); }
 .ticket-explorer { background: var(--surface); box-shadow: 0 10px 28px rgba(0,0,0,.1); }
 
-/* New version available: the ⟳ Refresh button is how the widget updates (see deployment-refresh.js / app.js). */
 #refreshBtn.update-pending { position: relative; color: #8fb0ff; animation: update-pulse 1.8s ease-in-out infinite; }
 #refreshBtn.update-pending::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #ff5d5d; }
 @keyframes update-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(79, 124, 255, .55); } 50% { box-shadow: 0 0 0 6px rgba(79, 124, 255, 0); } }
 @media (prefers-reduced-motion: reduce) { #refreshBtn.update-pending { animation: none; } }
 
-/* ---------- Lookups running / finished in another chat; the lookup message on its own card ---------- */
 .bg-lookup-pill { margin: 6px 12px; padding: 5px 12px; width: fit-content; max-width: calc(100% - 24px); border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
 .bg-lookup-pill.hidden { display: none; }
 .bg-lookup-pill.running { border-color: var(--blue); }
 .bg-lookup-pill.done { border-color: var(--teal); color: var(--teal); }
 .bg-lookup-pill.attention { border-color: var(--gold); color: var(--gold); }
 
-/* Compact ticket inbox. Colors continue to use the widget theme tokens. */
 .ticket-inbox-workspace { padding: 3px 4px 12px; }
 .ticket-workspace-card .ticket-inbox-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
 .ticket-inbox-header h2 { margin: 0; font-size: 17px; font-weight: 650; }
@@ -1451,7 +1293,6 @@ body { font-size: 13px; }
 .ticket-comment-input { width: 100%; min-height: 70px; resize: vertical; font: inherit; }
 .ticket-comment-replying { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 12px; color: var(--text-muted); }
 .ticket-problem-email { width: 100%; margin: 6px 0; }
-/* The "raise a ticket to claim" popup: centred in the window, a card on a dimmed backdrop. */
 .claim-ticket-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(5, 8, 14, .72); backdrop-filter: blur(3px); overflow-y: auto; }
 .claim-ticket-card { width: 100%; max-width: 400px; max-height: calc(100vh - 32px); overflow-y: auto; padding: 18px 18px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: 0 24px 60px rgba(0, 0, 0, .5); }
 .claim-ticket-head { display: flex; align-items: flex-start; gap: 12px; }
@@ -1495,7 +1336,6 @@ body { font-size: 13px; }
 .ticket-account-gate { margin-top: 14px; display: grid; gap: 10px; justify-items: start; }
 .ticket-account-gate .ticket-account { width: 100%; font-size: 13px; }
 
-/* Pictures on tickets and comments, and the comment box's attachments */
 .ticket-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ticket-thumb { position: relative; display: grid; gap: 4px; justify-items: start; width: 132px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-muted); font: inherit; font-size: 10px; text-align: left; cursor: zoom-in; overflow: hidden; }
 .ticket-thumb img { display: block; width: 100%; height: 96px; object-fit: cover; background: var(--surface); }

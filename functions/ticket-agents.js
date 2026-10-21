@@ -2,10 +2,6 @@ import { adapt } from "./_lib/adapt.js";
 import { isOnBehalfRefusal, readingAs, refusalResponse } from "./_lib/ticket-actor.js";
 import { json, ticketError, ticketGet, withOnBehalf } from "./_lib/tickets.js";
 
-// Who can the Agent filter offer? The ticket API has no list of users, so this reads the newest tickets the signed-in agent may see (up to
-// MAX_PAGES pages of 250) and returns everyone who raised one or is assigned to one: [{ id, name }], by name. Names only, never emails.
-// A page is kept for ROSTER_TTL_MS per person on this isolate (see ticketGet), so opening the filters costs at most a few reads every ten
-// minutes out of the key's 120 a minute shared by every agent. ?fresh=1 (or fresh: true) skips the stored copy.
 const PAGE_SIZE = 250;
 const MAX_PAGES = 4;
 const ROSTER_TTL_MS = 10 * 60_000;

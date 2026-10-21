@@ -1,11 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { queueStubFrom } from "./_lib/queue-stub.js";
 
-// Read-only health numbers from the shared Lark queue (the Durable Object): starts per class, 429s, queue wait, batch sizes,
-// create batches/mismatches. Used to decide whether the gate pace can be raised and to watch batched creates.
-//
-// Disabled (404) until the QUEUE_STATS_KEY variable is set on the Pages project. Callers send it as the x-stats-key header
-// (never in the URL, which would end up in logs). The numbers contain no usernames or record data.
 const headers = { "Cache-Control": "no-store" };
 
 function sameSecret(a, b) {
@@ -27,8 +22,7 @@ export async function handler(event) {
   try {
     const stub = queueStubFrom(queue, event.env);
     if (typeof stub.getStats !== "function") throw new Error("The deployed queue has no getStats");
-    // Where does the queue run? (colo + country; cached inside the queue after the first call). An older queue has no locate().
-    if (typeof stub.locate === "function") { try { await stub.locate(); } catch (_) { /* best effort */ } }
+    if (typeof stub.locate === "function") { try { await stub.locate(); } catch (_) { } }
     const stats = await stub.getStats();
     return { statusCode: 200, headers, body: JSON.stringify({ ok: true, at: new Date().toISOString(), stats }) };
   } catch (error) {

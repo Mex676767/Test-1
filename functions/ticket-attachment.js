@@ -3,16 +3,9 @@ import { readingAs } from "./_lib/ticket-actor.js";
 import { fileMatchesType, IMAGE_TYPES } from "./_lib/ticket-images.js";
 import { json, ticketCredentials, ticketSettings, withOnBehalf } from "./_lib/tickets.js";
 
-// A picture that sits on a ticket or comment in the ticket system, for the widget to show as a preview. The ticket system serves its files
-// from /api/attachments/<path> and, to an API key, only images (a PDF there asks for a browser login), so the browser cannot load them
-// itself: this reads one through the key, as the signed-in agent, and hands back the picture only if its bytes really are a PNG, JPEG or
-// WebP. POST { path, author } -> the image. Anything else is refused, so this cannot be used to read other files.
 const MAX_BYTES = 6 * 1024 * 1024;
-// How the dashboard itself asks for a picture is /api/attachments/<path>?access=1 (and &w=320 for a small one). Which of these the ticket
-// system answers to an API key is tried in this order, the first that returns a picture wins; a 404 moves on to the next.
 const ADDRESS_FORMS = ["?access=1", "", "?access=1&w=320"];
 const TIMEOUT_MS = 15_000;
-// What the ticket system writes: folders and a file name, e.g. 2026-09/21/3f9a…c1.jpg. No dot-segments, no leading slash.
 const PATH = /^(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9_\-./]{0,250}\.(png|jpe?g|webp)$/i;
 
 export async function handler(event) {
@@ -32,7 +25,7 @@ export async function handler(event) {
     for (const form of ADDRESS_FORMS) {
       response = await fetch(withOnBehalf(`${base}${form}`, reading.email), {
         headers: { Authorization: `Bearer ${apiKey}` },
-        redirect: "manual", // a file that needs a browser login answers with a redirect: not a picture we can show
+        redirect: "manual",
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       if (response.status !== 404) break;

@@ -1,50 +1,16 @@
 import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_PATS, LIVECHAT_ACCOUNTS, accountKeyForPat } from "./_lib/livechat.js";
 
-// The widget already knows which LiveChat license a chat belongs to (this endpoint told it).
-// Try that license first so the common case costs one API call instead of one per license.
-// The other licenses are still tried afterwards, so a wrong label can never hide a chat.
 function orderedPats(preferredAccountKey) {
   const preferred = LIVECHAT_ACCOUNTS.find((account) => account.key === preferredAccountKey);
   return preferred ? [preferred.pat, ...LIVECHAT_PATS.filter((pat) => pat !== preferred.pat)] : LIVECHAT_PATS;
 }
 
-// Reuses the same LiveChat PAT(s) as livechat-group-name.js, against
-// LiveChat's Agent Chat API — this is where per-chat data lives, not group
-// data.
-//
-// CONFIRMED (2026-08-29, from a real chat URL the agent shared: two separate
-// "open chat" sessions for the same customer produced
-// https://my.livechatinc.com/chats/TK2IWC00SW/TK2IWE9R94 and
-// https://my.livechatinc.com/chats/TK2IWC00SW/TK2IWE9UNT — same first
-// segment, different second segment):
-//   - LiveChat's URL scheme is /chats/{chat_id}/{thread_id}.
-//   - The Agent App SDK's `profile.chat.id` (what app.js has been sending
-//     here as `chatId`) is actually the THREAD id, not the chat id — it's
-//     the second, changing segment. A chat is the stable conversation; each
-//     time it's reopened, a new thread starts within it.
-//   - get_chat's `chat_id` parameter wants the first, stable segment, which
-//     the SDK never exposes. Sending the thread id there always produced
-//     "Chat not found" — not an auth/scope/region problem after all.
-//
-// Fix: resolve the real chat_id ourselves via list_chats (same PAT/scope,
-// same agent/action/* namespace), matching on the thread id we do have.
-// list_chats conveniently already includes each chat's last thread's
-// active status and the customer's channel info, so once matched we don't
-// need a second get_chat call at all.
-//
-// Tries every configured LiveChat account's PAT in turn (see lib/
-// livechat.js) — a thread only ever exists under the one account it
-// belongs to; with a second account's chats now reaching this widget too,
-// checking only the first configured PAT would report every one of that
-// second account's chats as "not found" (looked exactly like a busy-queue
-// paging miss, not an auth/account mismatch — see the 2026-09-10 note
-// there for how that actually got diagnosed).
 async function listChatsFor(pat) {
   const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/list_chats", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Basic " + pat },
-    body: JSON.stringify({ limit: 100, sort_order: "desc" }), // no active filter — we want both open and just-closed chats
+    body: JSON.stringify({ limit: 100, sort_order: "desc" }),
   });
   const data = await res.json();
   if (data && data.error) {
@@ -53,10 +19,6 @@ async function listChatsFor(pat) {
   return data;
 }
 
-// An /archives/{thread_id} URL only gives us the thread id. list_chats is
-// intentionally limited to recent chats, but list_archives supports an exact
-// thread_ids filter. Use it when the recent lookup misses so old archive links
-// can still be resolved without paging through the license's full history.
 export async function getArchiveForThread(pat, threadId) {
   const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/list_archives", {
     method: "POST",
@@ -73,17 +35,6 @@ export async function getArchiveForThread(pat, threadId) {
   return { data, match };
 }
 
-// Targeted alternative to list_chats once we already know a thread's real
-// chat_id (see the module header note on chat_id vs thread_id) -- list_chats
-// only ever returns the 100 most recently active chats per account, so a
-// chat the agent has switched away from silently falls out of that window
-// as newer chats arrive, forever after reporting notFound (confirmed live,
-// 2026-09-19: a busy multi-agent queue with 45,000+ total chats caused a
-// closed-but-backgrounded chat to never be found again by the sweep, so it
-// never auto-recorded until the agent manually reopened it in LiveChat).
-// get_chat looks up one specific chat_id directly and isn't windowed by
-// recency at all, so it keeps working no matter how long ago this chat was
-// last touched.
 async function getChatFor(pat, realChatId) {
   const res = await fetch("https://api.livechatinc.com/v3.6/agent/action/get_chat", {
     method: "POST",
@@ -97,16 +48,6 @@ async function getChatFor(pat, realChatId) {
   return data;
 }
 
-// CORRECTED (2026-09-10) — a real Telegram chat's customer object here has
-// no "omnichannel" key at all (confirmed from a live chat: 03908b38-...
-// customer object had no such field, so the old omnichannel.telegram check
-// always silently read false). What Telegram customers actually carry is a
-// "Telegram ID" entry inside session_fields (an array of single-key
-// objects, e.g. [{"First Name":"Mexha"}, {"Telegram ID":"628101177"},
-// {"Bot ID":"8729168475"}, ...]) — match any key containing "telegram"
-// case-insensitively with a non-empty value, so a rename on LiveChat's side
-// (e.g. "Telegram Id") doesn't silently break this again. Shared by both
-// the list_chats and get_chat paths below — same users[] shape either way.
 function detectTelegram(users) {
   const customer = (users || []).find((u) => u.type === "customer") || {};
   const sessionFields = customer.session_fields || [];
@@ -119,31 +60,21 @@ export async function handler(event) {
   let threadId;
   try {
     if (!LIVECHAT_PATS.length) {
-      // Distinct from a real API response with unrecognized fields — a
-      // missing PAT should never look like "field paths need adjusting".
       return { statusCode: 200, body: JSON.stringify({ ok: true, isTelegram: null, isActive: null, notConfigured: true }) };
     }
     const body = JSON.parse(event.body || "{}");
     const pats = orderedPats(typeof body.accountKey === "string" ? body.accountKey : "");
-    // The raw LiveChat payload is only for diagnosing a chat's first check (or when asked);
-    // a normal poll every 2 s should not ship it. "Not found"/unrecognised replies keep it.
     const wantRaw = !!body.debug;
-    threadId = body.chatId; // wire name kept as chatId for app.js compat; it's actually the thread id — see header note
+    threadId = body.chatId;
     if (!threadId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "chatId is required" }) };
     }
 
-    // Fast path — app.js sends this once a previous check has already
-    // resolved the real chat_id for this thread (parsed back out of its own
-    // saved chatUrl). Bypasses list_chats' 100-most-recent window entirely,
-    // so a chat that's been backgrounded for a while still resolves
-    // correctly instead of silently going notFound forever (see getChatFor's
-    // header note).
     if (body.realChatId) {
       for (const pat of pats) {
         try {
           const data = await getChatFor(pat, body.realChatId);
-          if (!data || !data.thread) continue; // this account doesn't recognize this chat_id — try the next
+          if (!data || !data.thread) continue;
           const chatUrl = `https://my.livechatinc.com/chats/${body.realChatId}/${threadId}`;
           return {
             statusCode: 200,
@@ -158,7 +89,7 @@ export async function handler(event) {
               ...(wantRaw ? { raw: { id: data.id, thread: data.thread, users: data.users } } : {}),
             }),
           };
-        } catch (_) { /* this account's get_chat call failed outright — try the next, then fall through to list_chats below */ }
+        } catch (_) { }
       }
     }
 
@@ -176,13 +107,10 @@ export async function handler(event) {
         match = chats.find((c) => c.last_thread_summary && String(c.last_thread_summary.id) === String(threadId));
         if (match) { matchedPat = pat; break; }
       } catch (err) {
-        lastErr = err; // keep trying the remaining accounts
+        lastErr = err;
       }
     }
 
-    // Exact fallback for an older /archives/{thread_id} link. Unlike
-    // list_chats, list_archives can filter directly by thread id, so this
-    // remains fast even when a license has tens of thousands of chats.
     if (!match) {
       let archiveData = null;
       for (const pat of pats) {
@@ -212,7 +140,7 @@ export async function handler(event) {
         }
       }
 
-      if (lastErr && !lastData && !archiveData) throw lastErr; // every account's request failed outright
+      if (lastErr && !lastData && !archiveData) throw lastErr;
       return {
         statusCode: 200,
         body: JSON.stringify({
@@ -240,7 +168,7 @@ export async function handler(event) {
         threadId,
         chatUrl,
         accountKey: accountKeyForPat(matchedPat),
-        ...(wantRaw || typeof thread.active !== "boolean" ? { raw: { id: match.id, last_thread_summary: thread, users: match.users } } : {}), // only when asked, or when the status could not be read
+        ...(wantRaw || typeof thread.active !== "boolean" ? { raw: { id: match.id, last_thread_summary: thread, users: match.users } } : {}),
       }),
     };
   } catch (err) {

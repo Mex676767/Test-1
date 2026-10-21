@@ -1,4 +1,3 @@
-// State: array of { url, messages: [] | null (null = use default) }
 let chatEntries = [];
 let defaultMessages = [];
 let running = false;
@@ -26,15 +25,12 @@ const log         = document.getElementById('log');
 const openSettings= document.getElementById('openSettings');
 const bulkRuntimeDock = document.getElementById('bulkRuntimeDock');
 
-// Bulk is now the only visible workflow. Reuse the existing delivery and run
-// controls in its dock so the automation logic and event handlers stay intact.
 if (bulkRuntimeDock) {
   const deliveryCard = document.querySelector('.delivery-card');
   [deliveryCard, status, log].filter(Boolean).forEach(el => bulkRuntimeDock.appendChild(el));
   document.querySelector('.bulk-actions')?.appendChild(runControls);
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -44,7 +40,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
-// ── Load ──────────────────────────────────────────────────────────────────────
 chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency', 'concurrencyVersion', 'chatEntries', 'isRunning', 'isPaused'], (d) => {
   defaultMessages = d.cannedMessages || [];
   const savedDelay = Number(d.delay);
@@ -60,19 +55,15 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency
   updateConcurrencyPicker();
   if (d.concurrencyVersion !== 2) chrome.storage.sync.set({ concurrency: 5, concurrencyVersion: 2 });
 
-  // Large queues exceed chrome.storage.sync's per-item quota, so keep them local.
-  // Fall back to the old sync value once to migrate existing installations.
   chrome.storage.local.get(['chatEntries'], (localData) => {
-    // An earlier release saved the bulk image in localStorage (chatImages). It shares the ~5 MB origin quota with the
-    // widget's chat state, so remove it; images now live only in sessionStorage (the draft and the running queue).
-    try { chrome.storage.local.remove('chatImages'); } catch (_) { /* nothing to free */ }
+    try { chrome.storage.local.remove('chatImages'); } catch (_) { }
     const storedEntries = localData.chatEntries ?? d.chatEntries ?? [{ url: '', messages: null }];
     chatEntries = storedEntries.map(entry => ({
       url: entry.url || '',
       messages: entry.messages ?? null,
       expanded: Boolean(entry.expanded),
       imageUrl: entry.imageUrl || '',
-      imageDataUrl: entry.imageDataUrl || null,   // only present for entries saved by a much older release; save() strips it again
+      imageDataUrl: entry.imageDataUrl || null,
       imageFileName: entry.imageFileName || null,
     }));
     save();
@@ -87,7 +78,6 @@ chrome.storage.sync.get(['cannedMessages', 'delay', 'delayVersion', 'concurrency
     paused = Boolean(savedQueue.paused);
     status.classList.add('on');
     statusText.textContent = paused ? 'Paused — press Resume to continue' : 'Recovering queue after widget refresh…';
-    // Let the runtime listener below attach before replaying progress.
     setTimeout(() => globalThis.__blastRestoreQueue?.(), 0);
   } else if (globalThis.__blastWebAdapter && d.isRunning) {
     chrome.storage.sync.set({ isRunning: false, isPaused: false });
@@ -110,7 +100,6 @@ window.addEventListener('message', (event) => {
   renderDefaultPreview();
 });
 
-// ── Render all chat rows ──────────────────────────────────────────────────────
 function renderAll() {
   chatList.innerHTML = '';
   chatEntries.forEach((entry, i) => renderRow(entry, i));
@@ -229,7 +218,6 @@ function autoResize(ta) {
   ta.style.height = Math.max(36, ta.scrollHeight) + 'px';
 }
 
-// ── Add new chat row ──────────────────────────────────────────────────────────
 document.getElementById('clearManualBtn').addEventListener('click', () => {
   if (chatEntries.length === 0) return;
   chatEntries = [{ url: '', messages: null, expanded: false }];
@@ -247,7 +235,6 @@ addChatBtn.addEventListener('click', () => {
   }, 50);
 });
 
-// ── Default messages preview ──────────────────────────────────────────────────
 function renderDefaultPreview() {
   defMsgCount.textContent = defaultMessages.length;
   if (!defaultMessages.length) {
@@ -259,7 +246,6 @@ function renderDefaultPreview() {
   ).join('');
 }
 
-// ── Delay ─────────────────────────────────────────────────────────────────────
 delaySlider.addEventListener('input', () => {
   const v = parseFloat(delaySlider.value);
   delayVal.textContent = v + 's';
@@ -327,7 +313,6 @@ concurrencyMenu.querySelectorAll('.speed-option').forEach((option) => {
       closeConcurrencyPicker();
       concurrencyTrigger.focus();
     }
-    // Enter and Space use the button's native click behavior.
   });
 });
 
@@ -347,23 +332,15 @@ concurrencySelect.addEventListener('change', () => {
   chrome.storage.sync.set({ concurrency: Number(concurrencySelect.value), concurrencyVersion: 2 });
 });
 
-// ── Save ──────────────────────────────────────────────────────────────────────
-// Image bytes are NEVER written to chrome.storage.local: in the web widget that is localStorage, whose ~5 MB per-origin quota
-// is shared with the widget's chat state (rc-chat-state). A few MB of base64 here makes saveState() start failing silently
-// and chat persistence / cross-tab sync stop. The image lives only in memory, in the sessionStorage draft (survives an iframe
-// replacement) and, once a run starts, in the adapter's own sessionStorage store.
 function save() {
   const slim = chatEntries.map((entry) => { const { imageDataUrl, ...rest } = entry; return rest; });
   try {
     chrome.storage.local.set({ chatEntries: slim });
   } catch (error) {
-    // Never let a storage error abort the click that triggered the save (it used to stop a run before it started).
     addLog('⚠ Could not save the queue between sessions (' + (error && error.name === 'QuotaExceededError' ? 'browser storage is full' : error.message) + '). The run itself is not affected.', 'err');
   }
 }
 
-// Entries restored from storage have no image bytes. Before starting, re-attach the draft's image (the same single image
-// for the whole bulk), or refuse to start: sending the text and silently dropping a chosen image is the worse outcome.
 function ensureEntryImages() {
   const missing = chatEntries.filter((e) => e.imageFileName && !e.imageDataUrl && !e.imageUrl);
   if (!missing.length) return true;
@@ -375,7 +352,6 @@ function ensureEntryImages() {
   return false;
 }
 
-// ── Log ───────────────────────────────────────────────────────────────────────
 function addLog(msg, type = '') {
   log.classList.add('on');
   const el = document.createElement('div');
@@ -401,7 +377,6 @@ function updateRunControls() {
   }
 }
 
-// ── Background messages ───────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'PROGRESS') {
     statusText.innerHTML = msg.text;
@@ -449,7 +424,6 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
-// ── Start / Pause / Resume / Stop ─────────────────────────────────────────────
 startBtn.addEventListener('click', () => {
   if (globalThis.__blastWebAdapter && !globalThis.__blastAgentConnected?.()) {
     status.classList.add('on');
@@ -499,7 +473,7 @@ startBtn.addEventListener('click', () => {
   statusText.textContent = 'Starting…';
   updateRunControls();
 
-  saveBlastDraft(); // running is true now: this rewrites the draft WITHOUT the image so the adapter can store its own copy
+  saveBlastDraft();
   chrome.runtime.sendMessage({
     type: 'START',
     jobs,
@@ -525,7 +499,6 @@ stopBtn.addEventListener('click', () => {
   addLog('■ Automation stopped', 'info');
 });
 
-// ── Bulk Import ───────────────────────────────────────────────────────────────
 const MAX_ROWS = 1000;
 
 const bulkLinks = document.getElementById('bulkLinks');
@@ -578,7 +551,6 @@ function updateCounter(ta, counterId) {
 [bulkLinks, bulkMsg1, bulkMsg2, bulkMsg3].forEach((ta, i) => {
   const ids = ['cntLinks','cntMsg1','cntMsg2','cntMsg3'];
   ta.addEventListener('input', () => {
-    // Auto-parse: if user pastes tab-separated data into links column
     if (ta === bulkLinks && ta.value.includes('\t')) {
       parseTabbedPaste(ta.value);
       return;
@@ -586,12 +558,10 @@ function updateCounter(ta, counterId) {
     updateCounter(ta, ids[i]);
   });
   ta.addEventListener('paste', (e) => {
-    // Cells copied from a spreadsheet into any box: fill this box and the ones after it, one column each.
     if (ta !== bulkLinks) {
       const text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
       if (isSpreadsheetPaste(text)) { e.preventDefault(); parseTabbedPaste(text, i); return; }
     }
-    // Give the paste time to land before checking
     setTimeout(() => {
       if (ta === bulkLinks && ta.value.includes('\t')) {
         parseTabbedPaste(ta.value);
@@ -605,18 +575,14 @@ function updateCounter(ta, counterId) {
 bulkMessageModeInputs.forEach(input => input.addEventListener('change', syncBulkMessageMode));
 syncBulkMessageMode();
 
-// Boxes in page order. A spreadsheet paste fills the box it lands in and the ones after it, one column each.
 const TABBED_BOX_NAMES = ['Links', 'Message 1', 'Message 2', 'Message 3', 'Image URL'];
 const tabbedBoxes = () => [bulkLinks, bulkMsg1, bulkMsg2, bulkMsg3, bulkImgUrl];
 
-// Spreadsheet cells = every non-empty line has a tab. A message that merely contains an indented line is not one.
 function isSpreadsheetPaste(text) {
   const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim());
   return lines.length > 0 && lines.every((l) => l.includes('\t'));
 }
 
-// Parse tab-separated paste (copied from Excel/Sheets). Column 1 goes to the box that was pasted into (startIndex),
-// column 2 to the next box, and so on. Pasting into Links with the usual 4 columns behaves exactly as before.
 function parseTabbedPaste(raw, startIndex = 0) {
   const rowsMode = bulkMessageModeInputs.find(input => input.value === 'rows');
   if (rowsMode) rowsMode.checked = true;
@@ -624,7 +590,6 @@ function parseTabbedPaste(raw, startIndex = 0) {
   const rows = raw.split('\n').map(r => r.split('\t').map(c => c.trim())).filter(r => r.some(c => c));
   if (!rows.length) return;
 
-  // Skip a header row (LINKS / MESSAGE 1 / IMAGE URL ...)
   const isHeader = (cells) => cells.every((c) => !c || /^(links?|message\s*[123]|image(\s*url)?)$/i.test(c));
   const dataRows = isHeader(rows[0]) ? rows.slice(1) : rows;
   if (!dataRows.length) return;
@@ -634,11 +599,10 @@ function parseTabbedPaste(raw, startIndex = 0) {
   const fitting = boxes.length - startIndex;
   for (let c = 0; c < fitting; c += 1) {
     const box = boxes[startIndex + c];
-    // The four text boxes are always rewritten (as before); the Image URL box only if the paste actually has a column for it.
     if (!box || (startIndex + c === 4 && c >= columns)) continue;
     box.value = dataRows.map((cols) => cols[c] || '').join('\n');
   }
-  if (startIndex + columns > 4 && typeof imgSubUrl !== 'undefined') imgSubUrl.click();   // image URLs live on the URL tab
+  if (startIndex + columns > 4 && typeof imgSubUrl !== 'undefined') imgSubUrl.click();
 
   ['cntLinks','cntMsg1','cntMsg2','cntMsg3'].forEach((id, i) => updateCounter(boxes[i], id));
   if (bulkImgUrl) bulkImgUrl.dispatchEvent(new Event('input'));
@@ -682,13 +646,11 @@ function prepareBulkQueue() {
     return false;
   }
 
-  // Validate links count
   if (links.length > MAX_ROWS) {
     showBulkStatus(`⚠ Too many links (${links.length}). Maximum is ${MAX_ROWS}.`, 'err');
     return false;
   }
 
-  // Validate each message column individually
   const m1nonEmpty = msgs1.filter(m => m.length > 0);
   const m2nonEmpty = msgs2.filter(m => m.length > 0);
   const m3nonEmpty = msgs3.filter(m => m.length > 0);
@@ -698,7 +660,6 @@ function prepareBulkQueue() {
     return false;
   }
 
-  // Check at least one message column has data
   if (sameForEveryone ? !sharedMessages.length : (!m1nonEmpty.length && !m2nonEmpty.length && !m3nonEmpty.length)) {
     showBulkStatus('⚠ No messages found. Fill in at least Message 1.', 'err');
     return false;
@@ -715,7 +676,6 @@ function prepareBulkQueue() {
   }
 
 
-  // Build entries — with image support
   const imgUrls = bulkImgMode === 'url' 
     ? (bulkImgUrl ? bulkImgUrl.value.split('\n').map(l => l.trim()) : [])
     : [];
@@ -738,7 +698,6 @@ function prepareBulkQueue() {
   });
 
 
-  // Replace chatEntries and save
   chatEntries = newEntries;
   save();
   renderAll();
@@ -747,8 +706,7 @@ function prepareBulkQueue() {
   return true;
 }
 
-// ── Image Column (Bulk) ───────────────────────────────────────────────────────
-let bulkImgMode = 'url'; // 'url' or 'file'
+let bulkImgMode = 'url';
 let bulkImgDataUrl = null;
 let bulkImgFileName = null;
 
@@ -775,16 +733,14 @@ imgSubFile.addEventListener('click', () => {
   imgPaneFile.classList.add('on'); imgPaneUrl.classList.remove('on');
 });
 
-// THE WORKING FILE BUTTON: direct .click() call — only method that works in extension popups
 imgPickBtn.addEventListener('click', function(e) {
   e.preventDefault();
   e.stopPropagation();
   imgFileInput.click();
 });
 
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // base64 grows it by a third; the queue is saved in ~5 MB of browser storage
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 
-// Shared by the file picker and Ctrl+V: validates the size, reads the file and shows it as the image for every chat.
 function loadImageFile(file) {
   if (!file) return;
   if (file.size > MAX_IMAGE_BYTES) {
@@ -810,8 +766,6 @@ function loadImageFile(file) {
 
 imgFileInput.addEventListener('change', (e) => loadImageFile(e.target.files[0]));
 
-// The image on the clipboard (a screenshot, or "Copy image" from a browser), or null. Text copied from a spreadsheet
-// carries an image preview too, so anything that also has text is left to the normal paste into the text boxes.
 function imageFromClipboard(data) {
   if (!data) return null;
   if (String(data.getData('text/plain') || '').trim()) return null;
@@ -830,7 +784,7 @@ document.addEventListener('paste', (e) => {
   const file = imageFromClipboard(e.clipboardData);
   if (!file) return;
   e.preventDefault();
-  imgSubFile.click();   // pasted images go in the FILE tab
+  imgSubFile.click();
   loadImageFile(file);
 });
 
@@ -845,7 +799,6 @@ imgFileClear.addEventListener('click', () => {
   document.getElementById('cntImg').textContent = '—';
 });
 
-// Track URL counter
 const bulkImgUrl = document.getElementById('bulkImgUrl');
 if (bulkImgUrl) {
   bulkImgUrl.addEventListener('paste', (e) => {
@@ -858,7 +811,6 @@ if (bulkImgUrl) {
   });
 }
 
-// Keep the visible paste grid through host-driven iframe replacements.
 const blastDraftKey = globalThis.__blastSessionKey?.('draft');
 const draftFields = [bulkLinks, bulkMsg1, bulkMsg2, bulkMsg3, bulkImgUrl];
 function saveBlastDraft() {
@@ -886,7 +838,7 @@ try {
     syncBulkMessageMode();
     updateCounter(bulkLinks, 'cntLinks');
   }
-} catch (_) { /* An invalid draft must not stop queue recovery. */ }
+} catch (_) { }
 document.addEventListener('input', saveBlastDraft);
 document.addEventListener('change', saveBlastDraft);
 document.addEventListener('click', () => setTimeout(saveBlastDraft, 0));

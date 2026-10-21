@@ -16,7 +16,6 @@
     }
     body{width:100%;min-width:0;background:var(--bg);font-family:'DM Sans',sans-serif;color:var(--txt);}
 
-    /* Header */
     .hdr{background:var(--s1);border-bottom:1px solid var(--bd);padding:13px 16px;display:flex;align-items:center;justify-content:space-between;}
     .logo{display:flex;align-items:center;gap:9px;}
     .logo-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--ag);animation:pulse 2s ease-in-out infinite;}
@@ -27,7 +26,6 @@
     .icon-btn{background:none;border:1px solid var(--bd);color:var(--dim);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
     .icon-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--ad);}
 
-    /* Tabs */
     .tabs{display:flex;border-bottom:1px solid var(--bd);background:var(--s1);}
     .tab-btn{flex:1;padding:10px 8px;background:none;border:none;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;color:var(--dim);cursor:pointer;letter-spacing:.05em;text-transform:uppercase;transition:all .15s;border-bottom:2px solid transparent;}
     .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);}
@@ -35,11 +33,9 @@
     .tab-pane{display:none;}
     .tab-pane.active{display:block;}
 
-    /* Body */
     .body{padding:14px;display:flex;flex-direction:column;gap:12px;}
     .lbl{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:6px;}
 
-    /* Chat rows */
     .chat-list{display:flex;flex-direction:column;gap:8px;}
     .chat-row{background:var(--s1);border:1px solid var(--bd);border-radius:10px;overflow:hidden;transition:border-color .15s;}
     .chat-row:focus-within{border-color:var(--accent);}
@@ -113,7 +109,6 @@
     .btn-pause:hover{border-color:var(--warn);background:rgba(227,179,65,.08)}
     .btn-resume{background:var(--accent);color:#fff;border:1px solid var(--accent)}
 
-    /* ── Bulk Import ── */
     .bulk-body{padding:14px;display:flex;flex-direction:column;gap:12px;}
     .bulk-hint{font-size:11px;color:var(--dim);line-height:1.6;background:var(--s1);border:1px solid var(--bd);border-radius:10px;padding:10px 13px;}
     .bulk-hint strong{color:var(--accent);}
@@ -139,7 +134,6 @@
     .bulk-status.err{display:block;background:var(--rd);border:1px solid rgba(248,113,113,.3);color:var(--red);}
 
 
-    /* ── Image Column ── */
     .bulk-col-label.img{color:#60a5fa;}
     .img-col-body{display:flex;flex-direction:column;gap:4px;height:200px;}
     .img-subtabs{display:flex;gap:3px;margin-bottom:2px;}
@@ -150,7 +144,6 @@
     .img-url-area::placeholder{color:var(--dim);font-size:9.5px;}
     .img-file-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:8px;}
     .img-file-wrap.has-file{border-color:#60a5fa;background:rgba(96,165,250,.06);}
-    /* THE FIX: real button that calls .click() on hidden input */
     .img-pick-btn{background:var(--s2);border:1px solid var(--bd);border-radius:6px;padding:5px 8px;color:var(--dim);font-size:10px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all .15s;width:100%;}
     .img-pick-btn:hover{border-color:#60a5fa;color:#60a5fa;}
     .img-file-input{display:none;}
@@ -161,7 +154,6 @@
     .img-pane{display:none;flex:1;flex-direction:column;}
     .img-pane.on{display:flex;}
 
-    /* Customer Approaching theme */
     :root{
       --bg:#101216;--s1:#191c22;--s2:#21252d;--bd:#2a2e37;
       --accent:#4f8cf0;--ad:rgba(79,140,240,.13);--ag:rgba(79,140,240,.28);
@@ -190,8 +182,6 @@
     html,body{scrollbar-width:none;-ms-overflow-style:none}
     ::-webkit-scrollbar{display:none}
 
-    /* 2026 workspace refresh: compact hierarchy, centered content, fewer
-       full-width bars. All existing IDs stay unchanged for popup.js. */
     body{min-height:100vh;background:
       radial-gradient(circle at 50% -180px,rgba(79,140,240,.12),transparent 430px),var(--bg)}
     .blast-shell{width:min(1180px,calc(100% - 32px));margin:0 auto;padding:12px 0 34px}
@@ -270,7 +260,6 @@
       .bulk-grid{grid-template-columns:1fr}.bulk-col:last-child{grid-column:auto}.workspace-panel,.bulk-workspace{padding:12px}
     }
 
-    /* Cards redesign — matches the parent Console preview. */
     :root{
       --bg:#0e1014;--s1:#14171c;--s2:#1a1e25;--bd:#2b303a;
       --accent:#6879e9;--ad:rgba(104,121,233,.14);--ag:rgba(104,121,233,.25);
@@ -285,7 +274,6 @@
     .btn-go,.bulk-load-btn{background:var(--accent);box-shadow:0 9px 24px rgba(104,121,233,.22)}
     .btn-go:hover,.bulk-load-btn:hover{background:#7888ef}
     .connection-card.is-connected .connection-dot{background:var(--success)}
-    /* Operational deck — queue on the canvas, controls grouped as one dock. */
     .workspace-nav{margin-bottom:10px}.tabs{width:100%;min-width:0}
     .bridge-banner{border-left:3px solid var(--success)!important;border-radius:8px!important;background:transparent!important}
     .queue-panel{padding:2px 0 0;border:0;background:transparent;box-shadow:none}
@@ -329,11 +317,9 @@
   <strong>LiveChat connection</strong>
 </div>
 
-<!-- MANUAL TAB -->
 <div class="tab-pane" id="tab-manual">
   <div class="body manual-layout">
 
-    <!-- Chat rows -->
     <section class="workspace-panel queue-panel">
       <div class="manual-top">
         <div>
@@ -347,7 +333,6 @@
     </section>
 
     <aside class="side-stack">
-      <!-- Default messages preview -->
       <section class="workspace-panel message-card">
         <div class="panel-head">
           <div>
@@ -398,7 +383,6 @@
         </div>
       </section>
 
-      <!-- Status -->
       <div class="status" id="status">
         <div class="spinner"></div>
         <span class="status-text" id="statusText">Starting…</span>
@@ -415,7 +399,6 @@
   </div>
 </div>
 
-<!-- BULK IMPORT TAB -->
 <div class="tab-pane active" id="tab-bulk">
   <div class="bulk-body">
     <div class="bulk-workspace">
@@ -460,15 +443,12 @@
             <div class="img-subtab active" id="imgSubUrl">URL</div>
             <div class="img-subtab" id="imgSubFile">FILE</div>
           </div>
-          <!-- URL pane -->
           <div class="img-pane on" id="imgPaneUrl">
             <textarea class="img-url-area" id="bulkImgUrl" placeholder="One URL per row&#10;(blank = no image)&#10;&#10;https://i.imgur.com/&#10;abc.png"></textarea>
           </div>
-          <!-- File pane — one file for ALL chats -->
           <div class="img-pane" id="imgPaneFile">
             <div class="img-file-wrap" id="imgFileWrap">
               <div class="img-file-note">Sends one image to <strong>all</strong> chats</div>
-              <!-- WORKING: button calls input.click() directly -->
               <button class="img-pick-btn" id="imgPickBtn">📎 Choose image</button>
               <input type="file" class="img-file-input" id="imgFileInput" accept="image/*">
               <div class="img-file-name" id="imgFileName" style="display:none"></div>
@@ -494,7 +474,7 @@
 </div>
 </main>
 
-<script src="web-adapter.js?v=20261011-1"></script>
-<script src="popup.js?v=20261007-4"></script>
+<script src="web-adapter.js?v=20261021-1"></script>
+<script src="popup.js?v=20261021-1"></script>
 </body>
 </html>

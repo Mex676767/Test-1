@@ -46,7 +46,7 @@ test("the Lark client uses the configured name and hint for its queue calls", as
   assert.equal(calls.length, 1);
   assert.ok(b.seen.names.every((n) => n === "lark-api-apac"));
   assert.ok(b.seen.getArgs.every(([id, options]) => id === "id:lark-api-apac" && options?.locationHint === "apac"));
-  initEnv({});                                                       // leave the module as other tests expect it
+  initEnv({});
 });
 
 test("/queue-stats asks the queue where it runs (when it can), reads the same object as the client, and still works with an older queue", async () => {

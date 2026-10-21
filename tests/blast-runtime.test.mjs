@@ -42,8 +42,6 @@ test('embedded Blast sends 151 chats and retries failed final cleanup without re
   assert.equal(new Set(calls.filter(c=>c.action==='send_event').map(c=>c.body.chat_id)).size,151);
   assert.equal(calls.filter(c=>c.action==='deactivate_chat').length,152);
   assert.equal(new Set(calls.filter(c=>c.action==='deactivate_chat').map(c=>c.body.id)).size,151);
-  // Cleanup closes directly and confirms once: one get_chat per chat. The chat whose first close lost its connection is closed
-  // again straight away (a dropped connection is retried), so it needs no extra read.
   assert.equal(calls.filter(c=>c.action==='get_chat').length,151);
 });
 
@@ -73,7 +71,7 @@ test('SDK connection preserves selected Blast and queue pins its existing iframe
   assert.equal(context.activeMainTab,'blast');
   assert.equal(view.hidden,false);
   context.blastRunInProgress=true;
-  context.activeMainTab='customer'; // Late department update or tab switch.
+  context.activeMainTab='customer';
   vm.runInContext('syncMainTabs()',context);
   assert.equal(context.activeMainTab,'blast');
   assert.equal(view.hidden,false);
@@ -123,7 +121,7 @@ for (const reloadAt of ['resume_chat', 'send_event', 'deactivate_chat', 'unconfi
             destroyed=true;
             events.pagehide();
             notifyDestroyed();
-            return new Promise(()=>{}); // The old document never gets the response.
+            return new Promise(()=>{});
           }
           return Response.json(name==='get_chat'?{thread:{events:chat.events}}:{event_id:'mock-event'});
         },

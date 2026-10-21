@@ -3,27 +3,15 @@ import { identifyAgent } from "./livechat-identity.js";
 import { looksLikeEmail, ticketEmailFor } from "./ticket-email.js";
 import { json } from "./tickets.js";
 
-// Acting in the ticket system AS the signed-in agent (raising a ticket, posting a comment). The ticket API takes the person's email
-// (onBehalfOf) and then everything is theirs: raisedBy, their department, the comment's author. It needs the API key's role to hold
-// api-keys:act-on-behalf and an active ticket-system account with that email. Switched on with TICKETS_ON_BEHALF_OF=1.
-//
-// There is deliberately no fallback to the key's owner: a ticket or comment that is not the agent's would be wrong in the ticket
-// system's history, so a refusal is shown to the agent instead (needTicketEmail asks for their ticket account email).
 export const flag = (value) => ["1", "true", "on", "yes"].includes(String(value ?? "").trim().toLowerCase());
 export const isOnBehalfRefusal = (error) => [400, 403].includes(Number(error?.statusCode))
   && /on behalf|onBehalfOf|No active account has the email|is not an account this API key can act for|nothing can be done on their behalf|is a service account|outranks/i.test(String(error?.message || ""));
-// The ticket system words this refusal two ways, and only the first was recognised at first: 'No active account has the email "x"' and
-// '"x" is not an account this API key can act for, so nothing can be done on their behalf. Check the address, or ask whoever issued the key.'
-// (also for a deactivated, hidden, protected, role-less or senior account, which it deliberately does not tell apart; and for a service account).
-// All of them mean: ask the agent for their own ticket account email.
 
 export const needTicketEmail = (triedEmail) => json(400, {
   ok: false, needTicketEmail: true, ...(triedEmail ? { triedEmail } : {}),
   error: "Ticket account not found. Please enter your ticket account email.",
 });
 
-// Who is signed in (asked of LiveChat with their own token; the browser's word is never used) and which ticket account email that is:
-// an email set in Lark wins, else one the agent typed, else their LiveChat email. { response } when they are not signed in.
 export async function actingAs(env, author, { resolveEmail = true } = {}) {
   const account = LIVECHAT_ACCOUNTS.find((item) => item.key === author?.accountKey);
   if (!account || !String(author?.agentToken || "").trim()) {
@@ -42,8 +30,6 @@ export async function actingAs(env, author, { resolveEmail = true } = {}) {
   return out;
 }
 
-// Who a read (the inbox, a ticket, the field lists) is made as: the signed-in agent when acting on behalf is switched on, else nobody.
-// { email, source } or { response } (not signed in, or no ticket email known: the popup asks for it).
 export async function readingAs(env, author) {
   if (!flag(env?.TICKETS_ON_BEHALF_OF)) return { email: "", source: "" };
   const acting = await actingAs(env, author);
@@ -52,8 +38,6 @@ export async function readingAs(env, author) {
   return acting;
 }
 
-// The ticket system refused to act for this person. 400 = no active account with that email (ask for the right one, or send the agent to
-// the admin when the email came from the Ticket Email column, which an agent cannot change); 403 = the key may not act for others.
 export function refusalResponse(error, email, source) {
   if (Number(error.statusCode) === 403) {
     return json(403, {

@@ -1,19 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { createRecord, ESCALATION_BASE_TOKEN, TABLE_ESCALATION } from "./_lib/lark.js";
 
-// Writes straight to the C9MYR CS-PYM ESCALATION table -- CS never touches
-// the actual Lark Form (per the request: "we will not be filling this
-// ticket, instead we will be filling in the actual table"). Field names
-// confirmed from the real table's own columns (not the form's labels,
-// which don't all match 1:1 -- e.g. the form says "AMOUNT" but the column
-// is "Bonus Amount", "TRANSACTION ID" vs "TRX ID", "REMARKS (CS - PYM)" vs
-// "REMARK (CS - PYM)"). Ticket No. is a formula/auto field on that table
-// and is never written here. Attachment is intentionally not included yet
-// -- file upload needs a separate Lark attachment-upload step this doesn't
-// do. "PIC" (Created By) is a Lark system field that always reflects the
-// API caller's identity (the app's own bot, not the individual agent) --
-// "PIC Name" is the separate Single Option field the agent actually
-// controls, always set to the same name chosen in Settings.
 export async function handler(event) {
   try {
     if (!ESCALATION_BASE_TOKEN || !TABLE_ESCALATION) {

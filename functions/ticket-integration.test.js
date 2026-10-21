@@ -27,10 +27,8 @@ test("config returns fields without exposing ticket records", async () => {
     assert.equal(body.ok, true);
     assert.equal("tickets" in body, false);
     assert.equal(body.fields[0].key, "status");
-    // The ticket system's own list (with display labels) comes first; the observed value is already in it.
     assert.equal(body.fields[0].options.length, 13);
     assert.deepEqual(body.fields[0].options.find((option) => option.value === "PYM_SOLVED"), { value: "PYM_SOLVED", label: "PYM TEAM SOLVED", isActive: true });
-    // Every department and market is offered; the ones seen on a ticket carry that ticket system id.
     assert.equal(body.departments.length, 20);
     assert.deepEqual(body.departments.find((item) => item.code === "PYM_MYR"), { id: 2, code: "PYM_MYR", name: "PAYMENT MYR/PHP/PKR" });
     assert.deepEqual(body.departments.find((item) => item.code === "CS"), { id: "CS", code: "CS", name: "Customer Service" });

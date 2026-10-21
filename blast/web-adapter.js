@@ -1,10 +1,6 @@
-/* Web version of LC V4. Queue data remains in this browser; sends use the
- * signed-in agent's OAuth token, never the shared admin PAT. */
 (() => {
   if (globalThis.chrome?.storage?.local && globalThis.chrome?.runtime?.sendMessage) return;
 
-  // Embedded queues checkpoint before API mutations so a replaced LiveChat
-  // iframe can resume without replaying acknowledged customer messages.
   globalThis.__blastWebAdapter = true;
 
   const storageListeners = [];
@@ -71,8 +67,6 @@
   };
   const selectedAccount = () => detectedAccount() || validAccountKey(sessionStorage.getItem(SELECTED_ACCOUNT_KEY));
   const journalKey = () => `${prefix}queue:${selectedAccount()}`;
-  // Images are saved once, under their own key, when a run starts; the journal (re-written at every checkpoint)
-  // only references them.
   const imagesKey = () => `${prefix}queue-images:${selectedAccount()}`;
   let queueImages = {};
   const readQueueImages = () => { try { return JSON.parse(sessionStorage.getItem(imagesKey()) || "{}") || {}; } catch (_) { return {}; } };
@@ -117,8 +111,6 @@
     return String(data.account_id);
   }
 
-  // A chat lists an agent by EMAIL, not by the login id (a UUID): add_user_to_chat with the UUID answers "`user_id` not found"
-  // and the open chat gets nothing. Ask the server for the email (it knows how to look it up); fall back to the login id alone.
   const AGENT_EMAIL_KEY = "ca-livechat-agent-email";
   async function currentAgentIds() {
     const accountKey = selectedAccount();
@@ -137,7 +129,7 @@
           email = String(data.email).trim();
           sessionStorage.setItem(emailKey, email);
         }
-      } catch (_) { /* the login id is still tried below */ }
+      } catch (_) { }
     }
     return [...new Set([email, login].filter(Boolean))];
   }
@@ -215,11 +207,9 @@
         });
         text = await response.text();
       } catch (error) {
-        // The connection failed (or LiveChat's answer carried no CORS headers, as a rate-limit reply can). Try again.
         if (unloading) throw new Error("Widget reloading");
         if (attempt >= maxAttempts) throw error;
         await sleep(Math.min(8000, 1000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 400));
-        // A send may have reached LiveChat before the answer was lost: look for its custom id before sending it again.
         if (name === "send_event" && body?.event?.custom_id) {
           const chat = await action("get_chat", { chat_id: body.chat_id });
           if ((chat.thread?.events || []).some((item) => item.custom_id === body.event.custom_id)) return {};
@@ -256,18 +246,11 @@
     return new File([bytes], fileName || "image.png", { type: mime });
   };
 
-  // OPT-IN (off by default): upload the image once per run and reuse the returned URL for every chat,
-  // instead of downloading/decoding/uploading it for each one (an upload per chat is an extra throttled
-  // action per chat). Not verified that LiveChat accepts one upload_file URL in several chats, so it only
-  // turns on with localStorage "ca-blast-reuse-upload" = "1" -- try it on a small run in a TEST account first.
   const reuseUploadedFile = () => { try { return localStorage.getItem("ca-blast-reuse-upload") === "1"; } catch (_) { return false; } };
-  const uploadedFiles = new Map(); // content key -> Promise<{ uploaded, fileName }>; cleared at the start of every run
+  const uploadedFiles = new Map();
   const fnv = (text) => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i += 1) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
   const uploadKey = (job) => { const dataUrl = jobImageDataUrl(job); return dataUrl ? `data:${dataUrl.length}:${fnv(dataUrl)}:${job.imageFileName || ""}` : `url:${job.imageUrl}:${job.imageFileName || ""}`; };
 
-  // Images are stored ONCE per queue, not once per chat. Every job used to carry its own copy of the full
-  // base64 image, and the whole queue is saved to sessionStorage for crash recovery, so a realistic image
-  // x a realistic number of chats blew the ~5 MB quota ("Cannot save recoverable queue") and NOTHING was sent.
   const imageIdFor = (dataUrl) => `img-${dataUrl.length}-${fnv(dataUrl)}`;
   function dedupeJobImages(jobs) {
     const images = {};
@@ -307,9 +290,9 @@
       if (!uploadedFiles.has(key)) {
         const pending = uploadImage(job);
         uploadedFiles.set(key, pending);
-        pending.catch(() => { if (uploadedFiles.get(key) === pending) uploadedFiles.delete(key); }); // a failed upload is retried by the next chat
+        pending.catch(() => { if (uploadedFiles.get(key) === pending) uploadedFiles.delete(key); });
       }
-      upload = await uploadedFiles.get(key);   // concurrent chats share one in-flight upload
+      upload = await uploadedFiles.get(key);
     } else {
       upload = await uploadImage(job);
     }
@@ -323,8 +306,6 @@
     const saved = progress.events[key];
     if (saved?.done) return;
     if (saved?.dispatched) {
-      // A refresh may have discarded the send response. Custom IDs identify
-      // delivery; they are not an API idempotency guarantee. Never blindly retry.
       const chat = await action("get_chat", { chat_id: body.chat_id });
       if (!(chat.thread?.events || []).some(event => event.custom_id === saved.id)) {
         throw new Error("Delivery could not be confirmed after widget reload; this chat was not resent. Check its history.");
@@ -341,8 +322,6 @@
     checkpoint();
   }
 
-  // Worth another try: the connection dropped, or LiveChat / the server was busy. Anything else (chat not found, wrong
-  // workspace, no access, a delivery that could not be confirmed) would fail the same way again.
   const retryableError = (error) => error?.name === "TypeError"
     || /failed to fetch|network|load failed|rate limited|timed? ?out|temporar|unavailable|busy|too many|\(5\d\d\)|\(429\)/i.test(String(error?.message || ""));
 
@@ -353,13 +332,10 @@
     let temporarilyAddedAgent = Boolean(progress.added);
     let agentAccountId = progress.agentAccountId || "";
     let chatId = progress.chatId || "";
-    let enteredChat = false;   // this call has resumed the chat or put the agent in it (a retry does not do it again)
+    let enteredChat = false;
     try {
-      // A chat that fails part-way (a lost connection, a busy moment) is tried again from where it stopped: every send is
-      // checkpointed, so a message that arrived is never sent twice. Only then is the failure reported.
       for (let attempt = 1; ; attempt += 1) {
         try {
-          // Fail BEFORE anything is sent if this job's image reference cannot be resolved (never send the text and then drop the image).
           if (job.imageId && !jobImageDataUrl(job)) throw new Error("The image for this queue is missing (it was not saved). Start the run again.");
           emit({ type: "PROGRESS", text: `Opening chat ${index + 1} of ${total}…`, progress: `${index + 1}/${total}`, log: `Opening ${job.url}`, logType: "info" });
           const chat = await resolveChat(job.url);
@@ -368,12 +344,9 @@
           progress.chatId = chatId;
           checkpoint();
           if (progress.delivered || progress.deliveryFinished) {
-            // Closing the last chat can itself replace the widget. Never reopen
-            // that chat just to discover its messages were already sent.
             return;
           }
           if (enteredChat) {
-            // A retry of this chat: the agent is already in it from the first try.
           } else if (chat.isActive !== true) {
             try {
               progress.resumed = true;
@@ -389,7 +362,6 @@
             const agentIds = await currentAgentIds();
             const present = new Set((chat.users || []).map((user) => String(user?.id || "").toLowerCase()));
             if (!agentIds.some((id) => present.has(id.toLowerCase()))) {
-              // The email is tried first (what a chat lists an agent by), then the login id.
               let added = "";
               let lastError = null;
               for (const id of agentIds) {
@@ -402,7 +374,7 @@
                   break;
                 } catch (error) {
                   lastError = error;
-                  if (/already/i.test(error.message)) { added = ""; break; }   // already in the chat: nothing to add, nothing to remove
+                  if (/already/i.test(error.message)) { added = ""; break; }
                   if (!/user_id|not found/i.test(error.message)) throw error;
                 }
               }
@@ -454,11 +426,8 @@
           checkpoint();
         } catch (error) { cleanupFailed = true; }
       }
-      // Do not leave a customer chat open when a later message or image fails.
       if (resumed && chatId) {
         try {
-          // We resumed this chat, so it is active: close it directly instead of reading it first. If the close is refused
-          // (for example someone already closed it), fall back to the old read-first check before treating that as a failure.
           try {
             await action("deactivate_chat", { id: chatId, ignore_requester_presence: true });
           } catch (error) {
@@ -472,7 +441,6 @@
         } catch (error) { cleanupFailed = true; }
       }
       if (unloading) return;
-      // A reload during cleanup must return here, not skip a supposedly done job.
       progress.done = !cleanupFailed;
       checkpoint();
       if (cleanupFailed) emit({ type: "PROGRESS", text: `Retrying cleanup for chat ${index + 1}…`, log: `Chat ${index + 1}: delivery finished; cleanup still pending`, logType: "info" });
@@ -543,11 +511,9 @@
     setPaused(Boolean(saved.paused));
     const runId = ++runSequence;
     activeRunId = runId;
-    uploadedFiles.clear(); // a new run never reuses a previous run's upload
+    uploadedFiles.clear();
     const run = async () => {
       if (runWasStopped(runId)) return;
-      // Another iframe may have finished the same saved run while this one
-      // waited for ownership. Read its latest checkpoint after taking the lock.
       const latest = savedQueue();
       if (!latest || latest.id !== saved.id) {
         journal = null;
@@ -557,7 +523,6 @@
       journal = latest;
       await runJobs(latest.jobs, latest.delay, latest.concurrency, runId);
     };
-    // Only one iframe may own delivery while LiveChat replaces its widget.
     const task = globalThis.navigator?.locks
       ? navigator.locks.request(`blast-delivery:${selectedAccount()}`, run)
       : run();
@@ -575,9 +540,6 @@
     sessionStorage.setItem(STATE_KEY, state);
     sessionStorage.setItem(PENDING_ACCOUNT_KEY, client.key);
     sessionStorage.setItem(SELECTED_ACCOUNT_KEY, client.key);
-    // Use the exact URI registered in Developer Console. Cloudflare preview
-    // aliases can have a different origin, which LiveChat rejects even when
-    // the rest of the OAuth request is correct.
     const redirectUri = oauthConfig.redirectUri || `${location.origin}/blast/oauth.html`;
     const url = new URL("https://accounts.livechat.com/");
     url.search = new URLSearchParams({ response_type: "token", client_id: client.clientId, redirect_uri: redirectUri, state, prompt: "consent" }).toString();
@@ -622,8 +584,6 @@
     const client = clients.find((item) => item.key === accountKey);
     const connected = Boolean(token(accountKey));
     const missingWorkspaceClient = workspaceAccount && !clients.some((item) => item.key === workspaceAccount);
-    // Signed in with the widget's own LiveChat login: there is nothing to connect, so the card is hidden. It comes back
-    // by itself when that login runs out, so a blast is never stuck without a way to sign in.
     clearTimeout(connectionExpiryTimer);
     if (connected) {
       banner.innerHTML = "";
@@ -648,8 +608,6 @@
     button.disabled = !clients.length || Boolean(missingWorkspaceClient);
     button.style.opacity = button.disabled ? ".45" : "1";
     button.addEventListener("click", async () => {
-      // Open synchronously from the user gesture. Waiting for account
-      // detection before window.open causes Chrome/Safari to block OAuth.
       const authWindow = window.open("about:blank", "livechat-agent-oauth", "popup=yes,width=560,height=720");
       if (!authWindow) {
         const note = banner.querySelector(".connection-note");

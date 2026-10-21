@@ -51,13 +51,11 @@ test("handler resolves an archive after the recent chat lookup misses", async (t
   assert.equal(body.isTelegram, true);
 });
 
-// ---- poll cost: preferred license first, raw payload only on request -------------------
 function twoAccountFetch(calls) {
   return async (url, options) => {
     const token = String(options.headers.Authorization || "").replace("Basic ", "");
     calls.push({ url: String(url).split("/").pop(), token });
     if (String(url).endsWith("/list_chats")) {
-      // Only the SECOND license owns this thread.
       return { json: async () => token === "second-token"
         ? { chats_summary: [{ id: "CHAT9", users: [], last_thread_summary: { id: "THREAD9", active: true } }] }
         : { chats_summary: [] } };

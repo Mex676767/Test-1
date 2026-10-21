@@ -26,13 +26,12 @@ async function blastRun({ reuse, chats = 3, concurrency = 1, failFirstUpload = f
     async fetch(url, init = {}) {
       if (url === '/livechat-oauth-config') return Response.json({});
       const action = String(url).split('/').pop();
-      // upload_file carries a FormData body (not JSON), so it must be handled before any JSON.parse
       const body = action === 'upload_file' ? {} : JSON.parse(init.body || '{}');
       if (url === '/livechat-chat-status') return Response.json({ ok: true, chatId: body.realChatId, isActive: false, accountKey: 'lc2', raw: { users: [] } });
       if (action === 'upload_file') {
         uploads += 1;
         calls.push({ action, body: {} });
-        if (failFirstUpload && uploads === 1) return Response.json({ error: { message: 'file rejected', type: 'validation' } }, { status: 400 }); // non-retryable, so the chat really fails
+        if (failFirstUpload && uploads === 1) return Response.json({ error: { message: 'file rejected', type: 'validation' } }, { status: 400 });
         return Response.json({ url: `https://cdn.test/file-${uploads}.png` });
       }
       calls.push({ action, body });
@@ -83,8 +82,7 @@ test('different images never share an upload when reuse is on', async () => {
   assert.equal(b.uploads, 1);
 });
 
-// ---- the reported bug: "upload image doesn't send any images" (storage quota) --------------------------
-const QUOTA = 5_000_000; // ~5 MB of Web Storage per origin (characters)
+const QUOTA = 5_000_000;
 function quotaStorage(initial = []) {
   const m = new Map(initial);
   const used = () => [...m].reduce((n, [k, v]) => n + k.length + v.length, 0);
@@ -155,7 +153,6 @@ test('jobs that still carry the image inline (older callers) keep working', asyn
   assert.equal(calls.filter((c) => c === 'upload_file').length, 3);
 });
 
-// ---- popup: image bytes never go to localStorage (shared ~5 MB quota with the widget's chat state) ------------
 function popupFns(names, context) {
   const popup = readFileSync(new URL('../blast/popup.js', import.meta.url), 'utf8');
   const NL = String.fromCharCode(10);
@@ -176,8 +173,8 @@ function quotaLocalStorage(initial) {
 }
 
 test('a 3 MB image across a whole queue leaves the widget\'s chat-state key writable (no image bytes in localStorage)', () => {
-  const bigImage = 'data:image/png;base64,' + Buffer.alloc(3 * 1024 * 1024, 9).toString('base64');     // a 3 MB file = 4 MB of base64
-  const local = quotaLocalStorage([[STATE_KEY, JSON.stringify({ c1: { username: 'x'.repeat(1_500_000) } })]]);   // 1.5 MB of existing chat state
+  const bigImage = 'data:image/png;base64,' + Buffer.alloc(3 * 1024 * 1024, 9).toString('base64');
+  const local = quotaLocalStorage([[STATE_KEY, JSON.stringify({ c1: { username: 'x'.repeat(1_500_000) } })]]);
   const logs = [];
   const context = vm.createContext({
     chatEntries: Array.from({ length: 120 }, (_, i) => ({ url: `https://my.livechatinc.com/chats/C${i}/T${i}`, messages: null, imageDataUrl: bigImage, imageFileName: 'promo.png' })),
@@ -190,7 +187,6 @@ test('a 3 MB image across a whole queue leaves the widget\'s chat-state key writ
   const storedBytes = [...local._m].filter(([k]) => k !== STATE_KEY).reduce((n, [, v]) => n + v.length, 0);
   assert.ok(storedBytes < 100_000, `saved queue is ${storedBytes} chars (no image bytes)`);
   assert.equal([...local._m.values()].some((v) => v.includes('data:image')), false);
-  // the widget's own state can still grow: this is the write that used to start failing silently
   assert.doesNotThrow(() => local.setItem(STATE_KEY, JSON.stringify({ c1: { username: 'x'.repeat(2_500_000) } })));
   assert.equal(JSON.parse(local._m.get('ca-livechat-engagement:local:chatEntries')).every((e) => e.imageDataUrl === undefined && e.imageFileName === 'promo.png'), true, 'the file name is kept, the bytes are not');
   assert.equal(context.chatEntries[0].imageDataUrl, bigImage, 'the in-memory queue still has the image for this run');
@@ -215,14 +211,11 @@ test('ensureEntryImages re-attaches the draft image after a reload, and refuses 
     popupFns(['ensureEntryImages'], context);
     return context;
   };
-  // restored entries: the file name survived, the bytes did not
   let c = make([{ url: 'a', imageFileName: 'p.png' }, { url: 'b', imageFileName: 'p.png' }]);
   assert.equal(vm.runInContext('ensureEntryImages()', c), true);
   assert.ok(c.chatEntries.every((e) => e.imageDataUrl === PNG), 'every entry got the draft image back');
-  // nothing to restore: no-ops
   c = make([{ url: 'a' }, { url: 'b', imageUrl: 'https://x/y.png', imageFileName: null }]);
   assert.equal(vm.runInContext('ensureEntryImages()', c), true);
-  // the image is gone everywhere: do not silently send text-only
   logs.length = 0;
   c = make([{ url: 'a', imageFileName: 'p.png' }], { bulkImgDataUrl: null });
   assert.equal(vm.runInContext('ensureEntryImages()', c), false);
@@ -268,7 +261,7 @@ test('a destroyed iframe mid-run is recovered WITH the image: every chat still g
         if (name === 'resume_chat') chat.active = true;
         if (name === 'send_event') chat.events.push(body.event);
         if (name === 'deactivate_chat') chat.active = false;
-        if (!destroyed && name === 'send_event' && id === 'C2' && body.event.type === 'message') {   // the old document dies mid-run
+        if (!destroyed && name === 'send_event' && id === 'C2' && body.event.type === 'message') {
           destroyed = true; events.pagehide(); notifyDestroyed(); return new Promise(() => {});
         }
         return Response.json(name === 'get_chat' ? { thread: { events: chat.events } } : { event_id: 'mock-event' });

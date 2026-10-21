@@ -161,11 +161,11 @@ test('the ticks are read page after page until the list is complete', async () =
 test("the QA page uses its own calendar, not the browser's date input; weeks start on Monday and always show 6 rows", () => {
   const page = readFileSync(new URL('../qa/index.html', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /type="date"/);
-  const october = calendarDays(2026, 9); // 1 Oct 2026 is a Thursday
+  const october = calendarDays(2026, 9);
   assert.equal(october.length, 42);
   assert.deepEqual([october[0].year, october[0].month, october[0].day, october[0].otherMonth], [2026, 8, 28, true], 'the first cell is Monday 28 Sep');
   assert.deepEqual(october.filter((d) => !d.otherMonth).map((d) => d.day), Array.from({ length: 31 }, (_, i) => i + 1));
-  const monday = calendarDays(2026, 5); // 1 Jun 2026 is a Monday: no days of May in front
+  const monday = calendarDays(2026, 5);
   assert.deepEqual([monday[0].month, monday[0].day, monday[0].otherMonth], [5, 1, false]);
   assert.equal(displayDate('2026-10-07'), '07/10/2026');
   assert.equal(displayDate(''), '');
@@ -207,8 +207,6 @@ test('nothing is saved between searches: every search reads the data again, ther
   assert.doesNotMatch(script + scan, /indexedDB|createCache|cache\.(get|set|clear)|fromSaved|saved results/);
 });
 
-// ---- who to check -----------------------------------------------------------------------------------------------------------
-
 test('the agents to choose from are the Agent Logins names, A to Z, with every login of a name; the button says what is chosen', () => {
   const choices = agentChoices([
     { email: 'B2@x', name: '96  Bob' }, { email: 'a@x', name: '96 Alice' }, { email: 'b1@x', name: '96 bob' }, { email: '', name: 'No email' }, { email: 'z@x', name: '' },
@@ -227,8 +225,6 @@ test('only the chosen agents are listed as unknown chats, whatever else is going
   assert.equal(planAll(scan, { only: null }).length, 4);
   assert.equal(planAll(scan, { only: [] }).length, 0, 'an empty list of emails is a choice of nobody (the page passes null for "everybody")');
 });
-
-// ---- ticked Unknown although a username was on file -------------------------------------------------------------------------
 
 test('a chat ticked Unknown by hand whose customer already had a username on file is marked with it; automatic ticks and untouched chats are not asked', async () => {
   const entries = [
@@ -284,14 +280,12 @@ test('every other agent in the installed widget is unchanged by the QA view: Ret
 
 test('the QA view is wired in the widget: on by default, with an off switch, Tickets and Knowledge held back, and it skips the agent-name step and the settings name panel', () => {
   assert.match(app, /const QA_VIEW_LIVE = new URLSearchParams\(location\.search\)\.get\("qaView"\) !== "0";/);
-  assert.match(app, /&& !selectedAgent && !qaView\) \{\s*\n\s*\/\/ Give the agent-name list a short chance/, 'boot does not force the agent-name panel on a QA person');
+  assert.match(app, /&& !selectedAgent && !qaView\) \{\s*\n\s*await Promise\.race\(/, 'boot does not force the agent-name panel on a QA person');
   assert.match(app, /const customerService = isCustomerServiceView\(\) \|\| qaView;/);
   assert.match(app, /const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;/, 'Tickets and Knowledge are not live for QA yet');
   assert.match(app, /\.get\("department"\)/, 'the department views are untouched');
   assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/, 'the department switch is on (rolled out 2026-10-19)');
 });
-
-// ---- one chat -------------------------------------------------------------------------------------------------------------
 
 const fn2 = (name) => app.match(new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n\\}'))[0];
 
@@ -356,7 +350,6 @@ test('the admin preview stays the full admin view for a QA login, and shows the 
   assert.equal(flag(true, '?department=qa'), false, 'the installed widget ignores the preview switch: only the login decides');
   assert.equal(flag(true, ''), false);
   assert.match(app, /if \(!QA_VIEW_LIVE \|\| !IS_EMBEDDED_APP\) return false;/, 'a QA login in the preview is not looked up');
-  // The preview with ?department=qa shows the QA view like the installed widget: QA and Retention, no Blast, Tickets or Knowledge.
   const forced = tabs({ previewMode: true, activeMainTab: 'customer', qaView: true });
   assert.deepEqual(['unknownChatsTab', 'retentionTab', 'blastTab', 'ticketsTab', 'knowledgeTab'].map((id) => forced.els[id].hidden), [false, false, true, true, true]);
   assert.equal(forced.context.activeMainTab, 'customer', 'Retention stays open');
@@ -385,8 +378,6 @@ test('the card for a logged case is a tidy read-only grid: agent and time, usern
   assert.match(card, /row\.claimSecret \? "✓" : "—"/);
   assert.doesNotMatch(card, /Customer<\/div>|Case details|VIEW ONLY|<input/, 'no boxes inside boxes, nothing to edit');
 });
-
-// ---- the bonus the agent claimed, against what they logged ----------------------------------------------------------------
 
 const claimOf = (extra = {}) => ({ agent: '96 Alice', program: 'topPnl', label: 'Top 10 P&L', source: 'Pass RM18', inquiry: 'TOP P&L', amount: '18', at: 5, ...extra });
 const loggedRow = (extra = {}) => ({ agent: '96 Alice', createdAt: 1000, username: 'p1', brand: 'VS96', inquiry: ['TOP P&L'], status: 'Given', amount: 18, link: 'l', ...extra });
@@ -453,7 +444,7 @@ test('the admin preview has example chats for the QA card: each one runs through
 test('the QA page shows the examples only when the admin preview asks for them (?preview=1), and then reads nothing from the server', () => {
   const script = readFileSync(new URL('../qa/qa.js', import.meta.url), 'utf8');
   assert.match(script, /new URLSearchParams\(location\.search\)\.get\("preview"\) === "1"/);
-  const preview = script.slice(script.indexOf('// The admin preview (the QA tab opened with ?preview=1)'));
+  const preview = script.slice(script.indexOf('if (new URLSearchParams(location.search).get("preview") === "1") {'));
   const previewBranch = preview.slice(0, preview.indexOf('} else {'));
   assert.doesNotMatch(previewBranch, /resumeLogin|createClient|fetch\(/, 'the preview branch makes no request');
   assert.match(preview.slice(preview.indexOf('} else {')), /resumeLogin\(\)/, 'the real tab still signs in and reads');
@@ -464,7 +455,7 @@ test('the QA page shows the examples only when the admin preview asks for them (
 test('a QA login without an agent name can choose one: the picker can be skipped, and Settings offers it later', () => {
   assert.match(app, /function pickAgentName\(accountKey, token, available, \{ skippable = false \} = \{\}\)/);
   assert.match(app, /id="agentLoginSkip"/);
-  assert.match(app, /\{ skippable: true \}\); \/\/ QA is part of the Retention team/);
+  assert.match(app, /\{ skippable: true \}\);/);
   assert.match(app, /qaView && !selectedAgent \? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name<\/button>`/);
   assert.match(app, /async function chooseQaAgentName\(\)/);
 });

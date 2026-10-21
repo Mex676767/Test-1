@@ -4,17 +4,14 @@ import { rememberTicketEmail } from "./_lib/ticket-email.js";
 import { deleteTicketImages, fileMatchesType, isStoredImage, storeTicketImages, useImageBucket } from "./_lib/ticket-images.js";
 import { json, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 
-// Posts a comment (or a reply) on a ticket, as the signed-in agent when TICKETS_ON_BEHALF_OF is on (see ticket-actor.js). The ticket API
-// writes it as that person, with their mentions and notifications as from the dashboard. Reading the thread is ticket-status.js.
 const MAX_COMMENT = 5000;
-const MAX_FILES = 4; // the ticket API takes up to 4 files on a comment
+const MAX_FILES = 4;
 const TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
 
 export async function handler(event) {
   if (event.httpMethod !== "POST") return json(405, { ok: false, error: "Method not allowed" });
   try {
     if (!ticketSettings(event.env).configured) return json(503, { ok: false, error: "Ticket integration is not configured" });
-    // JSON for text; multipart (a "comment" JSON part plus the files) when pictures or PDFs come with it.
     let input;
     const files = [];
     if (event.formData) {
@@ -34,7 +31,7 @@ export async function handler(event) {
     for (const file of files) {
       totalSize += Number(file.size) || 0;
       if (!file.size) return json(400, { ok: false, error: `${file.name || "Attachment"} is empty` });
-      const limitMb = useImageBucket(event.env) && isStoredImage(file) ? 5 : 1; // images may go to R2 (a link is sent); the rest is attached
+      const limitMb = useImageBucket(event.env) && isStoredImage(file) ? 5 : 1;
       if (file.size >= limitMb * 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under ${limitMb}MB` });
       if (!TYPES.has(file.type)) return json(400, { ok: false, error: `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF` });
       if (!(await fileMatchesType(file))) return json(400, { ok: false, error: `${file.name || "Attachment"} is not really a ${file.type === "application/pdf" ? "PDF" : "PNG, JPG or WEBP image"}, so it was not sent` });
@@ -53,8 +50,6 @@ export async function handler(event) {
     }
     const email = onBehalf ? acting.email : "";
 
-    // Pictures go to the R2 bucket and the comment carries their links (like a ticket does); PDFs, and pictures when there is no bucket,
-    // are attached to the comment.
     let imageKeys = [];
     let sent = files;
     if (useImageBucket(event.env) && files.some(isStoredImage)) {
@@ -81,7 +76,7 @@ export async function handler(event) {
       }
       return json(201, { ok: true, parentId: data.parentId ?? null, comment: data.comment || null, images: imageKeys.length, ...(email ? { actedAs: email } : {}) });
     } catch (err) {
-      await deleteTicketImages(event.env, imageKeys); // nothing was posted, so nothing points to these pictures
+      await deleteTicketImages(event.env, imageKeys);
       if (email && isOnBehalfRefusal(err)) return refusalResponse(err, email, acting.source);
       throw err;
     }

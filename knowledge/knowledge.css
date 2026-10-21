@@ -14,7 +14,6 @@
 .copy-toast{position:fixed;right:14px;bottom:14px;z-index:10;padding:8px 11px;border:1px solid color-mix(in srgb,var(--teal) 45%,var(--border));border-radius:8px;background:var(--teal-soft);color:var(--teal);font-size:10px;font-weight:600;opacity:0;transform:translateY(8px);pointer-events:none;transition:.18s}.copy-toast.show{opacity:1;transform:translateY(0)}mark{padding:0 2px;border-radius:3px;background:var(--gold-soft);color:var(--gold)}
 @media(max-width:720px){.knowledge-grid{grid-template-columns:1fr}.results-list{max-height:300px}.hero-stats{display:none}.section-heading h1{font-size:20px}}@media(max-width:460px){.knowledge-shell{padding:10px}.detect-card{padding:16px}.detect-row{grid-template-columns:1fr}.detect-row .primary-btn{width:100%}.knowledge-head{padding:10px 12px}.knowledge-brand>img{width:32px;height:32px}.knowledge-brand div span{display:none}.preview-badge{font-size:8px}.guide-top{flex-direction:column}.guide-actions{justify-content:flex-start}.search-box kbd{display:none}}
 
-/* Cards redesign — quiet surfaces shared with the parent Console. */
 *,*::before,*::after{scrollbar-width:none;-ms-overflow-style:none}
 *::-webkit-scrollbar{width:0;height:0;display:none}
 :root[data-theme="dark"]{--bg:#0e1014;--surface:#14171c;--surface-2:#1a1e25;--border:#2b303a;--text:#f2f4f7;--muted:#929aa8;--faint:#7c8492;--blue:#6879e9;--blue-soft:#202641;--teal:#3dc49d;--teal-soft:#17372f;--gold:#d9aa55;--gold-soft:#292316;--shadow:0 12px 34px rgba(0,0,0,.16)}
@@ -33,7 +32,6 @@ body{font-family:Inter,-apple-system,"Segoe UI",sans-serif}
 .empty-illustration img{transform:none}
 .step-num{background:var(--blue);box-shadow:none}
 
-/* Knowledge workbench — a library sidebar beside one reading canvas. */
 .detect-card{border:0;background:linear-gradient(135deg,color-mix(in srgb,var(--blue) 19%,var(--surface)),var(--surface) 58%,color-mix(in srgb,var(--teal) 10%,var(--surface)))}
 .detect-card .section-heading h1{font-size:18px}.detect-card .section-heading h1 br{display:none}.detect-card .section-heading p{margin-top:4px}
 .detect-row{margin-top:12px}.detect-row textarea{min-height:58px}

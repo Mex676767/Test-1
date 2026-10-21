@@ -35,7 +35,6 @@ const TICKET = (extra = {}) => ({
   assignees: [{ id: 44, name: 'Ann' }, { id: 31, name: 'Bob' }], comments: [{ id: 1, body: 'hi' }], commentCount: 1, updatedAt: '2026-10-19T02:00:00.000Z', ...extra,
 });
 
-// reply(body, number of the call): what the fake /ticket-update answers. gate: a promise the first answer waits for.
 function world({ reply, gate } = {}) {
   const calls = { fetches: [], renders: 0, statuses: [], problems: 0, absorbed: [], loads: 0 };
   const context = vm.createContext({

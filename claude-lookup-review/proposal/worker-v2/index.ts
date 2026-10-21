@@ -1,34 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 
-// The shared Lark gate + search batcher: the Durable Object of the Worker `rtn-lark-rate-queue`. DEPLOYED from
-// claude-lookup-review/worker-v2-deploy (`npx wrangler deploy`); this file is kept identical to worker-v2-deploy/src/index.ts
-// (the tests run against this copy).
-//
-//  1. One ordered gate (concurrency + start spacing + shared cooldown). Waiters
-//     are granted slots by a single scheduler, ordered by arrival time within a
-//     priority class (token > read > write, with writes aged by 3 s so they
-//     cannot starve). No polling, no thundering herd. A caller that re-polls
-//     acquire() with the same waiterId keeps its place in line.
-//  2. Batch-while-busy: a per-(table,auth,username-field) bucket stays OPEN
-//     while it waits for its gate slot, so batch size grows with load.
-//  3. Callers carry a deadline (expiresAt). It is checked before every page, 429
-//     retry and orphan fallback, so cancelled/timed-out lookups stop consuming quota.
-//  4. Fail closed: a failed/truncated page, or any row that cannot be attributed
-//     to a requested username, never becomes a partial "clean" answer.
-//     Oversized results are split using Lark's `total` before paging; usernames
-//     that overflow on their own are remembered and run solo.
-//  5. Only selective shapes (username [+ Brand is]) are merged; wide predicates
-//     (Customer Approaching's Agent/Inquiry/Status case lookup) stay exact.
-//  6. 429 (code 1254290 recognised on ANY HTTP status) -> bounded retry after a
-//     shared cooldown; start spacing backs off multiplicatively and recovers slowly.
-//  7. Usernames that normalise identically (case/whitespace) are never co-batched,
-//     and repeated attribution failures switch batching off for that table for 5 min.
-
 type Env = { MY_DURABLE_OBJECT: DurableObjectNamespace<MyDurableObject> } & Record<string, unknown>;
 type Klass = "token" | "read" | "write";
 type PermitResult = { ticket: string | null; retryAfterMs: number };
-// requestStartedAt: when the Pages request (lookup / submit) that made this call began. The queue orders ALL of one request's steps
-// by it, so an older request's next step runs before a newer request's first one. label: what the call is for (diagnostics only).
 type SearchBatchInput = { url: string; method: string; headers: Record<string, string>; body: string; expiresAt?: number; requestStartedAt?: number; label?: string };
 type CachedCallInput = SearchBatchInput & { cacheKey: string; ttlMs: number; staleMs?: number; force?: boolean };
 type SearchBatchResult = { status: number; statusText: string; headers: [string, string][]; body: string };
@@ -39,7 +13,7 @@ type Waiter = {
 type Bucket = { key: string; baseKey: string; waiters: Waiter[]; createdAt: number };
 type CreateWaiter = { input: SearchBatchInput; fields: Record<string, unknown>; expiresAt: number; enqueuedAt: number; since: number; timed: boolean; resolve: (r: SearchBatchResult) => void };
 type CreateBucket = { key: string; waiters: CreateWaiter[]; createdAt: number };
-type Grant = { klass: Klass; at: number };                       // a granted slot: which class, and when (for hold-time stats)
+type Grant = { klass: Klass; at: number };
 type SlotEntry = { grant: (g: Grant) => void; cancelled: boolean; order: number; klass: Klass; requestedAt: number };
 type CallType = "search" | "batchCreate" | "batchUpdate" | "create" | "get" | "update" | "delete" | "list" | "fields" | "other";
 const CALL_TYPES: CallType[] = ["search", "batchCreate", "batchUpdate", "create", "get", "update", "delete", "list", "fields", "other"];
@@ -47,43 +21,35 @@ type Slot = { promise: Promise<Grant>; cancel: () => void };
 type Poll = { slot: Slot; granted: Promise<void>; ticket: string | null; idle: ReturnType<typeof setTimeout> | null };
 type Ticket = { timer: ReturnType<typeof setTimeout>; grant: Grant };
 
-const MAX_USERNAMES = 50;          // Lark: filter.conditions length 0..50
+const MAX_USERNAMES = 50;
 const PAGE_SIZE = 500;
-const MAX_PAGES = 20;              // 10,000 rows per merged query
+const MAX_PAGES = 20;
 const MAX_BISECT_DEPTH = 6;
-const MIN_WINDOW_MS = 15;          // only matters when the gate is idle
-const UPSTREAM_TIMEOUT_MS = 6_000;     // searches
-const WRITE_TIMEOUT_MS = 15_000;       // creates / other writes (Env GATE_WRITE_TIMEOUT_MS overrides, for tests)
-const CREATE_MEMORY_MS = 120_000;      // identical creates within this window share ONE row (Env CREATE_MEMORY_MS; 0 = off)
+const MIN_WINDOW_MS = 15;
+const UPSTREAM_TIMEOUT_MS = 6_000;
+const WRITE_TIMEOUT_MS = 15_000;
+const CREATE_MEMORY_MS = 120_000;
 const CREATE_MEMORY_MAX = 2_000;
-const WRITE_RETRIES = 1;               // one retry of a timed-out / 5xx create, with the SAME client_token
-const CACHE_MAX_ENTRIES = 50;          // shared read cache (field catalogs, bonus config)
+const WRITE_RETRIES = 1;
+const CACHE_MAX_ENTRIES = 50;
 const MAX_LABELS = 24;
 const MINUTE_MS = 60_000;
-const RING_MINUTES = 24 * 60;          // per-minute history kept for the last 24 h
+const RING_MINUTES = 24 * 60;
 const MINUTE_WAIT_SAMPLES = 200;
 const MAX_REPORT_NAMES = 64;
-const TOKEN_CONCURRENCY = 4;           // token lane (Env TOKEN_CONCURRENCY): fetching Lark's tenant token never competes with reads/writes
-const BURST_OFF_MS = 60_000;           // after a Lark throttle the burst allowance is off (bucket of 1) for this long
-const MAX_BURST = 10;                  // upper bound for GATE_BURST
-const TOKEN_GAP_MS = 50;               // spacing between token-lane starts (Env TOKEN_GAP_MS)
-// Lark's error codes that blame ONE record of a batch_update (its id or one of its values), from the table on
-// https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/reference/bitable-v1/app-table-record/batch_update :
-// 1254006 WrongRecordId, 1254043 RecordIdNotFound, 1254044 FieldIdNotFound, 1254045 FieldNameNotFound, 1254015 field types do not match,
-// 1254060-1254069 the *FieldConvFail family (1254061 NumberFieldConvFail, ...), 1254072 InvalidPhoneNumber, 1254074 DuplexLinkFieldConvFail,
-// 1254130 TooLargeCell. Measured against real Lark: such an error rejects the WHOLE call (nothing applied) and, except 1254043, does not
-// name the record. ONLY these codes split a batch. Every other code (invalid token 99991663 and the other auth codes, 1254302/1254304
-// permission denied, 1254003/1254004/1254040/1254041 base or table wrong, 1254291 write conflict, 1254607/1254608, 1255xxx internal, ...)
-// is about the call, not a record: the same error would come back for every half, so it goes to every caller at once.
+const TOKEN_CONCURRENCY = 4;
+const BURST_OFF_MS = 60_000;
+const MAX_BURST = 10;
+const TOKEN_GAP_MS = 50;
 const RECORD_LEVEL_UPDATE_CODES = new Set<number>([1254006, 1254015, 1254043, 1254044, 1254045, 1254060, 1254061, 1254062, 1254063, 1254064,
   1254065, 1254066, 1254067, 1254068, 1254069, 1254072, 1254074, 1254130]);
-const MAX_UPDATE_BATCH = 100;          // Lark documents 1,000 per batch_update call; stay small so one bad batch is cheap
+const MAX_UPDATE_BATCH = 100;
 const MAX_429_RETRIES = 2;
 const MAX_COOLDOWN_MS = 5_000;
 const PERMIT_LEASE_MS = 8_000;
 const LONGPOLL_MS = 5_000;
-const MAX_CREATE_BATCH = 100;      // Lark allows 1,000; stay small so one bad batch is cheap
-const LEGACY_WAIT_MS = 150;        // below the legacy client's 250 ms RPC timeout
+const MAX_CREATE_BATCH = 100;
+const LEGACY_WAIT_MS = 150;
 const POLL_IDLE_MS = 10_000;
 const WRITE_AGING_MS = 3_000;
 const HEAVY_MEMORY_MS = 10 * 60_000;
@@ -93,7 +59,6 @@ const NO_BATCH_MS = 5 * 60_000;
 const STAT_SAMPLES = 2_000;
 const CLASS_OFFSET: Record<Klass, number> = { token: -1e9, read: 0, write: WRITE_AGING_MS };
 
-// Nothing that looks like an access token may end up in an error message, a log line or a stat.
 const scrubSecrets = (text: unknown): string => String(text ?? "")
   .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [token]")
   .replace(/\b[tu]-[A-Za-z0-9_-]{20,}\b/g, "[token]");
@@ -101,12 +66,10 @@ const failure = (status: number, msg: string): SearchBatchResult => ({
   status, statusText: "", headers: [["content-type", "application/json"]],
   body: JSON.stringify({ code: -1, msg: scrubSecrets(msg) }),
 });
-// Results that came from a timeout / transport error / HTTP 5xx on a real upstream call (not from our own queue
-// deadline): the only failures worth retrying, and only for idempotent (client_token) writes.
 const upstreamFailures = new WeakSet<SearchBatchResult>();
 const callType = (input: SearchBatchInput): CallType => {
   let path = "";
-  try { path = new URL(input.url).pathname; } catch { /* unknown */ }
+  try { path = new URL(input.url).pathname; } catch { }
   const method = (input.method || "POST").toUpperCase();
   if (/\/records\/batch_create$/.test(path)) return "batchCreate";
   if (/\/records\/batch_update$/.test(path)) return "batchUpdate";
@@ -121,7 +84,6 @@ const summary = (values: number[]) => {
   return { n: sorted.length, p50: sorted[Math.floor(sorted.length * 0.5)] ?? 0, p95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0, max: sorted.at(-1) ?? 0 };
 };
 const recordIdOf = (url: string): string => { try { return (new URL(url).pathname.match(/\/records\/([^/]+)$/) || [])[1] || ""; } catch { return ""; } };
-// The fields of a plain "update these fields" body, or null if it is anything else.
 const putFields = (body?: string): Record<string, unknown> | null => {
   try {
     const parsed = JSON.parse(body || "");
@@ -134,7 +96,6 @@ type MinuteRow = { t: number; starts: number; limited: number; waitP95: number; 
   totalStarts: number; limitedSearch: number; limitedWrite: number; limitedOther: number; maxStartsPerSec: number };
 type Minute = { t: number; starts: number; limited: number; peakQueue: number; waits: number[]; searchMs: number[]; updateMs: number[]; tokenStarts: number; isolates: Set<string>;
   limitedSearch: number; limitedWrite: number; limitedOther: number; maxStartsPerSec: number };
-// What Lark answered when it throttled (nothing here may contain a token: only the code, status, label, table id and rate-limit headers).
 type Throttle = { label: string; httpStatus?: number; code?: unknown; retryAfter?: string | null; ratelimit?: Record<string, string>; table?: string; logId?: string };
 const THROTTLE_LABELS = new Set<string>([...CALL_TYPES, "token", "ticket"]);
 const WRITE_LABELS = new Set<string>(["create", "batchCreate", "update", "batchUpdate", "delete"]);
@@ -143,7 +104,6 @@ const bump = (counts: Record<string, number>, key: string, max = 24): void => {
   counts[key] = (counts[key] || 0) + 1;
 };
 const tableIdOf = (url: string): string => { try { return (new URL(url).pathname.match(/\/tables\/([A-Za-z0-9]{1,40})(?:\/|$)/) || [])[1] || ""; } catch { return ""; } };
-// Retry-After and every x-ogw-ratelimit-* header (Lark's gateway limits), as text, for the log line.
 const throttleHeaders = (headers: Headers): Record<string, string> => {
   const out: Record<string, string> = {};
   headers.forEach((value, name) => { const key = name.toLowerCase(); if ((key.startsWith("x-ogw-ratelimit") || key === "retry-after") && Object.keys(out).length < 12) out[key] = scrubSecrets(value).slice(0, 64); });
@@ -164,9 +124,6 @@ const norm = (value: string) => value.trim().toLowerCase();
 const isRateLimited = (status: number, parsed: any) => status === 429 || Number(parsed?.code) === 99991400 || Number(parsed?.code) === 1254290
   || /too ?many ?requests?|rate.?limit/i.test(String(parsed?.msg || ""));
 
-// Same value-unwrapping order as the Pages-side toDisplay() (value, text, name,
-// link); unknown object shapes are stringified so they can never silently
-// look like an empty username.
 function fieldText(value: any): string {
   if (value == null) return "";
   if (Array.isArray(value)) return value.map((item) => fieldText(item)).filter(Boolean).join(", ");
@@ -186,14 +143,11 @@ export class MyDurableObject extends DurableObject<Env> {
   private gapMs: number;
   private longPollMs: number;
   private active = 0;
-  // Start spacing is a token bucket in its "theoretical arrival time" form: nextStartAt is when the NEXT start would be due if starts
-  // were exactly one gap apart; a start may go up to (burst - 1) gaps ahead of it, so an idle gate lets `burst` starts go back to back
-  // and then settles at one start per gap (the long-run rate is unchanged). burst = 1 is the old behaviour exactly.
   private nextStartAt = 0;
-  private burst = 1;                                   // GATE_BURST (1 = no burst allowance)
-  private burstOffUntil = 0;                           // a throttle forces a bucket of 1 until this time
+  private burst = 1;
+  private burstOffUntil = 0;
   private lastBurstAt = 0;
-  private location: { colo: string; loc: string } | null = null;   // where this object runs (see locate())
+  private location: { colo: string; loc: string } | null = null;
   private locating: Promise<void> | null = null;
   private cooldownUntil = 0;
   private okStreak = 0;
@@ -206,13 +160,11 @@ export class MyDurableObject extends DurableObject<Env> {
   private orphanStrikes = new Map<string, { n: number; first: number }>();
   private noBatchUntil = new Map<string, number>();
   private createBuckets = new Map<string, CreateBucket>();
-  private pendingCreates = new Map<string, Promise<SearchBatchResult>>();                   // identical creates in flight -> share the result
-  private recentCreates = new Map<string, { record: any; at: number }>();                   // identical creates already done -> same row
-  private recordIndex = new Map<string, string>();                                          // record_id -> recentCreates key (for forgetCreated)
+  private pendingCreates = new Map<string, Promise<SearchBatchResult>>();
+  private recentCreates = new Map<string, { record: any; at: number }>();
+  private recordIndex = new Map<string, string>();
   private writeTimeoutMs: number;
   private createMemoryMs: number;
-  // Token lane: tenant-token permits have their own small limiter (concurrency + spacing). They take no slot, no start gap and no
-  // priority from the read/write gate, so a wave of cold Pages isolates fetching their tokens cannot delay a lookup or a submit.
   private tokenConcurrency: number;
   private tokenGapMs: number;
   private tokenActive = 0;
@@ -220,21 +172,19 @@ export class MyDurableObject extends DurableObject<Env> {
   private tokenCooldownUntil = 0;
   private tokenQ: SlotEntry[] = [];
   private tokenTimer: ReturnType<typeof setTimeout> | null = null;
-  // Diagnostics only (no behaviour depends on these): permit wait (acquire -> grant) and hold (grant -> release) per
-  // class, and the latency of each kind of upstream Lark call. Bounded like the other samples.
   private m = {
     waitMs: { token: [] as number[], read: [] as number[], write: [] as number[] } as Record<Klass, number[]>,
     holdMs: { token: [] as number[], read: [] as number[], write: [] as number[] } as Record<Klass, number[]>,
     larkMs: Object.fromEntries(CALL_TYPES.map((t) => [t, [] as number[]])) as Record<CallType, number[]>,
   };
-  private labels: Record<string, number> = {};                                              // permit/call counts by purpose
-  private recordWrites = new Map<string, { running: boolean; pending: PutJob | null }>();   // same-record writes: one at a time, newest wins
-  private updateBuckets = new Map<string, { ready: Set<string>; running: boolean }>();    // per table: records waiting for a batch_update slot
+  private labels: Record<string, number> = {};
+  private recordWrites = new Map<string, { running: boolean; pending: PutJob | null }>();
+  private updateBuckets = new Map<string, { ready: Set<string>; running: boolean }>();
   private startedAt = Date.now();
-  private ring: MinuteRow[] = [];                                                           // closed minutes, oldest first, up to 24 h
+  private ring: MinuteRow[] = [];
   private cur: Minute | null = null;
-  private pagesCounters: Record<string, number> = {};                                       // counters the Pages side reports (fire-and-forget)
-  private cache = new Map<string, { at: number; result: SearchBatchResult }>();             // shared read cache
+  private pagesCounters: Record<string, number> = {};
+  private cache = new Map<string, { at: number; result: SearchBatchResult }>();
   private cacheInflight = new Map<string, Promise<SearchBatchResult>>();
   private recentStarts: number[] = [];
   private pruneCounter = 0;
@@ -242,8 +192,8 @@ export class MyDurableObject extends DurableObject<Env> {
     upstream: 0, limited: 0, retries429: 0, batches: 0, expiredDropped: 0, bisected: 0, orphanFallbacks: 0, createBatches: 0, createdInBatches: 0, createMismatches: 0, createMemoryHits: 0, createSharedInflight: 0, writeRetries: 0,
     cacheHits: 0, cacheShared: 0, cacheStaleServed: 0, larkCalls: 0, writesSuperseded: 0, tokenLimited: 0,
     updateBatches: 0, updatedInBatches: 0, updateSplits: 0, updateMismatches: 0, updateRecordRejects: 0, updateWholeCallErrors: 0,
-    bucketBursts: 0, throttlesWhileBursting: 0,        // starts that went ahead of the one-per-gap spacing; throttles within 5 s of such a start
-    limitedByLabel: {} as Record<string, number>, limitedByCode: {} as Record<string, number>,   // every throttle Lark answered, main gate AND token lane
+    bucketBursts: 0, throttlesWhileBursting: 0,
+    limitedByLabel: {} as Record<string, number>, limitedByCode: {} as Record<string, number>,
     noBatchTrips: 0, peakQueue: 0, truncatedFails: 0, heavyUsers: 0, peakStartsPerSec: 0,
     startsByClass: { token: 0, read: 0, write: 0 } as Record<Klass, number>,
     batchSizes: [] as number[], queueWaitMs: [] as number[],
@@ -253,7 +203,7 @@ export class MyDurableObject extends DurableObject<Env> {
     super(ctx, env);
     this.concurrency = Number(env?.GATE_CONCURRENCY) || 3;
     this.longPollMs = Number(env?.GATE_LONGPOLL_MS) || LONGPOLL_MS;
-    this.baseGapMs = this.gapMs = Number(env?.GATE_START_GAP_MS) || 250;   // ship at today's pace, then ramp down
+    this.baseGapMs = this.gapMs = Number(env?.GATE_START_GAP_MS) || 250;
     this.writeTimeoutMs = Number(env?.GATE_WRITE_TIMEOUT_MS) || WRITE_TIMEOUT_MS;
     this.createMemoryMs = env?.CREATE_MEMORY_MS !== undefined ? Number(env.CREATE_MEMORY_MS) : CREATE_MEMORY_MS;
     this.burst = Math.max(1, Math.min(MAX_BURST, Math.floor(Number(env?.GATE_BURST)) || 1));
@@ -261,8 +211,6 @@ export class MyDurableObject extends DurableObject<Env> {
     this.tokenGapMs = env?.TOKEN_GAP_MS !== undefined && Number.isFinite(Number(env.TOKEN_GAP_MS)) ? Number(env.TOKEN_GAP_MS) : TOKEN_GAP_MS;
   }
 
-  // Where does this object run? One call to Cloudflare's trace page from inside the object, cached; only the data centre code (colo,
-  // e.g. "SIN") and the country (loc) are kept. Best effort: null if the call fails.
   async locate(): Promise<{ colo: string; loc: string } | null> {
     if (this.location) return this.location;
     if (!this.locating) {
@@ -273,7 +221,7 @@ export class MyDurableObject extends DurableObject<Env> {
           const pick = (key: string) => new RegExp(`^${key}=([A-Za-z0-9-]{1,16})\\s*$`, "m").exec(text)?.[1];
           const colo = pick("colo");
           if (colo) this.location = { colo, loc: pick("loc") || "" };
-        } catch { /* best effort */ } finally { this.locating = null; }
+        } catch { } finally { this.locating = null; }
       })();
     }
     await this.locating;
@@ -286,22 +234,18 @@ export class MyDurableObject extends DurableObject<Env> {
     return { ...rest, gapMs: this.gapMs, queued: this.waitq.length, active: this.active, buckets: this.buckets.size,
       meanBatch: batchSizes.length ? +(batchSizes.reduce((a, b) => a + b, 0) / batchSizes.length).toFixed(1) : 0,
       queueWaitP50: sorted[Math.floor(sorted.length / 2)] ?? 0, queueWaitMax: sorted.at(-1) ?? 0,
-      // ms. wait = permit requested -> granted; hold = granted -> released (for ticketed calls this is the caller's whole Lark call).
       permits: Object.fromEntries((["token", "read", "write"] as Klass[]).map((k) => [k, { wait: summary(this.m.waitMs[k]), hold: summary(this.m.holdMs[k]) }])),
       lark: Object.fromEntries(CALL_TYPES.map((t) => [t, summary(this.m.larkMs[t])])),
       limitedByLabel: { ...this.s.limitedByLabel }, limitedByCode: { ...this.s.limitedByCode },
       burst: { size: this.burst, effective: this.burstCapacity(Date.now()), offUntil: this.burstOffUntil > Date.now() ? new Date(this.burstOffUntil).toISOString() : null },
-      location: this.location,                                  // { colo, loc } once locate() has run (Pages' /queue-stats calls it)
+      location: this.location,
       labels: { ...this.labels }, cacheEntries: this.cache.size,
       tokenLane: { concurrency: this.tokenConcurrency, gapMs: this.tokenGapMs, active: this.tokenActive, queued: this.tokenQ.length },
       startedAt: new Date(this.startedAt).toISOString(), uptimeSec: Math.round((Date.now() - this.startedAt) / 1000),
       pagesCounters: { ...this.pagesCounters },
       perMinute: this.perMinute() };
   }
-  // Counters the Pages side reports (queue fallbacks, ownership fallbacks by reason, fail-open, caseRowError, lookup warnings by
-  // source, requests without a start time). Fire-and-forget from Pages; names are sanitised and the set is bounded.
   async reportCounters(counters: Record<string, number>, isolateId?: string): Promise<void> {
-    // Which Pages isolates are alive this minute (a random id per isolate; nothing else about them is sent).
     if (typeof isolateId === "string" && /^[A-Za-z0-9-]{8,64}$/.test(isolateId)) { const mm = this.minuteNow(); if (mm.isolates.size < 500) mm.isolates.add(isolateId); }
     if (!counters || typeof counters !== "object") return;
     for (const [name, raw] of Object.entries(counters)) {
@@ -311,7 +255,6 @@ export class MyDurableObject extends DurableObject<Env> {
       this.pagesCounters[key] = (this.pagesCounters[key] || 0) + n;
     }
   }
-  // ---- per-minute history (last 24 h): starts, 429s, queue-wait p95, peak queue -------------------------------------
   private minuteNow(): Minute {
     const t = Math.floor(Date.now() / MINUTE_MS);
     if (!this.cur || this.cur.t !== t) {
@@ -331,12 +274,10 @@ export class MyDurableObject extends DurableObject<Env> {
     this.trimRing();
     this.cur = null;
   }
-  // Keep only the last 24 h counted from NOW (not from the minute being closed: after a long idle gap that would keep stale minutes).
   private trimRing(): void {
     const oldest = Math.floor(Date.now() / MINUTE_MS) - RING_MINUTES;
     while (this.ring.length > RING_MINUTES || (this.ring.length && this.ring[0].t <= oldest)) this.ring.shift();
   }
-  // Columnar to keep the answer small: minutes[i] is minute number (epoch minutes), the other arrays line up with it.
   private sampleMinute(type: CallType, ms: number): void {
     const mm = this.minuteNow();
     const into = type === "search" ? mm.searchMs : type === "update" || type === "batchUpdate" ? mm.updateMs : null;
@@ -350,12 +291,8 @@ export class MyDurableObject extends DurableObject<Env> {
       waitP95: rows.map((r) => r.waitP95), peakQueue: rows.map((r) => r.peakQueue),
       searchP95: rows.map((r) => r.searchP95), updateP95: rows.map((r) => r.updateP95),
       tokenStarts: rows.map((r) => r.tokenStarts), isolates: rows.map((r) => r.isolates),
-      // totalStarts = gate starts + token-lane starts = every request this object let out to Lark that minute (the real Lark rate).
-      // limitedSearch / limitedWrite / limitedOther = throttles by kind of call (other: get, list, fields, token, ticketed calls); they
-      // include token-lane throttles, which the plain `limited` column (main gate only) does not.
       totalStarts: rows.map((r) => r.totalStarts), limitedSearch: rows.map((r) => r.limitedSearch),
       limitedWrite: rows.map((r) => r.limitedWrite), limitedOther: rows.map((r) => r.limitedOther),
-      // maxStartsPerSec = the most gate starts inside any 1 s window that minute (what a burst allowance would show).
       maxStartsPerSec: rows.map((r) => r.maxStartsPerSec) };
   }
   private countLabel(label: unknown): void {
@@ -365,10 +302,6 @@ export class MyDurableObject extends DurableObject<Env> {
   }
   private sample(arr: number[], value: number) { arr.push(value); if (arr.length > STAT_SAMPLES) arr.splice(0, arr.length - STAT_SAMPLES); }
 
-  // ---- gate -------------------------------------------------------------
-  // `since` is the ordering key (the START OF THE REQUEST this step belongs to, or arrival time for legacy callers). The 3 s
-  // write delay applies only to writes without a request start time (`aged`): a request that has a start time keeps its age
-  // across all its steps, so its PUT is not pushed behind newer requests' reads.
   private acquireTokenSlot(): Slot {
     let entry!: SlotEntry;
     const requestedAt = Date.now();
@@ -396,13 +329,13 @@ export class MyDurableObject extends DurableObject<Env> {
   }
 
   private acquireSlot(klass: Klass, since = Date.now(), aged = true): Slot {
-    if (klass === "token") return this.acquireTokenSlot();       // own lane: no read/write slot, start gap or priority is used
+    if (klass === "token") return this.acquireTokenSlot();
     let entry!: SlotEntry;
     const requestedAt = Date.now();
     const offset = klass === "write" && !aged ? 0 : CLASS_OFFSET[klass];
     const promise = new Promise<Grant>((grant) => { entry = { grant, cancelled: false, order: since + offset, klass, requestedAt }; });
     let at = this.waitq.length;
-    while (at > 0 && this.waitq[at - 1].order > entry.order) at--;       // stable insert by order
+    while (at > 0 && this.waitq[at - 1].order > entry.order) at--;
     this.waitq.splice(at, 0, entry);
     this.s.peakQueue = Math.max(this.s.peakQueue, this.waitq.length);
     { const mm = this.minuteNow(); mm.peakQueue = Math.max(mm.peakQueue, this.waitq.length); }
@@ -411,7 +344,6 @@ export class MyDurableObject extends DurableObject<Env> {
     return { promise, cancel: () => { entry.cancelled = true; } };
   }
 
-  // How many starts may go back to back right now: GATE_BURST, or 1 for BURST_OFF_MS after a Lark throttle.
   private burstCapacity(now: number): number { return now < this.burstOffUntil ? 1 : this.burst; }
 
   private pump(): void {
@@ -425,8 +357,8 @@ export class MyDurableObject extends DurableObject<Env> {
       if (at > now) { this.timer = setTimeout(() => { this.timer = null; this.pump(); }, at - now); return; }
       this.waitq.shift();
       this.active++;
-      if (now < this.nextStartAt) { this.s.bucketBursts++; this.lastBurstAt = now; }      // went ahead of the one-per-gap spacing
-      this.nextStartAt = Math.max(this.nextStartAt, now) + this.gapMs;                    // with capacity 1 this is exactly now + gapMs
+      if (now < this.nextStartAt) { this.s.bucketBursts++; this.lastBurstAt = now; }
+      this.nextStartAt = Math.max(this.nextStartAt, now) + this.gapMs;
       this.recentStarts.push(now);
       while (this.recentStarts.length && now - this.recentStarts[0] >= 1000) this.recentStarts.shift();
       this.s.peakStartsPerSec = Math.max(this.s.peakStartsPerSec, this.recentStarts.length);
@@ -436,7 +368,6 @@ export class MyDurableObject extends DurableObject<Env> {
     }
   }
 
-  // Every throttle Lark answers is counted by call label and by code, and logged with what Lark said (never a token).
   private noteThrottle(info: Throttle): void {
     const label = THROTTLE_LABELS.has(info.label) ? info.label : "other";
     bump(this.s.limitedByLabel, label);
@@ -451,7 +382,7 @@ export class MyDurableObject extends DurableObject<Env> {
 
   private releaseSlot(limited: boolean, retryAfterMs = 0, grant: Grant | null = null, info?: Throttle): void {
     if (grant) this.sample(this.m.holdMs[grant.klass], Date.now() - grant.at);
-    if (grant?.klass === "token") {                              // token lane: its own counters and cooldown, the main gate is untouched
+    if (grant?.klass === "token") {
       this.tokenActive = Math.max(0, this.tokenActive - 1);
       if (limited) {
         this.s.tokenLimited++;
@@ -465,7 +396,7 @@ export class MyDurableObject extends DurableObject<Env> {
     if (limited) {
       this.s.limited++;
       this.minuteNow().limited++;
-      if (this.burst > 1) {                                       // a throttle empties the bucket and switches the allowance off for a minute
+      if (this.burst > 1) {
         const t = Date.now();
         if (t - this.lastBurstAt < 5_000) this.s.throttlesWhileBursting++;
         this.burstOffUntil = t + BURST_OFF_MS;
@@ -474,7 +405,7 @@ export class MyDurableObject extends DurableObject<Env> {
       this.okStreak = 0;
       this.gapMs = Math.min(500, this.gapMs * 2);
       this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs)));
-      this.noteThrottle(info ?? { label: "ticket", retryAfter: retryAfterMs ? String(retryAfterMs / 1000) : null });   // gapMs in the log is the NEW (doubled) gap
+      this.noteThrottle(info ?? { label: "ticket", retryAfter: retryAfterMs ? String(retryAfterMs / 1000) : null });
     } else if (++this.okStreak >= 20) {
       this.okStreak = 0;
       this.gapMs = Math.max(this.baseGapMs, Math.floor(this.gapMs * 0.8));
@@ -482,7 +413,6 @@ export class MyDurableObject extends DurableObject<Env> {
     this.pump();
   }
 
-  // Slot must already be held. Always releases it.
   private async fetchOnce(input: SearchBatchInput, grant: Grant | null, timeoutMs: number): Promise<{ result: SearchBatchResult; limited: boolean }> {
     this.s.upstream++;
     const startedAt = Date.now();
@@ -494,7 +424,7 @@ export class MyDurableObject extends DurableObject<Env> {
       });
       const body = await response.text();
       let parsed: any = null;
-      try { parsed = JSON.parse(body); } catch { /* HTTP status only */ }
+      try { parsed = JSON.parse(body); } catch { }
       const limited = isRateLimited(response.status, parsed);
       this.sample(this.m.larkMs[type], Date.now() - startedAt);
       this.sampleMinute(type, Date.now() - startedAt);
@@ -513,14 +443,13 @@ export class MyDurableObject extends DurableObject<Env> {
     }
   }
 
-  // `held` is a slot the caller already holds (used for the first attempt only); null = acquire one.
   private async fetchPage(input: SearchBatchInput, held: Grant | null, since: number, deadline: number, klass: Klass = "read", aged = true, timeoutMs?: number): Promise<SearchBatchResult> {
     for (let attempt = 0; ; attempt++) {
       let grant = held;
       held = null;
       if (!grant) {
         if (Date.now() >= deadline) { this.s.expiredDropped++; return failure(504, "Lark search deadline exceeded in queue."); }
-        grant = await this.acquireSlot(klass, since, aged).promise;   // a retried write keeps WRITE priority
+        grant = await this.acquireSlot(klass, since, aged).promise;
       }
       if (Date.now() >= deadline) { this.s.expiredDropped++; this.releaseSlot(false, 0, grant); return failure(504, "Lark search deadline exceeded in queue."); }
       const { result, limited } = await this.fetchOnce(input, grant, timeoutMs ?? (klass === "write" ? this.writeTimeoutMs : UPSTREAM_TIMEOUT_MS));
@@ -529,12 +458,7 @@ export class MyDurableObject extends DurableObject<Env> {
     }
   }
 
-  // ---- RPC: permits for non-search calls (token, create, update, fields) -----
-  // Long-polls inside the DO. A caller that comes back with the same waiterId
-  // (after its RPC timed out) keeps its original place in line.
   async acquire(kind?: Klass, waiterId?: string, requestStartedAt?: number, label?: string): Promise<PermitResult> {
-    // A bare acquire() is the legacy protocol (current Pages code, 250 ms RPC timeout):
-    // wait briefly, then answer "retry in N ms" instead of holding the call open.
     if (kind === undefined && waiterId === undefined) return this.acquireLegacy();
     kind = kind ?? "write";
     let poll = waiterId ? this.polls.get(waiterId) : undefined;
@@ -554,7 +478,7 @@ export class MyDurableObject extends DurableObject<Env> {
     if (timedOut) {
       const current = poll;
       if (!waiterId) { current.slot.cancel(); return { ticket: null, retryAfterMs: 100 }; }
-      current.idle = setTimeout(() => {                  // the caller never came back
+      current.idle = setTimeout(() => {
         this.polls.delete(waiterId);
         if (!current.ticket) current.slot.cancel();
       }, POLL_IDLE_MS);
@@ -589,13 +513,10 @@ export class MyDurableObject extends DurableObject<Env> {
     this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + Math.min(MAX_COOLDOWN_MS, Math.max(1_000, retryAfterMs)));
   }
 
-  // ---- RPC: searches ------------------------------------------------------
   async searchBatch(input: SearchBatchInput): Promise<SearchBatchResult> {
     const expiresAt = Number(input.expiresAt) || Date.now() + 40_000;
     let body: any;
     try { body = JSON.parse(input.body || "{}"); } catch { return this.single(input, expiresAt); }
-    // A request that already carries a page_token is the CALLER following an unbatched reply's
-    // has_more. Merging it would restart at page 1 and hand back rows it already has.
     try { if (new URL(input.url).searchParams.has("page_token")) return this.single(input, expiresAt); } catch { return this.single(input, expiresAt); }
     if (++this.pruneCounter % 50 === 0) this.pruneExpired();
     const conds = body?.filter?.conditions;
@@ -603,10 +524,6 @@ export class MyDurableObject extends DurableObject<Env> {
     const userConds = conds.filter((c: any) => c?.operator === "is" && /^(username(?:\/uid)?|uid)$/i.test(String(c.field_name || ""))
       && Array.isArray(c.value) && c.value.length === 1);
     const others = conds.filter((c: any) => !userConds.includes(c));
-    // Merge username [+ brand] shapes, and wider shapes (is / isEmpty / isNotEmpty on other
-    // columns) only when the caller projected its columns: the merged query then returns
-    // just those few columns for the usernames and every caller re-applies its own full
-    // predicate. Without a projection a merge could drag whole row histories, so stay exact.
     const brandOnly = others.every((c: any) => c?.operator === "is" && /^brand$/i.test(String(c.field_name || "")));
     const simpleOps = others.every((c: any) => ["is", "isEmpty", "isNotEmpty"].includes(String(c?.operator || "")));
     const selective = brandOnly || (simpleOps && Array.isArray(body.field_names) && body.field_names.length > 0);
@@ -615,15 +532,13 @@ export class MyDurableObject extends DurableObject<Env> {
     const username = String(userConds[0].value[0]);
     const url = new URL(input.url);
     const headers = Object.fromEntries(Object.entries(input.headers).map(([k, v]) => [k.toLowerCase(), v]));
-    // automatic_fields is deliberately NOT part of the key: the merged query asks for it when any
-    // caller did, and the extra created_time on rows is harmless to the others.
     const baseKey = JSON.stringify([url.origin, url.pathname, headers.authorization || "", String(userConds[0].field_name),
       !!body.field_names?.length]);
     const now = Date.now();
     const noBatch = this.noBatchUntil.get(baseKey);
     if (noBatch !== undefined) {
-      if (noBatch > now) return this.single(input, expiresAt);                                    // kill switch tripped
-      this.noBatchUntil.delete(baseKey);                                                          // expired: forget it
+      if (noBatch > now) return this.single(input, expiresAt);
+      this.noBatchUntil.delete(baseKey);
     }
     const heavyUntil = this.heavy.get(baseKey + "|" + username);
     if (heavyUntil !== undefined && heavyUntil <= now) this.heavy.delete(baseKey + "|" + username);
@@ -640,11 +555,6 @@ export class MyDurableObject extends DurableObject<Env> {
     });
   }
 
-  // ---- RPC: record creation, coalesced into batch_create ---------------------
-  // Lark documents neither atomicity nor result ORDER for batch_create, so every returned
-  // record is matched to its caller by the columns that caller sent (never by position).
-  // Anything that does not map one-to-one fails closed: callers get an error, and a retried
-  // lookup reuses any blank row that did land (it never creates a second one).
   async createBatch(input: SearchBatchInput): Promise<SearchBatchResult> {
     const expiresAt = Number(input.expiresAt) || Date.now() + 40_000;
     let parsed: any;
@@ -656,10 +566,6 @@ export class MyDurableObject extends DurableObject<Env> {
     const headers = Object.fromEntries(Object.entries(input.headers).map(([k, v]) => [k.toLowerCase(), v]));
     const key = JSON.stringify([url.origin, url.pathname, headers.authorization || ""]);
 
-    // Identical creates (same table, same fields) get ONE Lark row and the SAME record id: a concurrent repeat shares the
-    // in-flight create, a near-simultaneous repeat (within CREATE_MEMORY_MS) is answered from memory with no Lark call.
-    // Only creates that carry a chat link are merged: the link is what identifies the chat, so two creates without one
-    // could be two different chats of the same player and must stay two rows.
     const mergeKey = this.createMemoryMs > 0 && fieldText((parsed.fields as any).link)
       ? JSON.stringify([url.origin, url.pathname, canonicalFields(parsed.fields)]) : "";
     if (mergeKey) {
@@ -688,8 +594,6 @@ export class MyDurableObject extends DurableObject<Env> {
     return tracked;
   }
 
-  // The Pages side calls this when it deletes or updates a row it created, so a later identical create can never be
-  // answered with a row that has since been removed or completed.
   async forgetCreated(recordId: string): Promise<void> { this.dropRecord(recordId); }
   private dropRecord(recordId: string): void {
     const key = this.recordIndex.get(String(recordId));
@@ -700,7 +604,6 @@ export class MyDurableObject extends DurableObject<Env> {
 
   private pruneCreates(): void {
     const now = Date.now();
-    // Entries are inserted in time order, so the expired ones are at the front of the map.
     for (const [key, entry] of this.recentCreates) { if (now - entry.at <= this.createMemoryMs) break; this.dropCreate(key); }
     while (this.recentCreates.size > CREATE_MEMORY_MAX) this.dropCreate(this.recentCreates.keys().next().value as string);
   }
@@ -717,10 +620,6 @@ export class MyDurableObject extends DurableObject<Env> {
     return this.fetchPage(input, grant, since, expiresAt, "write");
   }
 
-  // ---- RPC: any other single Lark call (record get / update / delete), run INSIDE the DO ----------------------------
-  // The caller sends the whole call at once; the DO takes a slot, calls Lark and releases the slot, so the slot is held for
-  // Lark's latency only (not for Pages<->DO round trips), and a write the DO has accepted completes even if the Pages request
-  // that sent it has since been cancelled. A timed-out / 5xx GET or PUT is retried once (both are idempotent); DELETE is not.
   async larkCall(input: SearchBatchInput): Promise<SearchBatchResult> {
     const method = (input.method || "GET").toUpperCase();
     const klass: Klass = method === "GET" ? "read" : "write";
@@ -729,7 +628,6 @@ export class MyDurableObject extends DurableObject<Env> {
     const expiresAt = Number(input.expiresAt) || Date.now() + 40_000;
     this.s.larkCalls++;
     this.countLabel(input.label || callType(input));
-    // Writes to the SAME record run one at a time, in order; a newer one queued behind an older one replaces it (see coalescePut).
     if (method === "PUT") {
       const fields = putFields(input.body);
       if (fields && recordIdOf(input.url)) return this.coalescePut(new URL(input.url).pathname, input, fields);
@@ -737,10 +635,6 @@ export class MyDurableObject extends DurableObject<Env> {
     return this.runLarkCall(input);
   }
 
-  // Two submits for one record can be in the queue at once (agent edits again, widget retry, sweep). Applied in arrival order
-  // they would cost two PUTs and could finish out of order; instead the QUEUED older write is replaced by the newer one: their
-  // fields are merged with the newer values winning, which is exactly what applying them one after the other would leave. A write
-  // already in flight is never cancelled -- the newer one runs after it, so the newest is always applied last.
   private coalescePut(key: string, input: SearchBatchInput, fields: Record<string, unknown>): Promise<SearchBatchResult> {
     return new Promise<SearchBatchResult>((resolve) => {
       let state = this.recordWrites.get(key);
@@ -763,8 +657,6 @@ export class MyDurableObject extends DurableObject<Env> {
     state.running = true;
     try {
       while (state.pending) {
-        // Wait for a slot FIRST and only then take the pending job: every newer write for this record that arrives while this one is
-        // still queued at the gate is merged into it, so the newest values are what gets sent.
         const first = state.pending;
         const startedAt = Number(first.input.requestStartedAt) || 0;
         const grant = await this.acquireSlot("write", startedAt || Date.now(), !startedAt).promise;
@@ -778,11 +670,6 @@ export class MyDurableObject extends DurableObject<Env> {
     } finally { state.running = false; this.recordWrites.delete(key); }
   }
 
-  // ---- RPC: record updates coalesced into Lark's batch_update (OFF unless the Pages side calls it: LARK_BATCH_UPDATE=1) -----------
-  // Same per-record rules as larkCall (a newer queued write for the record replaces an older queued one, a write in flight is never
-  // cancelled, one record is written at a time); on top of that, the records that are ready for the same table share ONE
-  // batch_update call. Ownership (409) is decided by Pages BEFORE a write is sent here, so only writes that passed it get in.
-  // See claude-lookup-review/LARK_BATCH_UPDATE_NOTES.md for what Lark's documentation does and does not promise.
   async updateBatch(input: SearchBatchInput): Promise<SearchBatchResult> {
     const fields = putFields(input.body);
     const id = recordIdOf(input.url);
@@ -793,7 +680,7 @@ export class MyDurableObject extends DurableObject<Env> {
     return new Promise<SearchBatchResult>((resolve) => {
       let state = this.recordWrites.get(pathKey);
       if (!state) { state = { running: false, pending: null }; this.recordWrites.set(pathKey, state); }
-      if (state.pending) {                                    // newer write replaces the queued older one (fields merged, newest wins)
+      if (state.pending) {
         const job = state.pending;
         job.fields = { ...job.fields, ...fields };
         job.input = { ...input, requestStartedAt: earlier(job.input.requestStartedAt, input.requestStartedAt), expiresAt: Math.max(Number(job.input.expiresAt) || 0, Number(input.expiresAt) || 0) || undefined };
@@ -802,7 +689,7 @@ export class MyDurableObject extends DurableObject<Env> {
         return;
       }
       state.pending = { input, fields, waiters: [resolve] };
-      if (state.running) return;                              // an older write of this record is in flight: this one goes after it
+      if (state.running) return;
       let bucket = this.updateBuckets.get(tableKey);
       if (!bucket) { bucket = { ready: new Set(), running: false }; this.updateBuckets.set(tableKey, bucket); }
       bucket.ready.add(pathKey);
@@ -815,7 +702,7 @@ export class MyDurableObject extends DurableObject<Env> {
     if (!bucket) return;
     bucket.running = true;
     try {
-      await sleep(MIN_WINDOW_MS);                             // let concurrent submits join before a slot is taken
+      await sleep(MIN_WINDOW_MS);
       while (bucket.ready.size) {
         let since = Infinity, timed = true;
         for (const key of bucket.ready) {
@@ -856,7 +743,7 @@ export class MyDurableObject extends DurableObject<Env> {
   private async executeUpdates(items: Array<{ id: string; job: PutJob }>, grant: Grant | null, since: number, timed: boolean): Promise<void> {
     const single = (item: { id: string; job: PutJob }, held: Grant | null) =>
       this.runLarkCall({ ...item.job.input, body: JSON.stringify({ fields: item.job.fields }) }, held);
-    if (items.length === 1) {                                 // a lone update stays an ordinary PUT
+    if (items.length === 1) {
       const result = await single(items[0], grant);
       for (const w of items[0].job.waiters) w(result);
       return;
@@ -869,14 +756,13 @@ export class MyDurableObject extends DurableObject<Env> {
     const input: SearchBatchInput = { ...base, url: url.toString(), method: "POST",
       body: JSON.stringify({ records: items.map((i) => ({ record_id: i.id, fields: i.job.fields })) }) };
     let result = await this.fetchPage(input, grant, since, deadline, "write", !timed, this.writeTimeoutMs);
-    if (upstreamFailures.has(result) && Date.now() < deadline - 1_000) {        // one retry of a transient failure, same body (updates are idempotent)
+    if (upstreamFailures.has(result) && Date.now() < deadline - 1_000) {
       this.s.writeRetries++;
       result = await this.fetchPage(input, null, since, deadline, "write", !timed, this.writeTimeoutMs);
     }
     let parsed: any = null;
-    try { parsed = JSON.parse(result.body); } catch { /* handled below */ }
+    try { parsed = JSON.parse(result.body); } catch { }
     if (result.status >= 200 && result.status < 300 && parsed && parsed.code === 0) {
-      // Match by record_id, never by position. A record missing from a success reply is not assumed written: it is re-sent alone.
       const byId = new Map<string, any>();
       for (const rec of Array.isArray(parsed.data?.records) ? parsed.data.records : []) if (rec?.record_id) byId.set(String(rec.record_id), rec);
       const missed: Array<{ id: string; job: PutJob }> = [];
@@ -893,17 +779,17 @@ export class MyDurableObject extends DurableObject<Env> {
       return;
     }
     const limited = result.status === 429 || Number(parsed?.code) === 1254290 || Number(parsed?.code) === 99991400;
-    if (upstreamFailures.has(result) || limited || items.length === 1) {       // transient (already retried once): every caller gets the error
+    if (upstreamFailures.has(result) || limited || items.length === 1) {
       for (const item of items) for (const w of item.job.waiters) w(result);
       return;
     }
     const code = Number(parsed?.code);
-    if (!RECORD_LEVEL_UPDATE_CODES.has(code)) {                // about the call (auth, permission, table, conflict, unknown): no split, every caller gets it now
+    if (!RECORD_LEVEL_UPDATE_CODES.has(code)) {
       this.s.updateWholeCallErrors++;
       for (const item of items) for (const w of item.job.waiters) w(result);
       return;
     }
-    if (code === 1254043) {                                    // Lark names the missing record: fail only it, send the rest again as ONE batch
+    if (code === 1254043) {
       const named = /id\s*=\s*([A-Za-z0-9_-]+)/.exec(String(parsed?.msg || ""))?.[1];
       const at = named ? items.findIndex((i) => i.id === named) : -1;
       if (at >= 0) {
@@ -914,7 +800,6 @@ export class MyDurableObject extends DurableObject<Env> {
         return this.executeUpdates(rest, g, since, timed);
       }
     }
-    // A record-level rejection that does not name the record (a field value Lark could not convert): bisect to find it.
     this.s.updateSplits++;
     const mid = Math.ceil(items.length / 2);
     await Promise.all([items.slice(0, mid), items.slice(mid)].map(async (half) => {
@@ -936,14 +821,11 @@ export class MyDurableObject extends DurableObject<Env> {
     }
     if (method !== "GET" && result.status >= 200 && result.status < 300) {
       const id = (new URL(input.url).pathname.match(/\/records\/([^/]+)$/) || [])[1];
-      if (id) this.dropRecord(id);                      // a row that changed or was deleted must never be handed out by the create memory
+      if (id) this.dropRecord(id);
     }
     return result;
   }
 
-  // ---- RPC: a read that many isolates need (field catalogs, bonus config): one Lark call per TTL, shared ---------------
-  // Fresh copy within ttlMs is answered with no Lark call; concurrent callers share one call; if Lark fails the last good copy
-  // (up to staleMs old) is served instead. Failures are never cached.
   async cachedCall(input: CachedCallInput): Promise<SearchBatchResult> {
     const key = String(input.cacheKey || "");
     if (!key) return this.larkCall(input);
@@ -954,7 +836,7 @@ export class MyDurableObject extends DurableObject<Env> {
     if (pending) { this.s.cacheShared++; return pending; }
     const run = this.larkCall(input).then((result) => {
       let ok = false;
-      try { ok = result.status >= 200 && result.status < 300 && JSON.parse(result.body)?.code === 0; } catch { /* not JSON */ }
+      try { ok = result.status >= 200 && result.status < 300 && JSON.parse(result.body)?.code === 0; } catch { }
       if (ok) {
         this.cache.set(key, { at: Date.now(), result });
         while (this.cache.size > CACHE_MAX_ENTRIES) this.cache.delete(this.cache.keys().next().value as string);
@@ -973,8 +855,8 @@ export class MyDurableObject extends DurableObject<Env> {
       if (wait > 0) await sleep(wait);
     }
     const since = Math.min(...bucket.waiters.map((w) => w.since), Date.now());
-    const aged = bucket.waiters.some((w) => !w.timed);                 // any waiter without a request start keeps the 3 s write delay
-    const grant = await this.acquireSlot("write", since, aged).promise;      // stays open (batching) until the slot is granted
+    const aged = bucket.waiters.some((w) => !w.timed);
+    const grant = await this.acquireSlot("write", since, aged).promise;
     if (this.createBuckets.get(bucket.key) === bucket) this.createBuckets.delete(bucket.key);
     const now = Date.now();
     const live: CreateWaiter[] = [];
@@ -992,9 +874,6 @@ export class MyDurableObject extends DurableObject<Env> {
     await this.executeCreates(batch, since, grant);
   }
 
-  // A create (single or batch) carries a client_token so Lark treats a repeat as the same request. A timeout / transport
-  // error / 5xx is retried ONCE with the same token: if the first attempt did write, the retry returns that result
-  // instead of making a second row.
   private async writeWithToken(input: SearchBatchInput, grant: Grant, since: number, deadline: number): Promise<SearchBatchResult> {
     const url = new URL(input.url);
     if (!url.searchParams.has("client_token")) url.searchParams.set("client_token", crypto.randomUUID());
@@ -1010,7 +889,7 @@ export class MyDurableObject extends DurableObject<Env> {
   private async executeCreates(batch: CreateWaiter[], since: number, grant: Grant): Promise<void> {
     const deadline = Math.max(...batch.map((w) => w.expiresAt));
     for (const w of batch) this.sample(this.s.queueWaitMs, Date.now() - w.enqueuedAt);
-    if (batch.length === 1) {                            // a lone create stays an ordinary create
+    if (batch.length === 1) {
       batch[0].resolve(await this.writeWithToken(batch[0].input, grant, since, deadline));
       return;
     }
@@ -1022,20 +901,18 @@ export class MyDurableObject extends DurableObject<Env> {
       body: JSON.stringify({ records: batch.map((w) => ({ fields: w.fields })) }),
     }, grant, since, deadline);
     let parsed: any = null;
-    try { parsed = JSON.parse(result.body); } catch { /* handled below */ }
+    try { parsed = JSON.parse(result.body); } catch { }
     if (result.status < 200 || result.status >= 300 || !parsed || parsed.code !== 0) {
-      for (const w of batch) w.resolve(result);          // callers see Lark's own error; nothing is guessed
+      for (const w of batch) w.resolve(result);
       return;
     }
     const returned: any[] = Array.isArray(parsed.data?.records) ? [...parsed.data.records] : [];
     const assigned: Array<any | undefined> = new Array(batch.length);
-    // Match by content, not position. Callers are matched in arrival order, so two identical
-    // requests simply take two identical rows.
     batch.forEach((w, i) => {
       const at = returned.findIndex((rec) => rec && rec.record_id && Object.entries(w.fields).every(([k, v]) => fieldText(rec.fields?.[k]) === fieldText(v)));
       if (at >= 0) assigned[i] = returned.splice(at, 1)[0];
     });
-    if (batch.some((_, i) => !assigned[i]) || returned.length) {   // explicit loop: .some() skips holes in a sparse array
+    if (batch.some((_, i) => !assigned[i]) || returned.length) {
       this.s.createMismatches++;
       const miss = failure(502, "batch_create result could not be matched one-to-one to its callers; retry the lookup (an existing blank row is reused).");
       for (const w of batch) w.resolve(miss);
@@ -1055,13 +932,13 @@ export class MyDurableObject extends DurableObject<Env> {
   }
 
   private async runBucket(bucket: Bucket): Promise<void> {
-    if (bucket.createdAt) {                              // collection window happens BEFORE taking a slot
+    if (bucket.createdAt) {
       const wait = bucket.createdAt + MIN_WINDOW_MS - Date.now();
       if (wait > 0) await sleep(wait);
     }
     const since = Math.min(...bucket.waiters.map((w) => w.since), Date.now());
-    const grant = await this.acquireSlot("read", since).promise;       // bucket stays open (in this.buckets) until now
-    if (this.buckets.get(bucket.key) === bucket) this.buckets.delete(bucket.key);   // close: later arrivals open a new bucket
+    const grant = await this.acquireSlot("read", since).promise;
+    if (this.buckets.get(bucket.key) === bucket) this.buckets.delete(bucket.key);
 
     const now = Date.now();
     const live: Waiter[] = [];
@@ -1070,8 +947,6 @@ export class MyDurableObject extends DurableObject<Env> {
     }
     if (!live.length) { this.releaseSlot(false, 0, grant); return; }
 
-    // Up to MAX_USERNAMES distinct usernames; usernames that normalise the same
-    // (case/whitespace) are never co-batched; the rest re-queue keeping their age.
     const byUser = new Map<string, Waiter[]>();
     const rawByNorm = new Map<string, string>();
     const leftover: Waiter[] = [];
@@ -1095,7 +970,6 @@ export class MyDurableObject extends DurableObject<Env> {
     void this.runBucket(bucket);
   }
 
-  // The first page uses the slot runBucket (or executeAfterSlot) already holds.
   private async execute(baseKey: string, chunk: Array<[string, Waiter[]]>, since: number, depth: number, grant: Grant | null): Promise<void> {
     const first = chunk[0][1][0];
     const usernameField = first.usernameField;
@@ -1123,7 +997,7 @@ export class MyDurableObject extends DurableObject<Env> {
     for (let page = 0; page < MAX_PAGES; page++) {
       if (Date.now() >= deadline) {
         for (const w of allWaiters) w.resolve(failure(504, "Lark search deadline exceeded.")); this.s.expiredDropped += allWaiters.length;
-        if (page === 0 && grant) this.releaseSlot(false, 0, grant);   // the caller's slot was never used: give it back (it used to leak)
+        if (page === 0 && grant) this.releaseSlot(false, 0, grant);
         return;
       }
       const pageUrl = new URL(baseUrl);
@@ -1131,22 +1005,21 @@ export class MyDurableObject extends DurableObject<Env> {
       if (pageToken) pageUrl.searchParams.set("page_token", pageToken);
       const result = await this.fetchPage({ ...first.input, url: pageUrl.toString(), body: merged }, page === 0 ? grant : null, since, deadline);
       let parsed: any = null;
-      try { parsed = JSON.parse(result.body); } catch { /* handled below */ }
+      try { parsed = JSON.parse(result.body); } catch { }
       if (result.status < 200 || result.status >= 300 || !parsed || parsed.code !== 0) {
-        for (const w of allWaiters) w.resolve(result);   // never a partial answer
+        for (const w of allWaiters) w.resolve(result);
         return;
       }
       rows.push(...(parsed.data?.items || []));
       more = !!parsed.data?.has_more && !!parsed.data?.page_token;
       if (!more) break;
-      // Lark reports `total` on the first page: split BEFORE spending pages on a result that cannot fit.
       const total = Number(parsed.data?.total);
       if (page === 0 && Number.isFinite(total) && total > MAX_PAGES * PAGE_SIZE) break;
       pageToken = String(parsed.data.page_token);
     }
     if (more) {
       this.s.truncatedFails++;
-      if (chunk.length > 1 && depth < MAX_BISECT_DEPTH) {                // one heavy user must not fail the others
+      if (chunk.length > 1 && depth < MAX_BISECT_DEPTH) {
         this.s.bisected++;
         const mid = Math.ceil(chunk.length / 2);
         await Promise.all([chunk.slice(0, mid), chunk.slice(mid)].map(async (half) => {
@@ -1160,8 +1033,6 @@ export class MyDurableObject extends DurableObject<Env> {
       return;
     }
 
-    // Attribution check: every row must belong to a requested username, else
-    // normalisation differs from Lark's `is` and splitting could silently drop rows.
     const seen = new Set<string>();
     const per = new Map<string, any[]>();
     let orphan = false;
@@ -1185,8 +1056,6 @@ export class MyDurableObject extends DurableObject<Env> {
     for (const [username, ws] of chunk) { const body = ok(per.get(username) || []); for (const w of ws) w.resolve(body); }
   }
 
-  // Entries are removed when read after expiry, and swept here every 50 searches so keys that
-  // are never read again cannot accumulate for the life of the object.
   private pruneExpired(): void {
     const now = Date.now();
     for (const [key, until] of this.heavy) if (until <= now) this.heavy.delete(key);

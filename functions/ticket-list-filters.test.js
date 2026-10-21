@@ -10,7 +10,6 @@ const onEnv = { TICKETS_API_KEY: "k", TICKETS_ON_BEHALF_OF: "1", LIVECHAT_CLIENT
 const author = { accountKey: "lc1", agentToken: "tok-alice" };
 const ticket = (ref, updatedAt) => ({ ref, updatedAt, fields: {} });
 
-// answer(url): what the fake ticket system returns for each list read.
 function network(answer) {
   const original = globalThis.fetch;
   const urls = [];

@@ -34,7 +34,6 @@ test('end rule: more than 2 non-200, or any throttle counter going up, or a rais
   assert.equal(checkRunEnd({ results: okRuns(25), before: null, after: null }).stop, false, 'without snapshots only the HTTP check applies');
 });
 
-// ---- the real script against a local fake (no production host, no Lark) --------------------------------------------------------
 async function withFake(behaviour, run) {
   const seen = { lookups: 0, stats: 0, keys: [] };
   const server = http.createServer((req, res) => {

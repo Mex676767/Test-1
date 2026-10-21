@@ -12,13 +12,10 @@ const ENV = {
 };
 const LINK = "https://my.livechatinc.com/chats/CHAT1/THREAD1";
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
-// A hang that gives up when the caller aborts (as a real fetch does) -- otherwise stuck calls would hold the per-isolate
-// search permits for the rest of the test process.
 const never = (options) => new Promise((_, reject) => { options?.signal?.addEventListener("abort", () => reject(options.signal.reason), { once: true }); });
 const blankRow = (id, createdAt) => ({ record_id: id, created_time: createdAt, fields: { Username: "player1", Brand: "PP", "Agent Name": "Agent A", link: { link: LINK, text: LINK } } });
 const body = (env, extra = {}) => ({ body: JSON.stringify({ username: "Player1", brand: "PP", picName: "Agent A", link: LINK }), env, ...extra });
 
-// Fake Lark. `route(kind, url, options)` may return a Response / a promise, or undefined for the default answer.
 async function withLark(route, run) {
   initEnv({ ...ENV });
   const log = { deletes: [], gets: [], caseSearches: 0, creates: 0 };
@@ -47,11 +44,10 @@ async function withLark(route, run) {
 const twins = () => json({ code: 0, data: { items: [blankRow("rec-old", 1), blankRow("rec-twin", 2)], has_more: false } });
 const pending = (promise) => Promise.race([promise.then(() => false), new Promise((resolve) => setTimeout(() => resolve(true), 60))]);
 
-// ---- step 1: twin deletes never delay the response --------------------------------------------------------
 test("a twin delete that hangs does not delay the answer: it is handed to waitUntil and the lookup still returns the kept row", async () => {
   await withLark((kind, url, options) => {
     if (kind === "caseSearch") return twins();
-    if (kind === "get" || kind === "delete") return never(options);          // the cleanup hangs forever
+    if (kind === "get" || kind === "delete") return never(options);
   }, async (log) => {
     const deferred = [];
     const started = Date.now();
@@ -98,10 +94,9 @@ test("a twin that was completed in the meantime is NOT deleted (the ownership re
   });
 });
 
-// ---- step 1: the post-create check is bounded by the remaining budget ---------------------------------------
 test("a post-create dedupe search that never answers is cut off at the remaining budget; the new row's id is kept", async () => {
   await withLark((kind, url, options, log) => {
-    if (kind === "caseSearch" && log.caseSearches >= 2) return never(options);      // 1st = pre-create check, 2nd = post-create dedupe
+    if (kind === "caseSearch" && log.caseSearches >= 2) return never(options);
   }, async (log) => {
     const started = Date.now();
     const result = await handler(body({ LOOKUP_BUDGET_MS: 3_500, LOOKUP_HARD_DEADLINE_MS: 5_000 }));
@@ -115,7 +110,6 @@ test("a post-create dedupe search that never answers is cut off at the remaining
   });
 });
 
-// ---- step 1: the hard deadline -------------------------------------------------------------------------------
 test("hard deadline: a case-row create that hangs still returns the bonus results with a warning before the deadline", async () => {
   await withLark((kind, url, options) => (kind === "create" ? never(options) : undefined), async () => {
     const started = Date.now();
@@ -138,7 +132,6 @@ test("the hard deadline defaults to 40 s (below the widget's 45 s abort) and a n
   });
 });
 
-// ---- the queue is told when a row it created is changed or deleted ----------------------------------------
 function queueEnv(stub, extra = {}) {
   return { ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub }, LARK_QUEUE_PROTOCOL: "v2", LARK_BATCH_CREATE: "1", ...extra };
 }
@@ -182,8 +175,6 @@ test("without batched creates, or with a queue that has no such method, or one t
   });
 });
 
-// Last on purpose: everything in this one hangs, and calls stuck in shared module state (field cache, token) would
-// otherwise leak into the tests that follow it.
 test("hard deadline: whatever hangs, the response is on its way by the deadline (here 500 ms) as an honest 'look up again'", async () => {
   await withLark((kind, url, options) => never(options), async () => {
     const started = Date.now();

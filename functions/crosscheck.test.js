@@ -14,7 +14,6 @@ const msg = (author_id, extra = {}) => ({ type: "message", author_id, text: "hi"
 const archived = (threadId, events, { active = false, users = [customer, ...agents] } = {}) =>
   ({ id: "CHAT-" + threadId, users, thread: { id: threadId, active, created_at: "2026-10-08T00:55:00.000000Z", events } });
 
-// A tiny fake of Lark (CA table pages, the Unrecorded table, create) and LiveChat's list_archives.
 function world({ caPages = [[]], unrecItems = [], loginItems = [], archivesReply = { chats: [] } } = {}) {
   const log = { created: [], archivesBodies: [], searches: [] };
   const original = globalThis.fetch;
@@ -81,7 +80,6 @@ test("without SCAN_KEY and without the Agent Logins table the endpoint does not 
   assert.equal(w.log.searches.length, 0);
 });
 
-// LiveChat's account endpoints and the tracker (Agent Logins) rows, on top of the world() fake.
 function withLiveChatLogins(w, { accounts }) {
   const inner = globalThis.fetch;
   w.log.accountCalls = 0;
@@ -223,7 +221,6 @@ test("archives: asks the account's own credential for the window, oldest first, 
   assert.equal(out.next, "P2");
   assert.equal(out.seen, 2);
   assert.deepEqual(w.log.archivesBodies, [{ auth: "Basic pat-2", body: { filters: { from: "2026-10-07T00:00:00.000000+00:00", to: "2026-10-08T00:00:00.000000+00:00" }, limit: 100, sort_order: "asc" } }]);
-  // A later page is asked for by its id ALONE: LiveChat refuses page_id together with filters, limit or sort_order.
   await call({ step: "archives", account: "lc2", from: Date.UTC(2026, 9, 7), to: Date.UTC(2026, 9, 8), pageId: "P2" });
   assert.deepEqual(w.log.archivesBodies[1], { auth: "Basic pat-2", body: { page_id: "P2" } });
   const unknown = await call({ step: "archives", account: "lc9", from: 1, to: 2 });

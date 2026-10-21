@@ -5,7 +5,6 @@ import { handler as claimHandler } from "./claim-log.js";
 import { handler as crosscheck } from "./crosscheck.js";
 import { initEnv as initLarkEnv } from "./_lib/lark.js";
 
-// A tiny fake of a Workers KV namespace: put with metadata and expiry, get, delete, and a prefix list that pages.
 function fakeKv() {
   const data = new Map();
   return {
@@ -105,7 +104,7 @@ test("an unclaim forgets every bonus of that agent on that chat, under either id
   const claim = (agent, program, ids) => ({ agentName: agent, ...ids, claim: { program, label: program, inquiry: "X", amount: "1" } });
   await send(claim("96 Alice", "topPnl", { threadId: "T1", chatId: "C1" }));
   await send(claim("96 Alice", "ltvTest", { threadId: "T1", chatId: "C1" }));
-  await send(claim("96 Alice", "gracePeriod", { chatId: "C1" })); // stored before the thread was known
+  await send(claim("96 Alice", "gracePeriod", { chatId: "C1" }));
   await send(claim("96 Bob", "topPnl", { threadId: "T1", chatId: "C1" }));
   assert.equal((await send({ agentName: "96 ALICE", threadId: "T1", chatId: "C1", remove: true })).removed, true);
   assert.deepEqual([...kv.data.keys()].filter((k) => k.startsWith("claim:")), ["claim:T1:96 bob:topPnl"]);

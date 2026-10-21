@@ -15,7 +15,6 @@ const SOURCE = [
   '({ noteUi, consoleNoteBlocker, renderNoteSection, saveConsoleNote, loadConsoleNotes, noteUiByChat })',
 ].join('\n');
 
-// The note box driven with fakes: no server, no LiveChat, no console.
 function harness({ state = {}, tokens = { lc1: 'tok' }, account = 'lc1', reply, previewMode = true } = {}) {
   const posted = [];
   const slot = { innerHTML: '' };

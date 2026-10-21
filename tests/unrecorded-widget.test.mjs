@@ -136,7 +136,6 @@ test('the list says in the activity log how many chats it got, and ⟳ reads it 
   assert.ok(refresh.indexOf('fetchUnrecordedChats();') > deploy, 'after the update branch returns, so an update still just reloads');
 });
 
-// ---- opening an archived chat from the unrecorded list gives a fresh card --------------------------
 function archivedHarness({ restored = false, entries = [{ threadId: 'T1', chatId: 'CH1', customer: 'Zimito', date: 1 }], source = 'archives', profileName = 'Zimito' } = {}) {
   const calls = { shown: [], brand: [], status: [], saved: 0, ensured: [], restoreAsked: [], logs: [] };
   const st = {};
@@ -183,7 +182,7 @@ test('a card Lark could restore is shown as before, and an archived chat that is
 test('leaving the archived chat before Lark answers does not open its card afterwards', async () => {
   const h = archivedHarness();
   vm.runInContext('applyProfile(' + JSON.stringify({ source: 'archives', name: 'Z', chat: { id: 'T1' } }) + ')', h.context);
-  vm.runInContext('applyProfile(null)', h.context);   // the agent moved on at once
+  vm.runInContext('applyProfile(null)', h.context);
   await new Promise((r) => setImmediate(r));
   assert.deepEqual(h.calls.shown, []);
   assert.deepEqual(h.calls.ensured, []);
@@ -196,7 +195,6 @@ test('once its fresh card is flagged incomplete here, the same chat is not liste
   assert.equal(w.shown(), 'T2');
 });
 
-// ---- the archived chat arrives before the list (Open ↗ opens a new tab) ---------------------------
 test('an archived chat that arrived before the list was read gets its card as soon as the list arrives', () => {
   const opened = [];
   const profile = { source: 'archives', chat: { id: 'T1' } };

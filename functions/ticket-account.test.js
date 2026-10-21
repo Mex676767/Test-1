@@ -47,7 +47,6 @@ test("not found, the key's missing permission and a senior account are told apar
     [noAccount(), "notFound"],
     [reply({ ok: false, error: "This API key's role may not act on behalf of other people (api-keys:act-on-behalf)." }, 403), "keyNeedsGrant"],
     [reply({ ok: false, error: '"alice@x.com" outranks the account this API key belongs to, so nothing can be done on their behalf.' }, 403), "outranks"],
-    // The newer wording the ticket system uses for an email it has no usable account for (also deactivated, hidden, role-less, senior): ask for another email.
     [reply({ ok: false, error: '"alice@x.com" is not an account this API key can act for, so nothing can be done on their behalf. Check the address, or ask whoever issued the key.' }, 400), "notFound"],
     [reply({ ok: false, error: '"alice@x.com" is a service account — it only owns API keys, so nothing can be done on their behalf. Name the person the request is for.' }, 400), "notFound"],
   ]) {

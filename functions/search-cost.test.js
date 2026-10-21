@@ -26,7 +26,6 @@ async function withLark(onSearch, run) {
   try { await run(searches); } finally { globalThis.fetch = original; }
 }
 
-// ---- item 1: first-match-only callers --------------------------------------------------
 test("maxRows reads ONE small page: no paging, no 'too many rows' refusal, and only that many rows come back", async () => {
   initEnv({ ...ENV });
   await withLark(() => json({ code: 0, data: { items: [{ record_id: "a", fields: {} }, { record_id: "b", fields: {} }], has_more: true, page_token: "next" } }), async (searches) => {
@@ -57,7 +56,6 @@ test("last-username check asks each P&L search for one row and only the columns 
   });
 });
 
-// ---- item 2: Customer Approaching projections --------------------------------------------
 test("CA_SUMMARY_FIELDS covers every column summarizeRow reads", () => {
   const touched = new Set();
   const spy = new Proxy({}, { get: (_t, key) => { touched.add(String(key)); return undefined; } });

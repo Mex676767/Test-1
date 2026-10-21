@@ -1,5 +1,3 @@
-// Sample chats for the admin preview of the QA tab: made-up data shaped like the server's chatlog answer, shown through the very same
-// code as a real chat (describeChatLog and the card), so what the preview shows is what QA will see. Nothing here is real or saved.
 export function buildExamples(now = Date.now()) {
   const HOUR = 3_600_000;
   const tracking = { configured: true, since: now - 48 * HOUR, claimsSince: now - 24 * HOUR };

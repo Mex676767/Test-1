@@ -1,27 +1,3 @@
-#!/usr/bin/env node
-// One-off check of how Lark's records/batch_update really behaves. Run it by hand, ONCE, against a DEDICATED TEST TABLE -- never a
-// production table. It creates its own rows in that table, runs four batch_update experiments, reads every row back after each one
-// and prints Lark's RAW replies so they can be pasted into a review. It never prints the access token.
-//
-//   a) a valid batch                                  -> do all records change?
-//   b) one record_id that does not exist              -> is the whole call rejected, or are the others applied? what does the reply look like?
-//   c) one invalid field value (text in a number col) -> same questions
-//   d) the same record_id twice in one batch          -> which value wins, is it an error?
-//
-// Setup (names only; values are yours to supply):
-//   LARK_APP_ID, LARK_APP_SECRET          the app credentials (same as the widget uses)
-//   LARK_BASE_APP_TOKEN                   the Base that holds the dedicated test table
-//   BATCH_TEST_TABLE_ID                   the dedicated test table (create an empty one; it needs a text column and a number column)
-//   BATCH_TEST_TEXT_FIELD   (default "Text")     name of a plain text column
-//   BATCH_TEST_NUMBER_FIELD (default "Number")   name of a number column
-//
-//   node scripts/lark-batch-update-check.mjs --i-understand-this-writes-to-a-test-table [--cleanup]
-//
-//   e) the same create sent twice with the same client_token (single create, then batch_create)
-//                                                     -> one row or two? is the second reply identical, or an error? (settles whether
-//                                                        the queue's "retry a timed-out create with the SAME client_token" is safe)
-//
-// --cleanup deletes the rows this script created (only those) at the end.
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
@@ -29,7 +5,6 @@ const API = "https://open.larksuite.com/open-apis";
 const GHOST_ID = "recDOESNOTEXIST000";
 const need = ["LARK_APP_ID", "LARK_APP_SECRET", "LARK_BASE_APP_TOKEN", "BATCH_TEST_TABLE_ID"];
 
-// Nothing that looks like a token may be printed.
 export const scrub = (text) => String(text ?? "")
   .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [token]")
   .replace(/\b[tu]-[A-Za-z0-9_-]{20,}\b/g, "[token]");
@@ -51,7 +26,6 @@ export async function runBatchUpdateCheck({ env = process.env, argv = process.ar
   const numberField = env.BATCH_TEST_NUMBER_FIELD || "Number";
   const base = `${API}/bitable/v1/apps/${env.LARK_BASE_APP_TOKEN.trim()}/tables/${table}`;
 
-  // ---- token (never printed) ------------------------------------------------------------------------------------------
   const auth = await fetchImpl(`${API}/auth/v3/tenant_access_token/internal`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ app_id: env.LARK_APP_ID, app_secret: env.LARK_APP_SECRET }) });
   const authBody = await auth.json().catch(() => ({}));
@@ -59,15 +33,13 @@ export async function runBatchUpdateCheck({ env = process.env, argv = process.ar
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${authBody.tenant_access_token}` };
   say("tenant token obtained (not printed)");
 
-  // Every call goes through here: returns the raw status + body text and the parsed JSON.
   const call = async (method, path, body) => {
     const res = await fetchImpl(`${base}${path}`, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) });
     const text = await res.text();
-    let json = null; try { json = JSON.parse(text); } catch { /* raw text only */ }
+    let json = null; try { json = JSON.parse(text); } catch { }
     return { status: res.status, text, json, logId: res.headers?.get?.("x-tt-logid") || "" };
   };
 
-  // ---- is this table usable? -------------------------------------------------------------------------------------------
   const fields = await call("GET", "/fields?page_size=100");
   const found = (fields.json?.data?.items || []).map((f) => ({ name: f.field_name, type: f.type }));
   const hasText = found.find((f) => f.name === textField), hasNumber = found.find((f) => f.name === numberField);
@@ -77,7 +49,6 @@ export async function runBatchUpdateCheck({ env = process.env, argv = process.ar
     return { ok: false, reason: "columns" };
   }
 
-  // ---- own rows --------------------------------------------------------------------------------------------------------
   const ids = {};
   for (const key of ["A", "B", "C", "D", "E", "F"]) {
     const created = await call("POST", "/records", { fields: { [textField]: `init-${key}`, [numberField]: 0 } });
@@ -113,7 +84,6 @@ export async function runBatchUpdateCheck({ env = process.env, argv = process.ar
   await experiment("(d) the same record_id twice", "error, or does one value win? which one?",
     [{ record_id: ids.F, fields: { [textField]: "d-first" } }, { record_id: ids.F, fields: { [textField]: "d-second" } }], ["F"]);
 
-  // (e) client_token replay. The text value carries a marker unique to this run, so the rows are found again by the marker alone.
   const marker = `e-${Date.now().toString(36)}`;
   const idsIn = (reply) => [reply.json?.data?.record?.record_id, ...(reply.json?.data?.records || []).map((r) => r.record_id)].filter(Boolean);
   const countMarked = async (label) => {

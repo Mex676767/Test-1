@@ -1,8 +1,3 @@
-// Load simulation: real lark-search.js handler + real Durable Object class,
-// synthetic Lark. Usage:
-//   node proposal/sim/run.mjs --do=v1|v2|none --pages=orig|nocap|v2 --n=100 \
-//        --arrival=burst|<spreadMs> --live=0|1 --median=200 --quota=20
-// All data is synthetic. Nothing here touches production or credentials.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,18 +11,17 @@ const ARRIVAL = args.arrival || "burst", LIVE = args.live === "1", MEDIAN = Numb
 const QUOTA = Number(args.quota || 20), RPC_MS = Number(args.rpc || 8), USERS = Number(args.users || 600);
 const ROWS_MAX = Number(args.rows || 4);
 const DUPES = Number(args.dupes || 0);
-const MODE = args.mode || "lookup";                    // "lookup" (default) or "submit": N simultaneous /lark-record submits                 // this many of the first agents look the SAME chat up twice at the same moment
+const MODE = args.mode || "lookup";
 const CA_HIST = Number(args.cahist || 12), BG_MS = Number(args.bg || 0), CFG = Number(args.cfg || 0);
 const PER_COND = Number(args.percond || 0), LIMIT_STATUS = Number(args.limitstatus || 429);
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repo = path.resolve(here, "../../..");                      // claude-lookup-review/.. = Test-1 root (functions/)
+const repo = path.resolve(here, "../../..");
 const build = path.join(here, ".build"); fs.mkdirSync(build, { recursive: true });
 
-// ---- build variants of the Pages code and the DO --------------------------------
 function buildPages(variant, suffix = "") {
   const dest = path.join(build, `pages-${variant}-${process.pid}${suffix}`);
   fs.mkdirSync(path.join(dest, "_lib"), { recursive: true });
-  const fromHead = variant !== "v2";           // orig/nocap = code as of git HEAD (before the review fixes); v2 = working tree
+  const fromHead = variant !== "v2";
   const read = (rel) => fromHead ? execFileSync("git", ["show", `HEAD:${rel}`], { cwd: repo, maxBuffer: 1 << 26 }).toString("utf8")
     : fs.readFileSync(path.join(repo, rel), "utf8");
   fs.writeFileSync(path.join(dest, "lark-search.js"), read("functions/lark-search.js"));
@@ -35,7 +29,7 @@ function buildPages(variant, suffix = "") {
   const libFiles = execFileSync("git", ["ls-files", "functions/_lib"], { cwd: repo }).toString().split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean);
   for (const rel of libFiles) fs.writeFileSync(path.join(dest, "_lib", path.basename(rel)), read(rel));
   fs.writeFileSync(path.join(dest, "package.json"), '{"type":"module"}');
-  if (variant === "nocap") {   // ideal "many isolates" case: no per-isolate cap of 3
+  if (variant === "nocap") {
     const larkPath = path.join(dest, "_lib/lark.js");
     fs.writeFileSync(larkPath, fs.readFileSync(larkPath, "utf8").replace("const MAX_CONCURRENT_LARK_SEARCHES = 3;", "const MAX_CONCURRENT_LARK_SEARCHES = 100000;"));
   }
@@ -57,7 +51,6 @@ function fakeCtx() {
   } } } };
 }
 
-// ---- synthetic data (deterministic) ------------------------------------------------
 const h = (a, b, c) => ((Math.imul(a + 1, 73856093) ^ Math.imul(b + 1, 19349663) ^ Math.imul(c + 1, 83492791)) >>> 0);
 const pick = (arr, n) => arr[n % arr.length];
 const T = { ca: "t-ca", redeem: "t-redeem", pnl: "t-pnl", grace: "t-grace", top: "t-top", ltv: "t-ltv", risk: "t-risk", special: "t-special",
@@ -91,8 +84,7 @@ function makeTables() {
       tables[id].rows.push({ record_id: `${id}-${u}-${bi}-${r}`, created_time: 1.79e12 + u * 100 + r, fields: f });
     }
   }
-  // Customer Approaching = the case log: long per-customer history (many chats, other agents/brands).
-  const blank = (u, r) => r === 0 && u % 40 === 0;      // blank (unfinished) case rows are rare and transient in production
+  const blank = (u, r) => r === 0 && u % 40 === 0;
   for (let u = 0; u < USERS; u++) for (const [bi, brand] of ["PP", "MY"].entries()) for (let r = 0; r < CA_HIST; r++) {
     tables[T.ca].rows.push({ record_id: `ca-${u}-${bi}-${r}`, created_time: 1.7e12 + u * 1000 + r, fields: {
       Username: [{ text: `u${String(u).padStart(4, "0")}`, type: "text" }], Brand: brand, "Agent Name": `agent${r % 5}`, Inquiry: blank(u, r) ? "" : "Deposit",
@@ -113,7 +105,6 @@ function makeTables() {
   return tables;
 }
 
-// ---- run -------------------------------------------------------------------------------
 const tables = makeTables();
 const tableEnv = { LARK_APP_ID: "synthetic", LARK_APP_SECRET: "synthetic", LARK_BASE_APP_TOKEN: "synthetic-base",
   LARK_TABLE_CUSTOMER_APPROACHING: T.ca, LARK_TABLE_REDEEM_CODE: T.redeem, LARK_TABLE_PNL: T.pnl, LARK_TABLE_GRACE_PERIOD: T.grace,
@@ -123,8 +114,6 @@ const tableEnv = { LARK_APP_ID: "synthetic", LARK_APP_SECRET: "synthetic", LARK_
 const pagesDir = buildPages(PAGES);
 const { handler } = await import(pathToFileURL(path.join(pagesDir, "lark-search.js")).href);
 const { initEnv } = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js")).href);
-// --isolates=N: N separate copies of the Pages code, each with its OWN module state (token cache), all cold. Lookups are dealt to them
-// round-robin, like a burst spread over N fresh Cloudflare isolates (each one fetches its own Lark token through the queue).
 const ISOLATES = Math.max(1, Number(args.isolates || 1));
 const isolateCopies = [];
 if (ISOLATES > 1) for (let i = 0; i < ISOLATES; i++) {
@@ -143,7 +132,6 @@ agents.forEach((a, i) => { a.iso = i; });
 const pickHandler = (a) => (isolateCopies.length ? isolateCopies[a.iso % isolateCopies.length].handler : handler);
 const call = (a) => pickHandler(a)({ body: JSON.stringify({ username: a.username, brand: a.brand, picName: `agent${a.username}`, link: LIVE ? a.link : "", preview: !LIVE }) });
 
-// Oracle: the same handler, unbatched, unlimited quota, zero latency, sequential.
 const refLark = createFakeLark({ tables, medianMs: 0, sigma: 0, perRowMs: 0, enforce: false });
 globalThis.fetch = refLark.fetch;
 initEnv({ ...tableEnv });
@@ -151,7 +139,6 @@ const expected = new Map();
 if (MODE === "lookup") for (const a of agents) { const r = JSON.parse((await handler({ body: JSON.stringify({ username: a.username, brand: a.brand, preview: true }) })).body); expected.set(a.username, JSON.stringify({ row: r.row, otherBrands: r.otherBrands, notVip: r.notVip })); }
 for (const t of Object.values(tables)) t.rows = t.rows.filter((r) => !String(r.record_id).startsWith("rec_new_"));
 
-// System under test
 const lark = createFakeLark({ tables, medianMs: MEDIAN, quota: QUOTA, enforce: true, perCondMs: PER_COND, limitStatus: LIMIT_STATUS, shuffleBatch: args.shuffle === "1" });
 globalThis.fetch = lark.fetch;
 let doInstance = null, queue;
@@ -169,11 +156,9 @@ for (const copy of isolateCopies) copy.initEnv(sutEnv);
 if (MODE === "submit") {
   const { handler: recordHandler } = await import(pathToFileURL(path.join(pagesDir, "lark-record.js")).href);
   const AGENT = "agentSUB", caTable = tables[T.ca];
-  // Seed one blank case row per submitter (created by an earlier lookup), next to the usual per-player history.
   const targets = Array.from({ length: N }, (_, i) => ({ id: `rec_sub_${i}`, username: `u${String(i).padStart(4, "0")}`, brand: i % 2 ? "MY" : "PP", status: i % 2 ? "Solved" : "Unsolved" }));
   for (const t of targets) caTable.rows.push({ record_id: t.id, created_time: 1.8e12 + 1, fields: { Username: [{ text: t.username, type: "text" }], Brand: t.brand, "Agent Name": AGENT,
     link: { link: `https://my.livechatinc.com/chats/SUB${t.id}/TSUB${t.id}`, text: "x" } } });
-  // One row belongs to ANOTHER agent: it must be refused and left untouched.
   const foreign = targets[Math.min(7, N - 1)];
   caTable.rows.find((r) => r.record_id === foreign.id).fields["Agent Name"] = "agentOTHER";
   const before = new Map(caTable.rows.map((r) => [r.record_id, JSON.stringify(r.fields)]));
@@ -215,7 +200,7 @@ if (MODE === "submit") {
 
 let bgCount = 0, bgFail = 0, stopBg = false;
 const larkLib = await import(pathToFileURL(path.join(pagesDir, "_lib/lark.js")).href);
-async function backgroundPoller(i) {      // emulates /lark-stale-records: 1 unbatchable search per visible widget per interval
+async function backgroundPoller(i) {
   await new Promise((r) => setTimeout(r, (i / N) * BG_MS));
   while (!stopBg) {
     bgCount++;
@@ -240,7 +225,6 @@ const q = (p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length
 const complete = results.filter((r) => r.ok && !r.warnings.length);
 let wrong = 0;
 for (const r of complete) if (JSON.stringify({ row: r.body.row, otherBrands: r.body.otherBrands, notVip: r.body.notVip }) !== expected.get(r.a.username)) wrong++;
-// LiveChat mode: every lookup must own exactly one row, and it must be ITS row.
 let caChecked = 0, caWrongOwner = 0, caDuplicateIds = 0, caRowsCreated = 0;
 if (LIVE) {
   const byId = new Map(tables[T.ca].rows.map((r) => [r.record_id, r]));
@@ -248,7 +232,6 @@ if (LIVE) {
   for (const r of results.filter((x) => x.ok)) {
     caChecked++;
     const id = r.body.caRecordId;
-    // the same id for two DIFFERENT players would be a bug; the same chat looked up twice must share one id
     if (seenIds.has(id) && seenIds.get(id) !== r.a.username) caDuplicateIds++;
     seenIds.set(id, r.a.username);
     const row = byId.get(id);

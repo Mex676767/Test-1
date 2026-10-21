@@ -1,41 +1,18 @@
-// The C9 ticket-system integration keeps its credentials in the server-side
-// Pages environment; the browser only receives the fields it needs.
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
-// Department-based sections (Retention: Retention, Blast, Tickets, Knowledge; Customer Service: Tickets and Knowledge). DEPARTMENT_TABS_LIVE
-// puts them in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
 const DEPARTMENT_TABS_LIVE = true;
-// Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team (see "Auto ticket on claim").
-// AUTO_TICKET_LIVE puts it in the installed LiveChat widget as well as the admin preview (on since the 2026-10-19 rollout).
 const AUTO_TICKET_LIVE = true;
 const BLAST_LIVE = true;
-// The Knowledge tab is switched off for the agents in the installed widget (they only need Tickets); the admin preview still has it.
-// Set it to true to bring it back for Retention and Customer Service in the installed widget too.
 const KNOWLEDGE_TAB_ENABLED = false;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
-// Temporary preview fallback. Turn this back on after agents--my:ro has
-// been added to both LiveChat OAuth clients.
 const AUTOMATIC_DEPARTMENT_DETECTION = false;
 const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
-// LiveChat login decides the agent name (see requireAgentLogin and functions/agent-login.js): the first sign-in picks a
-// name once, Lark remembers it for that LiveChat login, and Settings can no longer change it. ON for everyone. Adding
-// agentLogin=0 to the page address (for the LiveChat widget: to its App URL) turns it off again without a deploy, e.g. if
-// the login window cannot open somewhere. Independent of the department switches above.
 const AGENT_LOGIN_LIVE = new URLSearchParams(location.search).get("agentLogin") !== "0";
-// The QA view: a LiveChat login marked QA in the Agent Logins table (Role = QA) sees the QA tab and Retention (they sometimes cover and take
-// chats), no Blast. Chats are recorded only if the login already has an agent name; none is asked for (see detectQaRole and applyQaAgent). ON; adding qaView=0 to the page address (for the LiveChat
-// widget: to its App URL) turns it off again without a deploy. Independent of the department switches above.
-// QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE: whether that view also gets the Tickets and Knowledge tabs. Off until they are approved for QA.
 const QA_VIEW_LIVE = new URLSearchParams(location.search).get("qaView") !== "0";
 const QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE = false;
-// The admin preview is never turned into the QA view by a login (it stays the full admin view); like the department views, it shows the QA
-// view only when asked: ?department=qa. In the installed widget the QA view comes from the signed-in login (see detectQaRole).
 let qaView = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("department") === "qa";
 
-/* ============================================================
-   THEME
-   ============================================================ */
 const root = document.documentElement;
 const themeToggle = document.getElementById("themeToggle");
 
@@ -50,29 +27,17 @@ themeToggle.addEventListener("click", () => {
   applyTheme(next);
 });
 
-/* ============================================================
-   AGENT SETTINGS
-   Agent name is stored in localStorage and required before
-   any lookup or submit. On first load, settings panel opens
-   automatically if no agent is saved.
-   ============================================================ */
 const AGENT_KEY = "rc-agent-name";
 const BLAST_SYNC_STORAGE_KEY = "ca-livechat-engagement:sync";
 const BLAST_LOCAL_STORAGE_KEY = "ca-livechat-engagement:local";
 const CONFIGURED_LIVECHAT_ACCOUNT = /^lc[12]$/.test(new URLSearchParams(location.search).get("account") || "")
   ? new URLSearchParams(location.search).get("account")
   : "";
-// With the LiveChat login on, a name the agent chose in an older version is not trusted: the name comes from the login,
-// and until it arrives nothing can be recorded (every record path stops on "no agent name").
 let selectedAgent = AGENT_LOGIN_LIVE ? "" : (localStorage.getItem(AGENT_KEY) || "");
-let agentLocked = false; // true once the name came from the LiveChat login: Settings cannot change it
-// Dropdown option lists are cached in localStorage, and a fetch can only ever
-// REPLACE a list with a non-empty one. Before this, a slow/throttled Lark read
-// came back as an empty list that overwrote the working one -- Brand
-// auto-detection then found no matching option and Brand "disappeared".
+let agentLocked = false;
 const OPTIONS_CACHE_KEY = "rc-options-cache";
 function readCachedOptions() { try { return JSON.parse(localStorage.getItem(OPTIONS_CACHE_KEY) || "{}") || {}; } catch (_) { return {}; } }
-function writeCachedOptions(patch) { try { localStorage.setItem(OPTIONS_CACHE_KEY, JSON.stringify({ ...readCachedOptions(), ...patch })); } catch (_) { /* non-fatal */ } }
+function writeCachedOptions(patch) { try { localStorage.setItem(OPTIONS_CACHE_KEY, JSON.stringify({ ...readCachedOptions(), ...patch })); } catch (_) { } }
 let agentOptions = Array.isArray(readCachedOptions().agents) ? readCachedOptions().agents : [];
 function setAgentOptions(list) {
   if (!Array.isArray(list) || !list.length) return;
@@ -95,15 +60,10 @@ function saveBlastMessages(messages) {
   }, window.location.origin);
 }
 
-// Chats are recorded to Lark ONLY while the agent is on the Retention tab. Any other tab (Blast, Tickets, Knowledge, and any
-// tab added later) pauses recording automatically, and so does a running Blast. This replaces the old manual "Don't log chats"
-// checkbox. Nothing is lost while paused: submitRecord returns without marking the chat logged, so the background sweep
-// records it a few seconds after the agent is back on Retention. To pause on a new tab, just don't add it to LOGGING_TABS.
 const LOGGING_TABS = new Set(["customer"]);
 let blastLoggingLock = false;
 let blastRunInProgress = false;
 function isLoggingPaused() { return blastRunInProgress || blastLoggingLock || !LOGGING_TABS.has(activeMainTab); }
-// The old checkbox kept its state in localStorage; stale values must not linger.
 try { localStorage.removeItem("rc-logging-paused"); localStorage.removeItem("rc-blast-logging-previous"); } catch (_) {}
 
 async function fetchAgentOptions({ fresh = false } = {}) {
@@ -111,21 +71,16 @@ async function fetchAgentOptions({ fresh = false } = {}) {
     const res = await fetch("/lark-pic-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok) setAgentOptions(data.pics);
-  } catch (_) { /* non-fatal — settings panel still shows text input fallback */ }
+  } catch (_) { }
 }
 
-// Brand's dropdown options — real Brand values from Customer Approaching's
-// own field, not free text (see renderAutoFields). Fetched once at boot,
-// same as agentOptions.
 let brandOptions = Array.isArray(readCachedOptions().brands) ? readCachedOptions().brands : [];
 function setBrandOptions(list) {
   if (!Array.isArray(list) || !list.length) return;
   brandOptions = list;
   writeCachedOptions({ brands: list });
-  retryMissingBrandDetection(); // chats opened while the list was missing can now be matched
+  retryMissingBrandDetection();
 }
-// Brand auto-detect depends on the option list AND on a LiveChat lookup; either
-// can fail transiently. Retry a few times instead of leaving Brand blank.
 const brandRetryAttempts = new Map();
 let lastBrandListRefreshAt = 0;
 function scheduleBrandRetry(chatId, groupID) {
@@ -147,12 +102,9 @@ async function fetchBrandOptions({ fresh = false } = {}) {
     const res = await fetch("/lark-brand-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok) setBrandOptions(data.brands);
-  } catch (_) { /* non-fatal — falls back to just showing whatever's auto-detected */ }
+  } catch (_) { }
 }
 
-// The ticket API returns its live field catalog, including SELECT options.
-// Keeping that catalog here means changes in the ticket system do not need a
-// corresponding hard-coded option update in this widget.
 let ticketFields = [];
 let ticketDepartments = [];
 let ticketMarkets = [];
@@ -176,12 +128,9 @@ function mergeTicketChoices(live, fallback) {
     return true;
   });
 }
-// The ticket account email an agent typed, remembered in this browser per LiveChat account and sent with each ticket. An email an admin
-// set in Lark always wins on the server, so a stale or wrong value here can never make a ticket be raised as someone else.
 const ticketEmailKey = (accountKey) => `rc-ticket-email:${accountKey || ""}`;
 function storedTicketEmail(accountKey) { try { return localStorage.getItem(ticketEmailKey(accountKey)) || ""; } catch (_) { return ""; } }
-function storeTicketEmail(accountKey, email) { try { localStorage.setItem(ticketEmailKey(accountKey), String(email || "").trim().toLowerCase()); } catch (_) { /* not remembered */ } }
-// Who a read is made as, from this browser alone (no card needed): the signed-in LiveChat login and the ticket email remembered here.
+function storeTicketEmail(accountKey, email) { try { localStorage.setItem(ticketEmailKey(accountKey), String(email || "").trim().toLowerCase()); } catch (_) { } }
 function ticketReadAuthor(s) {
   const agentToken = liveChatAgentTokens()[currentLiveChatAccount];
   if (!agentToken || !currentLiveChatAccount) return undefined;
@@ -219,11 +168,9 @@ async function fetchTicketConfig({ fresh = false } = {}) {
 function saveAgent(name) {
   selectedAgent = name.trim();
   localStorage.setItem(AGENT_KEY, selectedAgent);
-  if (typeof resumePendingLookups === "function") resumePendingLookups();   // an interrupted lookup was waiting for the agent name
+  if (typeof resumePendingLookups === "function") resumePendingLookups();
 }
 
-// Settings panel — overlaid on top of the widget, blocking interaction
-// until an agent is chosen.
 function openSettingsPanel() {
   const customerService = isCustomerServiceView() || qaView;
   document.getElementById("settingsOverlay")?.remove();
@@ -293,7 +240,7 @@ function openSettingsPanel() {
       const chatId = ticketAccountSettingsChat();
       if (!chatId) return;
       if (event.target.closest("[data-settings-ticket-recheck]")) {
-        repaint(); // "Checking…" is drawn by the check itself; the result replaces it below
+        repaint();
         const done = checkTicketAccount(chatId, { force: true });
         repaint();
         await done;
@@ -303,7 +250,7 @@ function openSettingsPanel() {
       }
     });
   }
-  if (customerService) { // no Blast history and nothing to save
+  if (customerService) {
     overlay.querySelector(".settings-failures")?.closest(".settings-card")?.remove();
     document.getElementById("settingsSave")?.remove();
   }
@@ -324,8 +271,6 @@ function openSettingsPanel() {
     updateAgentBadge();
     staleRecords = [];
     fetchStaleRecords();
-    // A chat that loaded before any agent was picked (fresh incognito
-    // window) skipped the Lark card restore -- re-run it now.
     if (liveWidget) applyProfile(liveWidget.getCustomerProfile());
     setStatus(`Agent set to ${selectedAgent}.`, "success");
   });
@@ -333,9 +278,6 @@ function openSettingsPanel() {
   document.getElementById("settingsClose")?.addEventListener("click", () => overlay.remove());
 }
 
-// Replaces the old "dump state to browser console" link — a plain-language
-// activity log visible right in Settings, no devtools required. Every
-// setStatus() call (errors and routine confirmations alike) lands here.
 function renderDiagnosticsLog() {
   if (!diagnosticsLog.length) return `<div class="diag-empty">No activity logged yet.</div>`;
   return diagnosticsLog.map((e) => `
@@ -344,8 +286,6 @@ function renderDiagnosticsLog() {
     </div>`).join("");
 }
 
-// True while the LiveChat sign-in is waiting for the server (a few seconds at start): the badge says so instead of "No agent
-// set", which looked like a failure.
 let agentSigningIn = false;
 function updateAgentBadge() {
   const badge = document.getElementById("agentBadge");
@@ -354,17 +294,6 @@ function updateAgentBadge() {
   if (badge) badge.className = `agent-badge ${selectedAgent ? "set" : signingIn ? "" : "unset"}`;
 }
 
-/* ============================================================
-   SAMPLE DATA (stand-in until this is wired to LiveChat + Lark)
-   ============================================================ */
-
-// Each of these is its own bonus-program table in Lark (not columns on
-// Customer Approaching) — lark-search.js already applies each table's own
-// claim/hide rule and picks the single oldest still-claimable row, so by the
-// time it gets here r[key] is either "" (nothing to show) or the one display
-// value to render. Special Reload Event, Telegram RM28, and Redeem Code
-// aren't listed here — they're "special" (instant claim-writes-to-Lark)
-// tickets, handled separately below.
 const BONUS_PROGRAMS = [
   { key: "riskPlayer", label: "Risk Player" },
   { key: "topPnl", label: "Top 10 P&L" },
@@ -426,7 +355,7 @@ function applyDepartmentChrome() {
   const rtn = !departmentKnown || currentDepartment === "rtn";
   const settingsButton = document.getElementById("settingsBtn");
   const agentBadge = document.getElementById("agentBadge");
-  if (settingsButton) settingsButton.hidden = false; // Customer Service keeps Settings: Diagnostics and Sign out
+  if (settingsButton) settingsButton.hidden = false;
   if (agentBadge) agentBadge.hidden = !rtn;
 }
 
@@ -516,7 +445,7 @@ async function requirePreviewLiveChatLogin() {
         }
       }
       return;
-    } catch (_) { /* show the login screen so the agent can reconnect */ }
+    } catch (_) { }
   }
 
   return new Promise((resolve) => {
@@ -600,18 +529,11 @@ async function requirePreviewLiveChatLogin() {
   });
 }
 
-/* ============================================================
-   LIVECHAT LOGIN -> AGENT NAME (behind AGENT_LOGIN_LIVE)
-   Sign in with LiveChat. The server checks the token with LiveChat and looks the login up in the "Livechat App Agent
-   Logins" table: a known login gets its agent name back; a new one picks a name once (only names free on that
-   LiveChat account are offered) and it is locked. Nothing can be recorded until this finishes.
-   ============================================================ */
 function dropLiveChatToken(accountKey) {
   forgetLiveChatLogin(accountKey);
 }
 
 async function postAgentLogin(accountKey, token, name) {
-  // A server that does not answer in 25 s gives up, so the agent gets "Try again" instead of waiting for ever.
   const response = await fetch("/agent-login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -621,7 +543,6 @@ async function postAgentLogin(accountKey, token, name) {
   return response.json();
 }
 
-// One blocking panel, replaced in place as the steps change.
 function agentLoginPanel(innerHtml) {
   let overlay = document.getElementById("agentLoginOverlay");
   if (!overlay) {
@@ -630,39 +551,35 @@ function agentLoginPanel(innerHtml) {
     overlay.className = "settings-overlay agent-login-overlay";
     document.body.appendChild(overlay);
   }
-  agentSigningIn = false; // a panel is asking the agent for something: the badge goes back to "No agent set" until they answer
+  agentSigningIn = false;
   updateAgentBadge();
   overlay.innerHTML = `<div class="agent-login-card"><div class="login-mark">◆</div><div class="agent-login-app">Console</div>${innerHtml}</div>`;
   return overlay;
 }
 
-// Remembered across sessions in this browser: the LiveChat account that last signed in here is tried first, so a person who works in
-// account 2 is not sent to account 1's login first (LiveChat answers a stranger there with an error page, not a redirect back).
 const LAST_LIVECHAT_ACCOUNT_KEY = "rc-last-livechat-account";
-const LOGIN_POPUP_POLL_MS = 500; // how often the login window is checked for having been closed
-const LOGIN_POPUP_GRACE_MS = 800; // after it closed, how long an answer may still arrive before the next account is tried
+const LOGIN_POPUP_POLL_MS = 500;
+const LOGIN_POPUP_GRACE_MS = 800;
 function rememberLiveChatAccount(accountKey) {
-  try { localStorage.setItem(LAST_LIVECHAT_ACCOUNT_KEY, accountKey); } catch (_) { /* not remembered */ }
+  try { localStorage.setItem(LAST_LIVECHAT_ACCOUNT_KEY, accountKey); } catch (_) { }
 }
 function accountsLastUsedFirst(clients) {
   let last = "";
-  try { last = localStorage.getItem(LAST_LIVECHAT_ACCOUNT_KEY) || ""; } catch (_) { /* no preference */ }
+  try { last = localStorage.getItem(LAST_LIVECHAT_ACCOUNT_KEY) || ""; } catch (_) { }
   return [...clients].sort((a, b) => Number(b.key === last) - Number(a.key === last));
 }
 
-// Opens LiveChat's login window for each account in turn and resolves with the first that signs in. An account that refuses the person
-// is skipped either way LiveChat says so: by sending the refusal back, or by showing its own error page and the window being closed.
 function connectLiveChatLogin(clients, redirectUri, onProgress) {
   return new Promise((resolve, reject) => {
     const ordered = accountsLastUsedFirst(clients);
     let callbackOrigin = location.origin;
-    try { callbackOrigin = new URL(redirectUri).origin; } catch (_) { /* keep this origin */ }
+    try { callbackOrigin = new URL(redirectUri).origin; } catch (_) { }
     let index = -1;
     let pendingClient = null;
     let pendingState = "";
     let popup = null;
     let watcher = 0;
-    let done = false; // set once the login has resolved or failed: a pending timer must then do nothing
+    let done = false;
     const stopWatching = () => { if (watcher) { clearInterval(watcher); watcher = 0; } };
     const finish = (settle, value) => { done = true; stopWatching(); window.removeEventListener("message", onMessage); settle(value); };
     const watch = (state) => {
@@ -671,7 +588,7 @@ function connectLiveChatLogin(clients, redirectUri, onProgress) {
         if (!popup || !popup.closed) return;
         stopWatching();
         setTimeout(() => {
-          if (done || state !== pendingState) return; // an answer arrived in the meantime
+          if (done || state !== pendingState) return;
           if (!advance()) finish(reject, new Error("The LiveChat login window was closed before the login finished."));
         }, LOGIN_POPUP_GRACE_MS);
       }, LOGIN_POPUP_POLL_MS);
@@ -688,8 +605,6 @@ function connectLiveChatLogin(clients, redirectUri, onProgress) {
       if (popup) watch(pendingState);
       return Boolean(popup);
     };
-    // Moves on to the next account. A browser may block a window that no click just opened: then that account is remembered as the one to
-    // try first and the person is asked to click Connect LiveChat again. Returns false when there is no next account.
     const advance = () => {
       const upcoming = ordered[index + 1];
       if (!upcoming) return false;
@@ -723,21 +638,17 @@ function applyBoundAgent(name, accountKey) {
   if (changed) {
     staleRecords = [];
     fetchStaleRecords();
-    // A chat that loaded before the name was known skipped the Lark card restore -- run it again now.
     if (liveWidget) applyProfile(liveWidget.getCustomerProfile());
   }
   logDiagnostic(`Signed in with LiveChat as ${name}.`, "success");
   fetchUnrecordedChats();
 }
 
-// Signs this window out of the widget, so another agent can sign in in it: the stored LiveChat login and the agent name that
-// came from it are forgotten here, nothing can be recorded until someone signs in again, and the sign-in panel comes back.
-// LiveChat's own session in the browser is not touched (to switch to another LiveChat user, sign out of LiveChat itself too).
 async function signOutLiveChat() {
   if (!confirm("Sign out of LiveChat in this widget? Nothing can be recorded until you sign in again.")) return;
   for (const accountKey of ["lc1", "lc2"]) forgetLiveChatLogin(accountKey);
-  try { localStorage.removeItem(AGENT_KEY); } catch (_) { /* non-fatal */ }
-  if (qaView && IS_EMBEDDED_APP) { qaView = false; syncMainTabs(); } // the next sign-in decides again (the preview's ?department=qa stays)
+  try { localStorage.removeItem(AGENT_KEY); } catch (_) { }
+  if (qaView && IS_EMBEDDED_APP) { qaView = false; syncMainTabs(); }
   selectedAgent = "";
   agentLocked = false;
   staleRecords = [];
@@ -751,7 +662,6 @@ async function signOutLiveChat() {
   await requireAgentLogin();
 }
 
-// First sign-in: pick the agent name once. Resolves when it is saved.
 function pickAgentName(accountKey, token, available, { skippable = false } = {}) {
   return new Promise((resolve) => {
     const render = (names, error = "") => {
@@ -783,18 +693,14 @@ function pickAgentName(accountKey, token, available, { skippable = false } = {})
   });
 }
 
-// Which department is this signed-in agent in? The server asks LiveChat for their groups (Priority 96 / Priority TC = Retention).
-// If LiveChat cannot say, nothing is hidden: the agent keeps the full Retention view.
 async function detectDepartment(accountKey, token) {
   if (!DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE)) return "";
-  // Admin preview only: ?department=cs or ?department=rtn shows that department's view, so both can be tested without a second LiveChat account.
   const forced = previewMode ? new URLSearchParams(location.search).get("department") : "";
   if (forced === "cs" || forced === "rtn") { setDepartmentFromGroups(forced === "rtn" ? ["Priority 96"] : []); return forced; }
   try { return (await resolveLoggedInDepartment(accountKey, token)).department; }
   catch (error) { logDiagnostic(`Department check failed, full view kept: ${error.message}`, "warn"); forgetDepartment(); return ""; }
 }
 
-// A Customer Service agent records no cases, so there is no agent name to pick: straight to Tickets and Knowledge.
 function applyCustomerServiceAgent(accountKey) {
   agentSigningIn = false;
   setCurrentLiveChatAccount(accountKey);
@@ -803,10 +709,8 @@ function applyCustomerServiceAgent(accountKey) {
   logDiagnostic("Signed in with LiveChat as Customer Service (Tickets and Knowledge).", "success");
 }
 
-// Is this signed-in LiveChat login marked QA in the Agent Logins table? The server checks the token with LiveChat and reads the table.
-// Never blocks a sign-in: any failure just means "not QA", and the agent continues as before.
 async function detectQaRole(accountKey, token) {
-  if (!QA_VIEW_LIVE || !IS_EMBEDDED_APP) return false; // the admin preview keeps the full view whoever signs in
+  if (!QA_VIEW_LIVE || !IS_EMBEDDED_APP) return false;
   try {
     const response = await fetch("/qa-role", {
       method: "POST",
@@ -819,7 +723,6 @@ async function detectQaRole(accountKey, token) {
   } catch (_) { return false; }
 }
 
-// A QA person records no cases, so there is no agent name to pick: straight to the QA tab.
 function applyQaAgent(accountKey) {
   qaView = true;
   agentSigningIn = false;
@@ -831,7 +734,6 @@ function applyQaAgent(accountKey) {
   logDiagnostic("Signed in with LiveChat as QA.", "success");
 }
 
-// A QA login without an agent name chooses one later from Settings (QA is part of the Retention team and sometimes covers chats).
 async function chooseQaAgentName() {
   const token = liveChatAgentTokens()[currentLiveChatAccount];
   if (!token) return;
@@ -844,12 +746,10 @@ async function chooseQaAgentName() {
   syncMainTabs();
 }
 
-// The QA tab shows how the chat that is open in LiveChat was logged: its thread id (the SDK's chat id, the id the archive and the Lark
-// links use) is sent to the QA page, which asks for it once more when it has loaded. A chat opened from the archive counts too.
-let qaOpenChat = ""; // "" when no chat is open
+let qaOpenChat = "";
 function postQaChat() {
   if (!qaView) return;
-  try { document.querySelector("#unknownChatsView iframe")?.contentWindow?.postMessage({ source: "ca-qa-chat", threadId: qaOpenChat }, location.origin); } catch (_) { /* the page is not loaded yet: it asks when it is */ }
+  try { document.querySelector("#unknownChatsView iframe")?.contentWindow?.postMessage({ source: "ca-qa-chat", threadId: qaOpenChat }, location.origin); } catch (_) { }
 }
 function reportQaChat(profile) {
   const id = profile && profile.chat && profile.chat.id && profile.source !== "customers" ? String(profile.chat.id) : "";
@@ -865,13 +765,12 @@ async function requireAgentLogin() {
   agentSigningIn = true;
   updateAgentBadge();
   let config = null;
-  try { config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json(); } catch (_) { /* handled below */ }
+  try { config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json(); } catch (_) { }
   let clients = Array.isArray(config?.clients) ? config.clients : [];
-  // A widget installed in one LiveChat account only ever signs in against that account.
   if (CONFIGURED_LIVECHAT_ACCOUNT) clients = clients.filter((client) => client.key === CONFIGURED_LIVECHAT_ACCOUNT);
   if (!clients.length) {
     agentLoginPanel(`<div class="settings-head">LiveChat login unavailable</div><p class="settings-hint">LiveChat login has not been configured for this widget.</p>`);
-    return new Promise(() => {}); // nothing can be recorded without a login, so this never continues
+    return new Promise(() => {});
   }
   const redirectUri = config.redirectUri || `${location.origin}/blast/oauth.html`;
   let failure = "";
@@ -880,13 +779,12 @@ async function requireAgentLogin() {
     const usable = clients.map((client) => client.key).filter((key) => tokens[key]);
     for (const key of usable) {
       if (await detectDepartment(key, tokens[key]) === "cs") { applyCustomerServiceAgent(key); return; }
-      const qaCheck = detectQaRole(key, tokens[key]); // asked while the login request is on its way: no extra wait
+      const qaCheck = detectQaRole(key, tokens[key]);
       let data;
       try { data = await postAgentLogin(key, tokens[key]); } catch (_) { failure = "Couldn't reach the server — check your connection."; continue; }
       if (await qaCheck) {
-        // A QA login that already has an agent name records the chats it covers under that name; one without a name is not asked for one here.
         if (data.ok && data.bound) applyBoundAgent(data.name, key);
-        else if (data.ok) await pickAgentName(key, tokens[key], Array.isArray(data.available) ? data.available : [], { skippable: true }); // QA is part of the Retention team: may choose a name, or skip
+        else if (data.ok) await pickAgentName(key, tokens[key], Array.isArray(data.available) ? data.available : [], { skippable: true });
         applyQaAgent(key);
         return;
       }
@@ -895,9 +793,7 @@ async function requireAgentLogin() {
       if (data.ok) { await pickAgentName(key, tokens[key], Array.isArray(data.available) ? data.available : []); return; }
       failure = data.error || "Agent login failed.";
     }
-    // Needs a (re)connect, or a retry if the server could not be reached.
     await new Promise((resolve) => {
-      // Retry only when a login is still stored (the server could not be reached); an expired one needs a new login.
       const stored = liveChatAgentTokens();
       const retry = Boolean(failure && clients.some((client) => stored[client.key]));
       const overlay = agentLoginPanel(`
@@ -927,15 +823,6 @@ async function requireAgentLogin() {
   }
 }
 
-// A chat closed with no action of this agent on its card (no Look up, inquiry, status ...): did they at least write to
-// the customer? Asked of LiveChat once per chat, using the agent's own LiveChat login, and remembered in the chat's
-// state. true = theirs, false = not theirs (e.g. only watched while supervising), and when LiveChat cannot be asked the
-// chat is kept as theirs ("unsure") so a real case is reminded about, not lost; it is asked again on the next attempt.
-// Only with the LiveChat login on: otherwise nothing identifies the agent to LiveChat and the answer is "not theirs".
-//
-// An answer saved by an older version of this check is not trusted and the chat is asked about again: version 2 fixed
-// "did not write" answers that compared the login id with an email, version 3 made "the customer never wrote" (the agent
-// reached out) count as not theirs, so a "wrote" from before is re-checked too. "unsure" is always asked again anyway.
 const AGENT_WROTE_VERSION = 3;
 function agentWroteVerdict(s) {
   if (!s) return undefined;
@@ -948,11 +835,9 @@ async function agentWroteInChat(chatId) {
   const known = agentWroteVerdict(s);
   if (known === true) return true;
   if (known === false) return false;
-  if (s.agentWrote === false || s.agentWrote === true) delete s.agentWrote; // an old, untrusted answer
+  if (s.agentWrote === false || s.agentWrote === true) delete s.agentWrote;
   const token = liveChatAgentTokens()[currentLiveChatAccount];
   const link = String(s.chatUrl || "").match(/\/chats\/([^/]+)\/([^/]+)/);
-  // No link yet means the chat closed before LiveChat's first status check resolved it (a chat opened and shut within
-  // seconds): nothing happened that could need recording, and it is asked again once there is a link, not put on the list.
   if (token && !link) return false;
   let data = null;
   if (token && link) {
@@ -972,13 +857,10 @@ async function agentWroteInChat(chatId) {
     s.agentWrote = "unsure";
     return true;
   }
-  // Theirs only if they wrote AND the customer wrote too: a thread where the customer never said anything is the agent
-  // reaching out, with nothing to record. (An older server that does not say is taken as "the customer wrote".)
   const theirs = !!data.wrote && data.customerWrote !== false;
   s.agentWrote = theirs;
   s.agentWroteV = AGENT_WROTE_VERSION;
   if (!theirs) {
-    // Shows both sides, so a mismatch in how LiveChat names agents is visible instead of silent.
     logDiagnostic(data.wrote
       ? "Not on your list: the customer never wrote in this chat (you reached out), so there is nothing to record."
       : `Not on your list: no message from you (${(data.me || []).join(" / ")}) in this chat. Agent messages by: ${(data.authors || []).join(", ") || "nobody"}.`, "info");
@@ -986,9 +868,6 @@ async function agentWroteInChat(chatId) {
   return s.agentWrote;
 }
 
-// Agent, Brand, Inquiry and Status all come from the same Lark table. The
-// combined endpoint reads that table once, instead of making four duplicate
-// field requests plus a separate bonus-config request during startup.
 async function fetchBootstrapOptions({ fresh = false } = {}) {
   try {
     const res = await fetch(fresh ? "/app-bootstrap?fresh=1" : "/app-bootstrap", fresh ? { cache: "no-store" } : undefined);
@@ -1006,21 +885,8 @@ async function fetchBootstrapOptions({ fresh = false } = {}) {
 }
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
-// Released Amount normally comes directly from these programs. Risk Player
-// is calculated separately from the agent-entered customer reload amount.
-// 12h VIP Booster, Redeem Code, and Special Reload don't carry an amount.
-// Grace Period is included here for documentation, but never reaches the
-// generic claim flow that reads this set — it has its own separate handling
-// (see the claim handler) since one field packs two very different states.
-// Telegram RM28 does carry a real per-row amount (its display string is
-// "Eligible — RM18" etc.), so it's included here too.
 const AMOUNT_ELIGIBLE_PROGRAMS = new Set(["topPnl", "ltvTest", "gracePeriod", "telegram28"]);
 
-// Mirrors lark-record.js's own extractAmount() -- a number directly after
-// "RM" takes priority over the first plain number found, since a bonus's
-// raw display text often has other digits earlier (e.g. Top 10 P&L(Night)'s
-// real format "Batch 09-09-2026 Pass RM58" -- a naive first-number-found
-// match would grab "09" instead of the real "58").
 function extractAmountNumber(str) {
   const s = String(str || "");
   const rmMatch = s.match(/RM\s*(-?\d+(?:\.\d+)?)/i);
@@ -1029,9 +895,6 @@ function extractAmountNumber(str) {
   return match ? match[0] : "";
 }
 
-// The amount of an activated Grace Period claim. The real text from Lark is "Activated : 2026-10-17 14:35 - Pass - 58": the amount
-// is the last number, after "Pass - " (the date holds other numbers, so a first-number grab would record 2026). "Bonus N" is
-// still read first. The same for every agent (installed widget and admin preview).
 function graceClaimAmount(display) {
   const text = String(display || "");
   const bonus = text.match(/Bonus\s*[:\-]?\s*(-?\d+(?:\.\d+)?)/i);
@@ -1062,17 +925,13 @@ function riskPlayerCalculation(display, reloadAmount) {
   };
 }
 
-// One-line summary shown on a collapsed card — lets an agent glance across
-// several queued chats without expanding each one. Priority order matches
-// what's most actionable: a card needing attention should never be masked
-// by a "Logged" badge from a stale render, etc.
 function hasAnyBonus(chatId) {
   const r = state[chatId].matchedRow;
   if (!r) return false;
   if (allBonusPrograms().some((p) => isClaimableValue(r[p.key]))) return true;
   if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) return true;
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
-  if (r.specialReload) return true; // lark-search.js already filtered to only "Eligible Angpao"
+  if (r.specialReload) return true;
   return false;
 }
 
@@ -1087,29 +946,16 @@ function getChatSummary(chatId) {
   return hasAnyBonus(chatId) ? { text: "Bonuses ready", cls: "ready" } : { text: "No active bonuses", cls: "neutral" };
 }
 
-// Word-boundary substring, not === -- mirrors hidden() in lark-search.js
-// (see its own header note). Real Status/SW Check text embeds "claimed"/
-// "expired"/"failed" in different positions per bonus table -- e.g. Top 10
-// P&L(Night) is "Batch 09-09-2026 Claimed RM58", not the bare word alone --
-// so an exact match let an already-claimed row still render its Claim
-// button client-side even after the server itself stopped selecting it.
 function isHiddenStatus(v) {
   const t = String(v || "").trim().toLowerCase();
-  // "Not Eligible" / "Ineligible" = nothing to claim, same as Expired/Failed.
   return /\b(claimed|expired|failed|not\s+eligible|ineligible)\b/.test(t);
 }
 
-// Excludes: empty, "XD No Bonus" pattern, and Expired/Claimed
 function isClaimableValue(v) {
   const s = String(v || "").trim();
   return !!(s && !NO_BONUS_PATTERN.test(s) && !isHiddenStatus(s));
 }
 
-// Simulates the real Lark base: same username can exist under multiple
-// brands with completely different bonus states — matching must require
-// BOTH Username AND Brand, never username alone. This now also LOGS the
-// case (creates the Customer Approaching row) if one doesn't exist yet —
-// that's what makes Lark's bonus lookup columns actually populate.
 function waitBeforeLookupRetry(signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -1130,10 +976,6 @@ function waitBeforeLookupRetry(signal) {
 
 async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId, signal) {
   const body = JSON.stringify({ username, brand, link, telegram, picName, previousRecordId, preview: previewMode });
-  // Pages occasionally returns an HTML edge-error page instead of the JSON
-  // from the Function. Retry one transient response automatically; when a
-  // chat link is available the endpoint can reuse its blank case row. Preview
-  // mode is read-only.
   const canSafelyRetry = previewMode || !!String(link || "").trim();
   for (let attempt = 0; attempt < 2; attempt++) {
     let res;
@@ -1177,63 +1019,35 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
   throw new Error("Lookup failed. Please try again.");
 }
 
-// 2026-08-29: lark-search.js now queries every bonus's own source table
-// directly (Username/UID + Brand) instead of waiting on Customer
-// Approaching's Lookup columns to resolve — that Lookup delay (15-30s on a
-// big base) was the entire reason the poll-and-wait dance below used to
-// exist. lark-search.js's response is now already final, so there's nothing
-// left to poll for.
-
-// Fallback only — used until (or unless) the real LiveChat Agent App SDK
-// connects. See initLiveChatSdk() below.
 const SAMPLE_CHATS = [
   { chatId: "preview-test", customerName: "Bonus Test Preview", link: "", isTelegram: false, groupName: "VS96 Priority Support" },
 ];
 
-// The list renderChats() actually draws from. Starts as the demo data;
-// initLiveChatSdk() replaces it with the one real active chat once (if) the
-// SDK connects. Kept as a list (not a single object) so renderChats/state
-// keying by chatId didn't need to change shape for this swap.
-// Inside LiveChat, start with an empty lightweight shell. Rendering the full
-// preview card before the SDK resolves wastes a large DOM build on every chat
-// switch, only for the SDK to replace it a moment later. The standalone admin
-// preview keeps the sample card exactly as before.
 let activeChats = IS_EMBEDDED_APP ? [] : SAMPLE_CHATS;
-// Standalone Pages preview is a read-only test bench. It reads the same live
-// bonus tables, but every write path is disabled until the LiveChat SDK
-// successfully connects and replaces the sample cards with a real chat.
 let previewMode = !IS_EMBEDDED_APP;
-// The standalone admin/test preview is also the bonus showcase: populate one
-// sample eligible result for every built-in and configured bonus so reviewers
-// can see the complete card set without needing a live player lookup.
 const BONUS_SHOWCASE_PREVIEW = !IS_EMBEDDED_APP;
 let showPreviewClosedChat = false;
 let activeMainTab = "customer";
 const MAIN_TAB_SESSION_KEY = `rc-main-tab:${CONFIGURED_LIVECHAT_ACCOUNT || "default"}`;
 try { if (sessionStorage.getItem(MAIN_TAB_SESSION_KEY) === "blast") activeMainTab = "blast"; } catch (_) {}
 
-// Department access is intentionally session-only. Each incognito LiveChat
-// window gets its own value, and closing that window clears it. Until a valid
-// LiveChat group response arrives, use the smaller CS view.
 const DEPARTMENT_SESSION_KEY = "rc-agent-department";
 let currentDepartment = "cs";
-let departmentKnown = false; // false until LiveChat has said which department this agent is in: nothing is hidden before that
+let departmentKnown = false;
 try {
   const savedDepartment = sessionStorage.getItem(DEPARTMENT_SESSION_KEY);
   if (savedDepartment === "rtn" || savedDepartment === "cs") { currentDepartment = savedDepartment; departmentKnown = true; }
-} catch (_) { /* sessionStorage may be unavailable in a hardened iframe */ }
+} catch (_) { }
 
 function departmentFromGroups(groups) {
   const names = Array.isArray(groups) ? groups.map((name) => String(name || "").trim()) : [];
   return names.some((name) => /^priority\s+(?:96|tc)$/i.test(name)) ? "rtn" : "cs";
 }
 
-// Is this window showing the Customer Service view (a known department that is not Retention, with the department views on)?
 function isCustomerServiceView() {
   return DEPARTMENT_SEPARATION_ENABLED && (previewMode || DEPARTMENT_TABS_LIVE) && departmentKnown && currentDepartment === "cs";
 }
 
-// LiveChat could not say which department this agent is in: whatever an earlier session remembered no longer counts, and nothing is hidden.
 function forgetDepartment() {
   departmentKnown = false;
   try { sessionStorage.removeItem(DEPARTMENT_SESSION_KEY); } catch (_) {}
@@ -1260,7 +1074,6 @@ function mainTabAvailability() {
   if (!DEPARTMENT_SEPARATION_ENABLED) {
     return { customer: true, tickets: ESCALATION_TICKET_ENABLED, blast: previewMode || BLAST_LIVE, knowledge: previewMode || KNOWLEDGE_TAB_ENABLED };
   }
-  // Retention keeps everything; Customer Service gets Tickets (and Knowledge when it is enabled). Until the department is known nothing is hidden.
   const rtn = !departmentKnown || currentDepartment === "rtn";
   return {
     customer: rtn,
@@ -1272,13 +1085,9 @@ function mainTabAvailability() {
 
 function syncMainTabs() {
   const available = mainTabAvailability();
-  // A QA person sees the QA tab and Retention (they sometimes cover and take chats), never Blast; Tickets and Knowledge only when QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE is on.
   if (qaView) Object.assign(available, { customer: true, blast: false, tickets: QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE && ESCALATION_TICKET_ENABLED, knowledge: QA_VIEW_ALSO_TICKETS_AND_KNOWLEDGE });
   const { tickets: ticketsAvailable, blast: blastAvailable, knowledge: knowledgeAvailable } = available;
-  // Chat/department updates can arrive after an agent starts Blast.
-  // Keep its existing iframe visible for the lifetime of the queue.
   if (blastRunInProgress && blastAvailable) activeMainTab = "blast";
-  // The QA tab (the page at /qa/) is shown in the standalone admin preview and to a person marked QA, never to other agents.
   const unknownChatsAvailable = previewMode || qaView;
   if (!available[activeMainTab] && !(activeMainTab === "unknownChats" && unknownChatsAvailable)) {
     activeMainTab = qaView ? "unknownChats" : ticketsAvailable ? "tickets" : knowledgeAvailable ? "knowledge" : available.customer ? "customer" : "blast";
@@ -1296,7 +1105,7 @@ function syncMainTabs() {
   const unknownChatsTab = document.getElementById("unknownChatsTab");
   if (unknownChatsTab) unknownChatsTab.hidden = !unknownChatsAvailable;
   const agentBadge = document.getElementById("agentBadge");
-  if (agentBadge && qaView) agentBadge.hidden = !selectedAgent && activeMainTab !== "customer"; // on the QA tab a name shows only if they have one; on Retention it always shows (covering chats needs one)
+  if (agentBadge && qaView) agentBadge.hidden = !selectedAgent && activeMainTab !== "customer";
   document.querySelectorAll("[data-main-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mainTab === activeMainTab);
   });
@@ -1322,19 +1131,12 @@ function syncMainTabs() {
   if (unknownChatsView) unknownChatsView.hidden = activeMainTab !== "unknownChats";
   if (unknownChatsAvailable && activeMainTab === "unknownChats") {
     const frame = unknownChatsView?.querySelector("iframe[data-src]");
-    // The admin preview opens the QA tab with made-up example chats (?preview=1); a QA person in the widget gets the real thing.
     if (frame && !frame.src) frame.src = frame.dataset.src + (previewMode ? "?preview=1" : "");
   }
   const needsAttention = document.getElementById("needsAttentionPanel");
   if (needsAttention) needsAttention.style.display = activeMainTab === "customer" ? "" : "none";
 }
 
-// Builds our chat shape from the SDK's ICustomerProfile. One remaining gap,
-// confirmed from the SDK's own type definitions (not just undocumented) —
-// not solvable from the SDK alone: no chat permalink/URL, so link stays ""
-// (Open ↗ link hidden). Brand and Telegram both start blank/false here too,
-// but get filled in server-side shortly after (see resolveBrandFromGroupId
-// and checkChatStatus) via LiveChat's own REST API, not from this object.
 function chatFromProfile(profile) {
   return {
     chatId: profile.chat.id,
@@ -1345,12 +1147,6 @@ function chatFromProfile(profile) {
   };
 }
 
-// Finds the card (state key) for an archived-chat profile. Cards are keyed
-// by thread id, which is the id in /archives/{thread_id} -- and also the
-// second segment of the /chats/{chat_id}/{thread_id} link saved in
-// s.chatUrl, so both are checked. Deliberately NOT matched on chat_id (the
-// first segment): that one is shared by every past session of the same
-// customer and could open the wrong session's card.
 function findTrackedChatByThread(profile) {
   const chat = (profile && profile.chat) || {};
   const candidates = new Set(
@@ -1383,18 +1179,8 @@ function showTrackedArchivedChat(trackedId, profile) {
   setStatus("Archived chat — showing its saved card.");
 }
 
-// Set once the SDK actually connects — lets the Refresh button re-sync
-// against the real widget on demand instead of always claiming "preview
-// mode", which stopped being accurate the moment live mode existed.
 let liveWidget = null;
 
-// Top-level (not nested in initLiveChatSdk's closure) so the Refresh button
-// can also call this directly for a manual re-sync.
-// Small, self-dismissing on-screen confirmation, separate from the
-// diagnostics-only statusBar (see setStatus -- routine confirmations are
-// deliberately silent there). This one is specifically for "which chat did
-// that action just affect" -- the thing CS has no other way to check in the
-// moment, handling several chats at once.
 let chatToastTimer = null;
 function showChatToast(text, kind) {
   let el = document.getElementById("chatToast");
@@ -1409,50 +1195,32 @@ function showChatToast(text, kind) {
   chatToastTimer = setTimeout(() => el.classList.remove("visible"), kind === "warn" ? 6000 : 3000);
 }
 
-// Called right before applyProfile swaps to a different chat -- this is the
-// exact moment a stray click could otherwise land on the wrong customer.
-// Flags it loudly, and extra loudly if the chat being swapped AWAY from had
-// something unsaved (a typed-but-not-looked-up username, or a lookup still
-// in flight) -- that's the specific situation that can turn into recording
-// one customer's case under a different one's card.
 function announceChatSwitch(prevChatId, nextChat) {
   const prev = prevChatId ? state[prevChatId] : null;
   const nextLabel = nextChat.customerName || nextChat.chatId;
   if (prev && prev.usernameDraft) {
-    // Typed but never looked up: that one really can end up recorded under the wrong customer, so it stays a loud warning.
     showChatToast(`⚠ Switched chats before "${prev.usernameDraft}" was submitted — now viewing ${nextLabel}. Come back to the other chat to finish it.`, "warn");
   } else if (prev && prev.lookupInFlight && prevChatId !== nextChat.chatId) {
-    // A running lookup is not a problem: it writes into ITS chat and the result is waiting there.
     showChatToast(`Lookup for ${prev.pendingLookup?.username || prev.username || "this player"} keeps running — results will be waiting when you come back.`, "info");
   } else if (prevChatId && prevChatId !== nextChat.chatId) {
     showChatToast(`Now viewing ${nextLabel}`, "info");
   }
 }
 
-// ---- A lookup keeps running when the agent switches chats ---------------------------------------------------------------------
-// The request itself never depended on which chat is in front (it writes into ITS chat's state); what used to go wrong was what it SAID:
-// its toast / status-bar text landed on whatever chat was focused by then, and a widget reload mid-lookup lost the result. Now:
-//  * every message a lookup produces is stored on THAT chat's state (s.lookupMessage, shown in that chat's card), and goes to the global
-//    status bar / toast only while that chat is still the focused one; otherwise ONE neutral toast says it finished elsewhere;
-//  * a small pill shows "1 lookup running in another chat", then "Lookup for X done" for a few seconds;
-//  * the running lookup is remembered (s.pendingLookup, no secrets) so a widget that is recreated mid-lookup can resume it once.
-const LOOKUP_RESUME_MAX_AGE_MS = 40_000;   // an unfinished lookup older than this is "interrupted", not resumed
-const LOOKUP_LOCK_MS = 10_000;             // lock lease; the running widget renews it every LOOKUP_LOCK_BEAT_MS
+const LOOKUP_RESUME_MAX_AGE_MS = 40_000;
+const LOOKUP_LOCK_MS = 10_000;
 const LOOKUP_LOCK_BEAT_MS = 3_000;
 const LOOKUP_DONE_PILL_MS = 10_000;
-const LOOKUP_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; // this copy of the widget
-let bgLookupDone = null;                   // { chatId, text, attention, until }: the "done" pill
+const LOOKUP_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+let bgLookupDone = null;
 let bgLookupPillTimer = null;
 let lookupResumeTimer = null;
-let lookupResumeCandidates = null;         // chats that had an unfinished lookup when this widget loaded
+let lookupResumeCandidates = null;
 
 function isFocusedChat(chatId) {
   return !!chatId && activeChats[0]?.chatId === chatId;
 }
 
-// What this lookup wants to say. Always remembered on its own chat; in the global status bar only while that chat is in front.
-// `attention` = it failed or something is unavailable (the neutral "finished" toast then says so).
-// The message is not drawn in the player card (only the status bar / Diagnostics); a finished lookup is recognised by it.
 function lookupSay(chatId, text, kind, attention = false) {
   const s = state[chatId];
   if (s) s.lookupMessage = { text, kind: kind || "info", attention: !!attention, at: Date.now() };
@@ -1480,7 +1248,6 @@ function refreshBackgroundLookupPill() {
   if (showDone) bgLookupPillTimer = setTimeout(refreshBackgroundLookupPill, Math.max(50, bgLookupDone.until - Date.now() + 50));
 }
 
-// A lookup ended while its chat was not in front: one neutral toast, and the "done" pill.
 function announceLookupFinishedElsewhere(chatId, username) {
   const s = state[chatId];
   const who = username || s?.username || "a player";
@@ -1489,26 +1256,23 @@ function announceLookupFinishedElsewhere(chatId, username) {
   bgLookupDone = { chatId, text: attention ? `⚠ Lookup for ${who} needs a retry` : `✓ Lookup for ${who} done`, attention, until: Date.now() + LOOKUP_DONE_PILL_MS };
 }
 
-// ---- who may (re)run a chat's lookup: one widget copy at a time --------------------------------------------------------------
 const lookupLockKey = (chatId) => `ca-lookup-lock:${chatId}`;
 function lookupLockHeldByOther(chatId) {
   try {
     const lock = JSON.parse(localStorage.getItem(lookupLockKey(chatId)) || "null");
     return !!(lock && lock.instance !== LOOKUP_INSTANCE_ID && Number(lock.until) > Date.now());
-  } catch (_) { return false; }                // unusable storage: do not block
+  } catch (_) { return false; }
 }
 function takeLookupLock(chatId) {
-  try { localStorage.setItem(lookupLockKey(chatId), JSON.stringify({ instance: LOOKUP_INSTANCE_ID, until: Date.now() + LOOKUP_LOCK_MS })); } catch (_) { /* best effort */ }
+  try { localStorage.setItem(lookupLockKey(chatId), JSON.stringify({ instance: LOOKUP_INSTANCE_ID, until: Date.now() + LOOKUP_LOCK_MS })); } catch (_) { }
 }
 function releaseLookupLock(chatId) {
   try {
     const lock = JSON.parse(localStorage.getItem(lookupLockKey(chatId)) || "null");
     if (lock && lock.instance === LOOKUP_INSTANCE_ID) localStorage.removeItem(lookupLockKey(chatId));
-  } catch (_) { /* best effort */ }
+  } catch (_) { }
 }
 
-// The lookup of one chat: the Look up button, and the resume after a widget reload, both end up here. `btn` is the clicked button (null
-// when resumed). Nothing here reads the DOM of the chat that is in front: everything it needs is passed in or lives in state[chatId].
 async function runLookup(chatId, { username, brand, telegramNow = false, link = "", previousRecordId = null, forcing = false, resumed = false, btn = null }) {
   const s = state[chatId];
   if (!s || s.lookupInFlight) return;
@@ -1521,7 +1285,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
   }, 45000);
   lookupControllers.set(chatId, controller);
   s.lookupInFlight = true;
-  s.lookupMessage = null;                                   // a new lookup replaces the previous message
+  s.lookupMessage = null;
   s.pendingLookup = { username, brand, link, telegram: !!telegramNow, previousRecordId, forcing: !!forcing, agent: selectedAgent, startedAt: Date.now(), resumed: !!resumed };
   takeLookupLock(chatId);
   const lockBeat = setInterval(() => takeLookupLock(chatId), LOOKUP_LOCK_BEAT_MS);
@@ -1532,26 +1296,17 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     btn.disabled = false;
     btn.textContent = "Cancel";
   } else if (isFocusedChat(chatId)) {
-    renderChats(activeChats);                               // resumed: show the Cancel button
+    renderChats(activeChats);
   }
   refreshBackgroundLookupPill();
-  saveState();                                              // a widget that is recreated now finds pendingLookup and can resume it
+  saveState();
   try {
-    // lark-search.js resolves every bonus's own source table directly now
-    // (no more Customer Approaching Lookup-column delay) — this response
-    // is already final, nothing left to poll for.
-    //
-    // One Customer Approaching row per chat, not one per Look Up click —
-    // a repeat lookup for this same chat passes back the record created
-    // last time so the backend deletes it first. Only sent if that
-    // record hasn't been logged (submitted) yet — a completed case is
-    // never deleted by a stray re-lookup (previousRecordId is decided by the caller).
     const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, notVip } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
     s.caLinkSaved = !!link;
     s.matchedRow = row;
     s.otherBrandMatches = otherBrands;
     s.caRecordId = caRecordId;
-    if (previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId); // the server replaced it
+    if (previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId);
     s.caOwner = selectedAgent;
     s.claimedPrograms = {};
     s.vs96FeedbackQuery1 = "";
@@ -1565,12 +1320,6 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     const sameForced = !!s.forcedVipFor && s.forcedVipFor.toLowerCase() === username.toLowerCase();
     if (isFocusedChat(chatId)) showChatToast(`✓ Looked up "${username}" — ${brand}`, "info");
     if (notVip && !forcing && !sameForced) {
-      // CS only tracks VIP retention here — a confirmed non-VIP result
-      // is treated the same as Unknown player: nothing about this chat
-      // should end up in Customer Approaching (see setUnknown). The
-      // checkbox/username row lives outside the three targeted slots
-      // below, so this needs a full render -- done after the in-flight
-      // flag clears, so the button comes back as "Force lookup".
       s.notVipResult = true;
       s.forcedVipFor = "";
       setUnknown(chatId, true, { silent: true });
@@ -1588,12 +1337,11 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     if (lookupWarnings.length) {
       lookupSay(chatId, `Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error", true);
     }
-    // The bonus results above are valid; only the Lark case row was not saved. Warn, do not fail.
     if (caseRowError) {
       lookupSay(chatId, lookupWarnings.length ? `${caseRowError} Also unavailable: ${lookupWarnings.join(", ")}.` : caseRowError, "error", true);
     }
   } catch (err) {
-    if (forcing) { s.isUnknown = true; reportUnknownTick(chatId, true, true); } // failed force lookup -- back to how it was
+    if (forcing) { s.isUnknown = true; reportUnknownTick(chatId, true, true); }
     if (controller.signal.aborted) {
       lookupSay(chatId, timedOut ? "Lookup timed out after 45 seconds. Try again." : "Lookup canceled.", timedOut ? "error" : "info", timedOut);
     } else {
@@ -1603,7 +1351,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     clearTimeout(timeoutId);
     clearInterval(lockBeat);
     if (lookupControllers.get(chatId) === controller) lookupControllers.delete(chatId);
-    scheduleNeedsAttentionRefresh(1500); // a new case row may now belong in Needs Attention (the timer is slower now)
+    scheduleNeedsAttentionRefresh(1500);
     s.lookupInFlight = false;
     s.pendingLookup = null;
     releaseLookupLock(chatId);
@@ -1631,16 +1379,13 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
         }
       }
     } else {
-      announceLookupFinishedElsewhere(chatId, username);      // its card is drawn fresh (with the message) when the agent comes back
+      announceLookupFinishedElsewhere(chatId, username);
     }
     refreshBackgroundLookupPill();
     saveState();
   }
 }
 
-// After the widget is (re)created: a lookup that was running when the old copy went away is re-run ONCE if it is recent. The server
-// reuses the chat's blank row (chat link + the queue's create memory), so no second row appears. Older, or already resumed once:
-// "interrupted". Never another agent's lookup, never one that another widget copy is (still) running or resuming.
 function resumePendingLookups() {
   clearTimeout(lookupResumeTimer);
   if (!selectedAgent || !lookupResumeCandidates) return;
@@ -1650,8 +1395,8 @@ function resumePendingLookups() {
     const p = s?.pendingLookup;
     if (!p || s.lookupInFlight) { lookupResumeCandidates.delete(chatId); continue; }
     const age = Date.now() - Number(p.startedAt || 0);
-    if (s.lookupMessage && Number(s.lookupMessage.at) >= Number(p.startedAt || 0)) { s.pendingLookup = null; lookupResumeCandidates.delete(chatId); continue; }   // it did finish
-    if (p.agent !== selectedAgent || (s.caOwner && s.caOwner !== selectedAgent)) { lookupResumeCandidates.delete(chatId); continue; }   // somebody else's: leave it alone
+    if (s.lookupMessage && Number(s.lookupMessage.at) >= Number(p.startedAt || 0)) { s.pendingLookup = null; lookupResumeCandidates.delete(chatId); continue; }
+    if (p.agent !== selectedAgent || (s.caOwner && s.caOwner !== selectedAgent)) { lookupResumeCandidates.delete(chatId); continue; }
     if (p.resumed || !(age >= 0 && age < LOOKUP_RESUME_MAX_AGE_MS)) {
       s.pendingLookup = null;
       lookupResumeCandidates.delete(chatId);
@@ -1659,7 +1404,7 @@ function resumePendingLookups() {
       saveState();
       continue;
     }
-    if (lookupLockHeldByOther(chatId)) { waiting = true; continue; }       // another copy is on it (or just died: its lock lapses within seconds)
+    if (lookupLockHeldByOther(chatId)) { waiting = true; continue; }
     lookupResumeCandidates.delete(chatId);
     takeLookupLock(chatId);
     void runLookup(chatId, { username: p.username, brand: p.brand, telegramNow: p.telegram, link: p.link || "", previousRecordId: p.previousRecordId || null, forcing: !!p.forcing, resumed: true });
@@ -1671,20 +1416,14 @@ function startLookupResume() {
   resumePendingLookups();
 }
 
-// The archived chat a "restore from Lark" is currently being waited for, so a slow answer cannot open a card for a chat the
-// agent has already left.
 let archiveOpening = "";
 
-// An archived chat from the agent's unrecorded-chats list has no card anywhere (that is why it is on the list): no saved copy
-// in this browser and no Lark row under their name. Build a fresh, closed card for it so they can look the player up and
-// record it like any other chat, instead of finding an empty panel. Nothing is stamped on it until they record.
 function openFreshArchivedCard(threadId, entry, profile) {
   if (!state[threadId]) {
     ensureChatState({ chatId: threadId, customerName: (profile && profile.name) || entry.customer || "", link: "", isTelegram: false, groupName: "" });
   }
   const s = state[threadId];
   s.chatOpen = false;
-  // The link every other row carries: /chats/{chat_id}/{thread_id} (the chat id is what "last username" matching uses).
   if (!s.chatUrl && entry.chatId) s.chatUrl = `https://my.livechatinc.com/chats/${entry.chatId}/${threadId}`;
   saveState();
   resolveBrandFromGroupId(threadId, profile && profile.chat && profile.chat.groupID);
@@ -1701,30 +1440,12 @@ function applyProfile(profile) {
     renderChats(activeChats);
     return;
   }
-  // The SDK fires this same customer_profile event/getCustomerProfile()
-  // shape for three different contexts (profile.source): "chats" (a real
-  // live conversation), "archives" (an agent just browsing chat history),
-  // and "customers" (the Customers section). Confirmed live: opening an
-  // archived chat was triggering a full lookup/status-polling cycle for it
-  // exactly like a real live chat -- this widget has nothing useful to do
-  // for either of the other two, so only "chats" is treated as an actual
-  // active chat; everything else clears the widget the same as no profile
-  // at all, rather than silently tracking something that's already over.
-  // Exception: an archived chat this widget already has a card for. Once a
-  // chat ends, LiveChat rewrites its link from /chats/{chat_id}/{thread_id}
-  // to /archives/{thread_id}, so clicking Open on a Needs Attention card
-  // lands here as an "archives" profile, not "chats". Matched by thread id
-  // (the second id, and the key every card is stored under), so the agent
-  // gets their own saved card back to finish and record it -- nothing is
-  // tracked or polled, since the chat is already over.
   if (profile.source === "archives") {
     const trackedId = findTrackedChatByThread(profile);
     if (trackedId) {
       showTrackedArchivedChat(trackedId, profile);
       return;
     }
-    // No saved card in this browser (e.g. a new incognito window) -- look
-    // for this agent's own Lark rows for this thread and rebuild it.
     const threadId = String(profile.chat.id);
     archiveOpening = threadId;
     restoreCardFromLark(threadId, { archived: true, customerName: profile.name || "" }).then((restored) => {
@@ -1749,11 +1470,8 @@ function applyProfile(profile) {
   const chat = chatFromProfile(profile);
   announceChatSwitch(activeChats[0]?.chatId, chat);
   activeChats = [chat];
-  if (bgLookupDone && bgLookupDone.chatId === chat.chatId) bgLookupDone = null;   // the agent is back: no need to say it again
+  if (bgLookupDone && bgLookupDone.chatId === chat.chatId) bgLookupDone = null;
   refreshBackgroundLookupPill();
-  // In live mode there's only ever one chat shown at a time, so a newly-
-  // active chat should always render expanded — collapsing exists to save
-  // space among several chats, which doesn't apply here.
   ensureChatState(chat);
   state[chat.chatId].expanded = true;
   renderChats(activeChats);
@@ -1762,14 +1480,6 @@ function applyProfile(profile) {
   if (!state[chat.chatId].caRecordId) restoreCardFromLark(chat.chatId, { customerName: chat.customerName });
 }
 
-// The SDK only gives us an opaque groupID (chatFromProfile leaves groupName
-// blank), so this resolves it server-side via LiveChat's own Groups API
-// (see livechat-group-name.js — no LiveChat PAT configured just means this
-// quietly does nothing) and runs the real name through the same
-// deriveBrandFromGroup() the old demo data used.
-// In-memory only (per widget copy): the brand this copy detected for each
-// chat, and the group id it came from -- lets Look up recover Brand if the
-// saved copy of the card ever loses it, and re-detect if it never had it.
 const detectedBrandFor = new Map();
 const groupIdFor = new Map();
 
@@ -1781,31 +1491,26 @@ function liveChatAgentTokens() {
       const token = sessionStorage.getItem(`ca-livechat-agent-token:${accountKey}`) || "";
       if (token && expiry > Date.now()) tokens[accountKey] = token;
     }
-  } catch (_) { /* OAuth remains optional until the agent connects LiveChat */ }
+  } catch (_) { }
   return tokens;
 }
 
-// A new LiveChat tab starts with an empty sessionStorage, so the login used to be asked for again in every tab. The login is
-// also kept in localStorage -- shared by the tabs of one browser window, forgotten when an incognito window closes -- and a tab
-// copies it back into its own sessionStorage as it opens (the Blast page reads it from there). The expiry is the same as
-// LiveChat's, so nothing outlives the token.
 const LIVECHAT_LOGIN_BACKUP = "ca-livechat-login-backup";
 function saveLiveChatLogin(accountKey, token, expiresAt) {
   try {
     sessionStorage.setItem(`ca-livechat-agent-token:${accountKey}`, token);
     sessionStorage.setItem(`ca-livechat-agent-token-expiry:${accountKey}`, String(expiresAt));
     sessionStorage.setItem("ca-livechat-selected-account", accountKey);
-  } catch (_) { /* without sessionStorage this tab cannot keep the login */ }
-  try { localStorage.setItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`, JSON.stringify({ token, expiresAt: Number(expiresAt) })); } catch (_) { /* other tabs will ask */ }
+  } catch (_) { }
+  try { localStorage.setItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`, JSON.stringify({ token, expiresAt: Number(expiresAt) })); } catch (_) { }
 }
 function forgetLiveChatLogin(accountKey) {
   try {
     sessionStorage.removeItem(`ca-livechat-agent-token:${accountKey}`);
     sessionStorage.removeItem(`ca-livechat-agent-token-expiry:${accountKey}`);
-  } catch (_) { /* non-fatal */ }
-  try { localStorage.removeItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`); } catch (_) { /* non-fatal */ }
+  } catch (_) { }
+  try { localStorage.removeItem(`${LIVECHAT_LOGIN_BACKUP}:${accountKey}`); } catch (_) { }
 }
-// A tab without its own login takes the shared one, if it is still valid; an expired shared one is cleaned away.
 function restoreLiveChatLogins() {
   for (const accountKey of ["lc1", "lc2"]) {
     try {
@@ -1818,23 +1523,19 @@ function restoreLiveChatLogins() {
       sessionStorage.setItem(`ca-livechat-agent-token:${accountKey}`, shared.token);
       sessionStorage.setItem(`ca-livechat-agent-token-expiry:${accountKey}`, String(shared.expiresAt));
       if (!sessionStorage.getItem("ca-livechat-selected-account")) sessionStorage.setItem("ca-livechat-selected-account", accountKey);
-    } catch (_) { /* no storage: the agent signs in as before */ }
+    } catch (_) { }
   }
 }
 
-// One-time re-login. A LiveChat login made before the accounts scopes were added to the two LiveChat apps cannot read the
-// agent's email, so every stored login is dropped once and the agent signs in again (their agent name comes straight back).
-// The mark that this was done lives in both storages, so a new tab does not repeat it. To force another round later, change
-// the epoch.
 const LIVECHAT_TOKEN_EPOCH = "2026-10-08-accounts-scopes";
 const LIVECHAT_TOKEN_EPOCH_KEY = "ca-livechat-token-epoch";
 function dropOldLiveChatTokens() {
   let done = false;
-  try { done = sessionStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH; } catch (_) { /* non-fatal */ }
-  try { done = done || localStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH; } catch (_) { /* non-fatal */ }
+  try { done = sessionStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH; } catch (_) { }
+  try { done = done || localStorage.getItem(LIVECHAT_TOKEN_EPOCH_KEY) === LIVECHAT_TOKEN_EPOCH; } catch (_) { }
   if (!done) for (const accountKey of ["lc1", "lc2"]) forgetLiveChatLogin(accountKey);
-  try { sessionStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH); } catch (_) { /* non-fatal */ }
-  try { localStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH); } catch (_) { /* non-fatal */ }
+  try { sessionStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH); } catch (_) { }
+  try { localStorage.setItem(LIVECHAT_TOKEN_EPOCH_KEY, LIVECHAT_TOKEN_EPOCH); } catch (_) { }
 }
 dropOldLiveChatTokens();
 restoreLiveChatLogins();
@@ -1843,9 +1544,6 @@ async function resolveBrandFromGroupId(chatId, groupID) {
   if (groupID) groupIdFor.set(chatId, groupID);
   if (!chatId) return;
   if (!groupID) {
-    // Silent before this — if the SDK profile ever lacks a groupID at all,
-    // there'd be zero trace of why Brand never auto-filled. Logged once
-    // instead of every call so a genuinely groupID-less setup doesn't spam.
     if (!rawGroupIdMissingLoggedFor.has(chatId)) {
       rawGroupIdMissingLoggedFor.add(chatId);
       logDiagnostic(`Brand auto-detect skipped for this chat — LiveChat's SDK profile had no groupID.`, "warn");
@@ -1855,50 +1553,27 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     const res = await fetch("/livechat-group-name", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // chatId here is the thread id (see chatFromProfile) -- lets the server
-      // find which LiveChat account owns the chat, since a group ID alone is
-      // only unique within one account.
       body: JSON.stringify({ groupID, threadId: chatId, agentTokens: liveChatAgentTokens() }),
     });
     const data = await res.json();
     if (data.accountKey) setCurrentLiveChatAccount(data.accountKey, chatId);
-    // Group names also carry the department marker. Run this before the
-    // Brand early-return because Priority 96 / Priority TC deliberately do
-    // not count as brand groups.
     if (data.ok && Array.isArray(data.departmentGroups)) {
-      // Authoritative: these belong to the signed-in OAuth agent, rather
-      // than whichever agent most recently participated in this chat.
       setDepartmentFromGroups(data.departmentGroups);
     }
     if (!data.ok || !data.groupName) {
-      // Same deal — this used to fail completely silently, which is exactly
-      // how the JUS-brand-never-detected report went untraceable. data.error
-      // (from livechat-group-name.js's own catch) says why when there is one.
       logDiagnostic(
         `Brand auto-detect failed for group ID "${groupID}"${data.error ? `: ${data.error}` : " — group not found in LiveChat's group list."}`,
         "warn"
       );
-      scheduleBrandRetry(chatId, groupID); // LiveChat lookup failed -- try again shortly
+      scheduleBrandRetry(chatId, groupID);
       return;
     }
     const s = state[chatId];
-    // Bail if the agent already picked a brand manually, or the chat moved
-    // on before this (network-latency) response arrived.
     if (!s || s.brand) return;
-    // Only ever auto-fill Brand with a value that's an exact match (case-
-    // insensitive) against brandOptions — Lark's Brand field is a Single
-    // Select, and writing anything that isn't an existing option silently
-    // creates a brand-new one there instead of erroring. A group naming
-    // convention this parser doesn't fully understand (e.g. "AS126
-    // GENERAL" deriving to "AS", which isn't a real Brand option) must
-    // leave Brand blank for a manual pick, never guess and risk polluting
-    // that field's option list.
     const derived = deriveBrandFromGroup(data.groupName);
     const matchedBrand = brandOptions.find((b) => b.toLowerCase() === derived.toLowerCase());
     if (!matchedBrand) {
-      if (!brandOptions.length) scheduleBrandRetry(chatId, groupID); // option list not loaded yet
-      // A Brand added in Lark after this widget loaded is not in the in-memory list yet (it is only
-      // re-read on a slow timer). Re-read it now -- at most once every 30 s -- and try again.
+      if (!brandOptions.length) scheduleBrandRetry(chatId, groupID);
       if (derived && Date.now() - lastBrandListRefreshAt > 30_000) {
         lastBrandListRefreshAt = Date.now();
         if (!(await fetchBootstrapOptions({ fresh: true }))) await fetchBrandOptions({ fresh: true });
@@ -1914,52 +1589,26 @@ async function resolveBrandFromGroupId(chatId, groupID) {
     }
     detectedBrandFor.set(chatId, matchedBrand);
     brandRetryAttempts.delete(chatId);
-    s.brand = matchedBrand; // canonical casing from Lark's own option list, not whatever the group name happened to use
-    // Full code (with digits) for the Escalation Ticket section's own Brand
-    // field, which expects e.g. "VS96" not "VS" -- only fills in if blank,
-    // same as Brand itself, so a manual pick there sticks too.
+    s.brand = matchedBrand;
     if (!s.escalation.brand) s.escalation.brand = deriveFullBrandCode(data.groupName);
     logDiagnostic(`Auto-detected brand "${s.brand}" from group "${data.groupName}"${data.groups && data.groups.length > 1 ? ` (chat's groups: ${data.groups.join(", ")})` : ""}.`);
     if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
-    checkLastUsername(chatId); // brand is one of the two things this needs — try now that it's ready
+    checkLastUsername(chatId);
   } catch (err) {
     logDiagnostic(`Brand auto-detect request failed: ${err.message}`, "warn");
     scheduleBrandRetry(chatId, groupID);
   }
 }
-const rawGroupIdMissingLoggedFor = new Set(); // avoid re-logging the same missing-groupID chat repeatedly
+const rawGroupIdMissingLoggedFor = new Set();
 
-// LiveChat's URL is /chats/{chat_id}/{thread_id} — chat_id stays the same
-// across every reopen of a given customer's conversation, thread_id is
-// unique to each individual chat session (confirmed via the auto-close
-// investigation). Only chat_id can ever match a *previous* chat's link.
 function extractStableChatId(link) {
   const m = String(link || "").match(/\/chats\/([^/]+)\/[^/]+/);
   return m ? m[1] : "";
 }
 
-// Looks up P&L's "Live Chat link" field for a row whose link contains THIS
-// chat's stable chat_id — if this exact customer chatted before and that
-// case got recorded, this recognizes them before the agent even asks.
-// Needs both Brand (to scope the search — never search another brand's
-// players) and the resolved chat link (only available once
-// livechat-chat-status.js resolves the real chat_id, ~a poll tick after the
-// chat opens) — safe to call from either place, since it no-ops until both
-// are ready and only ever runs once per chat.
-//
-// lastUsernameStarted (not lastUsernameChecked) is the "don't call twice"
-// guard, set the instant this begins — separate from lastUsernameLoading
-// (the visible state) so an agent sees "Checking…" immediately instead of
-// nothing changing until the network round trip finishes. Without that
-// visible cue, someone might start typing their own guess in the still-
-// empty box while this is in flight — since the auto-fill only ever fills
-// an empty box, that typing would silently and permanently pre-empt it for
-// this chat, with no obvious reason why the auto-fill "didn't work."
 async function checkLastUsername(chatId) {
   const s = state[chatId];
   if (!s || s.lastUsernameStarted) return;
-  // Prefer s.chatUrl (survives once this chat isn't the focused one
-  // anymore) over activeChats[].link, which only exists while it is.
   const chatDef = activeChats.find((c) => c.chatId === chatId);
   const stableId = extractStableChatId(s.chatUrl || chatDef?.link);
   if (!stableId || !s.brand) return;
@@ -1977,26 +1626,17 @@ async function checkLastUsername(chatId) {
       s.lastUsernameFound = true;
       s.lastUsernameValue = data.username;
       logDiagnostic(`Recognized this chat — last recorded username was "${data.username}".`, "success");
-      // Semi-auto: only fills the box if the agent hasn't already typed
-      // something themselves — never overwrites a manual entry.
       if (!s.username) s.username = data.username;
     } else {
       s.lastUsernameFound = false;
-      // "Live Chat link" on P&L is a Lookup field, not a plain stored
-      // value — whether Lark's search API can even filter by a Lookup at
-      // all is unverified. If it can't, this is where that would show up,
-      // so surface it rather than let this look identical to "no match".
       if (data.error) logDiagnostic(`Last-username lookup failed: ${data.error}`, "warn");
     }
-  } catch (_) { /* non-fatal — just no "last username" hint shown */ }
+  } catch (_) { }
   s.lastUsernameLoading = false;
   s.lastUsernameChecked = true;
   updateLastUsernameUi(chatId);
 }
 
-// Surgical DOM update (not a full renderChats) so this never disrupts
-// whatever the agent might be actively doing elsewhere on the card —
-// updates the username box's placeholder/value and the player-info line.
 function updateLastUsernameUi(chatId) {
   const s = state[chatId];
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
@@ -2010,23 +1650,14 @@ function updateLastUsernameUi(chatId) {
   if (slot) slot.innerHTML = renderPlayerInfo(chatId);
 }
 
-// Polls LiveChat's Agent Chat API (via livechat-chat-status.js) for the
-// currently active chat's Telegram/open-closed status — there's no push
-// event for either (confirmed for Telegram from the SDK's own types;
-// confirmed for chat-closed from the SDK having no such event at all), so
-// this is the only way to detect them short of a full webhook integration.
-// The Telegram toggle stays manually overridable alongside this (see the
-// "change" listener below) — chat-closed detection has no manual fallback
-// anymore since the "Close chat" button was removed once this auto-close
-// path proved reliable.
 let chatStatusPollTimer = null;
-const CHAT_STATUS_POLL_MS = 2_000; // worst-case detection latency = this value; avg = half of it
+const CHAT_STATUS_POLL_MS = 2_000;
 const CLOSE_STATUS_CONFIRMATIONS = 2;
 const closeStatusEvidenceByChat = new Map();
-const rawStatusDebugLoggedFor = new Set(); // avoid re-logging the same raw payload every tick
-const firstCheckLoggedFor = new Set(); // one confirmation per chat that get_chat succeeded at all
-const errorLoggedFor = new Set(); // avoid spamming the same persistent error every 20s
-const autoMissingLoggedFor = new Map(); // chatId -> last "missing" list logged by submitRecord's auto path, so sweepPendingChats retrying a permanently-incomplete chat doesn't spam the identical message every 8s forever
+const rawStatusDebugLoggedFor = new Set();
+const firstCheckLoggedFor = new Set();
+const errorLoggedFor = new Set();
+const autoMissingLoggedFor = new Map();
 
 let chatStatusPollTick = null;
 function stopChatStatusPolling() {
@@ -2037,83 +1668,45 @@ function stopChatStatusPolling() {
   }
 }
 
-// Owns the tight (every CHAT_STATUS_POLL_MS) poll for whichever ONE chat is
-// currently focused/on screen — the only chat this widget instance can ever
-// actually be "live" for (see sweepPendingChats below for everything else).
-// The "should this timer keep going" decision lives here, not inside
-// checkChatStatus itself, since checkChatStatus is also called directly by
-// the sweep for other chats and must never be able to stop THIS timer as a
-// side effect of checking some other chat.
 function startChatStatusPolling(chatId) {
   stopChatStatusPolling();
   const tick = () => {
     const s = state[chatId];
     if (!s || !s.chatOpen || s.logged) { stopChatStatusPolling(); return; }
-    // A hidden widget cannot show anything, so do not spend a Lark/LiveChat call every 2 s on it.
-    // The background sweep still checks this chat while hidden (see sweepPendingChats), and one
-    // immediate tick runs the moment the widget becomes visible again.
     if (document.hidden) return;
     checkChatStatus(chatId);
   };
   chatStatusPollTick = tick;
-  tick(); // don't wait for the first interval tick
+  tick();
   chatStatusPollTimer = setInterval(tick, CHAT_STATUS_POLL_MS);
 }
 
-// Checks ONE chat's open/Telegram status and auto-records it if it just
-// closed. Deliberately has no dependency on activeChats[0] or the
-// chatStatusPollTimer above — callable equally for the currently-focused
-// chat (via startChatStatusPolling) or any other pending chat (via
-// sweepPendingChats), since LiveChat's Details widget only runs one
-// instance per focused chat and a background chat needs exactly the same
-// check, just from a different caller and cadence.
 async function checkChatStatus(chatId) {
   const s = state[chatId];
   if (!s || !s.chatOpen || s.logged) return;
   try {
-    // Once a previous check has resolved s.chatUrl, pull the real chat_id
-    // back out of it (https://my.livechatinc.com/chats/{chatId}/{threadId})
-    // and send it along -- lets the backend look this exact chat up
-    // directly instead of searching list_chats' 100-most-recent window,
-    // which a backgrounded chat silently falls out of over time (see
-    // livechat-chat-status.js's getChatFor header note).
     const realChatId = s.chatUrl?.match(/\/chats\/([^/]+)\//)?.[1] || null;
     const res = await fetch("/livechat-chat-status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // accountKey: ask the license this chat is known to belong to first; debug: ask for the raw
-      // LiveChat payload only until this chat's first successful check has been logged.
       body: JSON.stringify({ chatId, realChatId, accountKey: s.liveChatAccount || currentLiveChatAccount || undefined, debug: !firstCheckLoggedFor.has(chatId) || undefined }),
     });
     const data = await res.json();
     if (!data.ok) return;
     if (data.accountKey) setCurrentLiveChatAccount(data.accountKey, chatId);
 
-    // chatId here is actually the thread id (see livechat-chat-status.js
-    // header note) — the backend resolves the real chat id via list_chats
-    // and hands back a ready-to-click chatUrl once it does. Logged wherever
-    // available so the agent can cross-check against LiveChat's own UI.
     const linkSuffix = data.chatUrl ? ` (${data.chatUrl})` : ` (thread ${chatId}, chat id not yet resolved)`;
 
-    // Saved on state itself (not just activeChats[].link) so it's still
-    // there for submitRecord/checkLastUsername once this chat isn't the
-    // focused one anymore — activeChats[].link (what the "Open ↗" button
-    // and claim's chatLink read) is kept in sync too, when there's a live
-    // entry for it. Previously always "" (chatFromProfile has no way to get
-    // a permalink from the SDK alone), so both were silently blank for
-    // every real chat until now.
     if (data.chatUrl && s.chatUrl !== data.chatUrl) {
       s.chatUrl = data.chatUrl;
       const chatEntry = activeChats.find((c) => c.chatId === chatId);
       if (chatEntry) chatEntry.link = data.chatUrl;
       if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
-      checkLastUsername(chatId); // the chat link is the other thing this needs — try now that it's ready
+      checkLastUsername(chatId);
     }
     saveLinkToRecord(chatId);
 
     if (data.error) {
-      // Once per chat — this call runs every 20s, and a persistent error
-      // would otherwise spam the log with the identical line on every tick.
       if (!errorLoggedFor.has(chatId)) {
         errorLoggedFor.add(chatId);
         logDiagnostic(`Chat status check failed for thread "${chatId}": ${data.error}`, "error");
@@ -2122,11 +1715,6 @@ async function checkChatStatus(chatId) {
     }
 
     if (data.notConfigured) {
-      // Distinct, unmistakable message — this used to fall through to the
-      // "raw" branch below with no raw payload to show, which crashed
-      // JSON.stringify(undefined).slice(...) and got silently swallowed by
-      // the catch, giving zero diagnostic feedback for the single most
-      // likely misconfiguration (LIVECHAT_PAT missing on this site).
       if (!rawStatusDebugLoggedFor.has(chatId)) {
         rawStatusDebugLoggedFor.add(chatId);
         logDiagnostic("Telegram/auto-close detection is off — LIVECHAT_PAT isn't set on this site.", "warn");
@@ -2135,8 +1723,6 @@ async function checkChatStatus(chatId) {
     }
 
     if (data.notFound) {
-      // The thread wasn't among the chats list_chats returned — surfaced
-      // distinctly so it's never mistaken for a confirmed close.
       if (!rawStatusDebugLoggedFor.has(chatId)) {
         rawStatusDebugLoggedFor.add(chatId);
         logDiagnostic(`Chat lookup for thread "${chatId}" found no match in list_chats — raw: ${JSON.stringify(data.raw ?? null)}`, "warn");
@@ -2144,24 +1730,16 @@ async function checkChatStatus(chatId) {
       return;
     }
 
-    // Confirms the lookup actually resolved this chat at least once —
-    // otherwise a later miss is ambiguous: did it ever work, or was it
-    // always broken for this chat? Logged once, success or not.
     if (!firstCheckLoggedFor.has(chatId)) {
       firstCheckLoggedFor.add(chatId);
       logDiagnostic(`First chat status check succeeded: isActive=${data.isActive}, isTelegram=${data.isTelegram}.${linkSuffix}`);
     }
 
-    // Skips overwriting once CS has manually toggled this — otherwise the
-    // next poll tick (every 2s) would just flip a manual correction right
-    // back, making the override effectively impossible to keep.
     if (typeof data.isTelegram === "boolean" && data.isTelegram !== s.telegram && !s.telegramManual) {
       s.telegram = data.isTelegram;
       logDiagnostic(`Auto-detected Telegram chat = ${data.isTelegram}.${linkSuffix}`);
       if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
     } else if (data.isActive === null && !rawStatusDebugLoggedFor.has(chatId)) {
-      // Expected fields weren't found — surface the raw response once so
-      // the field paths can be corrected against real data.
       rawStatusDebugLoggedFor.add(chatId);
       logDiagnostic("Chat status fields not recognized — raw: " + JSON.stringify(data.raw ?? null).slice(0, 500), "warn");
     }
@@ -2169,10 +1747,6 @@ async function checkChatStatus(chatId) {
     if (data.isActive !== false) closeStatusEvidenceByChat.delete(chatId);
 
     if (data.isActive === false && s.chatOpen) {
-      // list_chats can briefly return an old inactive thread summary just as
-      // a chat is reopened. Never close from that broad snapshot; first get
-      // the resolved chat id, then require two spaced confirmations from the
-      // direct get_chat path before auto-recording anything.
       if (!realChatId) return;
       const now = Date.now();
       const previousEvidence = closeStatusEvidenceByChat.get(chatId);
@@ -2186,17 +1760,13 @@ async function checkChatStatus(chatId) {
 
       closeStatusEvidenceByChat.delete(chatId);
       logDiagnostic(`Auto-detected chat closed — auto-recording.${linkSuffix}`, "success");
-      // Only stop chatStatusPollTimer if it's actually this chat's own —
-      // checkChatStatus is also called for other chats by sweepPendingChats
-      // below, which must never stop the currently-focused chat's timer as
-      // a side effect of some other chat closing.
       if (activeChats[0]?.chatId === chatId) stopChatStatusPolling();
       s.chatOpen = false;
       if (activeChats[0]?.chatId === chatId) renderChats(activeChats);
       await submitRecord(chatId, { auto: true });
-      renderNeedsAttentionPanel(); // reflect immediately if that submit left this chat incomplete
+      renderNeedsAttentionPanel();
     }
-  } catch (_) { /* non-fatal — just try again next tick */ }
+  } catch (_) { }
 }
 
 function initLiveChatSdk() {
@@ -2209,13 +1779,6 @@ function initLiveChatSdk() {
     liveWidget = widget;
     previewMode = false;
     syncMainTabs();
-    // We're definitely embedded in real LiveChat now (this promise only
-    // resolves inside an actual Agent App) — stop showing demo data
-    // immediately, even before we know whether a chat happens to be
-    // selected yet. Previously this only replaced activeChats once a valid
-    // profile arrived, so with nothing selected (getCustomerProfile()
-    // returning null) the sample chats stayed visible forever, looking
-    // like real data when it wasn't.
     activeChats = [];
     renderChats(activeChats);
     applyProfile(widget.getCustomerProfile());
@@ -2225,31 +1788,16 @@ function initLiveChatSdk() {
   });
 }
 
-// Most LiveChat groups are named "<BRAND><DIGITS> Priority Support" —
-// Lark's Brand lookup strips digits — "VS96 Priority Support" → "VS". Some
-// (2026-09-10, confirmed from a real Groups list: "HOT GENERAL", "EZ
-// GENERAL", "VS GENERAL", "RM GENERAL", "BM GENERAL", "AS126 GENERAL")
-// instead use "<BRAND>[DIGITS] GENERAL" — same shape, different suffix, so
-// stripped the same way. A plain "General"/"96 General" group (no real
-// brand in the name at all) still correctly falls through to an empty
-// string either way, leaving Brand for a manual pick same as always.
 function deriveBrandFromGroup(groupName) {
   if (!groupName) return "";
   return groupName
     .replace(/\s*(prior\w*\s+support|general)\s*/i, "")
     .replace(/\d+/g, "")
-    // Strips emoji (e.g. the flag LiveChat group names wrap the brand code
-    // in) — Extended_Pictographic covers most emoji, Regional_Indicator
-    // covers flag pairs specifically (flags aren't pictographic symbols),
-    // ️/‍ are the variation selector/ZWJ used to combine glyphs.
     .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-// Same cleanup as deriveBrandFromGroup, but keeps the digits -- the
-// escalation ticket's own Brand field expects the full brand+number code
-// ("VS96", not "VS"; confirmed from the real table's Brand column values).
 function deriveFullBrandCode(groupName) {
   if (!groupName) return "";
   return groupName
@@ -2259,12 +1807,6 @@ function deriveFullBrandCode(groupName) {
     .trim();
 }
 
-// Fetched live from Lark's own Inquiry field (see fetchInquiryOptions) so a
-// tag added/renamed/removed there shows up here without a redeploy. This
-// array is only the fallback shown until that first fetch resolves (and if
-// it ever fails outright, e.g. preview mode with no Lark configured) --
-// kept as a snapshot of the real list so the app never opens on an empty
-// Inquiry dropdown.
 let inquiryOptions = [
   "Free Spin", "Ang Pao", "Deposit Challenge", "Feedback", "TOP P&L",
   "TOP LTV", "Grace Period", "1D", "3D", "7D", "14D", "19D", "21D",
@@ -2289,13 +1831,11 @@ async function fetchInquiryOptions({ fresh = false } = {}) {
     const res = await fetch("/lark-inquiry-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok && data.options && data.options.length) inquiryOptions = data.options;
-  } catch (_) { /* non-fatal — keeps whatever list it already had */ }
+  } catch (_) { }
 }
 
-// Maps each bonus program to the closest Inquiry option — auto-selected
-// the moment CS clicks Claim so they don't have to pick it manually.
 const BONUS_INQUIRY_MAP = {
-  riskPlayer: "Bonus Checking", // fallback only — see resolveInquiryForProgram
+  riskPlayer: "Bonus Checking",
   topPnl: "TOP P&L",
   gracePeriod: "Grace Period",
   ltvTest: "TOP LTV",
@@ -2307,14 +1847,6 @@ const BONUS_INQUIRY_MAP = {
   vs96Feedback: "VS96 Feedback bonus",
 };
 
-// Risk Player is a single Lark field, but its value encodes which day-tier
-// bonus actually applies for this customer (e.g. "7D 20%", "14D 30%" —
-// "1D No Bonus"/"3D No Bonus" never reach here at all, filtered out earlier
-// by isClaimableValue/NO_BONUS_PATTERN). The Inquiry tag should reflect that
-// specific tier ("7D", "14D", ...), not a generic "Bonus Checking" catch-all
-// — those day-tier tags already exist in inquiryOptions. Falls back to the
-// static map above if the value doesn't start with a recognized day-tier,
-// so this never silently produces no inquiry at all.
 function resolveInquiryForProgram(key, display) {
   if (key === "riskPlayer") {
     const match = String(display || "").match(/^\s*(\d+D)\b/i);
@@ -2329,20 +1861,15 @@ function programHasAmount(key) {
     || configuredBonusPrograms.some((item) => item.key === key && item.amountEligible);
 }
 
-// Fetched live from Lark's own Status field, same as inquiryOptions above —
-// this fallback is only shown until that first fetch resolves.
 let statusOptions = ["Solved", "Unsolved", "Given", "Not given", "Activated"];
 async function fetchStatusOptions({ fresh = false } = {}) {
   try {
     const res = await fetch("/lark-status-list", fresh ? { cache: "no-store" } : undefined);
     const data = await res.json();
     if (data.ok && data.options && data.options.length) statusOptions = data.options;
-  } catch (_) { /* non-fatal — keeps whatever list it already had */ }
+  } catch (_) { }
 }
 
-/* ============================================================
-   RENDER
-   ============================================================ */
 const chatListEl = document.getElementById("chatList");
 document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-main-tab]");
@@ -2353,26 +1880,22 @@ document.getElementById("mainTabs")?.addEventListener("click", (event) => {
   if (activeMainTab !== "knowledge" && activeMainTab !== "blast" && activeMainTab !== "unknownChats") renderChats(activeChats);
 });
 const statusEl = document.getElementById("statusBar");
-const state = {}; // chatId -> { username, bonus, claimed, brand, inquiry, telegram, logged }
-const lookupControllers = new Map(); // per-chat request cancellation, kept out of persisted state
-let hasAutoExpandedOnce = false; // see renderChats — only auto-expand a card on first load
+const state = {};
+const lookupControllers = new Map();
+let hasAutoExpandedOnce = false;
 
-// The same app origin is installed in both LiveChat accounts. Incognito
-// localStorage is shared across those tabs, while sessionStorage is scoped
-// to one top-level tab, so keep the current tab's anonymous account label in
-// sessionStorage and stamp it onto every pending chat. No PAT is exposed.
 const LIVECHAT_ACCOUNT_SESSION_KEY = "rc-livechat-account";
 let currentLiveChatAccount = "";
 try {
   const savedAccount = CONFIGURED_LIVECHAT_ACCOUNT || sessionStorage.getItem(LIVECHAT_ACCOUNT_SESSION_KEY) || "";
   if (/^lc[12]$/.test(savedAccount)) currentLiveChatAccount = savedAccount;
-} catch (_) { /* storage can be unavailable in hardened browser modes */ }
+} catch (_) { }
 
 function setCurrentLiveChatAccount(accountKey, chatId) {
   if (!/^lc[12]$/.test(String(accountKey || ""))) return;
   const changed = currentLiveChatAccount !== accountKey;
   currentLiveChatAccount = accountKey;
-  try { sessionStorage.setItem(LIVECHAT_ACCOUNT_SESSION_KEY, accountKey); } catch (_) { /* non-fatal */ }
+  try { sessionStorage.setItem(LIVECHAT_ACCOUNT_SESSION_KEY, accountKey); } catch (_) { }
   const targetId = chatId || activeChats[0]?.chatId;
   if (targetId && state[targetId]) state[targetId].liveChatAccount = accountKey;
   if (changed) {
@@ -2383,30 +1906,10 @@ function setCurrentLiveChatAccount(accountKey, chatId) {
   }
 }
 
-// Persists `state` into localStorage so a lookup survives LiveChat's own
-// in-app navigation and a plain page refresh — both just reload this
-// widget's iframe, which otherwise wipes every in-memory chat state and
-// forces a re-lookup. Scoped to this browser only, never sent anywhere.
-// Each chat's saved copy carries its own _savedAt so stale entries (chats
-// nobody's touched in a week) get pruned on load instead of accumulating
-// in localStorage forever.
 const STATE_STORAGE_KEY = "rc-chat-state";
-const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-// Several copies of this widget can be alive at once against the same
-// localStorage (the LiveChat window's own widget, plus the extra tab a
-// Needs Attention "Open" link launches, the other LiveChat account, ...).
-// This used to rebuild the WHOLE blob from this tab's memory every 3s, so a
-// tab that hadn't touched a chat still overwrote the newer copy another tab
-// had just saved -- e.g. a chat recorded in the "Open" tab flipped back to
-// "not logged, needs attention" a few seconds later, and the copies also
-// dropped each other's chats. Now each tab only writes chats IT changed
-// since it last synced, keeps everything else already in storage, and adopts
-// the newer stored copy of any chat it hasn't touched.
-const lastSyncedJson = new Map(); // chatId -> JSON of that chat as of this tab's last load/save/adopt
-// "A request is running right now" flags. They describe this tab's live network calls (and the AbortController
-// that can cancel one is never persisted), so saving them leaves a reloaded widget with a Cancel button that has
-// nothing to abort -- and a stuck lookup/unclaim that also blocks the ⟳ update. Never saved, never adopted.
+const lastSyncedJson = new Map();
 function stateSnapshot(s) {
   const { _savedAt, lookupInFlight, unclaimInFlight, ...rest } = s || {};
   return JSON.stringify(rest);
@@ -2415,8 +1918,6 @@ function persistableState(s, savedAt) {
   const { lookupInFlight, unclaimInFlight, ...rest } = s;
   return { ...rest, _savedAt: savedAt };
 }
-// Last non-empty Brand seen for each chat in THIS tab. If merging with / adopting
-// another tab's older saved copy would blank it, put it back.
 const knownBrandFor = new Map();
 function keepBrand(chatId, s) {
   if (s && !s.brand && knownBrandFor.get(chatId)) { s.brand = knownBrandFor.get(chatId); return true; }
@@ -2426,12 +1927,7 @@ function markStateSynced(chatId) {
   lastSyncedJson.set(chatId, stateSnapshot(state[chatId]));
 }
 
-// saveState() runs every 10 s and from ~23 call sites. It used to JSON.parse ALL of localStorage and stringify
-// every chat (twice) on each call even when nothing had changed. Now: if no chat in THIS tab changed since it
-// last synced and no other tab has written (the 'storage' event sets storageDirty), it returns without
-// touching localStorage. A full sync still runs at least once a minute as a safety net. The per-field merge /
-// adopt logic below is unchanged.
-let storageDirty = true;          // true until the first full sync; set again by the 'storage' event
+let storageDirty = true;
 let lastFullStateSyncAt = 0;
 const FULL_STATE_SYNC_MS = 60_000;
 function hasLocalStateChanges() {
@@ -2459,14 +1955,6 @@ function saveState() {
       const stored = raw[chatId];
       const storedJson = stored ? stateSnapshot(stored) : undefined;
       if (synced !== undefined && cur !== synced && storedJson !== undefined && storedJson !== synced) {
-        // BOTH this tab and another one changed this chat since this tab
-        // last synced. Writing either whole copy loses the other's edits --
-        // confirmed live: another tab's background sweep (checkChatStatus
-        // setting chatUrl/telegram on its older copy) wrote back a copy
-        // from before Brand was auto-detected, wiping Brand here ("Brand
-        // hasn't been auto-detected yet" on Look up right after "Auto-
-        // detected brand HOT"). Merge per field instead: whatever THIS tab
-        // changed wins, everything else comes from the stored copy.
         const base = JSON.parse(synced);
         const theirs = JSON.parse(storedJson);
         const merged = { ...theirs };
@@ -2486,19 +1974,16 @@ function saveState() {
         continue;
       }
       if (synced !== undefined && cur === synced) {
-        // Nothing changed in THIS tab -- another tab may have updated it.
         if (stored) {
           const { _savedAt, ...rest } = stored;
           if (storedJson !== cur) {
-            // Mutate in place so existing references to state[chatId] stay valid.
             const { lookupInFlight, unclaimInFlight } = s;
             for (const k of Object.keys(s)) delete s[k];
             const storedSnapshot = stateSnapshot(rest);
             Object.assign(s, rest);
-            if (lookupInFlight) s.lookupInFlight = true; // a request running in THIS tab is not in the stored copy
+            if (lookupInFlight) s.lookupInFlight = true;
             if (unclaimInFlight) s.unclaimInFlight = true;
             const restoredBrand = keepBrand(chatId, s);
-            // If Brand had to be restored, leave this tab "changed" so the next save writes it back.
             lastSyncedJson.set(chatId, restoredBrand ? storedSnapshot : stateSnapshot(s));
             adopted = true;
           }
@@ -2510,14 +1995,13 @@ function saveState() {
       dirty = true;
     }
     if (dirty) {
-      // Keep other tabs' chats, but still prune anything nobody has touched in a week.
       for (const [chatId, entry] of Object.entries(raw)) {
         if (!entry || now - (entry._savedAt || 0) >= STATE_MAX_AGE_MS) delete raw[chatId];
       }
       localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
     }
     if (adopted && typeof renderNeedsAttentionPanel === "function") renderNeedsAttentionPanel();
-  } catch (_) { /* non-fatal — e.g. private browsing blocking storage */ }
+  } catch (_) { }
 }
 
 function loadPersistedState() {
@@ -2528,7 +2012,6 @@ function loadPersistedState() {
     for (const [chatId, s] of Object.entries(raw)) {
       if (s && now - (s._savedAt || 0) < STATE_MAX_AGE_MS) {
         delete s._savedAt;
-        // Saved by an older version, or by a tab whose request died with it: nothing is running now.
         delete s.lookupInFlight;
         delete s.unclaimInFlight;
         fresh[chatId] = s;
@@ -2540,11 +2023,6 @@ function loadPersistedState() {
   }
 }
 
-// Status now mirrors Inquiry's own box exactly (merged chip + search
-// input, not a separate display-button-plus-panel) — same
-// renderXChips/renderXDropdown split, same .inquiry-chip/-option styling,
-// just single-select (one chip max, picking a new one replaces it instead
-// of adding a second).
 function renderStatusChip(chatId) {
   const s = state[chatId];
   if (!s.status) return "";
@@ -2565,17 +2043,12 @@ function renderStatusDropdown(chatId, query) {
   }).join("");
 }
 
-// Updates the chip slot AND the search box's own placeholder together —
-// same reasoning as Inquiry's refreshInquiryChips.
 function refreshStatusChip(card, chatId) {
   card.querySelector(".status-chip-slot").innerHTML = renderStatusChip(chatId);
   const searchInput = card.querySelector(".status-search");
   if (searchInput) searchInput.placeholder = state[chatId].status ? "" : "Select status…";
 }
 
-// Brand, same custom-dropdown treatment as Status — a native <select>'s
-// own dropdown chrome (including its scrollbar) can't be restyled via CSS
-// in any browser, so this is the only way to actually theme it.
 function renderBrandDisplay(chatId) {
   const s = state[chatId];
   const empty = !s.brand;
@@ -2584,12 +2057,6 @@ function renderBrandDisplay(chatId) {
 
 function renderBrandOptions(chatId, query) {
   const s = state[chatId];
-  // Only ever offers real brandOptions — never an ad-hoc extra value, auto-
-  // detected or otherwise. Lark's Brand field is a Single Select; writing
-  // anything that isn't an existing option there silently creates a new
-  // one instead of erroring, so this list (and resolveBrandFromGroupId,
-  // which is now the only other place Brand ever gets set) must stay
-  // restricted to what's already real.
   const q = (query || "").trim().toLowerCase();
   const filtered = brandOptions.filter((b) => !q || b.toLowerCase().includes(q));
   if (!filtered.length) return `<div class="inquiry-option-empty">No matching brand</div>`;
@@ -2602,9 +2069,6 @@ function renderBrandOptions(chatId, query) {
   }).join("");
 }
 
-// See renderStatusDropdown's header note — same panel/options split, same
-// reason (search box inside the dropdown panel, filtered list re-rendered
-// separately so typing never re-focuses the search input itself).
 function renderBrandDropdown(chatId) {
   return `
     <input type="text" class="brand-search" placeholder="Search brand…" autocomplete="off" />
@@ -2612,20 +2076,10 @@ function renderBrandDropdown(chatId) {
   `;
 }
 
-// D.O.B. — a fully custom calendar, not <input type="date">. The native
-// picker's popup calendar grid is OS/browser chrome with no CSS styling
-// hook in any browser (unlike the icon, which is at least reachable) —
-// this is the only way to actually theme it. dob is stored/read exactly
-// like before ("YYYY-MM-DD", parsed by lark-record.js's toEpochMs).
 const DOB_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DOB_WEEKDAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const pad2 = (n) => String(n).padStart(2, "0");
 const dobKey = (y, m, day) => `${y}-${pad2(m + 1)}-${pad2(day)}`;
-// Descending, current year first -- a customer's DOB is virtually always
-// somewhere in the last century, and jumping straight to a year (this
-// dropdown) beats clicking a Previous Year arrow dozens of times to get
-// there. currentYear is always included even if the picker's already
-// looking further out, so the dropdown never has to omit the selected year.
 function dobYearOptions(includeYear) {
   const nowY = new Date().getFullYear();
   const top = Math.max(nowY, includeYear);
@@ -2647,11 +2101,8 @@ function renderDobDisplay(chatId) {
   return `<span class="status-value ${empty ? "placeholder" : ""}">${empty ? "dd/mm/yyyy" : formatDobDisplay(s.dob)}</span><span class="status-caret">▾</span>`;
 }
 
-// Builds exactly 6 rows (42 cells) so the grid is always the same height —
-// leading/trailing cells spill into the adjacent month, shown dimmed but
-// still clickable (a common calendar-UX convenience, not just filler).
 function buildDobCalendarDays(year, month) {
-  const firstWeekday = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7; // 0=Mon..6=Sun
+  const firstWeekday = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7;
   const daysInThisMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   const daysInPrevMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const prevY = month === 0 ? year - 1 : year, prevM = month === 0 ? 11 : month - 1;
@@ -2666,10 +2117,6 @@ function buildDobCalendarDays(year, month) {
   return cells;
 }
 
-// Custom dropdowns (not native <select>s) for the same reason Brand is one
-// — see renderBrandDropdown's header note; a native <select>'s open list is
-// OS/browser chrome with no CSS styling hook in any browser, so it can't be
-// dark-themed and stands out badly against the rest of this app.
 function renderDobMonthOptions(chatId, query) {
   const { month } = state[chatId].dobView;
   const q = (query || "").trim().toLowerCase();
@@ -2694,10 +2141,6 @@ function renderDobYearOptions(chatId, query) {
   }).join("");
 }
 
-// See renderStatusDropdown's header note — same panel/options split, same
-// reason. Both month and year get a search box for consistency with every
-// other dropdown in this widget, even though month's own list (12 items)
-// barely needs one — year's (up to 101) genuinely does.
 function renderDobMonthDropdown(chatId) {
   return `
     <input type="text" class="dob-cal-month-search" placeholder="Search month…" autocomplete="off" />
@@ -2712,9 +2155,6 @@ function renderDobYearDropdown(chatId) {
   `;
 }
 
-// s.dobView (the month/year currently displayed — separate from s.dob, the
-// actually-selected date) is lazily initialized here: starts on the
-// selected date's month if one's set, otherwise today's.
 function renderDobCalendar(chatId) {
   const s = state[chatId];
   const today = new Date();
@@ -2758,13 +2198,6 @@ function renderDobCalendar(chatId) {
   `;
 }
 
-// PIC dropped entirely — it's always the Retention Logger bot (every row is
-// created by the app, never a human agent), so it carried no information.
-// Name customer dropped too — no longer fetched (P&L is only queried for
-// Tier now). D.O.B moved into the auto-grid next to Brand (see
-// renderAutoFields). "Last username recorded" shows as soon as
-// checkLastUsername resolves — before any Look Up, unlike Tier, which
-// still only shows once matched.
 const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg>`;
 
 function renderPlayerInfo(chatId) {
@@ -2798,7 +2231,7 @@ async function copyPlainText(value) {
     try {
       await navigator.clipboard.writeText(text);
       return;
-    } catch (_) { /* embedded browsers may deny Clipboard API access */ }
+    } catch (_) { }
   }
   const textarea = document.createElement("textarea");
   textarea.value = text;
@@ -2812,17 +2245,6 @@ async function copyPlainText(value) {
   if (!copied) throw new Error("Copy was blocked by the browser");
 }
 
-// ---------------------------------------------------------------------
-// Multiple cases per chat
-// One chat can hold several separate Customer Approaching rows -- e.g. the
-// customer asks about a free spin, then later about a deposit -- each with
-// its own Inquiry / Status / Amount / Claim Secret. Username, brand, D.O.B,
-// Telegram and the chat link carry over. The fields on state[chatId] always
-// describe the ONE open case; every other case is parked in s.logs[] as a
-// snapshot, and every parked case is already recorded in Lark. "Edit" swaps
-// a parked case back in (parking the current one), so all the existing
-// claim / unclaim / record code keeps working on "the open case" untouched.
-// ---------------------------------------------------------------------
 const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
@@ -2832,35 +2254,23 @@ const CASE_KEYS = [
   ...CASE_CONTENT_KEYS,
   "caseNo", "caRecordId", "matchedRow", "otherBrandMatches", "claimSecretManual",
   "logged", "autoRecordError", "loggedSnapshot", "caLinkSaved", "caOwner",
-  "claimTickets", // { programKey: ticket ref } raised when this case's bonus was claimed; kept out of CASE_CONTENT_KEYS: it is not recorded in Lark
+  "claimTickets",
 ];
 
-// Which agent's Lark row the open case is. After a chat transfer (PC crash
-// / lost connection) each agent keeps their OWN row -- this browser never
-// deletes, re-uses or records into a row that belongs to someone else (the
-// server refuses too, see functions/_lib/ca-row.js ownedBy).
 function ownsCaseRecord(s) {
   return !s.caOwner || s.caOwner === selectedAgent;
 }
 
-// Did THIS agent actually work the chat? A username auto-filled from an earlier recording of the same customer,
-// or a chat that was only watched (supervising), has none of these: no Look up, no typed username, no inquiry or
-// status, no earlier case. Such a chat is never auto-recorded, never stamped with the agent's name and never put
-// on their Needs Attention list. The manual Record button still works on it.
 function agentActed(s) {
   if (!s) return false;
   return !!(s.caRecordId || (s.inquiry && s.inquiry.length) || s.status || String(s.usernameDraft || "").trim()
     || (s.logs && s.logs.length) || Object.values(s.claimedPrograms || {}).some(Boolean));
 }
-// With the LiveChat login on, writing to the customer also makes a chat theirs (see agentWroteInChat): true = they wrote,
-// "unsure" = LiveChat could not be asked, so they are reminded rather than a case being lost.
 function agentTouchedChat(s) {
   return agentActed(s) || (!!s && (s.agentWrote === true || s.agentWrote === "unsure"));
 }
-const addingCaseFor = new Set(); // chatIds with an add/edit in flight (not persisted, so it can never get stuck)
+const addingCaseFor = new Set();
 
-// What actually gets written to Lark for a case -- used to tell whether a
-// logged case has been changed since it was last saved.
 function caseContentJson(s) {
   const o = {};
   for (const k of CASE_CONTENT_KEYS) o[k] = s[k] === undefined ? null : s[k];
@@ -2880,8 +2290,6 @@ function snapshotCase(s) {
   return o;
 }
 function loadCaseInto(s, snap) {
-  // Older persisted cases predate the VS96 fields. Clear them before loading
-  // so switching cases can never carry another player's answers across.
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
   s.riskReloadAmount = "";
@@ -2892,10 +2300,6 @@ function usedProgramsInOtherCases(s) {
   const used = new Set();
   for (const c of (s.logs || [])) {
     for (const [k, v] of Object.entries(c.claimedPrograms || {})) if (v) used.add(k);
-    // Reconstruct claims from centrally saved Lark fields too. This covers
-    // another browser/PC and older localStorage snapshots that do not carry
-    // claimedPrograms, preventing a restored chat from showing a bonus that
-    // the same case already recorded as Given.
     for (const key of Object.keys(claimedProgramsFromSavedCase(c))) used.add(key);
   }
   return used;
@@ -2942,19 +2346,14 @@ function renderCasesBar(chatId) {
     </div>`;
 }
 
-// Makes sure the open case is saved in Lark before anything moves on from
-// it. Resolves true only if it is.
 async function ensureActiveCaseSaved(chatId) {
   const s = state[chatId];
   if (s.logged && !isCaseDirty(s)) return true;
   if (s.logged) return resyncLoggedRecord(chatId);
-  await submitRecord(chatId, { auto: false }); // shows its own "missing …" / error message
+  await submitRecord(chatId, { auto: false });
   return !!s.logged;
 }
 
-// Start another case: record the open one, THEN run a fresh lookup (so any
-// bonus the first case just claimed is already accounted for), park the
-// finished case and open a clean one.
 async function addCaseFlow(chatId) {
   const s = state[chatId];
   if (!s || addingCaseFor.has(chatId) || s.lookupInFlight) return;
@@ -3006,9 +2405,6 @@ async function addCaseFlow(chatId) {
   }
 }
 
-// Swap a parked case back in for editing. The open case is parked first
-// (saved to Lark), or -- if it was never touched -- its blank Lark row is
-// removed instead of leaving an empty case behind.
 async function editCaseFlow(chatId, caseNo) {
   const s = state[chatId];
   if (!s || addingCaseFor.has(chatId)) return;
@@ -3023,7 +2419,7 @@ async function editCaseFlow(chatId, caseNo) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ recordId: s.caRecordId, agentName: selectedAgent }),
-        }).catch(() => { /* non-fatal — worst case a blank row stays in Lark */ });
+        }).catch(() => { });
       }
     } else {
       if (!(await ensureActiveCaseSaved(chatId))) return;
@@ -3057,11 +2453,7 @@ function renderTickets(chatId) {
   }
   const r = s.matchedRow;
 
-  // Build one unified list of ticket definitions across all 3 sources —
-  // the "only 1 claimable per case" lock applies across all of them together.
   const defs = [];
-  // A bonus claimed in an earlier case of this chat stays gone even if Lark
-  // hasn't caught up yet (its source row can lag behind).
   const usedElsewhere = usedProgramsInOtherCases(s);
 
   allBonusPrograms().forEach((p) => {
@@ -3069,37 +2461,16 @@ function renderTickets(chatId) {
     if (!isClaimableValue(r[p.key])) return;
     const def = { key: p.key, kind: "regular", label: p.label, display: r[p.key] };
     if (p.key === "vs96Feedback") def.requiresFeedback = true;
-    // Grace Period's one field packs two different states: "Pass ..." means
-    // the offer just needs activating (no money changes hands yet — button
-    // says Activate, doesn't consume the one-claim-per-case slot); "Activated
-    // : ... - Bonus N" means it's now a real, claimable bonus (normal Claim
-    // button/lock behavior). See the claim handler for what each does.
     if (p.key === "gracePeriod") {
       const isPass = /^\s*pass\b/i.test(r.gracePeriod);
       def.claimLabel = isPass ? "Activate" : "Claim";
       def.doneLabel = isPass ? "✓ Activated" : "✓ Claimed";
       def.done = isPass ? !!s.gracePeriodActivated : !!s.claimedPrograms.gracePeriod;
       def.excludeFromLock = isPass;
-      // A customer can fail to complete the challenge at either stage —
-      // before activating, or after activating but before claiming — so
-      // Reactivate sits alongside Activate/Claim always, not just once
-      // one of those is already done (whose own button disables itself
-      // the moment it's clicked, matching every other ticket's claimed/
-      // locked look, so it can't just be re-clicked directly). Only while
-      // the challenge's own "Expried" date hasn't fully passed yet, though
-      // — once that date is before today, there's no window left to give
-      // the customer another attempt in, so only Activate/Claim shows.
-      // Compared as a whole calendar day (from local midnight), not exact
-      // time, since the expiry itself is always stored as that day's
-      // 23:59 — e.g. expiring 2026-09-10 no longer reactivates once it's
-      // the 11th, but still does for the rest of the 10th itself.
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
       def.reactivatable = typeof r.graceExpiryMs === "number" && r.graceExpiryMs >= startOfToday.getTime();
     }
-    // Risk Player: surfaces its own "Date Expired" column as a line under
-    // the ticket (see renderExpiryLine) -- previously fetched from Lark
-    // (lark-search.js) but never actually shown anywhere in the app.
     if (p.key === "riskPlayer" && typeof r.riskExpiryMs === "number") {
       def.expiryMs = r.riskExpiryMs;
     }
@@ -3114,9 +2485,6 @@ function renderTickets(chatId) {
     defs.push({ key: "redeemCode", kind: "special", label: "Redeem Code", display: r.redeemCode.status, isCode: true });
   }
 
-  // Distinct from the standalone "Telegram RM28" ticket above — this is the
-  // Special Reload Event table's Ang Pao variant (its Free Spin variant is
-  // retired). Already pre-filtered server-side to only "Eligible Angpao".
   if (r.specialReload && !usedElsewhere.has("specialReload")) {
     defs.push({ key: "specialReload", kind: "special", label: "Special Reload (Ang Pao)", display: r.specialReload.status });
   }
@@ -3125,11 +2493,6 @@ function renderTickets(chatId) {
     return `<div class="ticket empty">No active bonuses for this player right now</div>`;
   }
 
-  // Only one bonus can be claimed per case — once any is claimed, the rest
-  // lock. Grace Period's "Activate" state (def.excludeFromLock) is exempt in
-  // both directions: it doesn't get locked out by another claim, and (since
-  // it never sets s.claimedPrograms.gracePeriod) it never locks other
-  // tickets either — it isn't a monetary claim.
   const alreadyClaimedOne = Object.values(s.claimedPrograms).some(Boolean);
   return `<div class="ticket-stack">` + defs.map((d) => {
     const claimed = d.key === "gracePeriod" ? !!d.done : !!s.claimedPrograms[d.key];
@@ -3186,10 +2549,6 @@ function renderTickets(chatId) {
     + Object.entries(s.claimTickets || {}).map(([key, ref]) => `<div class="ticket-note">Ticket ${escapeHtml(ref)} raised for ${escapeHtml(AUTO_TICKET_PROGRAMS[key]?.label || key)}</div>`).join("");
 }
 
-// Grace Period's SW Check text carries the challenge date(s) inline -- wraps
-// each date-looking piece so it stands out on the ticket. Covers numeric
-// (09/09/2026, 2026-09-09, 9-9-26, 09.09) and written-month (9 Sep 2026,
-// Sep 9) forms; anything else is left as plain text.
 const DATE_PATTERN = new RegExp([
   String.raw`\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b`,
   String.raw`\b\d{1,2}[-/.]\d{1,2}(?:[-/.]\d{2,4})?\b`,
@@ -3197,11 +2556,6 @@ const DATE_PATTERN = new RegExp([
   String.raw`\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{2,4})?\b`,
 ].join("|"), "gi");
 
-// "RM28", "RM 28", "Bonus 28" -- the actual claimable amount buried in a raw
-// Lark display string ("Pass RM28", "7D 20% Reload - Bonus 18", ...).
-// Highlighted the same way across every ticket now, not just one table, so
-// the number an agent actually cares about jumps out regardless of which
-// source table's own wording it came from.
 const AMOUNT_PATTERN = /\bRM\s?-?\d+(?:\.\d+)?\b|\bBonus\s+-?\d+(?:\.\d+)?\b/gi;
 const PASS_VALUE_PATTERN = /\bPass\b(?:\s+\d+(?:\.\d+)?)?/gi;
 const ELIGIBLE_PATTERN = /\bEligible\b/gi;
@@ -3210,12 +2564,6 @@ function highlightDates(text) {
   return escapeHtml(text).replace(DATE_PATTERN, (m) => `<span class="ticket-date">${m}</span>`);
 }
 
-// Every ticket's meta line goes through this now (previously only Grace
-// Period's did) -- wraps dates AND RM/Bonus amounts so every bonus reads
-// the same way at a glance: 📅 for a date, 🎁 for the actual amount. Escapes
-// first (same order highlightDates already used), so this is safe to run
-// on any raw table text without either pattern ever matching inside an
-// HTML-escaped entity.
 function formatTicketMeta(text) {
   let html = escapeHtml(text);
   html = html.replace(ELIGIBLE_PATTERN, (m) => `<span class="eligible-value">${m}</span>`);
@@ -3225,12 +2573,6 @@ function formatTicketMeta(text) {
   return html;
 }
 
-// Risk Player's own "Date Expired" column, shown as its own line under the
-// ticket so CS can see at a glance how much time is left -- previously not
-// shown in the app at all. Color escalates the closer/past the deadline is:
-// grey with plenty of time left, amber inside the last 24h, red once it's
-// actually already past (the row can still be showing here briefly if the
-// underlying Status text hasn't flipped to "Expired" yet on Lark's side).
 function renderExpiryLine(ms) {
   if (typeof ms !== "number" || !Number.isFinite(ms)) return "";
   const diff = ms - Date.now();
@@ -3244,25 +2586,14 @@ function renderExpiryLine(ms) {
   return `<div class="ticket-expiry ${cls}">📅 ${label}: ${escapeHtml(dateStr)} (${escapeHtml(timeStr)})</div>`;
 }
 
-// Inquiry is a searchable dropdown + chip list instead of a big always-open
-// tag grid — same 70+ option list, same max-2 / Feedback-pairing rule, just
-// collapsed behind a search box so the card stays short until it's used.
 function renderInquiryChips(chatId) {
   const s = state[chatId];
-  // No placeholder when empty — the "Search inquiry…" placeholder already
-  // sitting in the search box says the same thing without needing its own
-  // separate label crowding the box.
   if (!s.inquiry.length) return "";
   return s.inquiry.map((v) => `
     <span class="inquiry-chip">${v}<button type="button" class="inquiry-chip-remove" data-action="removeInquiry" data-chat="${chatId}" data-value="${v}" aria-label="Remove ${v}">✕</button></span>
   `).join("");
 }
 
-// Updates the chip row AND the search box's own placeholder together — the
-// input's "Search inquiry…" text is dropped once there's already a chip
-// (the chip itself makes the box's purpose obvious; the placeholder just
-// crowds a one-line box next to it), same reasoning as dropping the old
-// "No inquiry selected" label entirely.
 function refreshInquiryChips(card, chatId) {
   card.querySelector(".inquiry-chips").innerHTML = renderInquiryChips(chatId);
   const searchInput = card.querySelector(".inquiry-search");
@@ -3286,17 +2617,6 @@ function renderInquiryDropdown(chatId, query) {
   }).join("");
 }
 
-// Brand is auto-detected (resolveBrandFromGroupId, via LiveChat's Groups
-// API) but editable now — detection can fail (PAT not configured, API
-// error, unrecognized group) or just be wrong, and submitRecord still
-// requires a Brand to submit at all, so CS needs a way to fix/set it by
-// hand rather than being stuck. A real dropdown (options from
-// lark-brand-list.js — the Brand field's own Single Select choices on
-// Customer Approaching) rather than free text, so a manual override can
-// only ever be a real Brand value, never a typo that wouldn't match any
-// per-table Brand column. Custom dropdown (not a native <select>) so it
-// can actually be themed — see renderBrandDisplay/renderBrandDropdown and
-// the toggleBrandDropdown/selectBrand action handlers.
 function renderAutoFields(chatId) {
   const s = state[chatId];
   return `
@@ -3363,16 +2683,8 @@ function renderCollapsedCard(chat) {
   `;
 }
 
-/* ============================================================
-   NOTES FOR THE VIP RETENTION CONSOLE
-   An agent writes a note about the player they looked up; it appears in that player's "Relationship notes" in the console.
-   The server (functions/console-note.js) works out WHO wrote it from the LiveChat login sent here, never from a name in the
-   request. A failure here only shows a message in this box: lookups, claims and recording never wait on it.
-   The draft and the messages live in this map, not in the saved chat state.
-   ============================================================ */
 const CONSOLE_NOTE_MAX = 2000;
-const noteUiByChat = new Map(); // chatId -> { type, draft, busy, msg, kind, notes, notesBusy }
-// "relationship" = the customer's personal info (console: Relationship notes); "action" = the next action (console: Action log).
+const noteUiByChat = new Map();
 const CONSOLE_NOTE_TYPES = {
   relationship: { label: "Relationship note", where: "Relationship notes", hint: "The customer's personal info. It resurfaces every time anyone contacts them.", placeholder: "A personal fact about this customer (e.g. prefers Telegram, birthday in March)…", add: "Add note" },
   action: { label: "Action log", where: "Action log", hint: "The next action for this player.", placeholder: "What should happen next, or what was done (e.g. call back Friday about the VIP trip)…", add: "Add action" },
@@ -3382,7 +2694,6 @@ function noteUi(chatId) {
   return noteUiByChat.get(chatId);
 }
 
-// Why a note cannot be written for this chat yet, or "" when it can.
 function consoleNoteBlocker(s) {
   if (s.isUnknown) return "Unknown player: notes need a real player in the console.";
   if (!String(s.username || "").trim() || !String(s.brand || "").trim()) return "Notes need the player's username and brand. Look the player up first.";
@@ -3391,7 +2702,6 @@ function consoleNoteBlocker(s) {
 
 function renderNoteSection(chatId) {
   const s = state[chatId];
-  // Shown to every agent (installed widget and admin preview), and only once a player has been looked up.
   if (!s || !s.matchedRow) return "";
   const ui = noteUi(chatId);
   const blocker = consoleNoteBlocker(s);
@@ -3423,7 +2733,6 @@ function paintNoteSection(chatId) {
   if (slot) slot.innerHTML = renderNoteSection(chatId);
 }
 
-// The one request both buttons make. Resolves with the server's answer, or an error answer when it cannot be reached.
 async function postConsoleNote(s, extra) {
   const accountKey = currentLiveChatAccount;
   const agentToken = liveChatAgentTokens()[accountKey];
@@ -3455,9 +2764,9 @@ async function saveConsoleNote(chatId) {
   ui.busy = false;
   if (answer && answer.ok && answer.saved) {
     ui.draft = ""; ui.msg = `Saved to the ${(CONSOLE_NOTE_TYPES[type] || CONSOLE_NOTE_TYPES.relationship).where}`; ui.kind = "ok";
-    ui.notes = null; // the list shown before is out of date now
+    ui.notes = null;
   } else {
-    ui.msg = (answer && answer.error) || "The note could not be saved."; ui.kind = "error"; // the draft stays so nothing typed is lost
+    ui.msg = (answer && answer.error) || "The note could not be saved."; ui.kind = "error";
   }
   paintNoteSection(chatId);
 }
@@ -3567,9 +2876,6 @@ const TICKET_FIELD_SPECS = [
   { stateKey: "vipLevel", keys: ["member_level", "level", "vip_level"], labels: ["Level", "VIP Level"] },
 ];
 
-// GET /tickets describes SELECT fields but intentionally omits their choices.
-// These documented values make those fields selectable while the datalist still
-// accepts additional live values that the ticket team may add later.
 const TICKET_FALLBACK_OPTIONS = {
   status: [
     ["OPEN", "Open"], ["IN_PROGRESS", "PYM PROCESSING"], ["COMP_PROCESSING", "COMP PROCESSING"],
@@ -3605,22 +2911,14 @@ const TICKET_FALLBACK_OPTIONS = {
   member_platform: ["tcbo", "CS96", "SPIN321", "PP96", "MY36", "ACE33", "OMG67", "EZ96", "BM69", "AS126", "HOT321", "RM68", "VS96"],
 };
 
-// File objects cannot be serialized into localStorage. Keep them only in
-// memory for the current admin-preview tab; incognito clears them with the
-// session and a completed ticket clears them immediately.
 const ticketAttachmentsByChat = new Map();
-// Not persisted (module level): a ticket create / claim write that is running right now. Used by canRefreshForDeployment().
 const ticketCreateInFlight = new Set();
 const ticketDetailInFlight = new Set();
 const claimWriteInFlight = new Set();
 const ticketSearchResultsByChat = new Map();
 const watchedTicketSnapshots = new Map();
 const TICKET_ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
-const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024; // PDFs: they are attached to the ticket, whose service sets this limit
-// Every picture is compressed before it is sent: same size, similar quality, a lighter file. The ticket system takes files under 1MB and
-// a screenshot is often 2 to 4MB. WebP is tried first (smaller at the same quality), JPEG where the browser cannot write WebP. A picture
-// is replaced only by a result that is smaller than it AND under 1MB; the quality is lowered a little at a time, and only a picture that
-// still does not fit is made smaller in size (never below 40%).
+const TICKET_ATTACHMENT_MAX_BYTES = 1024 * 1024;
 const PICTURE_FIT_BYTES = 1_000_000;
 const PICTURE_STEPS = [[1, 0.92], [1, 0.85], [1, 0.78], [0.85, 0.85], [0.85, 0.78], [0.7, 0.8], [0.55, 0.8], [0.4, 0.8]];
 async function compressPicture(file) {
@@ -3636,19 +2934,19 @@ async function compressPicture(file) {
         canvas.width = Math.max(1, Math.round(bitmap.width * scale));
         canvas.height = Math.max(1, Math.round(bitmap.height * scale));
         const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#fff"; // a transparent picture becomes white instead of black
+        ctx.fillStyle = "#fff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
         drawnAt = scale;
       }
       for (const type of ["image/webp", "image/jpeg"]) {
         const blob = await encode(canvas, type, quality);
-        if (!blob || blob.type !== type) continue; // this browser cannot write that type
+        if (!blob || blob.type !== type) continue;
         if (blob.size < PICTURE_FIT_BYTES && blob.size < file.size) return new File([blob], `${String(file.name || "picture").replace(/\.\w+$/, "")}.${type === "image/webp" ? "webp" : "jpg"}`, { type });
         break;
       }
     }
-  } catch (_) { /* left as it is: the size check below tells the agent */ }
+  } catch (_) { }
   return file;
 }
 const ticketMaxBytes = () => TICKET_ATTACHMENT_MAX_BYTES;
@@ -3705,26 +3003,17 @@ function addTicketAttachments(chatId, addedFiles) {
   return !error;
 }
 
-/* ============================================================
-   AUTO TICKET ON CLAIM
-   Claiming Top P&L, LTV, Grace Period or Risk Player first raises a ticket for the payment team, and the claim only goes through once the
-   ticket exists. The agent is asked for the proof (a picture or PDF) in a dialog and, the first time only, for their default market.
-   Ticket: Member ID = the player, Market = the agent's default market, Query type = the ticket query type whose name contains the bonus
-   keyword, Department = PYM_MYR, Level = VVIP, Transaction ID = 32 random letters/digits, Amount = the amount claimed, Status = the ticket
-   default, Payment Gateway / Remarks / Manual Dep = left empty. The market lives in the Agent Logins table (functions/agent-market.js).
-   ============================================================ */
 const AUTO_TICKET_DEPARTMENT = "PYM_MYR";
 const AUTO_TICKET_LEVEL = "VVIP";
-// keyword: the text the ticket system's query type has to contain (case and punctuation ignored): "TOP P&L" finds "VVIP TOP P&L BONUS".
 const AUTO_TICKET_PROGRAMS = {
   topPnl: { label: "Top P&L", keyword: "TOP P&L" },
   ltvTest: { label: "LTV", keyword: "LTV" },
   gracePeriod: { label: "Grace Period", keyword: "Grace Period" },
   riskPlayer: { label: "Risk Player", keyword: "Risk Player" },
 };
-const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market"; // admin preview without a LiveChat login: remembered in this browser only
+const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market";
 let agentDefaultMarket = { account: "", code: "" };
-const claimTicketBusy = new Set(); // chats whose claim ticket dialog is open or being sent
+const claimTicketBusy = new Set();
 
 function autoTicketEnabled() {
   return ESCALATION_TICKET_ENABLED && (previewMode || AUTO_TICKET_LIVE);
@@ -3732,7 +3021,7 @@ function autoTicketEnabled() {
 
 function randomTransactionId(length = 32) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const limit = 256 - (256 % alphabet.length); // bytes above this are skipped so every character is equally likely
+  const limit = 256 - (256 % alphabet.length);
   let id = "";
   while (id.length < length) {
     for (const byte of crypto.getRandomValues(new Uint8Array(length * 2))) {
@@ -3742,7 +3031,6 @@ function randomTransactionId(length = 32) {
   return id;
 }
 
-// The query type option whose label or value contains the keyword. With several, the "VVIP ... BONUS" ones win.
 function autoTicketQueryOption(options, keyword) {
   const wanted = ticketChoiceSlug(keyword);
   if (!wanted) return null;
@@ -3754,7 +3042,6 @@ function autoTicketQueryOption(options, keyword) {
   return hits.sort((a, b) => rank(a) - rank(b))[0] || null;
 }
 
-// The fields of the claim ticket, or { error } saying why it cannot be made. market is the market code.
 function buildClaimTicketFields(s, programKey, amount, market) {
   const program = AUTO_TICKET_PROGRAMS[programKey];
   const need = (stateKey) => ticketFieldFor(TICKET_FIELD_SPECS.find((spec) => spec.stateKey === stateKey));
@@ -3788,13 +3075,11 @@ function buildClaimTicketFields(s, programKey, amount, market) {
   return { fields, query, departmentName: department?.name || AUTO_TICKET_DEPARTMENT };
 }
 
-// The agent's default market: { code, locked }. locked = already chosen (so it is only shown). Without a LiveChat login (admin preview) it
-// is remembered in this browser only. Throws when the server cannot say.
 async function loadDefaultMarket(s) {
   const author = ticketAuthor(s);
   if (!author) {
     let code = "";
-    try { code = localStorage.getItem(DEFAULT_MARKET_LOCAL_KEY) || ""; } catch (_) { /* not remembered */ }
+    try { code = localStorage.getItem(DEFAULT_MARKET_LOCAL_KEY) || ""; } catch (_) { }
     return { code, locked: false };
   }
   if (agentDefaultMarket.account === author.accountKey && agentDefaultMarket.code) return { code: agentDefaultMarket.code, locked: true };
@@ -3802,35 +3087,28 @@ async function loadDefaultMarket(s) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "Your default market could not be read.");
   if (data.market) agentDefaultMarket = { account: author.accountKey, code: data.market };
-  // None saved on the server yet: offer the one remembered in this browser (see saveDefaultMarket), not locked.
   let remembered = "";
-  if (!data.market) { try { remembered = localStorage.getItem(DEFAULT_MARKET_LOCAL_KEY) || ""; } catch (_) { /* not remembered */ } }
+  if (!data.market) { try { remembered = localStorage.getItem(DEFAULT_MARKET_LOCAL_KEY) || ""; } catch (_) { } }
   return { code: data.market || remembered, locked: !!data.market };
 }
 
-// Saves the market chosen in the dialog (only ever the first time) and returns the one that applies: the saved one wins over a stale choice.
 async function saveDefaultMarket(s, code) {
   const author = ticketAuthor(s);
   if (!author) {
-    try { localStorage.setItem(DEFAULT_MARKET_LOCAL_KEY, code); } catch (_) { /* not remembered */ }
+    try { localStorage.setItem(DEFAULT_MARKET_LOCAL_KEY, code); } catch (_) { }
     return code;
   }
   const res = await fetch("/agent-market", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author, market: code }) });
   const data = await res.json();
   if (!data.ok && data.loginExpired) throw new Error(data.error || "Your LiveChat login expired. Connect LiveChat again.");
   if (!data.ok || !data.market) {
-    // The market could not be stored on the server (the Default Market column is missing, Lark is unreachable): the claim must not be blocked
-    // for that, so it is remembered in this browser, used for this ticket and offered again next time.
-    try { localStorage.setItem(DEFAULT_MARKET_LOCAL_KEY, code); } catch (_) { /* not remembered */ }
+    try { localStorage.setItem(DEFAULT_MARKET_LOCAL_KEY, code); } catch (_) { }
     return code;
   }
   agentDefaultMarket = { account: author.accountKey, code: data.market };
   return data.market;
 }
 
-// The dialog: the proof is required, the market only when it has not been chosen yet. onSubmit({ files, market, ticketEmail }) does the work and
-// returns { ok } or { ok: false, error, needTicketEmail }; the dialog stays open on an error so it can be tried again. Resolves true once
-// onSubmit succeeded, false when the agent cancelled.
 function openClaimTicketModal({ title, intro, rows, markets, market, marketLocked, previewNote, onSubmit }) {
   return new Promise((resolve) => {
     document.getElementById("claimTicketOverlay")?.remove();
@@ -3939,20 +3217,15 @@ function openClaimTicketModal({ title, intro, rows, markets, market, marketLocke
   });
 }
 
-// Is the agent's ticket account usable? The auto ticket only asks for proof when it is ("found", or "off" when the ticket system acts as the key's
-// owner for everybody); with any known problem (account not found, the API key refused, the ticket system not answering) the claim goes ahead as
-// it did before the auto ticket existed. "unknown" (nobody signed in to LiveChat, so nothing could be checked) is left to the dialog.
 const CLAIM_TICKET_USABLE_ACCOUNT = ["found", "off", "unknown"];
 async function ticketAccountForClaim(chatId) {
   const problem = !CLAIM_TICKET_USABLE_ACCOUNT.includes(ticketAccount.status);
   if (ticketAccount.status === "unknown" && !ticketAccount.checking) await checkTicketAccount(chatId, { quiet: true });
-  else if (problem && !ticketAccount.checking && Date.now() - ticketAccount.at > 60_000) await checkTicketAccount(chatId, { force: true, quiet: true }); // a fixed key or a new account is noticed within a minute
+  else if (problem && !ticketAccount.checking && Date.now() - ticketAccount.at > 60_000) await checkTicketAccount(chatId, { force: true, quiet: true });
   for (let waited = 0; ticketAccount.checking && waited < 4000; waited += 200) await new Promise((resolve) => setTimeout(resolve, 200));
   return ticketAccount.status;
 }
 
-// A new ticket starts on the agent's default market (the one chosen for the auto ticket), not on "Use ticket default". Only while the Market box
-// is not one the agent chose themselves (it replaces the site-wide default the form may start with); nothing is changed when no default market is saved or the ticket system has no such market.
 async function applyDefaultMarketToNewTicket(chatId) {
   const s = state[chatId];
   if (!s?.escalation || s.escalation.marketTouched) return;
@@ -3960,20 +3233,16 @@ async function applyDefaultMarketToNewTicket(chatId) {
   try { stored = await loadDefaultMarket(s); } catch (_) { return; }
   if (!stored?.code) return;
   const item = ticketMarkets.find((market) => String(market.code || "").toUpperCase() === String(stored.code).toUpperCase());
-  if (!item || s.escalation.marketTouched) return; // the agent may have picked while this was loading
+  if (!item || s.escalation.marketTouched) return;
   s.escalation.marketId = String(item.id);
   renderTicketSlot(chatId);
 }
 
-// Raises the claim ticket for a bonus about to be claimed. Resolves true when the claim may go ahead (ticket created, one was already raised
-// for this case's claim, or this bonus / this build does not raise one) and false when it must not (cancelled or could not be raised; the
-// reason is shown). Nothing about the claim has been changed by then.
 async function raiseClaimTicket(chatId, programKey, amount) {
   const s = state[chatId];
   const program = AUTO_TICKET_PROGRAMS[programKey];
   if (!s || !program || !autoTicketEnabled()) return true;
   s.claimTickets = s.claimTickets || {};
-  // Unclaiming does not withdraw the ticket, so claiming the same bonus again in the same case must not raise a second one.
   if (s.claimTickets[programKey]) { setStatus(`Ticket ${s.claimTickets[programKey]} was already raised for this ${program.label} claim.`, "success"); return true; }
   if (claimTicketBusy.has(chatId) || ticketCreateInFlight.has(chatId)) return false;
   claimTicketBusy.add(chatId);
@@ -3984,14 +3253,13 @@ async function raiseClaimTicket(chatId, programKey, amount) {
       claimTicketBusy.delete(chatId);
       return true;
     }
-  } catch (_) { /* the account could not be checked: carry on to the dialog, which says what is wrong if it cannot raise the ticket */ }
+  } catch (_) { }
   try {
     if (!ticketFields.length) await fetchTicketConfig({ fresh: true });
     if (!ticketFields.length) { setStatus(`The ticket form could not be loaded (${ticketConfigError || "no fields"}). Nothing was claimed.`, "error"); return false; }
     let stored;
     try { stored = await loadDefaultMarket(s); }
     catch (err) { setStatus(`${err.message} Nothing was claimed.`, "error"); return false; }
-    // Check everything that does not need the agent's input first, so they are not asked for proof and then told it was never possible.
     const check = buildClaimTicketFields(s, programKey, amount, stored.code || "-");
     if (check.error) { setStatus(`${check.error} Nothing was claimed.`, "error"); return false; }
     const markets = ticketMarkets.map((item) => ({ value: String(item.code || item.id), label: item.label || item.code || String(item.id) }));
@@ -4047,7 +3315,6 @@ function ticketStatusValue(ticket) {
   return String(ticket?.fields?.status || "");
 }
 
-// The ticket list the open detail view refreshes every 30 s (pollTicketUpdates) only needs to know which tickets are open.
 function rememberTicketSnapshot(ticket) {
   if (!ticket?.ref) return;
   watchedTicketSnapshots.set(ticket.ref, {
@@ -4058,17 +3325,11 @@ function rememberTicketSnapshot(ticket) {
   });
 }
 
-// ---- Ticket notifications: the bell on the Tickets tab ---------------------------------------------------------------------------
-// The ticket system's own bell is not in its API, so this one is rebuilt from what the widget can read: the inbox list (one call a poll)
-// and, for the few tickets that changed, their thread. It tells the agent about tickets that are theirs (raised by them, assigned to
-// them, or commented on through the widget) and about any ticket where they are @mentioned. Their own comments never notify. What has
-// been seen and what is unread is kept in this browser (localStorage), per LiveChat account.
 const TICKET_NOTE_MAX = 60;
 const TICKET_NOTE_KEEP_SEEN = 300;
-const TICKET_NOTE_READS_PER_POLL = 3; // thread reads per poll: the ticket API allows each key 120 calls a minute, shared by every agent
-const TICKET_NOTE_POLL_MS = 15_000; // how often the bell looks for news; the ticket API allows 120 calls a minute to every agent together, see TICKET_INTEGRATION.md
-const TICKET_OPEN_POLL_MS = 8000; // how often an open ticket looks for changes
-// After the ticket system said it is busy, ticket polling waits as long as it asked (plus a moment), so polling never makes the limit worse.
+const TICKET_NOTE_READS_PER_POLL = 3;
+const TICKET_NOTE_POLL_MS = 15_000;
+const TICKET_OPEN_POLL_MS = 8000;
 let ticketPollPausedUntil = 0;
 function ticketPollBackoff(problem) {
   const text = String(problem?.message ?? problem ?? "");
@@ -4095,7 +3356,7 @@ function ticketNoteLoad() {
 
 function ticketNoteSave() {
   if (!ticketNoteStore) return;
-  try { localStorage.setItem(ticketNoteStoreKey, JSON.stringify(ticketNoteStore)); } catch (_) { /* kept for this page only */ }
+  try { localStorage.setItem(ticketNoteStoreKey, JSON.stringify(ticketNoteStore)); } catch (_) { }
 }
 
 function ticketNotePeople(ticket) {
@@ -4107,7 +3368,6 @@ function ticketNoteIsMine(store, ticket) {
   return ticketNoteMineRefs.has(ticket.ref) || store.mine.includes(ticket.ref) || (Boolean(email) && ticketNotePeople(ticket).some((person) => String(person.email || "").toLowerCase() === email));
 }
 
-// The agent's ticket-system user id is what comments and @mentions carry; it is read off any ticket that names their email.
 function ticketNoteLearnMe(store, tickets) {
   if (store.me.id != null || !store.me.email) return;
   for (const ticket of tickets) {
@@ -4116,7 +3376,6 @@ function ticketNoteLearnMe(store, tickets) {
   }
 }
 
-// A ticket the agent commented on through the widget becomes theirs. `authorId` is the id the ticket system gave their comment, if it said.
 function ticketNoteRemember(ref, authorId) {
   const store = ticketNoteLoad();
   if (ref && !store.mine.includes(ref)) store.mine = [ref, ...store.mine].slice(0, TICKET_NOTE_KEEP_SEEN);
@@ -4147,13 +3406,9 @@ function ticketNoteStatusItem(ticket, status, now) {
   return { id: `${ticket.ref}:s${ticket.updatedAt || now}`, ref: ticket.ref, title: ticketTitle(ticket), kind: "status", by: "", text: `Status changed to ${status ? ticketChoiceDisplayLabel("status", status) : "blank"}`, at: now };
 }
 
-// The first poll only records what is there (nothing is "new" yet). After that this works through the inbox list: a change on a ticket
-// that is the agent's is settled here when it needs no thread (a status change) and otherwise returned to be read; a ticket that is not
-// theirs is read only when it gained a comment (it may mention them). Returns the refs to read, the agent's own tickets first.
 function ticketNoteDue(store, tickets, now) {
   ticketNoteLearnMe(store, tickets);
   if (!store.startedAt) {
-    // "Now" is the ticket system's newest change, not this PC's clock, so a clock that is a little off cannot hide or repeat a comment.
     store.startedAt = tickets.reduce((newest, ticket) => Math.max(newest, Date.parse(ticket.updatedAt) || 0), 0) || now;
     for (const ticket of tickets) store.seen[ticket.ref] = ticketNoteSnapshot(ticket, Date.parse(ticket.updatedAt) || store.startedAt);
     return { due: [], added: 0 };
@@ -4164,8 +3419,6 @@ function ticketNoteDue(store, tickets, now) {
   for (const ticket of tickets) {
     const prev = store.seen[ticket.ref];
     const next = ticketNoteSnapshot(ticket, prev ? prev.at : store.startedAt);
-    // A new comment does NOT change the ticket's updatedAt in the ticket system (checked: updatedAt stayed on the day the ticket was raised while
-    // comments came in days later), so the comment count is what shows one. Status changes do move updatedAt.
     const changed = prev ? (prev.updatedAt !== next.updatedAt || prev.commentCount !== next.commentCount) : Date.parse(next.updatedAt) > store.startedAt;
     if (!changed) { if (!prev) store.seen[ticket.ref] = next; continue; }
     const moreComments = next.commentCount > (prev ? prev.commentCount : 0);
@@ -4186,7 +3439,6 @@ function ticketNoteDue(store, tickets, now) {
   return { due: [...mineDue, ...otherDue], added };
 }
 
-// Turns what is new in one ticket's thread into notifications, then moves the stored picture of that ticket forward.
 function ticketNoteApplyThread(store, ticket, now) {
   const prev = store.seen[ticket.ref];
   const cutoff = prev ? prev.at : store.startedAt;
@@ -4226,13 +3478,10 @@ function ticketNoteUnread(store) {
   return store.items.filter((item) => !item.read).length;
 }
 
-// The same three views as the ticket system's bell: everything, only @mentions, and comments (mentions included).
 function ticketNoteVisible(store, tab) {
   return store.items.filter((item) => tab === "mentions" ? item.kind === "mention" : tab === "comments" ? item.kind === "comment" || item.kind === "mention" : true);
 }
 
-// A short "ti-ding" made in the browser (no sound file). Browsers keep sound off until the page has been clicked once, so this is
-// prepared on the first click anywhere in the widget.
 function ticketNoteAudioReady() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -4261,7 +3510,7 @@ function ticketNoteChime() {
       oscillator.start(start);
       oscillator.stop(start + 0.55);
     }
-  } catch (_) { /* a browser that blocks sound: the bell still shows */ }
+  } catch (_) { }
 }
 document.addEventListener("pointerdown", () => { ticketNoteAudioReady(); }, { once: true });
 
@@ -4300,7 +3549,6 @@ function repaintTicketBell() {
   paintTicketsTabBadge();
 }
 
-// A ticket opened or refreshed in the detail view is being read, so what it holds is not news: it is recorded and marked read.
 function ticketNoteAbsorb(ticket) {
   if (!ticket?.ref) return;
   const store = ticketNoteLoad();
@@ -4312,33 +3560,26 @@ function ticketNoteAbsorb(ticket) {
   repaintTicketBell();
 }
 
-// What the last poll did, for Settings: when it ran, how many tickets it looked at, or why it could not.
 let ticketNotePollInfo = { at: 0, watching: 0, error: "" };
-let ticketNotePollRound = 0; // polls made so far: every fourth also reads everyone's newest tickets
-let ticketNoteMineRefs = new Set(); // refs the ticket system listed as mine at the last poll (not saved: read again every poll)
+let ticketNotePollRound = 0;
+let ticketNoteMineRefs = new Set();
 async function pollTicketNotifications() {
   if (document.hidden || ticketNotePolling || Date.now() < ticketPollPausedUntil || !(previewMode || DEPARTMENT_TABS_LIVE)) return;
   const author = ticketReadAuthor(null);
   if (!author) return;
   ticketNotePolling = true;
   try {
-    // The account is checked here too, quietly, so notifications arrive on whatever tab the agent is on, not only after the Tickets tab was opened.
     if (ticketAccount.status === "unknown" && !ticketAccount.checking) {
-      if (!Object.keys(state).length) ensureChatState(ticketsOnlyChat()); // no chat open yet: the account is checked on the Tickets tab's own stand-in
+      if (!Object.keys(state).length) ensureChatState(ticketsOnlyChat());
       const chatId = Object.keys(state)[0];
       if (chatId) await checkTicketAccount(chatId, { quiet: true });
     }
     if (ticketAccount.status !== "found" || !ticketAccount.email) { ticketNotePollInfo = { at: Date.now(), watching: 0, error: ticketAccount.status === "unknown" ? "The ticket account has not been checked yet." : "The ticket account is not available, so tickets cannot be watched." }; return; }
     const store = ticketNoteLoad();
     store.me.email = String(ticketAccount.email).trim().toLowerCase();
-    // Two lists: MY tickets as the ticket system says (raised by or assigned to the person it acts as: the same "created by me" the dashboard
-    // has; read every poll), and everyone's newest (needed to see a mention on someone else's ticket; read every fourth poll to spare the
-    // 120 calls a minute shared by all agents). Matching emails alone missed tickets that are the agent's but carry another email.
     const readList = async (extra) => (await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: "", fresh: false, author, ...extra }) })).json();
     const everyone = ticketNotePollRound % 4 === 0;
     ticketNotePollRound += 1;
-    // My tickets: up to 250 by creation date, not the 100 most recently updated: a new comment does not move a ticket's updatedAt, so the
-    // newest-updated 100 (often filled by bulk status changes) can miss the very ticket a comment came in on.
     const [mineList, allList] = await Promise.all([readList({ mine: true, size: 250, sort: "created" }), everyone ? readList({}) : null]);
     const failure = (!mineList.ok && mineList.error) || (allList && !allList.ok && allList.error) || "";
     if (!mineList.ok && !(allList && allList.ok)) { ticketPollBackoff(failure); ticketNotePollInfo = { at: Date.now(), watching: 0, error: failure || "The ticket list could not be read." }; return; }
@@ -4356,22 +3597,18 @@ async function pollTicketNotifications() {
     ticketNoteSave();
     repaintTicketBell();
     if (added) {
-      // Seen on whatever tab the agent is on, not only by a number on the bell: a message, and a chime unless it is muted.
       const newest = store.items[0];
       showChatToast(`${added > 1 ? `${added} new ticket notifications · ` : ""}${newest.ref} · ${newest.by ? `${newest.by}: ` : ""}${newest.kind === "mention" ? "mentioned you · " : ""}${newest.text}`, "info");
       if (store.sound !== false) ticketNoteChime();
     }
-  } catch (err) { ticketPollBackoff(err); ticketNotePollInfo = { at: Date.now(), watching: 0, error: err.message || "The poll failed." }; /* tried again next minute; Settings says why */ }
+  } catch (err) { ticketPollBackoff(err); ticketNotePollInfo = { at: Date.now(), watching: 0, error: err.message || "The poll failed." }; }
   finally { ticketNotePolling = false; }
 }
 setInterval(pollTicketNotifications, TICKET_NOTE_POLL_MS);
-setTimeout(() => void pollTicketNotifications(), 8000); // the first look soon after the page opens, not a minute later
-// A browser keeps sound silent until the page has had a click or a key press, so the sound is unlocked at the first one; a chime that arrives
-// minutes later, with nobody touching the page, is then audible. (A tab nobody has clicked in stays silent: that is the browser's rule.)
+setTimeout(() => void pollTicketNotifications(), 8000);
 for (const type of ["pointerdown", "keydown"]) document.addEventListener(type, () => { ticketNoteAudioReady(); }, { once: true, passive: true });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketNotifications(); });
 document.addEventListener("click", (event) => {
-  // The bell is redrawn by the click itself, which detaches the clicked button, so the path recorded at the click is what says where it was.
   if (!ticketBellOpen || event.composedPath().some((element) => element.classList?.contains("ticket-bell"))) return;
   ticketBellOpen = false;
   repaintTicketBell();
@@ -4486,9 +3723,6 @@ function renderTicketInput(chatId, spec) {
     control = `<textarea id="${controlId}" class="input esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" placeholder="Type here" rows="2">${escapeHtml(value)}</textarea>`;
   } else {
     const numeric = field.type === "NUMBER" || field.type === "CURRENCY";
-    // Use a text input with a decimal keyboard hint instead of type=number.
-    // This keeps the field numeric while removing browser spinner buttons and
-    // accidental mouse-wheel / ArrowUp / ArrowDown value changes.
     control = `<input id="${controlId}" type="text"${numeric ? ' inputmode="decimal" data-ticket-numeric="true"' : ""} class="input mono esc-input" data-chat="${escapeHtml(chatId)}" data-field="${spec.stateKey}" value="${escapeHtml(value)}" placeholder="Type here" />`;
   }
 
@@ -4510,8 +3744,6 @@ function ticketFieldDisplay(value) {
   return String(value);
 }
 
-// A ticket's SELECT values come from the API as stored codes (vvip_ltv_70_bonus, PYM_SOLVED, pp96). The ticket system's own screen shows
-// the label (VVIP LTV 70 BONUS, PYM TEAM SOLVED, PP96); everything the widget prints for a ticket field goes through here so it reads the same.
 function ticketValueDisplay(key, value) {
   const choiceKey = ({ brand: "member_platform", level: "member_level", vip_level: "member_level" })[key] || key;
   const field = ticketFields.find((item) => item.key === key);
@@ -4592,21 +3824,14 @@ async function refreshTicketInbox(chatId, query = "", mode = "all", { fresh = tr
     ticketSearchResultsByChat.set(chatId, { loading: false, tickets: [], error: error.message, mode });
   }
   renderTicketSlot(chatId);
-  // A filter was changed while this read was on its way: read again for the filters set now.
   if (ticketListStale(chatId)) {
     const loaded = ticketSearchResultsByChat.get(chatId);
     await refreshTicketInbox(chatId, loaded.query || "", loaded.mode || "all", { fresh: false });
   }
 }
 
-/* ============================================================
-   BULK STATUS EDIT (ticket list)
-   Tick tickets (or "Select all"), choose a status, and every ticked ticket is set to it, one /ticket-update after another, each guarded by
-   the status the list showed (expect), so a ticket someone else changed meanwhile is skipped and reported. The ticket API has no bulk call
-   and allows 120 requests a minute to everyone, hence the cap per run and the stop on the first problem that would repeat for every ticket.
-   ============================================================ */
 const TICKET_BULK_MAX = 60;
-const ticketBulkByChat = new Map(); // chatId -> { selected: [refs], status, running, progress, summary, visibleRefs }
+const ticketBulkByChat = new Map();
 function ticketBulkFor(chatId) {
   if (!ticketBulkByChat.has(chatId)) ticketBulkByChat.set(chatId, { selected: [], status: "", running: false, progress: "", summary: "", visibleRefs: [] });
   return ticketBulkByChat.get(chatId);
@@ -4622,7 +3847,6 @@ function ticketBulkToggle(chatId, ref, on) {
   if (on && !bulk.selected.includes(ref)) bulk.summary = `At most ${TICKET_BULK_MAX} tickets can be changed at a time.`;
   else bulk.summary = "";
 }
-// All the tickets the list shows now (up to the cap) or, when they are all ticked already, none.
 function ticketBulkSelectAll(chatId) {
   const bulk = ticketBulkFor(chatId);
   const shown = bulk.visibleRefs.slice(0, TICKET_BULK_MAX);
@@ -4630,7 +3854,6 @@ function ticketBulkSelectAll(chatId) {
   bulk.selected = all ? [] : shown;
   bulk.summary = !all && bulk.visibleRefs.length > TICKET_BULK_MAX ? `The first ${TICKET_BULK_MAX} of ${bulk.visibleRefs.length} tickets were ticked (the most that can be changed at a time).` : "";
 }
-// A status changed from here is not news to the agent who changed it: remember the ticket as it is now.
 function ticketNoteSeen(ticket) {
   const store = ticketNoteLoad();
   if (!store.startedAt || !ticket?.ref) return;
@@ -4670,15 +3893,13 @@ async function applyBulkStatus(chatId) {
       }
       if (!data.ok) {
         failed.push({ ref: ticket.ref, reason: data.code === "precondition_failed" ? "someone changed it first" : (data.error || "refused") });
-        // These would be refused for every ticket, so the rest are not tried.
         if (res.status === 429 || res.status === 401 || data.needTicketEmail || ["key_access", "key_standing", "forbidden", "field_forbidden", "validation_failed", "invalid_body"].includes(data.code)) { stoppedBecause = data.error || "The ticket system refused the change."; break; }
         continue;
       }
       noteTicketAccountUsed(data);
       changed.push(ticket.ref);
-      // The ticket may be in both lists (everyone's newest, and mine): keep them both right.
       const whole = ticketSearchResultsByChat.get(chatId);
-      const entry = data.visible && data.ticket ? (({ comments: _thread, ...rest }) => rest)(data.ticket) : null; // the list keeps no conversation
+      const entry = data.visible && data.ticket ? (({ comments: _thread, ...rest }) => rest)(data.ticket) : null;
       for (const list of [whole?.tickets, whole?.mine?.tickets].filter(Array.isArray)) {
         const at = list.findIndex((item) => item.ref === ticket.ref);
         if (at < 0) continue;
@@ -4689,7 +3910,7 @@ async function applyBulkStatus(chatId) {
   } finally {
     bulk.running = false;
     bulk.progress = "";
-    bulk.selected = bulk.selected.filter((ref) => !changed.includes(ref) && !already.includes(ref)); // what failed stays ticked
+    bulk.selected = bulk.selected.filter((ref) => !changed.includes(ref) && !already.includes(ref));
     bulk.summary = [
       changed.length ? `Set ${changed.length} ticket${changed.length === 1 ? "" : "s"} to ${label}.` : "No ticket was changed.",
       already.length ? `${already.length} already had it.` : "",
@@ -4700,9 +3921,7 @@ async function applyBulkStatus(chatId) {
   }
 }
 
-// The Agent filter's "Me": tickets the signed-in agent raised or is assigned to, by the ticket account email (or a ticket they raised from here).
 const TICKET_FILTER_ME = "@me";
-// The Agent filter on tickets already loaded: "Me", a roster user ("#44", by id) or a name.
 function ticketMatchesAgent(ticket, agent) {
   if (!agent || agent === "all") return true;
   if (agent === TICKET_FILTER_ME) return ticketIsMine(ticket);
@@ -4710,8 +3929,6 @@ function ticketMatchesAgent(ticket, agent) {
   return ticketPeople(ticket).includes(agent);
 }
 
-// Everyone who raised or is assigned a ticket among the newest ~1000 the agent may see (ticket-agents.js), for the Agent filter. The ticket
-// API has no list of users; this is the nearest thing, read when the filters are opened.
 let ticketAgentRoster = { agents: [], at: 0, loading: false, error: "" };
 const TICKET_ROSTER_MAX_AGE_MS = 10 * 60_000;
 async function loadTicketAgentRoster(chatId) {
@@ -4727,7 +3944,7 @@ async function loadTicketAgentRoster(chatId) {
     if (!data.ok) throw ticketReadFailure(chatId, data, "The agent list could not be loaded");
     ticketAgentRoster = { agents: Array.isArray(data.agents) ? data.agents : [], at: Date.now(), loading: false, error: "" };
   } catch (err) {
-    ticketAgentRoster = { ...ticketAgentRoster, loading: false, error: err.message }; // the filter keeps working with the people on the loaded tickets
+    ticketAgentRoster = { ...ticketAgentRoster, loading: false, error: err.message };
   }
   renderTicketSlot(chatId);
 }
@@ -4738,12 +3955,11 @@ function ticketIsMine(ticket) {
   return store.mine.includes(ticket.ref) || (Boolean(email) && ticketNotePeople(ticket).some((person) => String(person.email || "").toLowerCase() === email));
 }
 
-// Above the rows: Select all, and once something is ticked, the status to set them to.
 function renderTicketBulkBar(chatId, filtered) {
   const bulk = ticketBulkFor(chatId);
   bulk.visibleRefs = filtered.map((ticket) => ticket.ref);
   const shown = new Set(bulk.visibleRefs);
-  bulk.selected = bulk.selected.filter((ref) => shown.has(ref)); // a ticket the filters hide is not changed behind the agent's back
+  bulk.selected = bulk.selected.filter((ref) => shown.has(ref));
   if (!filtered.length) return "";
   const picked = bulk.selected.length;
   const all = bulk.visibleRefs.slice(0, TICKET_BULK_MAX).every((ref) => bulk.selected.includes(ref));
@@ -4761,21 +3977,17 @@ function renderTicketBulkBar(chatId, filtered) {
 function renderTicketExplorer(chatId) {
   const s = state[chatId];
   const result = ticketSearchResultsByChat.get(chatId);
-  const list = ticketActiveList(chatId); // "Me" shows the tickets the ticket system lists as mine, not a slice of everyone's
+  const list = ticketActiveList(chatId);
   const tickets = list?.tickets || [];
   const serverMine = Boolean(ticketScopedWho(s.ticketExplorerAgent) && result?.mine && result.mineFor === s.ticketExplorerAgent);
   const unique = values => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  // Every ticket-system user seen on the newest tickets (the roster, see /ticket-agents), else just those on the tickets loaded here.
   const rosterNames = new Map(ticketAgentRoster.agents.map(person => [`#${person.id}`, person.name]));
   const agents = rosterNames.size ? [...rosterNames.keys()].sort((a, b) => rosterNames.get(a).localeCompare(rosterNames.get(b))) : unique((result?.tickets || []).flatMap(ticketPeople));
   const agentLabel = value => rosterNames.get(value) || value;
-  // Status, department and market offer every choice the ticket system has, not only those on the tickets loaded (a status nobody has among
-  // the newest tickets would otherwise be missing), plus anything the loaded tickets carry that the lists do not know.
   const statuses = unique([...ticketBulkStatusOptions().map(option => String(option.value)), ...tickets.map(ticketStatusValue)])
     .sort((a, b) => ticketChoiceDisplayLabel("status", a).localeCompare(ticketChoiceDisplayLabel("status", b)));
   const departments = unique([...ticketDepartments.map(item => item.name || item.code), ...tickets.map(ticket => ticket.currentDepartment?.name || ticket.currentDepartment?.code)]);
   const markets = unique([...ticketMarkets.map(item => item.label || item.code), ...tickets.map(ticket => ticket.market?.label || ticket.market?.code)]);
-  // A filter left over from another list that no longer offers its value is not applied: it would hide every ticket with no way to see why.
   const effective = (key, values) => (!s[key] || s[key] === "all" || values.includes(s[key]) ? (s[key] || "all") : "all");
   const statusFilter = effective("ticketExplorerStatus", statuses);
   const departmentFilter = effective("ticketExplorerDepartment", departments);
@@ -4788,7 +4000,6 @@ function renderTicketExplorer(chatId) {
     && matches(ticketStatusValue(ticket), statusFilter)
     && matches(ticket.currentDepartment?.name || ticket.currentDepartment?.code, departmentFilter)
     && matches(ticket.market?.label || ticket.market?.code, marketFilter));
-  // The filters use the same searchable dropdown as the ticket form, not the browser's plain list.
   const filterChoice = (filterKey, allLabel, values, label = value => value, lead = []) => renderTicketChoice(chatId, `filter:${filterKey}`, ({ ticketExplorerStatus: statusFilter, ticketExplorerDepartment: departmentFilter, ticketExplorerMarket: marketFilter })[filterKey] || s[filterKey] || "all",
     [{ value: "all", label: allLabel }, ...lead, ...values.map(value => ({ value, label: label(value) }))], { allowEmpty: false });
   const activeFilters = [s.ticketExplorerAgent, statusFilter, departmentFilter, marketFilter].filter(value => value && value !== "all").length;
@@ -4817,15 +4028,8 @@ function renderTicketExplorer(chatId) {
   </section>`;
 }
 
-/* ============================================================
-   EDITING A TICKET, LIVE (/ticket-update -> the ticket API's PATCH /tickets/<ref>)
-   The ticket detail is always editable: the raise-form fields plus the department holding the ticket, the market and the assignees. Every
-   edit is saved as soon as it is made (a choice when it is picked, typed text when the box is left or Enter is pressed), on its own and
-   in order. Each save carries the value the agent saw (expect), so a ticket someone else changed in the meantime is refused and reloaded
-   instead of overwritten. The ticket system applies the agent's own roles and says what it refuses; the field then shows its real value.
-   ============================================================ */
-const ticketEditByChat = new Map(); // chatId -> { ref, typing: { name: text not saved yet }, saving, error, notice }
-const ticketSaveChains = new Map(); // chatId -> Promise: the saves of one chat run one after another
+const ticketEditByChat = new Map();
+const ticketSaveChains = new Map();
 
 function ticketEditFor(chatId, ticket) {
   let edit = ticketEditByChat.get(chatId);
@@ -4845,9 +4049,6 @@ function ticketFieldText(ticket, field) {
   return value === undefined || value === null ? "" : String(value).trim();
 }
 
-// The request body for /ticket-update (without ref and author) for ONE edit, { unchanged: true } when the ticket already holds it, or
-// { error }. change: { type: "field", stateKey, value } | { type: "department", value: code } | { type: "market", value: code or "" }
-// | { type: "assigneeAdd", value: "email or name, ..." } | { type: "assigneeRemove", value: person id }.
 function buildTicketChange(ticket, change) {
   if (change.type === "field") {
     const spec = TICKET_FIELD_SPECS.find((item) => item.stateKey === change.stateKey);
@@ -4883,7 +4084,6 @@ function buildTicketChange(ticket, change) {
   return { error: "Unknown change." };
 }
 
-// What the ticket system says it changed, for the agent: "Status: Open → PYM PROCESSING".
 function describeTicketChanges(changed) {
   if (!Array.isArray(changed) || !changed.length) return "Nothing needed to change: the ticket already had this value.";
   return changed.map((item) => {
@@ -4895,7 +4095,6 @@ function describeTicketChanges(changed) {
   }).join(" · ");
 }
 
-// The box name used in the page ("edit:<name>") -> the change it makes.
 function ticketChangeFor(name, value) {
   if (name === "departmentCode") return { type: "department", value };
   if (name === "marketCode") return { type: "market", value };
@@ -4903,7 +4102,6 @@ function ticketChangeFor(name, value) {
   return { type: "field", stateKey: name, value };
 }
 
-// Text typed but not saved yet is kept here, so a redraw (the 30 s refresh, another save) never wipes it.
 function ticketLiveTyping(chatId, name, value) {
   const ticket = state[chatId]?.ticketRecord;
   if (ticket) ticketEditFor(chatId, ticket).typing[name] = value;
@@ -4913,7 +4111,6 @@ function ticketForgetTyping(edit, change) {
   delete edit.typing[change.type === "field" ? change.stateKey : change.type === "department" ? "departmentCode" : change.type === "market" ? "marketCode" : change.type === "assigneeAdd" ? "addPeople" : ""];
 }
 
-// Saves one edit, after the ones before it. Never throws: a failure is shown on the ticket.
 function commitTicketChange(chatId, change) {
   const next = (ticketSaveChains.get(chatId) || Promise.resolve()).then(() => saveTicketChange(chatId, change));
   ticketSaveChains.set(chatId, next);
@@ -4947,7 +4144,7 @@ async function saveTicketChange(chatId, change) {
         const now = (data.mismatched || []).map((item) => `${item.name} is now ${item.actual === null || item.actual === undefined || item.actual === "" ? "empty" : item.actual}`).join(", ");
         edit.notice = "";
         edit.error = `Someone changed this ticket since you opened it${now ? ` (${now})` : ""}. It was reloaded and your edit was not saved: make it again.`;
-        try { await loadTicketStatus(chatId, ticket.ref); } catch (_) { /* the message still says what happened */ }
+        try { await loadTicketStatus(chatId, ticket.ref); } catch (_) { }
       } else {
         edit.error = data.error || "The ticket could not be changed.";
       }
@@ -4955,7 +4152,7 @@ async function saveTicketChange(chatId, change) {
     }
     noteTicketAccountUsed(data);
     if (s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
-    ticketSearchResultsByChat.delete(chatId); // the inbox list shows the old values until it is read again
+    ticketSearchResultsByChat.delete(chatId);
     if (data.visible && data.ticket) {
       const merged = { ...data.ticket, comments: s.ticketRecord?.comments || ticket.comments || [] };
       s.ticketRecord = merged;
@@ -4963,7 +4160,6 @@ async function saveTicketChange(chatId, change) {
       ticketNoteAbsorb(merged);
       edit.notice = describeTicketChanges(data.changed);
     } else {
-      // The change moved the ticket out of what this agent may see: it was saved, but there is nothing left to show.
       s.ticketRecord = null;
       s.ticketView = "list";
       setStatus(`Saved. ${describeTicketChanges(data.changed)} You can no longer see ${ticket.ref}.`, "success");
@@ -5032,7 +4228,6 @@ function renderTicketStatus(chatId) {
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   const editableKeys = new Set(ticketEditableSpecs().map(({ field }) => field.key));
   const remarkPictures = splitImageLinks(typeof ticket.fields?.remarks === "string" ? ticket.fields.remarks : "").links;
-  // Fields the edit form already shows are not listed again; any other field on the ticket stays here, read only.
   const rows = Object.entries(ticket.fields || {}).filter(([key]) => key !== "attachment" && !editableKeys.has(key))
     .map(([key, value]) => `<div><span>${escapeHtml(ticketFieldLabel(key))}</span><strong>${escapeHtml(key === "remarks" && typeof value === "string" ? (splitImageLinks(value).text || "—") : ticketValueDisplay(key, value))}</strong></div>`).join("");
   return `<article class="ticket-inbox-detail">
@@ -5054,15 +4249,11 @@ function renderTicketStatus(chatId) {
 
 const ticketCommentInFlight = new Set();
 
-// Who the ticket system should act as: the signed-in agent. The server asks LiveChat who the token belongs to; the ticket account email
-// typed in the box (or remembered in this browser) is used only when no admin-set Ticket Email exists.
 function ticketAuthor(s) {
   const agentToken = liveChatAgentTokens()[currentLiveChatAccount];
   return agentToken && currentLiveChatAccount ? { accountKey: currentLiveChatAccount, agentToken, ticketEmail: s.escalation.ticketEmail || storedTicketEmail(currentLiveChatAccount) } : undefined;
 }
 
-// A dialog for what the ticket system refused. "Ticket account not found" asks for the ticket account email in a box and tries the same
-// action again with it; anything else (the key may not act for others yet, a wrong Ticket Email) is a message to read.
 function showTicketProblem(chatId, failure, retry) {
   document.getElementById("ticketProblemOverlay")?.remove();
   const askEmail = Boolean(failure.needTicketEmail);
@@ -5108,21 +4299,15 @@ function showTicketProblem(chatId, failure, retry) {
   if (cancel) cancel.addEventListener("click", () => overlay.remove());
   if (input) input.addEventListener("keydown", (event) => { if (event.key === "Enter") accept(); });
 }
-// Is the signed-in agent known to the ticket system? Shown at the top of the Tickets tab before they raise a ticket or comment.
-// Not asked when the widget cannot say who is signed in, and again after five minutes, after an email is entered, or on demand.
-// The green "Ticket account found" line is only shown for a few seconds (shownUntil) when the account is first confirmed or checked again on
-// demand; after that it lives in Settings. A problem (not found, key refused, check failed) stays on the Tickets tab until it is fixed.
 let ticketAccount = { status: "unknown", email: "", source: "", message: "", detail: "", checking: false, at: 0, shownUntil: 0 };
 const TICKET_ACCOUNT_RECHECK_MS = 5 * 60_000;
 const TICKET_ACCOUNT_FOUND_SHOWN_MS = 6000;
 function hideTicketAccountLineLater() {
   setTimeout(() => { for (const id of Object.keys(state)) renderTicketSlot(id); }, TICKET_ACCOUNT_FOUND_SHOWN_MS + 100);
 }
-// quiet: the check made in the background for notifications (see pollTicketNotifications): no email popup and no inbox load from it.
 async function checkTicketAccount(chatId, { force = false, quiet = false } = {}) {
   const s = state[chatId];
   if (!s || ticketAccount.checking) return;
-  // The background check (quiet) found no account and showed nothing; the first time the agent is on the Tickets tab they are asked for their email.
   if (!quiet && !force && (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail") && !ticketAccount.asked) {
     ticketAccount.asked = true;
     queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
@@ -5143,7 +4328,7 @@ async function checkTicketAccount(chatId, { force = false, quiet = false } = {})
     if (ticketAccount.status === "found" && ticketAccount.shownUntil > Date.now()) hideTicketAccountLineLater();
     if (data.status === "found" && s.escalation.ticketEmail) storeTicketEmail(currentLiveChatAccount, s.escalation.ticketEmail);
     if (data.status === "found" && (ticketConfigError || !ticketFields.length)) await fetchTicketConfig({ fresh: true });
-    if (quiet && ticketAccount.status === "found") ticketAccount.shownUntil = 0; // a background check does not flash the green line
+    if (quiet && ticketAccount.status === "found") ticketAccount.shownUntil = 0;
     if (!quiet && (ticketAccount.status === "notFound" || ticketAccount.status === "noEmail")) {
       queueMicrotask(() => showTicketProblem(chatId, { needTicketEmail: true, triedEmail: ticketAccount.email, error: "Ticket account not found. Please enter your ticket account email." }, () => checkTicketAccount(chatId, { force: true })));
     }
@@ -5154,8 +4339,6 @@ async function checkTicketAccount(chatId, { force = false, quiet = false } = {})
   }
   renderTicketSlot(chatId);
 }
-// Admin preview only, opened with ?ticketDemo=1: the Tickets tab with made-up tickets and a "found" account, to look at the screens when the
-// ticket system is not reachable. Nothing is read from or sent to the ticket system; creating a ticket or a comment says so and stops.
 function installTicketDemo() {
   const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
   const person = (id, name) => ({ id, name, email: `${name.toLowerCase().replace(/[^a-z]+/g, ".")}@demo.test` });
@@ -5202,13 +4385,9 @@ function installTicketDemo() {
 }
 const TICKET_DEMO = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("ticketDemo") === "1";
 if (TICKET_DEMO) installTicketDemo();
-// A ticket or comment that went through as the agent proves the account: the line follows without another check.
 function noteTicketAccountUsed(data) {
   if (data?.actedAs) ticketAccount = { status: "found", email: data.actedAs, source: ticketAccount.source, message: "", checking: false, at: Date.now(), shownUntil: ticketAccount.shownUntil };
 }
-// The Tickets tab is only usable once the ticket system knows the signed-in agent, so every ticket and comment is theirs: while the check
-// runs, and whenever it says the account is missing or cannot be acted for, the tab shows only the account line (see ticketAccountBlocks).
-// A failed check (the ticket system busy or unreachable) does not lock anyone out: the line says so and a refused ticket is explained then.
 const TICKET_ACCOUNT_BLOCKING = ["notFound", "noEmail", "adminEmailInvalid", "keyNeedsGrant", "outranks", "keyRejected"];
 function ticketAccountBlocks() {
   return (ticketAccount.checking && ticketAccount.status !== "found") || TICKET_ACCOUNT_BLOCKING.includes(ticketAccount.status);
@@ -5223,7 +4402,6 @@ function renderTicketAccountGate(chatId) {
     </div>`;
 }
 
-// Settings: are ticket notifications being watched? (see pollTicketNotifications; it runs every minute while the widget is visible)
 function renderTicketNotesStatus() {
   const info = ticketNotePollInfo;
   if (!info.at) return "Notifications: waiting for the first check (every minute while this page is open and visible).";
@@ -5233,11 +4411,9 @@ function renderTicketNotesStatus() {
     : `Notifications: watching ${info.watching} ticket${info.watching === 1 ? "" : "s"}, last checked ${escapeHtml(when)}. New comments, mentions and status changes on your tickets appear on the bell.`;
 }
 
-// The Settings card for the ticket account: wherever the Tickets tab exists and the ticket system is acting as the agent.
 function ticketAccountSettingsVisible() {
   return ESCALATION_TICKET_ENABLED && (previewMode || DEPARTMENT_TABS_LIVE) && ticketAccount.status !== "off";
 }
-// Settings has no chat of its own; a check needs one only for its state.
 function ticketAccountSettingsChat() {
   if (!activeChats[0] && !Object.keys(state).length) ensureChatState(ticketsOnlyChat());
   return activeChats[0]?.chatId || Object.keys(state)[0] || "";
@@ -5252,7 +4428,6 @@ function renderTicketAccountSettings() {
     ${ticketAccount.checking ? "" : '<button type="button" class="secondary-btn" data-settings-ticket-recheck>Check again</button>'}`;
 }
 
-// always: Settings shows the account whatever the time; the Tickets tab shows a confirmed account only for a few seconds (see shownUntil).
 function renderTicketAccountLine(chatId, { always = false } = {}) {
   const a = ticketAccount;
   const line = (kind, html) => `<div class="ticket-account ticket-account-${kind}" role="status">${html}</div>`;
@@ -5279,13 +4454,8 @@ function resubmitTicket(chatId) {
   if (button) button.click();
 }
 
-// The conversation on a ticket: comments with their replies (the ticket API's shape; the preview's sample tickets use plain names),
-// and a box to comment or reply, posted as the signed-in agent.
-// Pictures on tickets and comments. The ticket system serves its files only to the API key, so the server reads each one (/ticket-attachment)
-// and the browser shows it from a local copy; pictures this site stored itself (a /ticket-image link in the text) are shown straight from
-// that link. A picture that cannot be loaded falls back to its file name.
 const TICKET_IMAGE_LINK = /https?:\/\/[^\s<>"]+?(?:\/ticket-image\?k=[^\s<>"]+|\/tickets\/\d{8}\/[0-9a-f-]{36}\.(?:png|jpg|webp))/gi;
-const ticketImageUrls = new Map(); // ticket-system path -> Promise of a local picture address
+const ticketImageUrls = new Map();
 const isTicketImage = (item) => (/^image\/(png|jpe?g|webp)$/i.test(String(item?.mime || item?.mimeType || "")) || /\.(png|jpe?g|webp)$/i.test(String(item?.name || item?.originalName || item?.path || ""))) && Boolean(item?.path);
 function splitImageLinks(text) {
   const links = [];
@@ -5304,7 +4474,7 @@ function fetchTicketImageUrl(path, chatId) {
       const res = await fetch("/ticket-attachment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, author }) });
       if (!res.ok) {
         let reason = `the ticket system could not give it (${res.status})`;
-        try { reason = (await res.json()).error || reason; } catch (_) { /* keep the status */ }
+        try { reason = (await res.json()).error || reason; } catch (_) { }
         throw new Error(reason);
       }
       return URL.createObjectURL(await res.blob());
@@ -5341,7 +4511,6 @@ function openTicketImageLightbox(src, name) {
   document.body.appendChild(overlay);
 }
 
-// What is waiting to be sent with a comment (kept in memory only, like a ticket's attachments).
 const ticketCommentFilesByChat = new Map();
 const COMMENT_FILE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "application/pdf"]);
 const COMMENT_MAX_FILES = 4;
@@ -5368,7 +4537,7 @@ function renderCommentFiles(chatId) {
       : `<img src="${escapeHtml(commentFileUrl(file))}" alt="" />`}<span>${escapeHtml(file.name || "Picture")}</span><button type="button" data-action="removeCommentFile" data-chat="${escapeHtml(chatId)}" data-index="${index}" aria-label="Remove ${escapeHtml(file.name || "file")}">×</button></span>`).join("")}${error ? `<span class="ticket-attachment-error">${escapeHtml(error)}</span>` : ""}`;
 }
 function clearCommentFiles(chatId) {
-  for (const file of ticketCommentFilesByChat.get(chatId) || []) { try { URL.revokeObjectURL(file._preview); } catch (_) { /* gone already */ } }
+  for (const file of ticketCommentFilesByChat.get(chatId) || []) { try { URL.revokeObjectURL(file._preview); } catch (_) { } }
   ticketCommentFilesByChat.delete(chatId);
 }
 
@@ -5438,8 +4607,6 @@ async function sendTicketComment(chatId) {
   renderTicketSlot(chatId);
 }
 
-// A refused read: "Ticket account not found" opens the email popup (and tries the read again once an email is saved); anything else is
-// the ticket system's message, as before.
 function ticketReadFailure(chatId, data, fallback) {
   if (data.needTicketEmail && state[chatId]) queueMicrotask(() => showTicketProblem(chatId, data, () => checkTicketAccount(chatId, { force: true })));
   return new Error(data.error || fallback);
@@ -5456,7 +4623,6 @@ async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = 
   const data = await res.json();
   if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket status lookup failed");
   s.ticketLookupRef = normalized;
-  // A refresh that may come from a copy kept a few seconds must not undo an edit just saved (the saved ticket is newer).
   if (!fresh && s.ticketRecord?.ref === data.ticket.ref && Date.parse(data.ticket.updatedAt) < Date.parse(s.ticketRecord.updatedAt)) return s.ticketRecord;
   s.ticketRecord = data.ticket;
   rememberTicketSnapshot(data.ticket);
@@ -5466,7 +4632,6 @@ async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = 
   return data.ticket;
 }
 
-// One read of the ticket list. mine: only the agent's own tickets, asked of the ticket system (see ticket-list.js).
 async function fetchTicketList(chatId, query, { fresh = true, who = "" } = {}) {
   const author = ticketReadAuthor(state[chatId]);
   const q = String(query || "").trim();
@@ -5480,9 +4645,6 @@ async function fetchTicketList(chatId, query, { fresh = true, who = "" } = {}) {
   return data;
 }
 
-// The Status, Department and Market filters as the ticket system takes them ({ status: value, department: id, market: id }), so it narrows
-// the whole list and not only the 100 tickets read here. A department or market without a real id (the built-in fallback lists have only
-// codes) and a status no longer offered are left to the filtering on the loaded tickets.
 function ticketServerFilters(chatId) {
   const s = state[chatId] || {};
   const out = {};
@@ -5496,7 +4658,6 @@ function ticketServerFilters(chatId) {
   return out;
 }
 
-// Was the loaded list read for other filters than the ones set now? Then it has to be read again.
 function ticketListStale(chatId) {
   const loaded = ticketSearchResultsByChat.get(chatId);
   if (!loaded || loaded.loading || loaded.error) return false;
@@ -5504,15 +4665,10 @@ function ticketListStale(chatId) {
   return loaded.filtersKey !== JSON.stringify(ticketServerFilters(chatId)) || (Boolean(ticketScopedWho(agent)) && loaded.mineFor !== agent);
 }
 
-// The person an Agent filter value asks the ticket system for: "me" for "Me", a ticket-system user id for an agent picked from the roster
-// ("#44"), "" for everyone and for a name that is only filtered on the tickets already loaded.
 function ticketScopedWho(value) {
   return value === TICKET_FILTER_ME ? "me" : /^#\d+$/.test(String(value)) ? String(value).slice(1) : "";
 }
 
-// The list the explorer shows now: with the Agent filter on "Me" or on an agent from the roster, that person's tickets as the ticket system
-// lists them (result.mine, read for the value in result.mineFor), otherwise the newest tickets of everyone the agent may see. The 100 newest
-// hold few of one person's tickets, so a person is asked for directly.
 function ticketActiveList(chatId) {
   const result = ticketSearchResultsByChat.get(chatId);
   const agent = state[chatId]?.ticketExplorerAgent;
@@ -5532,8 +4688,6 @@ async function searchTickets(chatId, query, mode = "search", { fresh = true } = 
   return data;
 }
 
-// A filter was picked in the ticket list's filter panel. A person (Me, or an agent from the roster) is asked of the ticket system, so the
-// list is read again with them the first time they are picked.
 function applyTicketFilter(chatId, key, value) {
   const s = state[chatId];
   if (!s || !["ticketExplorerAgent", "ticketExplorerStatus", "ticketExplorerDepartment", "ticketExplorerMarket"].includes(key)) return;
@@ -5552,23 +4706,17 @@ async function pollTicketUpdates() {
     const owner = Object.entries(state).find(([, value]) => value?.ticketRecord?.ref === ref);
     if (!owner) continue;
     const [chatId] = owner;
-    // Only a ticket that is on screen is refreshed here. Reading it counts as the agent seeing it (ticketNoteAbsorb marks its notifications
-    // read), so a ticket opened earlier and left behind in the list view must not be read in the background: its new comment would be marked
-    // read before the bell could show it. The notification poll looks after those.
     if (ticketWorkspaceView(state[chatId]) !== "detail") continue;
     try {
       await loadTicketStatus(chatId, ref, { fresh: false });
       const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .escalation-slot`);
       if (slot && ticketWorkspaceView(state[chatId]) === "detail") renderTicketSlot(chatId);
-    } catch (err) { ticketPollBackoff(err); /* a temporary poll failure should not interrupt the agent */ }
+    } catch (err) { ticketPollBackoff(err); }
   }
 }
 setInterval(pollTicketUpdates, TICKET_OPEN_POLL_MS);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketUpdates(); }); // news is fetched the moment the agent comes back
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void pollTicketUpdates(); });
 
-// Creates tickets through the C9 Tickets REST API and reads their latest
-// status. The API currently has no update route, so editing remains in the
-// ticket system itself.
 function renderEscalationSection(chatId) {
   const s = state[chatId];
   const view = ticketWorkspaceView(s);
@@ -5601,10 +4749,6 @@ function renderEscalationSection(chatId) {
   `;
 }
 
-// Full default state shape for a chat we haven't seen before. Factored out
-// so applyProfile() (live SDK mode) can ensure a new chat's state exists
-// with every required field before forcing it expanded, rather than
-// renderChats()'s own init pass silently skipping a partially-built object.
 function applyPreviewSampleState(chat) {
   if (!previewMode || chat.chatId !== "preview-test") return;
   const sample = state[chat.chatId];
@@ -5685,23 +4829,10 @@ function ensureChatState(chat) {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     liveChatAccount: currentLiveChatAccount,
     vs96FeedbackQuery1: "", vs96FeedbackQuery2: "", riskReloadAmount: "",
-    // Extra cases logged in this same chat (see the "Multiple cases" block
-    // above renderTickets). The fields above always describe the ONE case
-    // currently open for editing; earlier cases are parked in logs[].
     logs: [], caseNo: 1, loggedSnapshot: "",
-    // Set when a Look up came back "Not VVIP" and auto-marked the chat
-    // Unknown -- turns the Look up button into "Force lookup". forcedVipFor
-    // remembers a username CS force-looked-up so a repeat lookup of the same
-    // player isn't auto-marked Unknown all over again.
     notVipResult: false, forcedVipFor: "",
     gracePeriodActivated: false,
     brand: deriveBrandFromGroup(chat.groupName),
-    // C9MYR CS-PYM Escalation Ticket -- a separate Lark base/table entirely,
-    // filled in and submitted independently of the Customer Approaching
-    // record above. memberUserId auto-fills from s.username once looked up,
-    // brand from deriveFullBrandCode (keeps the digits, e.g. "VS96" vs
-    // "VS"), amount from whatever bonus gets claimed -- all editable, none
-    // of them overwrite a value the agent already typed/picked.
     escalation: {
       memberUserId: "", brand: deriveFullBrandCode(chat.groupName), queries: "",
       status: "", transactionId: "", paymentGateway: "", remarks: "", vipLevel: "", amount: "",
@@ -5711,69 +4842,18 @@ function ensureChatState(chat) {
     ticketRef: "", ticketLookupRef: "", ticketRecord: null, ticketSearchQuery: "",
     ticketView: "list", ticketInboxFilter: "all", ticketFiltersOpen: false, ticketAdditionalOpen: false,
     ticketExplorerAgent: "all", ticketExplorerStatus: "all", ticketExplorerDepartment: "all", ticketExplorerMarket: "all",
-    // "Last username recorded" — see checkLastUsername. Runs once per chat,
-    // as soon as both Brand and the resolved chat link are ready.
-    // lastUsernameStarted guards against calling twice; lastUsernameLoading
-    // is the visible "Checking…" state shown until it resolves.
     lastUsernameStarted: false, lastUsernameLoading: false,
     lastUsernameChecked: false, lastUsernameFound: false, lastUsernameValue: "",
     inquiry: [], status: "", telegram: chat.isTelegram, telegramManual: false, logged: false, dob: "", dobView: null,
     releasedBonusAmount: "", releasedAmountRaw: "", claimSecret: false,
-    // Typed-but-not-yet-looked-up text in the username box, saved on every
-    // keystroke (see the "input" listener below). Restores what CS was
-    // typing if LiveChat swaps this widget to a different chat mid-typing
-    // (a new incoming chat can steal focus at any moment) and they come
-    // back to this one later — the box never silently reverts to blank,
-    // and a stray click on a since-swapped-in card can't submit it either.
     usernameDraft: "",
-    // Ticked when the customer never gave a username — unknown players
-    // aren't counted toward chat data, so this skips recording entirely
-    // (see submitRecord) rather than treating a blank username as an
-    // incomplete record that needs chasing down.
     isUnknown: false,
-    // Resolved by checkChatStatus, same value as activeChats[].link but
-    // kept here too (not just on the transient activeChats entry) so it
-    // survives once this chat isn't the focused one anymore — see
-    // sweepPendingChats, which checks/auto-records chats other than
-    // whichever one is currently on screen.
     chatUrl: "",
-    // chatOpen mirrors the LiveChat conversation's open/closed state.
-    // Recording only happens once a chat closes — checkChatStatus flips
-    // this and calls submitRecord automatically once LiveChat reports the
-    // chat inactive; there's no manual close button anymore.
     chatOpen: true, autoRecordError: "",
-    // Guards the Look Up click handler against firing twice concurrently
-    // for the same chat — btn.disabled alone isn't enough, since any
-    // background re-render (checkChatStatus's Telegram-detection poll runs
-    // every 2s and calls renderChats for the focused chat) replaces the
-    // disabled button with a fresh enabled one mid-request. Without a
-    // state-level guard, a second click landing in that window starts a
-    // second lookup before the first has set s.caRecordId, so its "delete
-    // my previous record" dedup sees nothing to delete -- both create a
-    // fresh, empty Customer Approaching row, and only one ever gets
-    // tracked. The other sits there forever as an orphaned duplicate
-    // (confirmed from real data: the same username creating 3-4 rows
-    // seconds apart, all blank past Username/Brand/Agent Name).
     lookupInFlight: false,
-    // Collapsed by default — a card only expands to full detail when the
-    // agent clicks it (see toggleExpand). Keeps up to 6 concurrent chats
-    // glanceable instead of only ~2 fitting on screen at once.
     expanded: false,
-    // Whether the D.O.B. calendar is currently open -- tracked in state
-    // (not just a DOM class toggle) because renderChats does a full
-    // re-render of every card, including on a background poll the agent
-    // never triggered (checkChatStatus's telegram-detection check runs
-    // every 2s). The initial card template used to hardcode the calendar
-    // as hidden, so any such re-render silently closed it out from under
-    // an agent still scrolling through it -- confirmed live as "the date
-    // picker sometimes just closes on its own." See toggleDobCalendar and
-    // the card template below.
     dobCalendarOpen: false,
   };
-  // Standalone preview opens with a complete, read-only demonstration so
-  // reviewers can assess the special bonus workflows without configuring a
-  // brand and performing a live lookup first. Embedded LiveChat never uses
-  // this sample state.
   applyPreviewSampleState(chat);
 }
 
@@ -5792,12 +4872,6 @@ function resetPreviewCard(chatId) {
   setStatus("Preview test reset. No Lark record was changed.", "success");
 }
 
-// Which text field is focused, by a selector stable across a re-render
-// (class + which chat's card + which escalation field, where relevant) --
-// used to restore focus/cursor position around renderChats() below, since
-// it always tears down and rebuilds the whole card. Only a fixed, known
-// set of fields are worth this: the ones an agent is realistically still
-// typing into when a background poll's re-render lands mid-keystroke.
 function focusableFieldSelector(el) {
   if (el.classList.contains("ticket-search-input")) return ".ticket-search-input";
   if (el.classList.contains("username-input")) return ".username-input";
@@ -5814,9 +4888,6 @@ function focusableFieldSelector(el) {
   return null;
 }
 
-// Selector -> [options-list selector, options re-renderer] for every search
-// box whose typed filter text isn't mirrored into state (same situation as
-// Inquiry's — see restoreFocus below).
 const SEARCH_BOX_OPTIONS = {
   ".inquiry-search": [".inquiry-dropdown", renderInquiryDropdown],
   ".status-search": [".status-dropdown", renderStatusDropdown],
@@ -5840,13 +4911,6 @@ function restoreFocus(captured) {
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${captured.chatId}"]`);
   const el = card?.querySelector(captured.selector);
   if (!el) return;
-  // Every search box here (Inquiry, Status, Brand, D.O.B month/year) has
-  // its typed filter text live only in the DOM, never mirrored into state
-  // (see each one's own "input" handler note) -- a fresh render always
-  // starts it blank, so the typed text itself would otherwise be lost
-  // outright, not just defocused. Every other captured field (username,
-  // Escalation fields, the amount box) already renders with the right
-  // value straight from state, so this is a no-op for them.
   if (el.value !== captured.value) {
     el.value = captured.value;
     const optionsTarget = SEARCH_BOX_OPTIONS[captured.selector];
@@ -5857,24 +4921,15 @@ function restoreFocus(captured) {
     }
   }
   el.focus();
-  try { el.setSelectionRange(captured.selectionStart, captured.selectionEnd); } catch (_) { /* not a text-selectable input type */ }
+  try { el.setSelectionRange(captured.selectionStart, captured.selectionEnd); } catch (_) { }
 }
 
-// Wraps the actual render so a background re-render (checkChatStatus
-// detecting a link/Telegram/close, sweepPendingChats, etc.) never steals
-// focus or loses in-progress typing -- confirmed live as "it just reloads
-// while I'm typing." chatListEl.innerHTML = "" below always destroys every
-// input node outright, so plain focus() alone isn't enough; this captures
-// which field (and, for Inquiry's untracked search text, what was typed)
-// before that happens and restores it after.
 function renderChats(chats) {
   const focusCapture = captureFocus();
   renderChatsInner(chats);
   restoreFocus(focusCapture);
 }
 
-// The Tickets tab does not need a conversation: with none open it works on this stand-in "chat" (no player, no brand, nothing filled in), so an
-// agent can read, open, edit and raise tickets between chats. Its state lives in state[] like any chat's, because the Tickets tab is built on it.
 const TICKETS_ONLY_CHAT_ID = "tickets-only";
 function ticketsOnlyChat() {
   return { chatId: TICKETS_ONLY_CHAT_ID, groupName: "", link: "", isTelegram: false };
@@ -5891,8 +4946,6 @@ function renderChatsInner(chats) {
     }
   }
 
-  // Pass 1: make sure every chat has state before deciding defaults below —
-  // the "expand the first chat" default needs to see the whole list.
   for (const chat of chats) {
     ensureChatState(chat);
   }
@@ -5907,11 +4960,6 @@ function renderChatsInner(chats) {
     if (ticketWorkspaceView(state[chat.chatId]) === "list" && !ticketSearchResultsByChat.has(chat.chatId) && !ticketAccountBlocks()) void refreshTicketInbox(chat.chatId, "", "all", { fresh: false });
     return;
   }
-  // Default: expand exactly one chat (the first) on first load only, so
-  // agents land on a usable full card and see how the pattern works. Must
-  // NOT re-check "is anything expanded" on every render — collapsing the
-  // last open card is a deliberate agent action (e.g. wanting the full
-  // compact queue view) and shouldn't be silently reopened.
   if (!hasAutoExpandedOnce && chats.length) {
     state[chats[0].chatId].expanded = true;
     hasAutoExpandedOnce = true;
@@ -5922,9 +4970,6 @@ function renderChatsInner(chats) {
     const expanded = previewMode ? s.expanded : true;
 
     const card = document.createElement("div");
-    // Whole-card red highlight when a chat closed incomplete — meant to be
-    // impossible to miss even at a glance across 6 concurrent chats, not
-    // just a small line of text at the bottom.
     card.className = "chat-card"
       + (s.autoRecordError ? " needs-attention" : "")
       + (expanded ? "" : " collapsed");
@@ -5935,8 +4980,6 @@ function renderChatsInner(chats) {
   }
 }
 
-// Which state flag backs each dropdown's open/closed persistence -- see
-// closeAllDropdowns' header note for why this exists at all.
 const DROPDOWN_STATE_KEY = {
   "inquiry-dropdown": "inquiryDropdownOpen",
   "status-dropdown": "statusDropdownOpen",
@@ -5944,16 +4987,6 @@ const DROPDOWN_STATE_KEY = {
   "dob-calendar": "dobCalendarOpen",
 };
 
-// Hides every open dropdown/calendar across the whole widget (the "only
-// one open at a time" rule) AND clears each one's state flag, not just its
-// DOM class -- renderChats does a full re-render of every card, including
-// from a background poll the agent never triggered (checkChatStatus's
-// telegram-detection check runs every 2s). A card's initial template reads
-// these state flags to decide whether to render a dropdown already open;
-// if only the DOM class were cleared here, that flag would still say
-// "open" and the very next re-render would silently reopen a dropdown the
-// agent had already closed. Every toggle/select handler calls this instead
-// of touching classList directly.
 function closeAllDropdowns() {
   document.querySelectorAll(".inquiry-dropdown, .status-dropdown, .brand-dropdown, .dob-calendar, .dob-cal-jump-dropdown").forEach((d) => {
     d.classList.add("hidden");
@@ -5967,12 +5000,6 @@ function closeAllDropdowns() {
   });
 }
 
-/* ============================================================
-   EVENTS (delegated — cards re-render often)
-   ============================================================ */
-// The cases bar ("Save changes" appears once a logged case is edited) is
-// refreshed after any click / input / change inside a card, since many
-// handlers only update their own slot instead of re-rendering the card.
 function refreshCasesSlotLater(e) {
   const id = e.target.closest && e.target.closest(".chat-card")?.dataset.chatId;
   if (!id) return;
@@ -6021,7 +5048,6 @@ chatListEl.addEventListener("keydown", (event) => {
   const target = event.target;
   const card = target.closest?.(".chat-card");
 
-  // The comment box on a ticket: Enter posts the comment, Shift+Enter starts a new line (an empty box with no picture just says so, as the button does).
   if (event.key === "Enter" && !event.shiftKey && target.matches?.(".ticket-comment-input")) {
     event.preventDefault();
     const button = card?.querySelector('button[data-action="sendTicketComment"]');
@@ -6029,7 +5055,6 @@ chatListEl.addEventListener("keydown", (event) => {
     return;
   }
 
-  // The primary text lookups should submit like a normal search field.
   if (event.key === "Enter" && target.matches?.(".username-input, .ticket-search-input")) {
     const action = target.matches(".username-input")
       ? "lookup"
@@ -6087,7 +5112,6 @@ chatListEl.addEventListener("keydown", (event) => {
       event.preventDefault();
       closeKeyboardDropdown(option);
     }
-    // Enter and Space already activate these native buttons.
     return;
   }
 
@@ -6119,15 +5143,11 @@ chatListEl.addEventListener("click", async (e) => {
   let card = btn.closest(".chat-card");
   const s = state[chatId];
 
-  // try/finally (rather than a saveState() call at the end of the function
-  // body) so every branch below persists its change, including the several
-  // early `return`s inside individual action blocks (e.g. lookup's
-  // missing-username/brand guards).
   try {
 
   if (btn.dataset.action === "openTicketImage") {
     const img = btn.querySelector("img");
-    if (btn.dataset.fallbackUrl) window.open(btn.dataset.fallbackUrl, "_blank", "noopener"); // the picture could not be loaded here: the ticket system's own page
+    if (btn.dataset.fallbackUrl) window.open(btn.dataset.fallbackUrl, "_blank", "noopener");
     else if (img && img.src) openTicketImageLightbox(img.src, img.alt || "Picture");
     return;
   }
@@ -6136,7 +5156,7 @@ chatListEl.addEventListener("click", async (e) => {
     const row = btn.closest(".ticket-comment-files-row");
     const files = ticketCommentFilesByChat.get(chatId) || [];
     const [gone] = files.splice(Number(btn.dataset.index), 1);
-    try { URL.revokeObjectURL(gone?._preview); } catch (_) { /* gone already */ }
+    try { URL.revokeObjectURL(gone?._preview); } catch (_) { }
     if (files.length) ticketCommentFilesByChat.set(chatId, files); else ticketCommentFilesByChat.delete(chatId);
     if (s) s.commentFileError = "";
     if (row) row.innerHTML = renderCommentFiles(chatId);
@@ -6222,7 +5242,6 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
     if (btn.dataset.field.startsWith("edit:")) {
-      // The ticket detail saves a choice the moment it is picked (it shows the pick meanwhile).
       const name = btn.dataset.field.slice(5);
       const value = btn.dataset.value || "";
       ticketLiveTyping(chatId, name, value);
@@ -6230,7 +5249,7 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
     s.escalation[btn.dataset.field] = btn.dataset.value || "";
-    if (btn.dataset.field === "marketId") s.escalation.marketTouched = true; // the agent chose (even "Use ticket default"): their default market is not put back
+    if (btn.dataset.field === "marketId") s.escalation.marketTouched = true;
     card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
     return;
   }
@@ -6279,7 +5298,7 @@ chatListEl.addEventListener("click", async (e) => {
     if (btn.dataset.action === "filterTicketInbox") s.ticketInboxFilter = btn.dataset.value;
     if (btn.dataset.action === "toggleTicketFilters") {
       s.ticketFiltersOpen = !s.ticketFiltersOpen;
-      if (s.ticketFiltersOpen && !ticketAccountBlocks()) void loadTicketAgentRoster(chatId); // every agent for the Agent filter, not only those on the loaded tickets
+      if (s.ticketFiltersOpen && !ticketAccountBlocks()) void loadTicketAgentRoster(chatId);
     }
     if (btn.dataset.action === "clearTicketFilters") {
       s.ticketInboxFilter = "all";
@@ -6359,8 +5378,6 @@ chatListEl.addEventListener("click", async (e) => {
       btn.textContent = "Stopping…";
       controller.abort();
     } else {
-      // Nothing is running for this chat (e.g. the flag outlived the request): clear it, or the card keeps
-      // re-rendering a Cancel button that can never do anything.
       if (s) s.lookupInFlight = false;
       renderChats(activeChats);
     }
@@ -6369,21 +5386,12 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "lookup") {
     if (!selectedAgent && !previewMode) { openSettingsPanel(); return; }
-    // State-level guard, not just btn.disabled -- a background re-render
-    // (checkChatStatus's 2s Telegram-detection poll calls renderChats for
-    // the focused chat) replaces this button with a fresh enabled one
-    // mid-request, and a second click landing in that window would start a
-    // second lookup before the first has set s.caRecordId, creating a
-    // duplicate empty Customer Approaching row that never gets tracked or
-    // cleaned up. See ensureChatState's lookupInFlight for the full story.
     if (s.lookupInFlight) return;
     const username = card.querySelector(".username-input").value.trim();
     if (!username) { setStatus("Enter a username before looking up.", "error"); return; }
     if (!s.brand && detectedBrandFor.has(chatId)) s.brand = detectedBrandFor.get(chatId);
     const brand = s.brand;
     if (!brand) {
-      // Kick detection off again rather than just waiting -- the first
-      // attempt may have failed or never run for this chat.
       if (groupIdFor.has(chatId)) resolveBrandFromGroupId(chatId, groupIdFor.get(chatId));
       setStatus("Brand hasn't been auto-detected yet for this chat — pick it from the Brand box, or try again in a moment.", "error");
       return;
@@ -6393,13 +5401,8 @@ chatListEl.addEventListener("click", async (e) => {
     if (!s.escalation.memberUserId) s.escalation.memberUserId = username;
     const chatDef = activeChats.find((c) => c.chatId === chatId);
     const telegramNow = card.querySelector(".tg-check").checked;
-    // "Force lookup": the last lookup said Not VVIP and auto-ticked Unknown.
-    // CS is saying the player is VIP anyway (the list just isn't updated
-    // yet), so un-mark Unknown up front and don't auto-mark it again below.
     const forcing = !!s.notVipResult;
     if (forcing) { s.isUnknown = false; reportUnknownTick(chatId, false, true); }
-    // One Customer Approaching row per chat: a repeat lookup passes back the record created last time (only if it was not logged yet and is this
-    // agent's own), so the backend deletes it first.
     const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
     await runLookup(chatId, { username, brand, telegramNow, link: s.chatUrl || chatDef?.link || "", previousRecordId, forcing, btn });
   }
@@ -6408,9 +5411,6 @@ chatListEl.addEventListener("click", async (e) => {
     const programKey = btn.dataset.program;
     const r = s.matchedRow;
 
-    // VS96 is only earned after CS records two separate pieces of player
-    // feedback. Keep this guard here as well as disabling the button, so a
-    // stale DOM or programmatic click cannot bypass the requirement.
     if (programKey === "vs96Feedback" && (
       !String(s.vs96FeedbackQuery1 || "").trim()
       || !String(s.vs96FeedbackQuery2 || "").trim()
@@ -6427,13 +5427,6 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
 
-    // Grace Period's one field packs two different states (see renderTickets)
-    // and neither follows the generic claim flow below at all: "Pass ..."
-    // just activates the offer — Inquiry/Status only, no amount/claim
-    // secret, and it doesn't consume the one-claim-per-case slot. "Activated
-    // : 2026-10-17 14:35 - Pass - 58" is the real claim — amount comes from
-    // graceClaimAmount() (the last number, not the date's), and it behaves
-    // like any other claim (locks the rest, Claim Secret ticked).
     if (programKey === "gracePeriod") {
       const display = r.gracePeriod || "";
       if (/^\s*pass\b/i.test(display)) {
@@ -6443,14 +5436,11 @@ chatListEl.addEventListener("click", async (e) => {
       } else {
         const amount = graceClaimAmount(display);
         if (!(await raiseClaimTicket(chatId, "gracePeriod", amount))) return;
-        card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card; // the card may have been redrawn while the dialog was open
+        card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
         s.claimedPrograms.gracePeriod = true;
         s.inquiry = ["Grace Period"];
         s.status = "Given";
         if (!s.claimSecretManual) s.claimSecret = true;
-        // Bare number only, same convention as the generic claim path below
-        // — no "Grace Period: " label prefix (the Inquiry tag already says
-        // which bonus this is).
         s.releasedBonusAmount = amount || display;
         s.releasedAmountRaw = amount || display;
         reportClaim(chatId, { program: "gracePeriod", label: "Grace Period", source: display, inquiry: "Grace Period", amount });
@@ -6462,28 +5452,18 @@ chatListEl.addEventListener("click", async (e) => {
       card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
       refreshStatusChip(card, chatId);
       card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
-      // "Pass" is only an activation, not a completed claim (see this
-      // branch's own header note) — nothing to submit yet. The real claim
-      // ("Activated: ...") sets everything submitRecord needs same as any
-      // other program's claim, so it gets the same instant-submit treatment.
       if (s.claimedPrograms.gracePeriod && !previewMode) {
         await submitRecord(chatId, { auto: true, reason: "Grace Period claimed" });
       }
       return;
     }
 
-    // Top P&L / LTV / Risk Player raise a ticket for the payment team before they are claimed (Grace Period does the same in its own branch
-    // above); nothing below runs unless the ticket exists. The amount is the one the claim records.
     if (programKey !== "gracePeriod" && AUTO_TICKET_PROGRAMS[programKey]) {
       const ticketAmount = riskClaim?.valid ? riskClaim.formattedClaim : programHasAmount(programKey) ? extractAmountNumber(r?.[programKey]) : "";
       if (!(await raiseClaimTicket(chatId, programKey, ticketAmount))) return;
-      card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card; // the card may have been redrawn while the dialog was open
+      card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
     }
 
-    // Telegram RM28 / Redeem Code / Special Reload (Ang Pao) write live to
-    // Lark the instant they're claimed — that's what fires the backoffice-
-    // approval workflow. Regular (gold) tickets are read-only source-table
-    // rows; they're only logged at submit.
     if (!previewMode && (programKey === "telegram28" || programKey === "redeemCode" || programKey === "specialReload")) {
       const source = r[programKey];
       const chatDef = activeChats.find((c) => c.chatId === chatId);
@@ -6515,20 +5495,6 @@ chatListEl.addEventListener("click", async (e) => {
       { key: "redeemCode", label: "Redeem Code", display: r.redeemCode?.status },
       { key: "specialReload", label: "Special Reload (Ang Pao)", display: r.specialReload?.status },
     ];
-    // Released Amount only ever applies to Top 10 P&L / LTV / Telegram RM28
-    // (Grace Period has its own separate handling above). Risk Player uses
-    // riskClaim, calculated from the customer reload amount and capped by
-    // tier. 12h VIP Booster, Redeem Code, and Special Reload stay blank.
-    //
-    // The Amount box shows just the bare number now (e.g. "18"), not the
-    // label/status text it used to ("Top 10 P&L: Pass RM18") -- confirmed
-    // live as confusing to read, and the label added nothing the Inquiry
-    // tag doesn't already say. extractAmountNumber mirrors lark-record.js's
-    // own extractAmount(): a number directly after "RM" takes priority,
-    // since a bonus's raw display text often has other digits earlier
-    // (e.g. Top 10 P&L(Night)'s real format "Batch 09-09-2026 Pass RM58" --
-    // the naive "first number found" pattern used here previously for
-    // escalation.amount would have grabbed "09" instead of "58").
     const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && programHasAmount(src.key));
     const claimedAmount = riskClaim?.valid
       ? riskClaim.formattedClaim
@@ -6540,14 +5506,11 @@ chatListEl.addEventListener("click", async (e) => {
       s.escalation.amount = claimedAmount.split(" | ")[0];
     }
 
-    // Auto-set inquiry from the bonus type — only the matching inquiry tag,
-    // NOT "Feedback". CS adds Feedback manually if applicable.
     const mappedInquiry = resolveInquiryForProgram(programKey, r[programKey]);
     if (mappedInquiry) {
       s.inquiry = [mappedInquiry];
     }
 
-    // Status auto-sets to "Given" the moment any bonus is claimed.
     s.status = "Given";
     const claimedSource = allSources.find((src) => src.key === programKey);
     reportClaim(chatId, {
@@ -6562,16 +5525,6 @@ chatListEl.addEventListener("click", async (e) => {
     refreshStatusChip(card, chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
 
-    // Every field submitRecord requires is already fixed the instant any
-    // bonus is claimed here — username/caRecordId from the Look Up that
-    // had to happen first to see a claimable ticket at all, Brand
-    // auto-detected, Inquiry/Status just set above — so nothing about the
-    // Customer Approaching record still changes after this claim
-    // (D.O.B./Telegram aside, which stay editable and can be recorded
-    // later same as any other case). Submits immediately rather than
-    // waiting for the chat to close, same as Special Reload originally did
-    // — generalized to every program that reaches this shared completion
-    // path, not just that one.
     if (!previewMode) {
       await submitRecord(chatId, { auto: true, reason: `${allSources.find((src) => src.key === programKey)?.label || "Bonus"} claimed` });
     } else {
@@ -6579,19 +5532,6 @@ chatListEl.addEventListener("click", async (e) => {
     }
   }
 
-  // Click a claimed bonus again to undo it. Clears Inquiry, Status, Amount and
-  // Claim Secret in the card AND blanks them on the existing Customer
-  // Approaching record (the row itself is kept, never deleted). Claiming
-  // auto-submits instantly (s.logged = true), so if it was already written
-  // to Lark we send an unclaim update first, and only reset the card once
-  // that succeeds -- otherwise the card would say "cleared" while Lark still
-  // holds the old values. s.logged goes back to false so a re-claim (or the
-  // normal record-on-close) can write the record again.
-  //
-  // Telegram RM28 / Redeem Code / Special Reload: their claim also set the
-  // source table's own Status to "Claimed" (which fires the backoffice
-  // workflow). That is deliberately NOT touched here -- only the Customer
-  // Approaching record is cleared.
   if (btn.dataset.action === "unclaim") {
     if (s.unclaimInFlight) return;
     const programKey = btn.dataset.program;
@@ -6615,7 +5555,7 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
     s.unclaimInFlight = false;
-    reportClaim(chatId, null); // QA no longer sees the claim
+    reportClaim(chatId, null);
 
     const prevFirstAmount = String(s.releasedBonusAmount || "").split(" | ")[0];
     if (wasGraceActivationOnly) s.gracePeriodActivated = false;
@@ -6630,8 +5570,6 @@ chatListEl.addEventListener("click", async (e) => {
     s.logged = false;
     s.loggedSnapshot = "";
     s.autoRecordError = "";
-    // Polling stops once a chat is logged -- restart it so the chat closing
-    // still triggers the normal auto-record.
     if (s.chatOpen && activeChats[0]?.chatId === chatId) startChatStatusPolling(chatId);
 
     const special = programKey === "telegram28" || programKey === "redeemCode" || programKey === "specialReload";
@@ -6647,18 +5585,6 @@ chatListEl.addEventListener("click", async (e) => {
     renderChats(activeChats);
   }
 
-  // A customer can fail to complete the Grace Period challenge whether
-  // they're mid-activation or already at the claim stage, so this sits
-  // alongside Activate/Claim always (see renderTickets) rather than only
-  // once one of those is already done — Activate/Claim's own button
-  // disables itself the moment it's clicked, same look as every other
-  // claimed ticket, so it can't just be re-clicked directly. Resets back
-  // to a fresh "Activated, not yet claimed" state every time — including
-  // undoing an already-made claim (amount/Claim Secret/the one-claim-per-
-  // case lock) if there was one, since reactivating means giving them a
-  // new attempt at the whole thing. Same effect as Activate itself either
-  // way (nothing writes to Lark until the final submit), just
-  // re-triggerable as many times as the case needs.
   if (btn.dataset.action === "reactivateGracePeriod") {
     const wasClaimed = !!s.claimedPrograms.gracePeriod;
     s.gracePeriodActivated = true;
@@ -6685,8 +5611,6 @@ chatListEl.addEventListener("click", async (e) => {
     if (s.inquiry.includes(val)) {
       s.inquiry = s.inquiry.filter((v) => v !== val);
     } else if (btn.dataset.action === "toggleInquiry") {
-      // Same max-2 / "one must be Feedback" rule as before, just enforced
-      // from a dropdown click instead of a checkbox change event.
       if (s.inquiry.length >= 2) {
         setStatus("Only 2 inquiries can be selected per case.", "error");
       } else if (s.inquiry.length === 1 && s.inquiry[0] !== "Feedback" && val !== "Feedback") {
@@ -6695,16 +5619,10 @@ chatListEl.addEventListener("click", async (e) => {
         s.inquiry.push(val);
       }
     }
-    // Clears whatever was typed to find this option — leaving it in place
-    // left stale filter text sitting in the box (and the list still
-    // filtered down to just that text) right after picking something.
     const searchInput = card.querySelector(".inquiry-search");
     if (searchInput) { searchInput.value = ""; searchInput.blur(); }
     refreshInquiryChips(card, chatId);
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
-    // Close after every pick (same as Status) -- needing a second inquiry
-    // (e.g. Feedback) is just a click on the box to reopen it. The state
-    // flag is cleared too, or the next background re-render would reopen it.
     card.querySelector(".inquiry-dropdown").classList.add("hidden");
     s.inquiryDropdownOpen = false;
   }
@@ -6775,7 +5693,6 @@ chatListEl.addEventListener("click", async (e) => {
     ticketCreateInFlight.add(chatId);
     try {
       const files = ticketAttachmentsByChat.get(chatId) || [];
-      // The server asks LiveChat who this token belongs to and sends that agent's LiveChat id and email with the ticket.
       const agentToken = liveChatAgentTokens()[currentLiveChatAccount];
       const author = agentToken && currentLiveChatAccount ? { accountKey: currentLiveChatAccount, agentToken, ticketEmail: s.escalation.ticketEmail || storedTicketEmail(currentLiveChatAccount) } : undefined;
       let requestBody;
@@ -6806,7 +5723,7 @@ chatListEl.addEventListener("click", async (e) => {
       s.ticketAttachmentError = "";
       ticketAttachmentsByChat.delete(chatId);
       ticketSearchResultsByChat.delete(chatId);
-      try { await loadTicketStatus(chatId, data.ref); } catch (_) { /* creation succeeded; status can be retried */ }
+      try { await loadTicketStatus(chatId, data.ref); } catch (_) { }
       setStatus(`Ticket ${data.ref} created.`, "success");
     } catch (err) {
       s.escalationError = "Ticket creation failed: " + err.message;
@@ -6873,8 +5790,6 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "toggleExpand") {
     const wasExpanded = s.expanded;
-    // Accordion — only one full card open at a time, so the rest stay
-    // collapsed and glanceable instead of the list growing unbounded.
     Object.values(state).forEach((st) => { st.expanded = false; });
     s.expanded = !wasExpanded;
     renderChats(activeChats);
@@ -6901,7 +5816,7 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "toggleBrandDropdown") {
     const dropdown = card.querySelector(".brand-dropdown");
     const willOpen = dropdown.classList.contains("hidden");
-    closeAllDropdowns(); // only one dropdown open at a time across the whole widget
+    closeAllDropdowns();
     if (willOpen) {
       dropdown.classList.remove("hidden");
       s.brandDropdownOpen = true;
@@ -6920,16 +5835,16 @@ chatListEl.addEventListener("click", async (e) => {
   if (btn.dataset.action === "toggleDobCalendar") {
     const cal = card.querySelector(".dob-calendar");
     const willOpen = cal.classList.contains("hidden");
-    closeAllDropdowns(); // only one dropdown open at a time across the whole widget
+    closeAllDropdowns();
     if (willOpen) {
       s.dobCalendarOpen = true;
-      cal.innerHTML = renderDobCalendar(chatId); // fresh each open — reflects any dob change since last shown
+      cal.innerHTML = renderDobCalendar(chatId);
       cal.classList.remove("hidden");
     }
   }
 
   if (btn.dataset.action === "dobNavMonth") {
-    if (!s.dobView) renderDobCalendar(chatId); // side effect: lazily initializes s.dobView
+    if (!s.dobView) renderDobCalendar(chatId);
     let { year, month } = s.dobView;
     month += Number(btn.dataset.dir);
     if (month < 0) { month = 11; year--; }
@@ -6994,13 +5909,6 @@ chatListEl.addEventListener("click", async (e) => {
   }
 
   } catch (err) {
-    // This whole handler previously had no catch -- an exception thrown by
-    // ANY action here (not just saveCase) was swallowed by the browser
-    // with zero feedback: no status message, no visible change, nothing in
-    // the UI to suggest anything even happened. Surfacing it here doesn't
-    // fix whatever throws, but at least tells the agent (and, via the
-    // console.error below, tells us) what actually went wrong instead of
-    // looking like the button silently does nothing.
     console.error("Action failed:", btn.dataset.action, err);
     setStatus(`Something went wrong (${btn.dataset.action}): ` + err.message, "error");
   } finally {
@@ -7008,7 +5916,6 @@ chatListEl.addEventListener("click", async (e) => {
   }
 });
 
-// Inquiry search box: filter as the agent types.
 chatListEl.addEventListener("input", (e) => {
   const ticketChoiceSearch = e.target.closest(".ticket-choice-search");
   if (ticketChoiceSearch) {
@@ -7083,20 +5990,12 @@ chatListEl.addEventListener("input", (e) => {
     card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(card.dataset.chatId, inquiryInput.value);
     return;
   }
-  // Status's search box lives in its always-visible box now (matching
-  // Inquiry exactly), so its dropdown panel holds nothing but the options
-  // list already -- same renderStatusDropdown(chatId, query) call Inquiry's
-  // own handler makes just above.
   const statusSearch = e.target.closest(".status-search");
   if (statusSearch) {
     const card = statusSearch.closest(".chat-card");
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(card.dataset.chatId, statusSearch.value);
     return;
   }
-  // Brand/D.O.B month/year search boxes still live inside their own
-  // dropdown panel (see renderBrandDropdown's header note) -- each only
-  // replaces its sibling .*-options list, never the panel that contains
-  // the search input itself.
   const brandSearch = e.target.closest(".brand-search");
   if (brandSearch) {
     const card = brandSearch.closest(".chat-card");
@@ -7115,8 +6014,6 @@ chatListEl.addEventListener("input", (e) => {
     card.querySelector(".dob-cal-year-options").innerHTML = renderDobYearOptions(card.dataset.chatId, dobYearSearch.value);
     return;
   }
-  // Escalation Ticket text/number/textarea fields — same no-re-render,
-  // just-sync-state pattern as D.O.B.
   const ticketRefInput = e.target.closest(".ticket-ref-input");
   if (ticketRefInput) {
     const s = state[ticketRefInput.dataset.chat];
@@ -7143,9 +6040,6 @@ chatListEl.addEventListener("input", (e) => {
     else if (s) s.escalation[escInput.dataset.field] = escInput.value;
     return;
   }
-  // Risk Player's manually-typed Amount (see renderAutoFields) — both
-  // fields lark-record.js reads at submit time double as the typed value
-  // directly, same as every other program's auto-derived amount.
   const amountInput = e.target.closest(".amount-input");
   if (amountInput) {
     const s = state[amountInput.dataset.chat];
@@ -7155,10 +6049,6 @@ chatListEl.addEventListener("input", (e) => {
     }
     return;
   }
-  // Username isn't otherwise state-synced (only read from the DOM at Look
-  // up time) — checkLastUsername can re-render this card in the background
-  // while the agent is mid-typing, which would stomp an un-synced value.
-  // Keeping state.username live here means any re-render is always safe.
   const usernameInput = e.target.closest(".username-input");
   if (usernameInput) {
     const card = usernameInput.closest(".chat-card");
@@ -7167,13 +6057,7 @@ chatListEl.addEventListener("input", (e) => {
   }
 });
 
-// Telegram stays auto-detected by default but is now editable — CS may
-// need to correct it, and checkboxes fire "change" reliably, unlike
-// "input", across browsers. (Brand's own editing now goes through the
-// selectBrand action handler above, since it's a custom dropdown, not a
-// native <select>, anymore.)
 chatListEl.addEventListener("change", (e) => {
-  // A box on the ticket detail was left (or Enter pressed): that edit is saved now.
   const liveInput = e.target.closest(".ticket-live-input");
   if (liveInput && liveInput.dataset.field?.startsWith("edit:")) {
     const name = liveInput.dataset.field.slice(5);
@@ -7196,9 +6080,6 @@ chatListEl.addEventListener("change", (e) => {
     });
     return;
   }
-  // Claim Secret: auto-ticked on claim, but editable. If the record was
-  // already written to Lark (claims auto-submit), push the edit through too,
-  // otherwise it would only change on screen.
   const secretCheck = e.target.closest(".secret-check");
   if (secretCheck) {
     const s = state[secretCheck.dataset.chat];
@@ -7217,7 +6098,7 @@ chatListEl.addEventListener("change", (e) => {
     const s = state[tgCheck.dataset.chat];
     if (s) {
       s.telegram = tgCheck.checked;
-      s.telegramManual = true; // stops the auto-poll from overwriting this
+      s.telegramManual = true;
     }
     return;
   }
@@ -7230,16 +6111,13 @@ chatListEl.addEventListener("change", (e) => {
   const unknownCheck = e.target.closest(".unknown-check");
   if (unknownCheck) {
     const uState = state[unknownCheck.dataset.chat];
-    if (uState) uState.notVipResult = false; // a manual tick/untick ends the "Force lookup" offer
+    if (uState) uState.notVipResult = false;
     setUnknown(unknownCheck.dataset.chat, unknownCheck.checked);
     renderChats(activeChats);
     saveState();
   }
 });
 
-// Tells the server an agent ticked (or un-ticked) "Unknown player" on a chat, so QA can tell a chat ticked Unknown from one the agent
-// never logged (see functions/unknown-tick.js). Fire and forget: a failure never affects the agent. Never from the admin preview.
-// Which chat: the thread id from the chat link when the card has one (the id the archive and Lark rows use), the card's own id besides.
 function reportUnknownTick(chatId, ticked, auto) {
   const s = state[chatId];
   if (previewMode || !s || !selectedAgent) return;
@@ -7250,9 +6128,6 @@ function reportUnknownTick(chatId, ticked, auto) {
   fetch("/unknown-tick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 }
 
-// Tells the server which bonus an agent claimed on a chat, with the source table's value and the inquiry and amount that bonus implies, so
-// QA can check what was logged against what was claimed (see functions/claim-log.js). claim = null reports an unclaim (every bonus of this
-// agent on this chat is forgotten). Fire and forget: a failure never affects the agent. Never from the admin preview.
 function reportClaim(chatId, claim) {
   const s = state[chatId];
   if (previewMode || !s || !selectedAgent) return;
@@ -7263,23 +6138,11 @@ function reportClaim(chatId, claim) {
   fetch("/claim-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 }
 
-// Shared by the manual "Unknown player" checkbox and the auto-tick once a
-// Look Up comes back Not VVIP (see the lookup action handler) -- both mean
-// the same thing to this widget: nothing about this chat should end up in
-// Customer Approaching. Deletes the placeholder row a Look Up already
-// created (username/brand/agent name only, nothing else filled in yet) so
-// an Unknown-marked chat truly records nothing, not just an empty row.
-// Doesn't render or save itself -- callers already do their own render
-// right after (the checkbox handler above, the lookup handler's own
-// unconditional slot refresh), so this stays a plain state mutation
-// instead of triggering a second, redundant re-render on top of theirs.
 function setUnknown(chatId, value, { silent = false } = {}) {
   const s = state[chatId];
   if (!s) return;
   s.isUnknown = value;
   reportUnknownTick(chatId, value, silent);
-  // A chat on the agent's unrecorded list that they mark Unknown is written off in Lark right away, so it cannot come back
-  // from there (an incognito window forgets the tick, Lark does not).
   if (value && unrecordedChats.some((chat) => chat.threadId === chatId)) resolveUnrecorded(chatId, "Ignored");
   if (value) removeStaleRecordsForChat(chatId, silent);
   if (!s.isUnknown || !s.caRecordId) return;
@@ -7292,12 +6155,6 @@ function setUnknown(chatId, value, { silent = false } = {}) {
     return;
   }
 
-  // A record can already exist from a Look up (a guessed/wrong username, a
-  // confirmed non-VIP) or even have been recorded already -- an Unknown
-  // player should have no Customer Approaching row at all, so it's removed
-  // either way. The one exception: a bonus claimed on it is real (the
-  // source table was already marked Claimed), so that record is kept --
-  // unclaim first (click the claimed bonus again) if it should go too.
   const hasClaim = Object.values(s.claimedPrograms || {}).some(Boolean);
   if (hasClaim) {
     if (!silent) setStatus("Marked Unknown, but its Lark record was kept because a bonus is claimed on it. Unclaim the bonus first if the record should be removed.", "error");
@@ -7306,7 +6163,6 @@ function setUnknown(chatId, value, { silent = false } = {}) {
 
   const staleRecordId = s.caRecordId;
   if (!ownsCaseRecord(s)) {
-    // Another agent's row -- just stop using it here, never delete it.
     s.caRecordId = null;
     s.logged = false;
     s.loggedSnapshot = "";
@@ -7316,7 +6172,7 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   s.logged = false;
   s.loggedSnapshot = "";
   s.autoRecordError = "";
-  const restore = () => { forgetDeletedRecord(staleRecordId); if (!s.caRecordId) s.caRecordId = staleRecordId; }; // lets a re-tick retry
+  const restore = () => { forgetDeletedRecord(staleRecordId); if (!s.caRecordId) s.caRecordId = staleRecordId; };
   rememberDeletedRecord(staleRecordId);
   fetch("/lark-delete-record", {
     method: "POST",
@@ -7336,9 +6192,6 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   });
 }
 
-// Rows a Look up left in Lark for this chat that Needs Attention lists, even when this card does not remember them (the browser forgot
-// the chat, or it was opened again from Open ↗): ticking Unknown removes them too, like the card's own row below. The server re-checks that
-// the row is this agent's and that Inquiry and Status are still empty, so a filled-in row is never deleted; a claimed bonus keeps it.
 function removeStaleRecordsForChat(chatId, silent) {
   const s = state[chatId];
   if (previewMode || !selectedAgent || !s) return;
@@ -7358,7 +6211,7 @@ function removeStaleRecordsForChat(chatId, silent) {
       renderNeedsAttentionPanel();
       if (!silent) setStatus("Unknown player — the leftover record was removed from Lark Base.", "success");
     }).catch((err) => {
-      forgetDeletedRecord(row.recordId); // lets a re-tick retry
+      forgetDeletedRecord(row.recordId);
       logDiagnostic(`Failed to remove the leftover record for this Unknown-marked chat: ${err.message}`, "warn");
       if (!silent) setStatus("Couldn't remove the leftover record from Lark Base: " + err.message, "error");
     });
@@ -7366,19 +6219,11 @@ function removeStaleRecordsForChat(chatId, silent) {
   if (rows.length) renderNeedsAttentionPanel();
 }
 
-// Inquiry and Status both use this same merged box + search pattern now
-// (Status rebuilt to match Inquiry exactly, single-select instead of up to
-// 2 — see renderStatusChip's header note). One shared config drives both
-// the focusin and click handlers below instead of duplicating each one
-// per field.
 const MERGED_SEARCH_BOXES = [
   { search: ".inquiry-search", box: ".inquiry-box", wrapper: ".inquiry-select", dropdown: ".inquiry-dropdown", stateKey: "inquiryDropdownOpen" },
   { search: ".status-search", box: ".status-box", wrapper: ".status-picker", dropdown: ".status-dropdown", stateKey: "statusDropdownOpen" },
 ];
 
-// Dropdown opens on focus (no explicit toggle button, unlike Brand/D.O.B);
-// closes whatever else is open first so only one shows at a time across
-// the whole widget.
 chatListEl.addEventListener("focusin", (e) => {
   for (const cfg of MERGED_SEARCH_BOXES) {
     const input = e.target.closest(cfg.search);
@@ -7391,21 +6236,13 @@ chatListEl.addEventListener("focusin", (e) => {
   }
 });
 
-// Clicking anywhere in the merged box (not just the thin search input
-// itself) focuses it — makes the whole box feel like one clickable control.
-// Also makes a second click actually close it again (e.g. on the caret, or
-// empty space in the box) — focus() alone never does, since the input's
-// already focused by then and focusin (which is what opens it) doesn't
-// refire. Scoped to clicks that land outside the search input itself so
-// typing in it never closes the dropdown out from under whoever's still
-// searching.
 chatListEl.addEventListener("click", (e) => {
-  if (e.target.closest(".inquiry-chip-remove, .status-chip-slot .inquiry-chip-remove")) return; // don't steal focus from a chip removal click
+  if (e.target.closest(".inquiry-chip-remove, .status-chip-slot .inquiry-chip-remove")) return;
   for (const cfg of MERGED_SEARCH_BOXES) {
     const box = e.target.closest(cfg.box);
     if (!box) continue;
     const searchInput = box.querySelector(cfg.search);
-    if (e.target === searchInput) return; // let native focus behavior handle a direct click into the input
+    if (e.target === searchInput) return;
     const dropdown = box.closest(cfg.wrapper)?.querySelector(cfg.dropdown);
     if (dropdown && !dropdown.classList.contains("hidden")) {
       dropdown.classList.add("hidden");
@@ -7413,26 +6250,12 @@ chatListEl.addEventListener("click", (e) => {
       if (chatId && state[chatId]) state[chatId][cfg.stateKey] = false;
       searchInput?.blur();
     } else {
-      searchInput?.focus(); // opens via the focusin handler above
+      searchInput?.focus();
     }
     return;
   }
 });
 
-// Click anywhere outside a given dropdown's own wrapper closes it — so a
-// click on one of its own options, which lives inside that same wrapper,
-// never closes it prematurely.
-//
-// Uses composedPath(), not wrap.contains(e.target): chatListEl's own click
-// handler runs first (closer ancestor, fires earlier in bubbling) and some
-// actions (dobNavMonth, selectDobMonthValue/selectDobYearValue) replace their container's innerHTML to
-// reflect the new month/year — which detaches the very button that was
-// clicked from the document. By the time this handler runs, e.target is a
-// detached node, and wrap.contains(detachedNode) is always false — every
-// wrapper reads as "clicked outside," closing the calendar right as it
-// tries to update instead of navigate. composedPath() is captured at
-// dispatch time, before any handler can mutate the DOM, so it still lists
-// the original ancestors regardless of what ran before this.
 document.addEventListener("click", (e) => {
   const path = e.composedPath();
   document.querySelectorAll(".inquiry-select, .status-picker, .brand-picker, .dob-picker, .dob-cal-jump-picker").forEach((wrap) => {
@@ -7461,10 +6284,6 @@ function clearRecordRetry(chatId) {
   recordRetryAttempts.delete(chatId);
 }
 
-// Custom dropdowns need the keyboard behavior browsers provide for a native
-// <select>: arrows move through the visible choices, Enter chooses one, and
-// Escape closes the list. Keep this shared so Inquiry, Status, Brand, D.O.B.
-// and ticket fields all behave the same way.
 function keyboardDropdownOptions(container, selector) {
   if (!container) return [];
   return Array.from(container.querySelectorAll(selector)).filter((option) => (
@@ -7517,8 +6336,6 @@ function closeKeyboardDropdown(target, { restoreFocus = true } = {}) {
   trigger?.focus();
 }
 
-// Same-record updates are idempotent, so retrying a dropped request is safe:
-// it can only write the same final values again, never create another row.
 async function writeLarkRecord(payload) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -7567,9 +6384,6 @@ function shouldResumeInterruptedSave(s) {
     && /failed to fetch|network|save interrupted/i.test(String(s.autoRecordError || "")));
 }
 
-// Re-sends an already-logged chat's record with its current values -- used
-// when something is edited AFTER the instant claim auto-submit (submitRecord
-// returns early once s.logged is set, so it can't do this itself).
 async function resyncLoggedRecord(chatId) {
   const s = state[chatId];
   if (previewMode) return true;
@@ -7604,12 +6418,6 @@ async function resyncLoggedRecord(chatId) {
   }
 }
 
-// Shared by the manual "Record to Lark Base" button and the auto-record
-// triggered when a chat closes. Pulls Brand/Status straight from the DOM
-// since the agent may have edited them after the card was last rendered.
-// Always re-queries the card by chatId rather than taking a DOM reference,
-// since renderChats() can have rebuilt the card (e.g. right before an
-// auto-record call) and made any earlier reference stale.
 async function submitRecord(chatId, options = {}) {
   if (recordSubmitInFlight.has(chatId)) return recordSubmitInFlight.get(chatId);
   const task = submitRecordOnce(chatId, options);
@@ -7626,19 +6434,8 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
   if (previewMode) return;
   if (!s || s.logged) return;
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
-  // Every auto message below used to hardcode "Chat closed" -- accurate for
-  // checkChatStatus's own call, but not for e.g. an instant-submit right
-  // after a claim (see the specialReload branch above), which happens
-  // before the chat ever closes. reason lets each caller say what actually
-  // triggered this.
   const reasonText = reason || "Chat closed";
 
-  // Unknown players are intentionally excluded from chat data — skip
-  // recording entirely rather than treating a blank username as an
-  // incomplete record that needs chasing down (which is what would
-  // otherwise happen the moment the chat closes). s.logged still gets set
-  // so this chat stops being polled/swept/retried like a real completed
-  // one, but the UI shows a distinct "not recorded" state, not "✓ Logged".
   if (s.isUnknown) {
     s.logged = true;
     s.autoRecordError = "";
@@ -7648,22 +6445,14 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
     return;
   }
 
-  // Global "Don't log chats" toggle (top bar) — unlike isUnknown, this
-  // deliberately does NOT set s.logged: it's a temporary gate any chat
-  // passes back through once unticked, not a permanent per-chat skip, so
-  // the next attempt (a manual click, the next auto-close, or the next
-  // background sweep retry) records normally once logging resumes. Never
-  // flagged as an error either — nothing's actually wrong.
   if (isLoggingPaused()) {
     if (!auto) setStatus("Logging is paused while you are on another tab — go back to Retention to record this chat.", "error");
     return;
   }
 
-  // Not worked by this agent (see agentTouchedChat): nothing to record or chase, and nothing is stamped on it.
-  // No action of theirs on the card -- with the LiveChat login on, LiveChat is asked whether they wrote in the chat.
   if (auto && !agentActed(s)) {
     if (!(await agentWroteInChat(chatId))) {
-      if (!s.logged && s.autoRecordError) s.autoRecordError = ""; // flagged earlier on an "unsure" answer
+      if (!s.logged && s.autoRecordError) s.autoRecordError = "";
       return;
     }
     if (s.logged) return;
@@ -7681,9 +6470,6 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
     return;
   }
 
-  // Transferred chat: this card's Lark row is another agent's -- never
-  // record into it (and never stamp it as ours). The agent presses Look up
-  // to get a row of their own; both agents' records are kept.
   if (s.caRecordId && !ownsCaseRecord(s)) {
     const msg = `This case's Lark record belongs to ${s.caOwner}. Press Look up to log your own record — theirs is kept.`;
     if (auto) {
@@ -7696,17 +6482,9 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
     return;
   }
 
-  // Stamps this chat as belonging to whichever agent's browser last tried
-  // to record it — the Needs Attention panel uses this to only surface a
-  // given agent's own incomplete chats (see getIncompleteChats), not every
-  // agent's, since localStorage is shared across tabs but a shared/kiosk
-  // browser can otherwise mix different agents' work together in the list.
   s.agentName = selectedAgent;
   s.liveChatAccount = currentLiveChatAccount;
 
-  // Brand and Status are both discrete picks from a dropdown now (no free
-  // text), written to state the instant they're clicked — state is always
-  // the source of truth here, no need to reach into the DOM for either.
   const brand = s.brand || "";
   const status = s.status || "";
 
@@ -7719,15 +6497,7 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
 
   if (missing.length) {
     if (auto) {
-      // Logged, not shown in the top bar — the whole card turning red (see
-      // .chat-card.needs-attention) is the urgency signal now, not a banner
-      // at the top that may not even be about the card the agent is looking at.
       s.autoRecordError = `${reasonText} but not fully filled in (missing: ${missing.join(", ")}) — complete it and click Record to Lark Base.`;
-      // Only the diagnostics-log write is deduped, not autoRecordError
-      // itself — a permanently-incomplete chat (e.g. one that never had a
-      // real lookup done at all) gets retried by sweepPendingChats every
-      // 8s forever, and it was logging this identical line every single
-      // time. The card still stays accurately red regardless.
       const missingKey = missing.join(",");
       if (autoMissingLoggedFor.get(chatId) !== missingKey) {
         autoMissingLoggedFor.set(chatId, missingKey);
@@ -7755,9 +6525,6 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
         releasedAmount: s.releasedBonusAmount,
         releasedAmountRaw: s.releasedAmountRaw,
         claimSecret: s.claimSecret,
-        // s.chatUrl first — survives once this chat isn't the focused one
-        // anymore (see checkChatStatus); activeChats[].link as a fallback
-        // for anything relying on the older path.
         chatLink: s.chatUrl || activeChats.find((c) => c.chatId === chatId)?.link || "",
         dob: s.dob || "",
         telegram: !!s.telegram,
@@ -7788,12 +6555,6 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
   }
 }
 
-// Every status message is logged here regardless of whether it's shown in
-// the compact top bar — Settings → Diagnostics is where an agent (or
-// whoever's troubleshooting) can see the full history without opening
-// devtools. Only errors interrupt the top bar; routine confirmations
-// ("Bonuses ready...", "Logged X to Lark Base") are logged silently since
-// normal CS doesn't need to see them.
 const DIAGNOSTICS_LOG_MAX = 50;
 const diagnosticsLog = [];
 
@@ -7808,21 +6569,12 @@ function setStatus(text, kind) {
     statusEl.textContent = text;
     statusEl.className = "status-bar error";
   } else {
-    // Not an error — keep the top bar clear/compact rather than showing
-    // routine confirmations. Check Settings → Diagnostics for the log.
     statusEl.textContent = "";
     statusEl.className = "status-bar hidden";
   }
 }
 
-// Agent Name / Brand / Inquiry / Status dropdowns all come from Lark's own
-// field option lists (see fetchAgentOptions etc. above) instead of being
-// hardcoded, so a name/tag added, renamed or removed there shows up here
-// without a redeploy. Re-fetched at boot, on every manual Refresh click,
-// and on this slow background timer — a widget an agent leaves open all
-// day would otherwise only ever see whatever was live when it first
-// loaded. Doesn't touch anything already picked on an open card.
-const OPTIONS_REFRESH_MS = 10 * 60_000; // was 3 min: every open widget re-read Lark's field catalog on this timer
+const OPTIONS_REFRESH_MS = 10 * 60_000;
 async function refreshDropdownOptions({ fresh = false } = {}) {
   const loaded = await fetchBootstrapOptions({ fresh });
   if (!loaded) {
@@ -7837,10 +6589,6 @@ setInterval(() => {
   if (!document.hidden) refreshDropdownOptions();
 }, OPTIONS_REFRESH_MS);
 
-// ⟳ Refresh. When a new version has been deployed (deployment-refresh.js shows the notice and sets
-// deploymentUpdatePending) this is also THE way to load it -- never automatic, because a reload would interrupt a ticket
-// being created, a claim in flight, unsent attachments, or typing in LiveChat's own chat box. With no update pending it
-// behaves exactly as before.
 function handleRefreshClick() {
   if (window.deploymentUpdatePending?.()) {
     if (!window.canRefreshForDeployment()) {
@@ -7854,11 +6602,8 @@ function handleRefreshClick() {
     return;
   }
   refreshDropdownOptions({ fresh: true });
-  fetchUnrecordedChats(); // the list is otherwise read only when the widget starts, so a list written since would not show
+  fetchUnrecordedChats();
   if (liveWidget) {
-    // Live mode — re-sync against the SDK on demand rather than just
-    // re-rendering whatever we already had (which could be stale if a
-    // customer_profile event was somehow missed).
     const profile = liveWidget.getCustomerProfile();
     const currentChatId = activeChats[0]?.chatId;
     const nextChatId = profile?.chat?.id ? String(profile.chat.id) : "";
@@ -7879,7 +6624,6 @@ function handleRefreshClick() {
 document.getElementById("refreshBtn").addEventListener("click", handleRefreshClick);
 document.getElementById("settingsBtn").addEventListener("click", () => openSettingsPanel());
 
-// Blast reports whether a queue is active (running, paused or cleaning up); recording stays off for all of it.
 function setBlastLoggingLock(active) {
   const next = Boolean(active);
   if (next === blastLoggingLock) return;
@@ -7903,9 +6647,6 @@ window.addEventListener("message", async (event) => {
   renderChats(activeChats);
 });
 
-// Schedules non-critical work after the first paint. requestIdleCallback is
-// especially helpful on low-end devices; the timeout keeps the work from
-// being postponed forever in a busy LiveChat window.
 function runWhenIdle(task, timeout = 1500) {
   if ("requestIdleCallback" in window) {
     window.requestIdleCallback(task, { timeout });
@@ -7914,12 +6655,7 @@ function runWhenIdle(task, timeout = 1500) {
   }
 }
 
-// Boot sequence: connect to LiveChat first. Lark option lists, stale-record
-// checks and the settings UI must not compete with the SDK handshake.
 (async () => {
-  // Restore any chat state saved before this widget last reloaded — must
-  // happen before the first renderChats/ensureChatState call, since
-  // ensureChatState only fills in defaults for a chatId it hasn't seen yet.
   Object.assign(state, loadPersistedState());
   for (const chatId of Object.keys(state)) markStateSynced(chatId);
   if (!IS_EMBEDDED_APP) logDiagnostic("Preview mode — showing sample chats until connected to LiveChat.");
@@ -7928,13 +6664,10 @@ function runWhenIdle(task, timeout = 1500) {
   updateAgentBadge();
   renderChats(activeChats);
 
-  // Keep this as one call with no retries: repeated createDetailsWidget()
-  // handshakes are what caused the earlier timeout loop.
   initLiveChatSdk();
 
   const optionsReady = refreshDropdownOptions();
-  // Off by default. When on, the agent name comes from the LiveChat login and nothing is recorded before it arrives.
-  if (TICKET_DEMO) selectedAgent = "Demo Agent"; // the ticket demo has no sign-in
+  if (TICKET_DEMO) selectedAgent = "Demo Agent";
   else if (AGENT_LOGIN_LIVE) await requireAgentLogin();
   if (PREVIEW_LOGIN_GATE) {
     try {
@@ -7950,8 +6683,6 @@ function runWhenIdle(task, timeout = 1500) {
   }
   const originalAgentSetup = !DEPARTMENT_SEPARATION_ENABLED || (!previewMode && !DEPARTMENT_TABS_LIVE);
   if ((originalAgentSetup || !departmentKnown || currentDepartment === "rtn") && !selectedAgent && !qaView) {
-    // Give the agent-name list a short chance to arrive, while never holding
-    // the LiveChat connection or the first paint behind the network.
     await Promise.race([
       optionsReady,
       new Promise((resolve) => setTimeout(resolve, 1200)),
@@ -7962,19 +6693,15 @@ function runWhenIdle(task, timeout = 1500) {
   optionsReady.finally(() => {
     if (BONUS_SHOWCASE_PREVIEW) renderChats(activeChats);
     if (activeMainTab === "tickets") renderChats(activeChats);
-    // Brand detection may have started before the Lark option list arrived.
-    // Retry it once with the populated list rather than leaving Brand blank.
     const chatId = activeChats[0]?.chatId;
     const groupID = chatId ? groupIdFor.get(chatId) : null;
     if (chatId && groupID && !state[chatId]?.brand) resolveBrandFromGroupId(chatId, groupID);
   });
 
-  setTimeout(startLookupResume, 1500);   // a lookup that was running when the previous copy of this widget went away
+  setTimeout(startLookupResume, 1500);
   runWhenIdle(() => {
     renderNeedsAttentionPanel();
     fetchStaleRecords();
-    // Recover claims saved by an older app version that stopped at
-    // "Auto-record failed (Failed to fetch)" while the chat was still open.
     if (!isLoggingPaused()) {
       for (const [chatId, saved] of Object.entries(state)) {
         if (shouldResumeInterruptedSave(saved)
@@ -7987,26 +6714,17 @@ function runWhenIdle(task, timeout = 1500) {
   }, 2000);
 })();
 
-// Autosave safety nets beyond the explicit saveState() calls in the click/
-// input/change handlers below — covers state mutated outside those (e.g.
-// applyProfile's auto brand/telegram detection, checkLastUsername,
-// checkChatStatus) and the moment this iframe actually goes away.
 setInterval(() => {
   if (!document.hidden) saveState();
 }, 10_000);
-// Another tab just wrote state (e.g. finished recording a chat from a Needs
-// Attention "Open" tab) -- pick it up and refresh the panel right away
-// instead of waiting for the next sweep. saveState() only adopts/writes
-// what actually differs, so this can't ping-pong between tabs.
 window.addEventListener("storage", (e) => {
   if (e.key !== STATE_STORAGE_KEY) return;
-  storageDirty = true; // another tab wrote: the next saveState() must read and adopt it
+  storageDirty = true;
   saveState();
   renderNeedsAttentionPanel();
   scheduleNeedsAttentionRefresh(300);
 });
 
-// Ctrl+V in the comment box: a picture on the clipboard is attached to the comment (text pastes as usual).
 chatListEl.addEventListener("paste", (event) => {
   const box = event.target.closest?.(".ticket-comment-input");
   if (!box) return;
@@ -8032,7 +6750,6 @@ chatListEl.addEventListener("change", (event) => {
     if (row) row.innerHTML = renderCommentFiles(chatId);
   });
 });
-// Pictures are loaded as soon as the screen that shows them is drawn.
 new MutationObserver(hydrateTicketImages).observe(chatListEl, { childList: true, subtree: true });
 
 chatListEl.addEventListener("paste", (event) => {
@@ -8060,25 +6777,9 @@ document.addEventListener("click", (event) => {
 window.addEventListener("pagehide", saveState);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(); });
 
-// LiveChat's Agent App "Details" widget (createDetailsWidget, see
-// initLiveChatSdk) only ever runs for whichever ONE chat is currently
-// focused on screen — switching to a different chat reloads this widget's
-// iframe just like a page refresh does (the same reload state persistence
-// above works around), so a chat the agent switches away from gets zero
-// status polling at all and its closure is only ever noticed once they
-// switch back to it. This sweeps every OTHER pending (not yet logged,
-// still open per its own last-known state) chat on a slower cadence,
-// piggybacking off whichever tab/instance happens to be alive at the
-// moment — localStorage is shared across every tab on this origin, so any
-// currently-open LiveChat tab can pick up and auto-record a chat that
-// closed while the agent was looking at a different one. checkChatStatus
-// itself is safe to call this way — see its own header note.
 const PENDING_SWEEP_MS = 8_000;
 const SWEEP_BACKOFF_CAP_MS = 5 * 60_000;
 const SWEEP_TAB_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
-// Every open tab/LiveChat account on this origin runs this timer against the same localStorage, which
-// multiplied every retry. One tab per account+agent holds a short renewable lease and sweeps; the
-// others skip until it expires (tab closed). Without usable storage this falls back to sweeping.
 function holdsSweepLease() {
   const key = `rc-sweeper:${currentLiveChatAccount || "-"}:${selectedAgent || "-"}`;
   try {
@@ -8091,9 +6792,7 @@ function holdsSweepLease() {
     return !!check && check.tabId === SWEEP_TAB_ID;
   } catch (_) { return true; }
 }
-// 8 s, 16 s, 32 s ... capped at 5 min.
 function nextSweepDelay(failures) { return Math.min(PENDING_SWEEP_MS * 2 ** Math.max(0, failures - 1), SWEEP_BACKOFF_CAP_MS); }
-// What the agent could have changed to make a retry succeed; if it changes, retry immediately.
 function sweepSignature(s) {
   const { _savedAt, sweepRetry, ...rest } = s || {};
   return JSON.stringify(rest);
@@ -8109,43 +6808,18 @@ async function sweepPendingChats() {
   }
   const currentChatId = activeChats[0]?.chatId;
   for (const [chatId, saved] of Object.entries(persisted)) {
-    // The focused chat has its own tight poll -- unless that poll is paused because the widget is hidden.
     if (chatId === currentChatId && !document.hidden) continue;
     if (!saved || saved.logged) continue;
-    // Two LiveChat accounts share this origin's incognito localStorage.
-    // Never sweep or auto-record another account's pending chat.
     if (currentLiveChatAccount && saved.liveChatAccount !== currentLiveChatAccount) continue;
-    // Another agent's case (shared browser) -- theirs to record, not ours.
     if (saved.caOwner && saved.caOwner !== selectedAgent) continue;
-    // Adopt the persisted copy only if this tab has no live copy of its own
-    // — never clobber an in-memory one that might be ahead of what was last
-    // saved.
     if (!state[chatId]) { state[chatId] = saved; markStateSynced(chatId); }
     if (saved.chatOpen === false) {
-      // While logging is paused, submitRecord would just no-op anyway (see
-      // its own isLoggingPaused() check) -- skip calling it at all so a chat
-      // that's permanently missing fields (or anything else that'll never
-      // resolve on its own) doesn't keep re-attempting and re-logging every
-      // sweep tick while the agent has deliberately paused recording.
-      // Resumes retrying normally as soon as the agent is back on the Retention tab.
       if (isLoggingPaused()) continue;
-      // A chat this agent never worked has nothing to retry (submitRecord would skip it anyway).
       const idle = state[chatId] || saved;
-      // (With the LiveChat login on, a chat not yet checked goes to submitRecord, which asks LiveChat once.)
       if (!agentTouchedChat(idle) && !(AGENT_LOGIN_LIVE && agentWroteVerdict(idle) === undefined)) {
-        if (idle.autoRecordError) idle.autoRecordError = ""; // flagged by an older version of this widget
+        if (idle.autoRecordError) idle.autoRecordError = "";
         continue;
       }
-      // Already known closed but never successfully recorded — the one-time
-      // auto-record attempt that fired when checkChatStatus first detected
-      // the close can still fail for reasons that have nothing to do with
-      // whether the chat is open (a transient network blip, a momentary
-      // Lark API error) and nothing used to retry it afterward — the chat
-      // would just sit there needing the agent to notice the red "needs
-      // attention" card and resubmit manually, easy to miss if they'd
-      // already moved on. Retry the submit itself here instead of
-      // checkChatStatus, which has nothing left to check once a chat's
-      // open/closed status is already known.
       const live = state[chatId] || saved;
       const backoff = live.sweepRetry;
       if (backoff && backoff.signature === sweepSignature(live) && Date.now() < backoff.nextAt) continue;
@@ -8164,16 +6838,6 @@ async function sweepPendingChats() {
 }
 setInterval(sweepPendingChats, PENDING_SWEEP_MS);
 
-// Every chat the CURRENT agent's own browser knows about that closed
-// without ever being completed (missing Inquiry/Status/etc.) -- read
-// straight from persisted state, not just whichever chat happens to be the
-// currently-focused card (see sweepPendingChats' own header note on why
-// that distinction matters: LiveChat's SDK only ever shows this widget one
-// real chat at a time, so a case the agent already navigated away from
-// would otherwise be invisible until they happened to reopen that exact
-// conversation). Filtered to s.agentName === selectedAgent so a shared/
-// kiosk browser used by multiple agents across shifts doesn't mix other
-// agents' incomplete chats into this one's list.
 function getIncompleteChats() {
   if (IS_EMBEDDED_APP && !currentLiveChatAccount) return [];
   let persisted;
@@ -8191,24 +6855,17 @@ function getIncompleteChats() {
       chatId,
       username: s.username || "(no username)",
       reason: s.autoRecordError,
-      // Closed chats only open under /archives/{thread_id} -- the card key.
       chatUrl: s.chatUrl ? archiveUrlFor(chatId) : "",
       recordId: s.caRecordId || null,
     }));
 }
 
-// Look Up writes the chat link onto its new Lark row straight away, but the
-// real link only resolves ~2s after a chat opens -- a Look Up done before
-// that created the row without one. Fills it in once it's known, so every
-// row (even one never completed) can be traced back to its chat.
-const linkSaveInFlight = new Set(); // not persisted, so it can never get stuck
+const linkSaveInFlight = new Set();
 async function saveLinkToRecord(chatId) {
   const s = state[chatId];
   if (!s || !s.caRecordId || !s.chatUrl || s.caLinkSaved || s.logged || linkSaveInFlight.has(chatId)) return;
   if (!ownsCaseRecord(s)) return;
   const recordId = s.caRecordId;
-  // This is called from the 2 s chat-status tick, so a failing save used to hit Lark every 2 s. Back off
-  // (8 s, 16 s, ... cap 5 min) per record+link; a different record or link retries immediately.
   const retry = s.linkSaveRetry;
   const sameTarget = !!retry && retry.recordId === recordId && retry.url === s.chatUrl;
   if (sameTarget && Date.now() < retry.nextAt) return;
@@ -8236,9 +6893,6 @@ function archiveUrlFor(threadId) {
   return `https://my.livechatinc.com/archives/${encodeURIComponent(threadId)}`;
 }
 
-// Local Needs Attention entries whose Lark row turned out to be filled in
-// (recorded from another browser/tab) or removed -- stop flagging them, and
-// stop this browser's sweep from retrying (and overwriting) them.
 function markResolvedElsewhere(recordIds) {
   if (!recordIds || !recordIds.length) return;
   const ids = new Set(recordIds);
@@ -8254,7 +6908,7 @@ function markResolvedElsewhere(recordIds) {
       }
     }
     if (changed) localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
-  } catch (_) { /* non-fatal */ }
+  } catch (_) { }
   for (const [chatId, st] of Object.entries(state)) {
     if (st && ids.has(st.caRecordId) && !st.logged) {
       st.logged = true;
@@ -8264,19 +6918,8 @@ function markResolvedElsewhere(recordIds) {
   }
 }
 
-/* Rebuilding a card from Lark. Agents run LiveChat in incognito, so closing
-   the window wipes every saved card. Look Up saves the chat link on the
-   Lark row, so when a chat (live, or archived via Needs Attention's Open)
-   shows up with no saved card here, this agent's rows for that chat are
-   found by its thread id -- the SECOND id, the only part shared by the
-   /chats/{chat_id}/{thread_id} link and the /archives/{thread_id} one --
-   and put back on the card: newest row as the open case, earlier completed
-   rows as its other cases. Only ever the selected agent's own rows. */
-const larkRestoreTried = new Set(); // not persisted -- a reload may try again
+const larkRestoreTried = new Set();
 
-// Records this browser just deleted (Unknown ticked, an empty case dropped, an empty row removed). Lark's search can keep
-// returning a deleted row for a few seconds, which rebuilt a "Logged" card from a row that no longer existed. They are
-// remembered in storage so a reload or another tab honours it too, and forgotten after an hour.
 const DELETED_RECORDS_KEY = "rc-deleted-records";
 const DELETED_RECORDS_TTL_MS = 60 * 60_000;
 function readDeletedRecords() {
@@ -8294,24 +6937,22 @@ function rememberDeletedRecord(recordId) {
     const all = readDeletedRecords();
     all[recordId] = Date.now();
     localStorage.setItem(DELETED_RECORDS_KEY, JSON.stringify(all));
-  } catch (_) { /* non-fatal */ }
+  } catch (_) { }
 }
 function forgetDeletedRecord(recordId) {
   try {
     const all = readDeletedRecords();
     delete all[recordId];
     localStorage.setItem(DELETED_RECORDS_KEY, JSON.stringify(all));
-  } catch (_) { /* non-fatal */ }
+  } catch (_) { }
 }
 function isDeletedRecord(recordId) {
   return !!recordId && Object.prototype.hasOwnProperty.call(readDeletedRecords(), recordId);
 }
-// How long ago this browser deleted the record (Infinity when it did not).
 function deletedRecordAgeMs(recordId) {
   const at = recordId ? Number(readDeletedRecords()[recordId]) : 0;
   return at ? Date.now() - at : Infinity;
 }
-// Lark's search lags a delete by seconds, not minutes: past this a row Lark still lists is real and must be shown.
 const DELETED_RECORD_HIDE_MS = 3 * 60_000;
 
 function epochToDateInput(ms) {
@@ -8329,7 +6970,7 @@ function caseFromLarkRow(r) {
     releasedBonusAmount: amount,
     releasedAmountRaw: amount ? "RM" + amount : "",
     claimSecret: !!r.claimSecret,
-    claimSecretManual: true, // keep what Lark has; don't auto-fill over it
+    claimSecretManual: true,
     dob: epochToDateInput(r.dob),
     telegram: !!r.telegram,
     vs96FeedbackQuery1: r.vs96FeedbackQuery1 || "",
@@ -8340,7 +6981,7 @@ function caseFromLarkRow(r) {
     autoRecordError: "",
     loggedSnapshot: "",
     caLinkSaved: !!r.link,
-    caOwner: selectedAgent, // lark-chat-records only returns this agent's own rows
+    caOwner: selectedAgent,
     liveChatAccount: currentLiveChatAccount,
   };
   if (c.logged) c.loggedSnapshot = caseContentJson(c);
@@ -8362,7 +7003,7 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
     if (!data.ok) throw new Error(data.error || "lookup failed");
     records = (data.records || []).filter((r) => !isDeletedRecord(r.recordId));
   } catch (err) {
-    larkRestoreTried.delete(threadId); // let a later visit try again
+    larkRestoreTried.delete(threadId);
     logDiagnostic("Couldn't check Lark for this chat's saved case: " + err.message, "warn");
     return false;
   }
@@ -8372,7 +7013,6 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
     ensureChatState({ chatId: threadId, customerName, link: "", isTelegram: false, groupName: "" });
   }
   const s = state[threadId];
-  // Something already happened on this card meanwhile -- never overwrite it.
   if (s.caRecordId || (s.logs && s.logs.length) || s.lookupInFlight) return false;
 
   const latest = records[records.length - 1];
@@ -8399,20 +7039,10 @@ async function restoreCardFromLark(threadId, { archived = false, customerName = 
   return true;
 }
 
-// Lark-side half of Needs Attention (see functions/lark-stale-records.js):
-// Customer Approaching rows stamped with THIS agent's name that still have
-// no Inquiry/Status -- found straight from Lark, so an unfinished case can't
-// vanish just because the browser that started it forgot about it
-// (incognito closed, cleared storage, another PC). Only ever the selected
-// agent's own rows, never anyone else's.
-// One unbatchable Lark search per widget per tick, so keep it slow (was 60 s). A lookup or a recording
-// triggers its own refresh right away (scheduleNeedsAttentionRefresh), so this is only the safety net.
 const STALE_POLL_MS = 240_000;
 let staleRecords = [];
 let needsAttentionRefreshTimer = null;
 
-// Coalesces bursts from recording, storage events and panel opens into one
-// request. This makes the badge feel immediate without adding a busy poll.
 function scheduleNeedsAttentionRefresh(delay = 150) {
   clearTimeout(needsAttentionRefreshTimer);
   needsAttentionRefreshTimer = setTimeout(() => {
@@ -8433,13 +7063,10 @@ function formatAge(ms) {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-// The one-time crosscheck (functions/crosscheck.js): chats since 7 Oct that THIS agent wrote in and nobody ever recorded.
-// Read once per widget start, after the LiveChat login, with one small request; the list lives in the Lark table
-// "Unrecorded Chats" and is matched to the agent by their LiveChat email, so there is nothing to poll.
 let unrecordedChats = [];
 let unrecordedLoaded = false;
 const UNRECORDED_SHOWN_MAX = 25;
-const unrecordedResolving = new Set(); // not persisted
+const unrecordedResolving = new Set();
 async function postUnrecorded(body) {
   const token = liveChatAgentTokens()[currentLiveChatAccount];
   if (!token) return null;
@@ -8450,16 +7077,13 @@ async function postUnrecorded(body) {
   });
   return response.json();
 }
-// Needs Attention's "Open" opens the chat in a NEW tab, where the widget starts at the same moment as the archive page: the
-// archived chat arrives before the list has been read, so it looked "not on the list" and showed nothing. When the list
-// arrives, look at the chat that is open now and give it its card.
 function reopenArchivedFromList() {
   if (!liveWidget) return;
   let profile = null;
   try { profile = liveWidget.getCustomerProfile(); } catch (_) { return; }
   if (!profile || profile.source !== "archives" || !profile.chat || !profile.chat.id) return;
   const threadId = String(profile.chat.id);
-  if (activeChats[0] && activeChats[0].chatId === threadId) return; // its card is already showing
+  if (activeChats[0] && activeChats[0].chatId === threadId) return;
   if (unrecordedChats.some((chat) => chat.threadId === threadId)) applyProfile(profile);
 }
 async function fetchUnrecordedChats() {
@@ -8473,17 +7097,15 @@ async function fetchUnrecordedChats() {
       if (data.chats.length || data.notConfigured) logDiagnostic(data.notConfigured ? "Unrecorded-chats list: not set up on the server." : `Unrecorded-chats list: ${data.chats.length} from the crosscheck.`, "info");
       renderNeedsAttentionPanel();
     } else if (data && data.error) logDiagnostic(`Couldn't read your unrecorded-chats list: ${data.error}`, "warn");
-  } catch (_) { /* non-fatal: the list simply stays as it was */ }
+  } catch (_) { }
 }
-// Marks one chat Done (recorded here) or Ignored (written off) in Lark and takes it off the list.
 async function resolveUnrecorded(threadId, status) {
   unrecordedChats = unrecordedChats.filter((chat) => chat.threadId !== threadId);
   renderNeedsAttentionPanel();
   if (unrecordedResolving.has(threadId)) return;
   unrecordedResolving.add(threadId);
-  try { await postUnrecorded({ action: "resolve", threadId, status }); } catch (_) { /* the row stays Open and shows again next start */ }
+  try { await postUnrecorded({ action: "resolve", threadId, status }); } catch (_) { }
 }
-// Writes off the whole backlog in one go: gone from the list at once, then Lark is told in small chunks until none are left.
 async function ignoreAllUnrecorded() {
   const count = unrecordedChats.length;
   if (!count) return;
@@ -8496,20 +7118,17 @@ async function ignoreAllUnrecorded() {
       if (!data || !data.ok) { logDiagnostic(`Couldn't write off the whole list: ${data?.error || "no answer"} — the rest shows again next start.`, "warn"); return; }
       if (!data.remaining) { logDiagnostic(`Ignored ${count} unrecorded chats.`, "success"); return; }
     }
-  } catch (_) { /* the rows stay Open and show again next start */ }
+  } catch (_) { }
 }
-// What is still left to show: not completed in this browser since, and a completed one is told to Lark once.
 function getUnrecordedChats() {
   if (!unrecordedChats.length) return [];
   let persisted = {};
-  try { persisted = loadPersistedState(); } catch (_) { /* non-fatal */ }
+  try { persisted = loadPersistedState(); } catch (_) { }
   const local = (threadId) => state[threadId] || persisted[threadId];
   return unrecordedChats.filter((chat) => {
     const s = local(chat.threadId);
     if (s && s.logged && (s.inquiry || []).length && s.status) { resolveUnrecorded(chat.threadId, "Done"); return false; }
-    // Ticked "Unknown player" in this browser: nothing is meant to be recorded for it, so it is written off.
     if (s && s.isUnknown) { resolveUnrecorded(chat.threadId, "Ignored"); return false; }
-    // Its card was opened here and is now flagged incomplete: it is already in the other part of the list.
     if (s && s.chatOpen === false && !s.logged && s.autoRecordError && s.agentName === selectedAgent) return false;
     return !(s && s.attentionIgnored);
   });
@@ -8517,8 +7136,6 @@ function getUnrecordedChats() {
 
 async function fetchStaleRecords() {
   if (!selectedAgent) { staleRecords = []; renderNeedsAttentionPanel(); return; }
-  // Do not briefly mix both accounts while the first chat is still being
-  // identified. setCurrentLiveChatAccount triggers this again immediately.
   if (IS_EMBEDDED_APP && !currentLiveChatAccount) {
     staleRecords = [];
     renderNeedsAttentionPanel();
@@ -8536,10 +7153,10 @@ async function fetchStaleRecords() {
       }),
     });
     const data = await res.json();
-    if (agentAtRequest !== selectedAgent) return; // agent switched mid-request
+    if (agentAtRequest !== selectedAgent) return;
     if (!data.ok) {
       logDiagnostic("Unfinished-records check failed: " + (data.error || "unknown error"), "error");
-      return; // keep the last good list rather than blanking it
+      return;
     }
     staleRecords = data.records || [];
     markResolvedElsewhere(data.resolvedIds || []);
@@ -8550,13 +7167,10 @@ async function fetchStaleRecords() {
   renderNeedsAttentionPanel();
 }
 
-// Rows the local list already covers (or that are still being worked on in
-// a chat this browser has open) are left out, so nothing shows twice and an
-// in-progress case isn't flagged.
 function getStaleLarkRecords() {
   if (IS_EMBEDDED_APP && !currentLiveChatAccount) return [];
   let persisted = {};
-  try { persisted = loadPersistedState(); } catch (_) { /* non-fatal */ }
+  try { persisted = loadPersistedState(); } catch (_) { }
   const localByRecord = new Map();
   for (const s of [...Object.values(persisted), ...Object.values(state)]) {
     if (s && s.caRecordId) localByRecord.set(s.caRecordId, s);
@@ -8566,14 +7180,12 @@ function getStaleLarkRecords() {
     .filter((r) => {
       if (currentLiveChatAccount && r.accountKey && r.accountKey !== currentLiveChatAccount) return false;
       if (shownLocally.has(r.recordId)) return false;
-      if (deletedRecordAgeMs(r.recordId) < DELETED_RECORD_HIDE_MS) return false; // just removed here; Lark's search may not know yet
+      if (deletedRecordAgeMs(r.recordId) < DELETED_RECORD_HIDE_MS) return false;
       const local = localByRecord.get(r.recordId);
       if (!local) return true;
-      // Lark says this row has no Inquiry/Status, and Lark is the truth. Only these keep it off the list:
-      if (local.attentionIgnored) return false;                                   // the agent wrote it off
-      if (local.logged && (local.inquiry || []).length && local.status) return false; // completed here a moment ago; the poll is older
-      return local.chatOpen === false;                                            // a chat still open is being worked on
-      // (A card marked "logged" WITHOUT inquiry and status -- Unknown, a ghost restore -- no longer hides an incomplete row.)
+      if (local.attentionIgnored) return false;
+      if (local.logged && (local.inquiry || []).length && local.status) return false;
+      return local.chatOpen === false;
     })
     .map((r) => {
       const local = localByRecord.get(r.recordId);
@@ -8601,25 +7213,12 @@ Only do this if the case doesn't need logging. It's only removed if Inquiry and 
     setStatus(`Removed empty record for ${label}.`, "success");
   } catch (err) {
     setStatus(`Couldn't remove record: ${err.message}`, "error");
-    fetchStaleRecords(); // e.g. it got filled in meanwhile -- refresh the list
+    fetchStaleRecords();
   }
   if (btn) btn.disabled = false;
   renderNeedsAttentionPanel();
 }
 
-// Permanently drops one chat out of the Needs Attention list AND stops it
-// from ever being recorded -- for a case an agent has decided to write off
-// rather than ever complete (unlike Unknown player, which skips logging
-// from the start, this is for a chat that already tried and failed to
-// auto-record). Also sets logged so sweepPendingChats' own retry loop
-// (gated on !saved.logged) stops targeting it -- attentionIgnored alone
-// only hid it from this list; the chat was still being silently retried
-// every 8s forever underneath, and could still end up recorded later if
-// the retry ever happened to succeed. Written straight into the persisted
-// blob rather than through state+saveState(), since this tab may not have
-// that chatId in memory at all if another tab is the one that logged it --
-// going through saveState() would rebuild the whole storage key from just
-// this tab's own state and silently drop everyone else's entries.
 function ignoreAttention(chatId) {
   try {
     const raw = JSON.parse(localStorage.getItem(STATE_STORAGE_KEY) || "{}");
@@ -8629,9 +7228,7 @@ function ignoreAttention(chatId) {
       raw[chatId]._savedAt = Date.now();
       localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(raw));
     }
-  } catch (_) { /* non-fatal — e.g. private browsing blocking storage */ }
-  // Mirror onto this tab's own in-memory copy too, if it has one, so this
-  // tab's own periodic saveState() doesn't overwrite the flag back off.
+  } catch (_) { }
   if (state[chatId]) {
     state[chatId].attentionIgnored = true;
     state[chatId].logged = true;
@@ -8648,7 +7245,6 @@ function renderNeedsAttentionPanel() {
   const incomplete = getIncompleteChats();
   const stale = getStaleLarkRecords();
   const unrecorded = getUnrecordedChats();
-  // A long backlog is not poured into a narrow sidebar: the newest are listed, the rest counted.
   const unrecordedShown = [...unrecorded].sort((a, b) => b.date - a.date).slice(0, UNRECORDED_SHOWN_MAX);
   const previewCount = previewMode && showPreviewClosedChat ? 1 : 0;
   const total = incomplete.length + stale.length + unrecorded.length + previewCount;
@@ -8723,7 +7319,7 @@ setInterval(() => {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     scheduleNeedsAttentionRefresh(150);
-    if (chatStatusPollTick) chatStatusPollTick(); // one immediate chat-status check on becoming visible
+    if (chatStatusPollTick) chatStatusPollTick();
   }
 });
 
@@ -8739,19 +7335,12 @@ document.getElementById("needsAttentionToggle").addEventListener("click", () => 
   toggleBtn.classList.toggle("open", willOpen);
 });
 
-// Updates load on the next manual refresh or when LiveChat recreates the widget.
-
-// A new release may refresh only after all queue work, including cleanup, ends.
-// Called right before an automatic update reload: persist this tab's cards so nothing typed or looked up is lost.
-window.prepareForDeploymentRefresh = () => { try { saveState(); } catch (_) { /* the 10 s autosave already covers it */ } };
+window.prepareForDeploymentRefresh = () => { try { saveState(); } catch (_) { } };
 
 window.canRefreshForDeployment = () => {
   if (blastRunInProgress || Object.values(state).some(s => s?.lookupInFlight || s?.unclaimInFlight)) return false;
-  // A Lark write that is still going (recording a chat, saving its link) must finish; an unsent typed username counts as work in progress.
   if (recordSubmitInFlight.size || linkSaveInFlight.size) return false;
   if (Object.values(state).some((s) => s && !s.logged && String(s.usernameDraft || "").trim())) return false;
-  // A ticket being created, a bonus claim being written, ticket attachments chosen but not sent (they live in memory only
-  // and would be lost), or a ticket form with typed input that has not been raised.
   if (ticketCreateInFlight.size || claimWriteInFlight.size) return false;
   for (const files of ticketAttachmentsByChat.values()) if (files && files.length) return false;
   if (Object.values(state).some((s) => s && s.escalation && !s.escalationSubmitted

@@ -1,19 +1,3 @@
-#!/usr/bin/env node
-// One-time crosscheck: which chats since a start date did an agent write in, but nobody ever recorded in Customer Approaching?
-// The result goes into the Lark table "Unrecorded Chats" and each agent's widget lists their own rows.
-//
-//   $env:SCAN_KEY = "<the same value as SCAN_KEY in the Cloudflare Pages settings>"
-//   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-07            (dry run: only prints)
-//   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-07 --write    (writes the rows)
-//
-// A sheet for QA (who has the most never-recorded chats, with a link per chat), leaving out the admin's own logins:
-//   node scripts/crosscheck-unrecorded.mjs --base https://test-1-7wp.pages.dev --from 2026-10-01 --exclude a@x.com,b@y.com --csv qa.csv
-// (The admin preview has the same thing as a page: the "QA" tab, no command line needed.)
-//
-// It only talks to the site's /crosscheck endpoint (small steps, one at a time, with a pause between them), so the credentials
-// stay in Cloudflare. A chat counts as recorded when ANY Customer Approaching row created since the start date carries its
-// thread id in the link. Run it again later and it adds only what is missing (rows already written are skipped).
-// The scanning and judging live in qa/scan.js, shared with that page.
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { archiveLink, createClient, histogram, pool, planAll, planEntries, scanChats, stepWithRetry, summarize, toCsv, windows } from "../qa/scan.js";

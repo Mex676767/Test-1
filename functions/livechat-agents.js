@@ -3,16 +3,6 @@ import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
 import { listRecords, TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { parseBindings } from "./agent-login.js";
 
-// Every LiveChat agent, for the ticket team: they match each ticket's author (the LiveChat id and email the widget sends with
-// a ticket) to a user of their system. One entry per agent per LiveChat account (lc1 / lc2), straight from LiveChat's
-// Configuration API (needs the account's PAT to carry agents--all:ro).
-//
-// `email` is the agent's LiveChat id as LiveChat lists it. `login` (the UUID account_id) and `agentName` (the name the agent
-// picked in the widget) come from the Lark table "Livechat App Agent Logins" and are filled only for agents who have signed in
-// to the widget at least once; `signedIn` says which.
-//
-// Disabled (404) until LIVECHAT_AGENTS_KEY is set on the Pages project. Callers send it as the x-agents-key header (never in
-// the URL, which would end up in logs). The answer holds names and emails, so it is never cached.
 const headers = { "Cache-Control": "no-store" };
 const reply = (statusCode, body) => ({ statusCode, headers, body: JSON.stringify(body) });
 const clean = (value) => String(value ?? "").trim();
@@ -44,7 +34,6 @@ export async function handler(event) {
   if (!sameSecret(String(event.headers?.["x-agents-key"] || ""), String(key))) return reply(401, { ok: false, error: "Unauthorized" });
   if (!LIVECHAT_ACCOUNTS.length) return reply(503, { ok: false, error: "No LiveChat account is configured" });
 
-  // Best effort: the list is useful without the widget's own table.
   let bindings = [];
   let bindingsError = "";
   if (TABLE_AGENT_LOGINS) {
@@ -75,7 +64,6 @@ export async function handler(event) {
   }
   agents.sort((a, b) => a.account.localeCompare(b.account) || a.email.localeCompare(b.email));
 
-  // Every account failing is a failure; one of two failing is reported next to what did come back.
   if (!agents.length && Object.keys(errors).length) return reply(502, { ok: false, error: "LiveChat did not return the agents", errors });
   return reply(200, {
     ok: true,

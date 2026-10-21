@@ -344,7 +344,7 @@ test('a comment is noticed by the comment count even though the ticket\'s update
   const mineTicket = (extra = {}) => ticket('TK2610170260', { raisedBy: ME, updatedAt: iso(-2000), ...extra });
   list.mine = [mineTicket({ commentCount: 5 })];
   await w.run('pollTicketNotifications()');
-  list.mine = [mineTicket({ commentCount: 6 })]; // updatedAt unchanged
+  list.mine = [mineTicket({ commentCount: 6 })];
   await w.run('pollTicketNotifications()');
   assert.equal(items(w).length, 1);
   assert.match(w.calls.toasts.at(-1).text, /TK2610170260 · Ashton: moshi moshi/);

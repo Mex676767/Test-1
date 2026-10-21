@@ -19,16 +19,11 @@ function publicBonus(config) {
 
 export async function handler(event = {}) {
   try {
-    // Agent, Brand, Inquiry and Status are fields in the same table. Reading
-    // its field catalog once avoids four identical Lark API calls on every
-    // browser startup and periodic refresh.
     const fresh = event.queryStringParameters?.fresh === "1";
     const [fields, bonuses] = await Promise.all([
       listFields(TABLE_CUSTOMER_APPROACHING, undefined, { force: fresh }),
       listBonusConfigs({ fresh }),
     ]);
-    // Brand and Agent Name always have options. An empty catalog means the read
-    // was partial/failed -- say so, so the widget keeps the lists it already has.
     const brands = optionNames(fields, "Brand", { sort: true });
     const agents = optionNames(fields, "Agent Name", { sort: true });
     if (!brands.length || !agents.length) {

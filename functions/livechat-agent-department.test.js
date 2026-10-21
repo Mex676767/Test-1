@@ -9,8 +9,6 @@ const GROUPS = [
   { id: 12, name: "CS 96A" },
 ];
 
-// A small fake of LiveChat: the token info, the account lookup that gives an email for a UUID login, get_agent and list_groups.
-// `agents` maps the id get_agent is asked for to that agent's groups; an id missing from it answers "not found".
 function world({ info = { account_id: "agent@example.com" }, agents = {}, patBroken = false } = {}) {
   const original = globalThis.fetch;
   const calls = { getAgent: [], listGroups: 0, info: 0 };

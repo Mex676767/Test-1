@@ -1,12 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { getFieldOptionMap, ESCALATION_BASE_TOKEN, TABLE_ESCALATION } from "./_lib/lark.js";
 
-// Populates the Escalation Ticket section's 4 dropdowns (Brand, Queries,
-// Payment Gateway, VIP Level) straight from that field's own Single Select
-// options on the escalation table, same getFieldOptionMap pattern as Agent
-// Name/Brand elsewhere in this app — so the list always matches whatever
-// options actually exist there, no redeploy needed when the other team
-// adds a new Query type or Brand code.
 export async function handler() {
   try {
     if (!ESCALATION_BASE_TOKEN || !TABLE_ESCALATION) {

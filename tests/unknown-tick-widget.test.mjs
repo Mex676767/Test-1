@@ -45,7 +45,7 @@ test('nothing is sent from the admin preview, without an agent name, or for a ch
   assert.equal(preview.posts.length + noAgent.posts.length + unknown.posts.length, 0);
   const offline = widget({ failing: true, state: chat });
   assert.doesNotThrow(() => offline.report('C', true, false));
-  await new Promise((resolve) => setTimeout(resolve, 5)); // the rejected send is swallowed, not an unhandled rejection
+  await new Promise((resolve) => setTimeout(resolve, 5));
 });
 
 test('every way a chat becomes Unknown or stops being Unknown reports it: the tick, the auto-tick, a forced lookup and a failed forced lookup', () => {
@@ -91,7 +91,6 @@ test('every way a bonus is claimed or unclaimed reports it: the normal claim, th
   assert.match(app, /amount: riskClaim\?\.valid \? riskClaim\.formattedClaim : programHasAmount\(programKey\) \? extractAmountNumber\(claimedSource\?\.display\) : ""/);
 });
 
-// ---- ticking Unknown also removes the leftover Lark row Needs Attention lists for this chat ------------------------
 function leftoverHarness({ staleRecords, chatUrl = '', claimed = {}, caRecordId = null, deleteReply = { ok: true }, selectedAgent = '96 Mexha', previewMode = false }) {
   const calls = { fetched: [], remembered: [], forgotten: [], rendered: 0, status: [] };
   const context = vm.createContext({
