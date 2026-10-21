@@ -1971,6 +1971,7 @@ function saveState() {
         lastSyncedJson.set(chatId, stateSnapshot(s));
         dirty = true;
         adopted = true;
+        if (agentActed(s)) logCaseOrigin(chatId, "case content came from another tab of this browser");
         continue;
       }
       if (synced !== undefined && cur === synced) {
@@ -1986,6 +1987,7 @@ function saveState() {
             const restoredBrand = keepBrand(chatId, s);
             lastSyncedJson.set(chatId, restoredBrand ? storedSnapshot : stateSnapshot(s));
             adopted = true;
+            if (agentActed(s)) logCaseOrigin(chatId, "case content came from another tab of this browser");
           }
         }
         continue;
@@ -2268,6 +2270,17 @@ function agentActed(s) {
 }
 function agentTouchedChat(s) {
   return agentActed(s) || (!!s && (s.agentWrote === true || s.agentWrote === "unsure"));
+}
+function caseNeverLookedUp(s) {
+  return !!s && !s.username && !s.caRecordId;
+}
+const caseOriginLogged = new Set();
+function logCaseOrigin(chatId, how) {
+  const s = state[chatId];
+  const key = `${chatId}:${how}`;
+  if (!s || caseOriginLogged.has(key)) return;
+  caseOriginLogged.add(key);
+  logDiagnostic(`Chat ${chatId}: ${how} (player: ${s.username || "none"}, Lark record: ${s.caRecordId ? "yes" : "no"}, agent: ${selectedAgent || "none"}).`, "info");
 }
 const addingCaseFor = new Set();
 
@@ -5443,6 +5456,7 @@ chatListEl.addEventListener("click", async (e) => {
         if (!(await raiseClaimTicket(chatId, "gracePeriod", amount))) return;
         card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
         s.claimedPrograms.gracePeriod = true;
+        logCaseOrigin(chatId, "gracePeriod claimed");
         s.inquiry = ["Grace Period"];
         s.status = "Given";
         if (!s.claimSecretManual) s.claimSecret = true;
@@ -5494,6 +5508,7 @@ chatListEl.addEventListener("click", async (e) => {
     }
 
     s.claimedPrograms[programKey] = true;
+    logCaseOrigin(chatId, `${programKey} claimed`);
     const allSources = [
       ...allBonusPrograms().map((p) => ({ key: p.key, label: p.label, display: r[p.key] })),
       { key: "telegram28", label: "Telegram RM28", display: r.telegram28?.status },
@@ -5622,6 +5637,7 @@ chatListEl.addEventListener("click", async (e) => {
         setStatus('When picking 2 inquiries, one of them must be "Feedback".', "error");
       } else {
         s.inquiry.push(val);
+        logCaseOrigin(chatId, "inquiry picked");
       }
     }
     const searchInput = card.querySelector(".inquiry-search");
@@ -5802,6 +5818,7 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "selectStatus") {
     s.status = btn.dataset.value;
+    logCaseOrigin(chatId, "status picked");
     s.statusDropdownOpen = false;
     const searchInput = card.querySelector(".status-search");
     if (searchInput) { searchInput.value = ""; searchInput.blur(); }
@@ -6455,7 +6472,7 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
     return;
   }
 
-  if (auto && !agentActed(s)) {
+  if (auto && (!agentActed(s) || (AGENT_LOGIN_LIVE && caseNeverLookedUp(s)))) {
     if (!(await agentWroteInChat(chatId))) {
       if (!s.logged && s.autoRecordError) s.autoRecordError = "";
       return;
@@ -6817,7 +6834,11 @@ async function sweepPendingChats() {
     if (!saved || saved.logged) continue;
     if (currentLiveChatAccount && saved.liveChatAccount !== currentLiveChatAccount) continue;
     if (saved.caOwner && saved.caOwner !== selectedAgent) continue;
-    if (!state[chatId]) { state[chatId] = saved; markStateSynced(chatId); }
+    if (!state[chatId]) {
+      state[chatId] = saved;
+      markStateSynced(chatId);
+      if (agentActed(saved)) logCaseOrigin(chatId, "a case saved earlier in this browser was picked up by the retry");
+    }
     if (saved.chatOpen === false) {
       if (isLoggingPaused()) continue;
       const idle = state[chatId] || saved;
