@@ -2,15 +2,12 @@ import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
 
-// Retention = the signed-in agent belongs to the LiveChat group "Priority 96" or "Priority TC"; everyone else is Customer Service.
 const RTN_GROUP = /^priority\s+(?:96|tc)$/i;
 
-// The group list is the same for every agent and the groups an agent belongs to rarely change, but every widget load asks:
-// remember each briefly per isolate (the agent's own answer is kept per LiveChat account + login).
 const GROUPS_TTL_MS = 10 * 60_000;
-const AGENT_TTL_MS = 30_000; // short: a group change must show up on the next load
-const groupListCache = new Map(); // account key -> { at, groups }
-const agentGroupCache = new Map(); // `${account key}|${login}` -> { at, ids }
+const AGENT_TTL_MS = 30_000;
+const groupListCache = new Map();
+const agentGroupCache = new Map();
 export function resetDepartmentCache() { groupListCache.clear(); agentGroupCache.clear(); }
 
 async function json(url, options) {
@@ -32,8 +29,6 @@ async function listGroups(account) {
   return Array.isArray(groups) ? groups : [];
 }
 
-// A Configuration API agent is identified by their email. The account's PAT (agents--all:ro) is asked first; the agent's own login
-// (agents--my:ro on the OAuth app) is the fallback, with the email and then the account id.
 async function agentGroupIds(account, agentToken, who) {
   const cacheKey = `${account.key}|${who.login}`;
   const cached = agentGroupCache.get(cacheKey);
@@ -69,7 +64,6 @@ export async function handler(event) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "LiveChat login is required." }) };
     }
 
-    // Who the token belongs to is asked of LiveChat; the browser's own word about who it is is never used.
     const who = await identifyAgent(event.env, accountKey, agentToken, { withEmail: true, pat: account.pat });
     if (!who.ok) return { statusCode: 200, body: JSON.stringify(who) };
 

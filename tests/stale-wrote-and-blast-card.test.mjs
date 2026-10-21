@@ -8,7 +8,6 @@ const adapter = readFileSync(new URL('../blast/web-adapter.js', import.meta.url)
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 const constLine = (name) => app.match(new RegExp(`const ${name} = [^\\n]*;`))[0];
 
-// ---- old "did not write" answers (made when the id and the email never matched) are not trusted ----
 function wroteHarness(chat, reply) {
   const st = { c1: { chatUrl: 'https://my.livechatinc.com/chats/CHAT/THREAD', ...chat } };
   const fetched = [];
@@ -51,7 +50,6 @@ test('the sweep re-asks about a closed chat whose only verdict is an old "did no
   assert.match(app, /!\(AGENT_LOGIN_LIVE && agentWroteVerdict\(idle\) === undefined\)/);
 });
 
-// ---- Blast: the LiveChat account card is hidden while the widget's login is valid ------------------
 function blastCard({ connected, expiresIn = 3600_000 }) {
   const start = adapter.indexOf('let connectionExpiryTimer = null;');
   const end = adapter.indexOf('  let oauthConfig =');

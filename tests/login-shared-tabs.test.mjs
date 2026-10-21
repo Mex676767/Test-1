@@ -11,7 +11,6 @@ const storage = () => {
   const m = new Map();
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), map: m };
 };
-// Tabs of one browser window share localStorage; each tab has its own sessionStorage.
 function browser() {
   const shared = storage();
   const clock = { now: 1_000_000 };
@@ -20,7 +19,6 @@ function browser() {
     const context = vm.createContext({ sessionStorage: session, localStorage: shared, Number, JSON, Date: { now: () => clock.now } });
     vm.runInContext([constLine('LIVECHAT_LOGIN_BACKUP'), constLine('LIVECHAT_TOKEN_EPOCH'), constLine('LIVECHAT_TOKEN_EPOCH_KEY'),
       fn('saveLiveChatLogin'), fn('forgetLiveChatLogin'), fn('restoreLiveChatLogins'), fn('dropOldLiveChatTokens'), fn('liveChatAgentTokens')].join('\n'), context);
-    // what the page does as it loads
     vm.runInContext('dropOldLiveChatTokens(); restoreLiveChatLogins();', context);
     return { session, call: (code) => vm.runInContext(code, context), tokens: () => JSON.stringify(vm.runInContext('liveChatAgentTokens()', context)) };
   };
@@ -72,10 +70,10 @@ test('forgetting a login (expired or refused) removes it from the shared copy to
 test('the one-time re-login drops the shared copy as well, and a new tab does not repeat it', () => {
   const b = browser();
   b.shared.setItem('ca-livechat-login-backup:lc1', JSON.stringify({ token: 'pre-scope', expiresAt: b.clock.now + 3600_000 }));
-  const first = b.openTab();     // no epoch mark anywhere: everything stored from before is dropped
+  const first = b.openTab();
   assert.equal(first.tokens(), '{}');
   first.call(`saveLiveChatLogin('lc1', 'fresh', ${b.clock.now + 3600_000})`);
-  const second = b.openTab();    // the mark is in localStorage now, so a new tab keeps the fresh login
+  const second = b.openTab();
   assert.equal(second.tokens(), JSON.stringify({ lc1: 'fresh' }));
 });
 

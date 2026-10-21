@@ -1,6 +1,3 @@
-// The QA tab (/qa/, shown inside the widget for a person marked QA, and in the admin preview): the card of how the chat open in LiveChat
-// was logged, and a report of the chats nobody logged. Read-only: nothing is written to Lark or anywhere else. The page has no sign-in of
-// its own: it uses the LiveChat login the widget already holds in this tab (sign in and out in the widget's Settings).
 import { attachAgentPicker } from "./agentpicker.js";
 import { attachDatePicker } from "./datepicker.js";
 import { buildExamples } from "./examples.js";
@@ -9,7 +6,7 @@ import { agentChoices, archiveLink, checkKnownUsernames, classifyEntries, countM
 const $ = (id) => document.getElementById(id);
 const store = {
   get(key) { try { return localStorage.getItem(key) || ""; } catch (_) { return ""; } },
-  set(key, value) { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch (_) { /* private window: simply not remembered */ } },
+  set(key, value) { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch (_) { } },
 };
 const FROM = "qa-from";
 const WINDOW_MS = 6 * 3_600_000;
@@ -20,21 +17,18 @@ const dayInMyt = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(0, 10)
 const PREVIEW = new URLSearchParams(location.search).get("preview") === "1";
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-let login = null; // { account, token } once the server has accepted the widget's LiveChat login
-let loginProblem = ""; // why there is no login, in words for the person
-let result = null; // { entries, byEmail, from, to } of the last finished report
+let login = null;
+let loginProblem = "";
+let result = null;
 let running = false;
 let agentPicker = null;
-let currentRun = null; // { stopped } of the report on screen: every run has its own flag, so a stopped run stays stopped when the next one starts
+let currentRun = null;
 
 function setStatus(text, isError = false) {
   $("status").textContent = text;
   $("status").classList.toggle("error", isError);
 }
 
-// ---- The LiveChat login ---------------------------------------------------------------------------------------------------
-// The widget keeps the signed-in agent's LiveChat token in this tab's session storage; this page asks the server to accept it. The server
-// decides who may read: a login marked QA in the Agent Logins table.
 const TOKEN = (account) => `ca-livechat-agent-token:${account}`;
 const EXPIRY = (account) => `ca-livechat-agent-token-expiry:${account}`;
 const storedToken = (account) => {
@@ -46,10 +40,9 @@ async function acceptLogin(candidate) {
   login = candidate;
   loginProblem = "";
   if (data && data.ok) agentPicker?.setChoices(agentChoices(data.agents));
-  if (chatThread) showChat(chatThread); // a chat was opened before the login was accepted
+  if (chatThread) showChat(chatThread);
 }
 
-// A login still valid in this tab is accepted quietly. When none is, the card says what to do.
 async function resumeLogin() {
   const tokens = ["lc1", "lc2"].map((account) => [account, storedToken(account)]).filter(([, token]) => token);
   if (!tokens.length) { loginProblem = "Sign in with LiveChat in Settings (⚙) first."; return showChat(chatThread); }
@@ -59,12 +52,9 @@ async function resumeLogin() {
   showChat(chatThread);
 }
 
-// ---- The open chat --------------------------------------------------------------------------------------------------------
-// The widget tells this page the thread id of the chat open in LiveChat: every agent's record for it, and any Unknown tick.
 let chatThread = "";
-let chatToken = 0; // an answer for a chat that is no longer the one on screen is dropped
+let chatToken = 0;
 
-// The bonuses the agent clicked Claim on, each checked against what they logged: the inquiry tag and the amount that bonus implies.
 function claimsBlock(claims) {
   if (!claims.length) return "";
   return `<div class="qc-claims"><div class="qc-claims-title">Bonus claimed</div>${claims.map((claim) => `<div class="qc-claim">
@@ -74,7 +64,6 @@ function claimsBlock(claims) {
     </div>`).join("")}</div>`;
 }
 
-// One logged case: who and when, then the fields in a tidy grid. Nothing on it can be changed.
 function loggedCard(row) {
   const missing = '<span class="qc-missing">Not filled in</span>';
   const value = (text, extra = "") => (text ? `<dd${extra}>${escapeHtml(text)}</dd>` : `<dd>${missing}</dd>`);
@@ -93,7 +82,6 @@ function loggedCard(row) {
   </article>`;
 }
 
-// An agent claimed a bonus on this chat but has logged nothing for it.
 function claimOnlyCard(agent, claims) {
   return `<article class="qc qc-unknown">
     <header class="qc-head"><span class="qc-agent">${escapeHtml(agent)}</span></header>
@@ -102,7 +90,6 @@ function claimOnlyCard(agent, claims) {
   </article>`;
 }
 
-// An agent ticked Unknown player on this chat: that is all the system keeps.
 function tickCard(tick) {
   return `<article class="qc qc-unknown">
     <header class="qc-head"><span class="qc-agent">${escapeHtml(tick.agent)}</span><time class="qc-time">${escapeHtml(myt(tick.at))}</time></header>
@@ -142,14 +129,12 @@ async function showChat(threadId) {
   }
 }
 
-// The page around us says which chat is open in LiveChat (and is asked once when this page has loaded).
 window.addEventListener("message", (event) => {
   if (event.origin !== location.origin || event.source !== window.parent || event.data?.source !== "ca-qa-chat" || PREVIEW) return;
   showChat(String(event.data.threadId || ""));
 });
-if (window.parent !== window) { try { window.parent.postMessage({ source: "ca-qa-ready" }, location.origin); } catch (_) { /* standalone */ } }
+if (window.parent !== window) { try { window.parent.postMessage({ source: "ca-qa-ready" }, location.origin); } catch (_) { } }
 
-// ---- Report: chats nobody logged -------------------------------------------------------------------------------------------
 function render() {
   const { byEmail } = result;
   const all = countMarks(result.entries);
@@ -226,17 +211,15 @@ async function find(event) {
 }
 
 async function findUnknown({ step, fromMs, toMs, run, only }) {
-  // The first line of the scan appears only after the whole Customer Approaching table is read: say so, instead of leaving the last message.
   setStatus("Reading Customer Approaching… this can take a minute.");
   $("results").hidden = true;
   $("notes").hidden = false;
   $("log").textContent = "";
   const lines = [];
-  // Every finished time window of either LiveChat account moves the bar (two accounts read the same windows).
   const expectedWindows = windows(fromMs, toMs, WINDOW_MS).length * 2;
   let finishedWindows = 0;
   const note = (line, meta) => {
-    if (run.stopped) return; // a stopped scan may still finish a request in the background: it must not write over the next one
+    if (run.stopped) return;
     lines.push(line);
     $("log").textContent = lines.join("\n");
     if (meta) {
@@ -254,7 +237,6 @@ async function findUnknown({ step, fromMs, toMs, run, only }) {
   const tickData = await loadTicks(step);
   classifyEntries(entries, tickData, scan.byEmail);
   const shown = await dropOwnUntracked(entries);
-  // Chats ticked Unknown whose customer already had a player username on file: the lookup is per chat, so it comes last, on what is left.
   if (shown.some((entry) => entry.mark === "ticked")) {
     note("Checking whether the customers of ticked chats already had a username…");
     const lookup = await checkKnownUsernames(shown, step, { isCancelled: () => run.stopped, onProgress: (done, total) => !run.stopped && setStatus(`Checking ticked chats for a username on file… ${done}/${total}`) });
@@ -283,11 +265,9 @@ $("stop").addEventListener("click", () => { if (currentRun) currentRun.stopped =
 $("download").addEventListener("click", () => { if (result) saveCsv(toCsv(result.entries, result.byEmail), `qa-unknown-chats_${result.from}_to_${result.to}.csv`); });
 $("onlyNotTicked").addEventListener("change", () => { if (result) render(); });
 $("onlyKnownUser").addEventListener("change", () => { if (result) render(); });
-// The "who to check" list is filled once the login is accepted.
 agentPicker = attachAgentPicker($("agentPicker"), {
   onOpen: () => { if (!login) agentPicker.setMessage(loginProblem || "Sign in with LiveChat in Settings (⚙) first."); },
 });
-// The admin preview (the QA tab opened with ?preview=1) shows made-up example chats instead of reading anything.
 if (new URLSearchParams(location.search).get("preview") === "1") {
   const examples = buildExamples();
   const toolbar = document.createElement("div");

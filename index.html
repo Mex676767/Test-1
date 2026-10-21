@@ -8,7 +8,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <link rel="stylesheet" href="style.css?v=20261019-12" />
+  <link rel="stylesheet" href="style.css?v=20261021-1" />
 </head>
 <body>
   <header class="topbar">
@@ -39,10 +39,6 @@
 
   <div id="statusBar" class="status-bar hidden"></div>
 
-  <!-- Every chat this browser knows about that closed without ever being
-       completed (missing Inquiry/Status/etc.) -- not just whichever one
-       happens to be the currently-focused card, since LiveChat's SDK only
-       ever shows this widget one chat at a time. See renderNeedsAttentionPanel. -->
   <div id="needsAttentionPanel" class="needs-attention-panel hidden">
     <button type="button" id="needsAttentionToggle" class="needs-attention-toggle">
       <span id="needsAttentionCount"></span>
@@ -53,7 +49,7 @@
 
   <main id="chatList" class="chat-list"></main>
   <section id="blastView" class="blast-view" hidden>
-    <iframe data-src="/blast/index.html?v=20261011-1" loading="lazy" title="LiveChat Engagement"></iframe>
+    <iframe data-src="/blast/index.html?v=20261021-1" loading="lazy" title="LiveChat Engagement"></iframe>
   </section>
   <section id="knowledgeView" class="knowledge-view" hidden>
     <iframe data-src="/knowledge/index.html" loading="lazy" title="CS Learning Assistant"></iframe>
@@ -62,14 +58,9 @@
     <iframe data-src="/qa/index.html" loading="lazy" title="QA"></iframe>
   </section>
 
-  <!-- LiveChat Agent App SDK — provides the currently active chat (customer
-       name, chat ID) when this widget is actually running inside LiveChat's
-       Details sidebar. Loaded before app.js so `LiveChat` is defined by the
-       time app.js checks for it; harmless (just unused) when previewed
-       standalone outside LiveChat, or if this CDN fails to load. -->
   <script src="vendor/livechat-agentapp-1.16.0.min.js"></script>
-  <script src="app.js?v=20261019-22"></script>
-  <script src="deployment-refresh.js?v=20261007-1"></script>
+  <script src="app.js?v=20261021-1"></script>
+  <script src="deployment-refresh.js?v=20261021-1"></script>
 </body>
 </html>
 

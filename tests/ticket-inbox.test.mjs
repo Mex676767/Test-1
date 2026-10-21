@@ -318,14 +318,12 @@ test('"Ticket account not found": the widget asks for the ticket account email, 
   vm.runInContext('storeTicketEmail("lc1", " Alice@Company.com ")', context);
   assert.equal(vm.runInContext('storedTicketEmail("lc1")', context), 'alice@company.com');
   assert.equal(vm.runInContext('storedTicketEmail("lc2")', context), '', 'remembered per LiveChat account');
-  // The create form shows the box only after the server said the account was not found, and a typed value is what gets sent.
   assert.ok(app.includes('${s.ticketEmailNeeded ? `<div class="escalation-field escalation-field-wide"><label class="field-label"'));
   assert.ok(app.includes('data-field=\\"ticketEmail\\"') || app.includes('data-field="ticketEmail"'));
   assert.ok(app.includes('ticketEmail: s.escalation.ticketEmail || storedTicketEmail(currentLiveChatAccount)'));
   assert.ok(app.includes('if (data.needTicketEmail) s.ticketEmailNeeded = true;'));
 });
 
-// ---- comments in the widget ---------------------------------------------------------------------------------
 function commentWorld(over = {}) {
   const calls = { fetches: [], problems: [], loads: [], renders: 0 };
   const state = { chat: { escalation: { commentDraft: 'Customer confirmed.' }, ticketRecord: { ref: 'TK2610150001' }, commentReplyTo: null, escalationError: '' } };
@@ -418,7 +416,6 @@ test('ticket problems open a dialog: the email box for "account not found", a me
   for (const action of ['sendTicketComment', 'replyTicketComment', 'cancelReplyTicketComment']) assert.ok(app.includes(`btn.dataset.action === "${action}"`), action);
 });
 
-// ---- the ticket account line -------------------------------------------------------------------------------
 function accountWorld(over = {}) {
   const calls = { fetches: [], renders: 0, stored: null, problems: [], inbox: [], timers: [] };
   const state = { chat: { escalation: { ticketEmail: over.typed || '' } } };

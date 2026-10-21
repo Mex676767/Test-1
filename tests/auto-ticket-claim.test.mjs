@@ -280,7 +280,7 @@ test('claim: an account never checked is checked first (quietly), and the dialog
   const missing = world({ account: { status: 'unknown', at: 0, checking: false }, checkResult: { status: 'notFound' } });
   assert.equal(await missing.run('raiseClaimTicket("chat1", "topPnl", "58")'), true);
   assert.equal(missing.calls.modals, 0);
-  const noLogin = world({ account: { status: 'unknown', at: 0, checking: false } }); // nobody signed in: nothing could be checked, the dialog decides
+  const noLogin = world({ account: { status: 'unknown', at: 0, checking: false } });
   await noLogin.run('raiseClaimTicket("chat1", "topPnl", "58")');
   assert.equal(noLogin.calls.modals, 1);
 });

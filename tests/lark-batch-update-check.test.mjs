@@ -6,7 +6,6 @@ const TOKEN = 't-SECRETTOKEN0123456789abcdef';
 const BASE_ENV = { LARK_APP_ID: 'app', LARK_APP_SECRET: 'secret', LARK_BASE_APP_TOKEN: 'basetok', BATCH_TEST_TABLE_ID: 'tblTEST', LARK_TABLE_CUSTOMER_APPROACHING: 'tblPROD' };
 const ARGS = ['--i-understand-this-writes-to-a-test-table'];
 
-// A small fake Lark: token, columns, create, get, delete, and batch_update that is either atomic or not.
 function fakeLark({ atomic = true, honourClientToken = true, columns = [{ field_name: 'Text', type: 1 }, { field_name: 'Number', type: 2 }] } = {}) {
   const rows = new Map(); let next = 0; const requests = []; const replies = new Map();
   const json = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'x-tt-logid': 'LOG123' } });
@@ -17,7 +16,7 @@ function fakeLark({ atomic = true, honourClientToken = true, columns = [{ field_
     if ((init.headers || {}).Authorization !== `Bearer ${TOKEN}`) return json({ code: 99991663, msg: 'Invalid access token for authorization' });
     const body = init.body ? JSON.parse(init.body) : {};
     const path = text.split('?')[0], clientToken = new URL(text).searchParams.get('client_token');
-    if (clientToken && honourClientToken && replies.has(clientToken)) return replies.get(clientToken).clone(); // Lark's documented repeat-of-the-same-request behaviour
+    if (clientToken && honourClientToken && replies.has(clientToken)) return replies.get(clientToken).clone();
     const remember = (response) => { if (clientToken) replies.set(clientToken, response.clone()); return response; };
     if (method === 'GET' && path.endsWith('/records')) return json({ code: 0, data: { items: [...rows].map(([record_id, fields]) => ({ record_id, fields })), has_more: false } });
     if (method === 'POST' && path.endsWith('/records/batch_create')) { const made = body.records.map((r) => { const id = `rec${++next}`; rows.set(id, { ...r.fields }); return { record_id: id, fields: rows.get(id) }; }); return remember(json({ code: 0, data: { records: made } })); }

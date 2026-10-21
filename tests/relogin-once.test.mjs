@@ -32,7 +32,7 @@ test('after that, a new login is kept: the drop happens only once per tab', () =
   t.boot();
   t.store.set('ca-livechat-agent-token:lc1', 'new1');
   t.store.set('ca-livechat-agent-token-expiry:lc1', future);
-  t.boot(); // a reload
+  t.boot();
   assert.equal(t.tokens(), JSON.stringify({ lc1: 'new1' }));
 });
 

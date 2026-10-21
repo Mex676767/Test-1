@@ -53,7 +53,6 @@ test("VS96 claim requires and saves both feedback answers", async () => {
   }
 });
 
-// ---- ownership: link-only and unclaim updates must never touch another agent's row ----------------
 async function recordCall(body, ownerOnRow) {
   initEnv({ LARK_APP_ID: "own-app", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token", LARK_TABLE_CUSTOMER_APPROACHING: "customer-table" });
   const original = globalThis.fetch;

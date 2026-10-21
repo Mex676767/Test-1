@@ -5,8 +5,6 @@ import { initEnv, getRecord, updateRecord, deleteRecord, listRecords, listFields
 const ENV = { LARK_APP_ID: "tr-app", LARK_APP_SECRET: "tr-secret", LARK_BASE_APP_TOKEN: "base-token", LARK_TABLE_CUSTOMER_APPROACHING: "customer-table" };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
-// A fake Lark that really expires tokens: it hands out t-<n>-… tokens (n counts up across ALL fakes, because the module keeps its cached token
-// between tests) and only accepts those with n >= validFrom.
 let globalIssued = 0;
 function fakeLark() {
   const state = { issued: 0, validFrom: 0, rejectAll: false, calls: [], tokenCalls: 0, seenAuth: [], missingCode: 0, msgOverride: "" };
@@ -36,7 +34,6 @@ async function withLark(lark, run) {
   globalThis.fetch = lark.handler;
   try { await run(); } finally { globalThis.fetch = original; }
 }
-// Make the token this isolate already holds stale: the next call with it is answered "invalid".
 async function primeToken(lark) { await getRecord("customer-table", "warm"); lark.state.validFrom = globalIssued + 1; lark.state.calls.length = 0; lark.state.seenAuth.length = 0; lark.state.tokenCalls = 0; }
 
 test("the documented codes: only 99991663 is retried; missing-header / malformed-token codes are bugs", () => {
@@ -140,7 +137,7 @@ test("calls the queue runs for us: the queue returns the invalid-token error and
   initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub }, LARK_QUEUE_PROTOCOL: "v2" });
   await withLark(lark, async () => {
     await primeToken(lark);
-    seen.length = 0;                                               // (the warm-up call also went through the queue)
+    seen.length = 0;
     const record = await updateRecord("customer-table", "r1", { Status: "Solved" });
     assert.equal(record.record_id, "r1");
     assert.equal(seen.length, 2, "the queue was asked twice");

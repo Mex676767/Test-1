@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-// The user does not want a scrollbar anywhere: scrolling stays available by wheel, touch and keyboard.
 const HIDE_ALL = /\*\s*,\s*\*::before\s*,\s*\*::after\s*\{\s*scrollbar-width:\s*none/;
 const HIDE_WEBKIT = /\*::-webkit-scrollbar\s*\{[^}]*display:\s*none/;
 
@@ -14,7 +13,6 @@ test('every stylesheet of the widget and its pages hides scrollbars for all elem
     assert.match(text, HIDE_ALL, `${path}: standard property`);
     assert.match(text, HIDE_WEBKIT, `${path}: webkit`);
   }
-  // Blast's own page hides the webkit scrollbar everywhere and the standard one on the page itself.
   assert.match(read('blast/index.html'), /::-webkit-scrollbar\s*\{\s*display:\s*none/);
 });
 

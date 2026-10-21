@@ -3,18 +3,6 @@ import { identifyAgent } from "./_lib/livechat-identity.js";
 import { TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { bindingFor, readBindings } from "./agent-login.js";
 
-// Notes from the widget to the VIP Retention Console: type "relationship" (default) -> the player's Relationship notes, type "action" -> the player's Action log.
-//
-// The browser sends the player, the brand, the note and the agent's LiveChat login. This function asks LiveChat who that login
-// is and which Agent Name the "Livechat App Agent Logins" table bound to it, and sends THAT name to the console as the author.
-// A name typed or sent by the browser is never used, and a login that cannot be verified or has no bound name is refused.
-//
-// Env (Cloudflare Pages, encrypted): CONSOLE_API_URL (e.g. https://console.example.workers.dev) and CONSOLE_NOTE_TOKEN (the console's
-// WIDGET_API_KEY). Neither is ever sent to the browser or logged.
-//
-// The console is reached with a time limit and every failure is turned into a short message. This file never touches the lookup,
-// the case rows, the shared Lark queue or the Durable Object, except one cached read of the agent-logins table (the same read a
-// sign-in makes, shared for 60 seconds).
 const ACCOUNT_KEYS = ["lc1", "lc2"];
 const NOTE_MAX = 2000;
 const CONSOLE_TIMEOUT_MS = 8_000;
@@ -25,9 +13,7 @@ const PER_MINUTE = 20;
 const clean = (value) => String(value ?? "").trim();
 const reply = (statusCode, body) => ({ statusCode, body: JSON.stringify(body) });
 
-// A few notes a minute per signed-in agent: a stuck button or a script cannot flood the console. Per server instance, so it is a
-// brake, not an exact count (the console has its own flood guard across all agents).
-const recent = new Map(); // login -> timestamps (ms)
+const recent = new Map();
 function tooMany(login, now = Date.now()) {
   const list = (recent.get(login) || []).filter((at) => now - at < 60_000);
   if (list.length >= PER_MINUTE) { recent.set(login, list); return true; }
@@ -43,7 +29,6 @@ function withTimeout(promise, ms, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-// Where the console is, or "" when it is not set up. Plain http is allowed only for a machine's own address (local testing).
 export function consoleBase(env) {
   const raw = clean(env?.CONSOLE_API_URL).replace(/\/+$/, "");
   if (!raw || !clean(env?.CONSOLE_NOTE_TOKEN)) return "";
@@ -54,7 +39,6 @@ export function consoleBase(env) {
   return raw;
 }
 
-// The agent the browser's LiveChat login belongs to: { name, login } or { response } to send back.
 async function verifiedAgent(env, accountKey, agentToken) {
   if (!ACCOUNT_KEYS.includes(accountKey) || !clean(agentToken)) {
     return { response: reply(401, { ok: false, loginExpired: true, error: "Connect LiveChat first: a note has to say which agent wrote it." }) };
@@ -65,7 +49,6 @@ async function verifiedAgent(env, accountKey, agentToken) {
   const who = await withTimeout(identifyAgent(env, accountKey, agentToken), VERIFY_TIMEOUT_MS, "LiveChat did not answer in time.");
   if (!who.ok) return { response: reply(401, { ok: false, loginExpired: true, error: who.error }) };
   let bound = bindingFor(await withTimeout(readBindings({ cached: true }), VERIFY_TIMEOUT_MS, "The agent list did not answer in time."), accountKey, who.login);
-  // A name bound a moment ago may not be in the shared copy yet: the table as it is now decides.
   if (!bound) bound = bindingFor(await withTimeout(readBindings(), VERIFY_TIMEOUT_MS, "The agent list did not answer in time."), accountKey, who.login);
   if (!bound) {
     return { response: reply(403, { ok: false, error: "Your LiveChat login has no Agent Name yet. Sign in to the widget again and pick your name first." }) };
@@ -73,7 +56,6 @@ async function verifiedAgent(env, accountKey, agentToken) {
   return { name: bound.name, login: who.login };
 }
 
-// What the console said, in words an agent can act on. The console's own text is shown only for a rejected input (400).
 function consoleProblem(status, text) {
   if (status === 404) return "This player is not in the console, so the note was not saved.";
   if (status === 429) return "Too many notes right now. Wait a minute and try again.";
@@ -87,7 +69,6 @@ async function callConsole(url, init) {
   try {
     response = await fetch(url, { ...init, signal: AbortSignal.timeout(CONSOLE_TIMEOUT_MS) });
   } catch (_) {
-    // A timeout or a network error: whether the console got the request is unknown.
     return { unknown: true };
   }
   const data = await response.json().catch(() => ({}));
@@ -102,8 +83,6 @@ export async function handler(event) {
     const username = clean(input.username).toLowerCase();
     const brand = clean(input.brand);
     if (!username || !brand || brand.length > 60) return reply(400, { ok: false, error: "A player username and brand are needed to add a note." });
-    // "relationship" = the customer's personal facts (console: Relationship notes); "action" = the next action (console: Action log).
-    // Each has its own console route, so a console that does not know the action route can never file an action as a relationship note.
     const type = input.type === undefined || input.type === "relationship" ? "relationship" : input.type === "action" ? "action" : "";
     if (!type) return reply(400, { ok: false, error: "Bad request." });
     const list = input.list === true;
@@ -133,7 +112,6 @@ export async function handler(event) {
     }
 
     if (tooMany(agent.login)) return reply(429, { ok: false, error: "Too many notes in a minute. Wait a little and try again." });
-    // The author is the Agent Name exactly as the widget has it; the console shortens it itself.
     const result = await callConsole(`${base}${type === "action" ? "/api/ext/action" : "/api/ext/note"}`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },

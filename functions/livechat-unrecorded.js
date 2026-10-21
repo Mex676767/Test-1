@@ -4,14 +4,6 @@ import { identifyAgent } from "./_lib/livechat-identity.js";
 import { searchRecords, updateRecord, toDisplay, TABLE_UNRECORDED } from "./_lib/lark.js";
 import { UNREC } from "./_lib/unrecorded.js";
 
-// The signed-in agent's own list from the one-time crosscheck (see crosscheck.js): chats since 7 Oct that they wrote in and
-// nobody recorded. The agent is identified by LiveChat from their login, never by what the browser says, and only rows
-// carrying THEIR email are ever read or changed.
-//
-//   list     -> { ok, chats: [{ threadId, chatId, date, customer }] }   (rows still "Open", oldest first)
-//   resolve  -> marks one chat "Done" (recorded) or "Ignored" (the agent wrote it off)
-//   resolveAll -> marks up to 50 of the agent's Open chats "Ignored" and says how many are left ({ updated, remaining }), so the
-//                 widget clears a long backlog with a few small calls
 const THREAD_ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const RESOLVE_ALL_CHUNK = 50;
 const clean = (value) => String(value ?? "").trim();

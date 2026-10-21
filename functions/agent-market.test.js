@@ -11,7 +11,6 @@ const ENV = {
 };
 const row = (id, account, login, name, market) => ({ record_id: id, fields: { "LiveChat Account": account, "LiveChat Login": login, "Agent Name": name, ...(market ? { "Default Market": market } : {}) } });
 
-// A tiny fake of LiveChat's token info and the Lark Agent Logins table. Updates are applied to `table` and logged.
 function world({ table = [], tokens = {}, failUpdate = false } = {}) {
   const log = { updates: [] };
   const original = globalThis.fetch;

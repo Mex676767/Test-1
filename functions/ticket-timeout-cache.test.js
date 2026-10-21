@@ -13,7 +13,6 @@ const hang = (url, options = {}) => new Promise((resolve, reject) => {
   options.signal?.addEventListener("abort", () => reject(options.signal.reason || new Error("aborted")), { once: true });
 });
 
-// ---- item 9: deadline ----------------------------------------------------------------------
 test("a hung ticket service times out with a 504 instead of hanging the function", async () => {
   await withFetch(hang, async () => {
     const startedAt = Date.now();
@@ -50,7 +49,6 @@ test("normal ticket requests still pass headers and body through (deadline is ad
   });
 });
 
-// ---- item 10: config cache ---------------------------------------------------------------------
 test("ticket-config is served from a 5-minute per-isolate cache; ?fresh=1 bypasses it", async () => {
   resetTicketConfigCache();
   let upstream = 0;

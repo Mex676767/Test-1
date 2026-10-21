@@ -41,7 +41,6 @@ test('once the name comes from the login, Settings shows it read-only and the Sa
   assert.match(panel, /if \(AGENT_LOGIN_LIVE\) \{ overlay\.remove\(\); return; \}/);
 });
 
-// ---- requireAgentLogin, driven with fakes ---------------------------------------------------------
 function harness({ configured = '', stored = {}, serverReplies, department = '', qa = false }) {
   const session = new Map(Object.entries(stored));
   const calls = { posted: [], panels: [], bound: [], picked: [], dropped: [], detected: [], cs: [], qa: [], qaChecked: [] };
@@ -126,7 +125,6 @@ test('an unreachable server offers Try again without throwing the stored login a
   assert.deepEqual(h.calls.bound, [['X', 'lc1']]);
 });
 
-// ---- the sign-in no longer looks like a failure while it waits, and cannot be bypassed by hand -----------
 test('while the sign-in waits, the badge says so instead of "No agent set"; once a name is known it shows the name', () => {
   const badge = { textContent: '', className: '' };
   const context = vm.createContext({ document: { getElementById: () => badge }, selectedAgent: '' });
@@ -156,7 +154,6 @@ test('with the LiveChat login on, Settings never offers the name list, not even 
   assert.match(panel, /if \(AGENT_LOGIN_LIVE\) \{ overlay\.remove\(\); return; \}/);
 });
 
-// ---- sign out ---------------------------------------------------------------------------------------
 function signOutHarness({ confirmed = true } = {}) {
   const calls = { forgotten: [], removed: [], logs: [], login: 0, rendered: 0 };
   const context = vm.createContext({
@@ -274,7 +271,6 @@ test('signing out of a QA view puts the tabs back for the next sign-in', async (
   assert.equal(h.calls.tabs, 1, 'the tabs are redrawn without the QA view');
 });
 
-// ---- connectLiveChatLogin: try both LiveChat accounts, remember the one that worked ------------------------------
 const CLIENTS = [{ key: 'lc1', clientId: 'c1' }, { key: 'lc2', clientId: 'c2' }];
 const REDIRECT = 'https://app.test/blast/oauth.html';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -340,7 +336,7 @@ test('LiveChat login: a refusal sent back to the page also moves on to the other
   const login = w.connect();
   w.reply(0, 'ERROR', { error: 'access_denied' });
   assert.equal(w.opened.length, 2);
-  w.reply(0); // the first window's old state no longer counts
+  w.reply(0);
   w.reply(1);
   assert.equal((await login).accountKey, 'lc2');
 });
@@ -355,7 +351,7 @@ test('LiveChat login: both windows closed without a login says so; an answer arr
   const late = loginWorld();
   const login = late.connect();
   late.popups[0].closed = true;
-  await wait(8); // closed, but within the grace period
+  await wait(8);
   late.reply(0);
   assert.equal((await login).accountKey, 'lc1');
   await wait(40);

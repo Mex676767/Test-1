@@ -1,16 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
 
-// Which bonus did the agent click Claim on? The saved case only keeps the inquiry tag and the amount, and the agent can edit both
-// afterwards, so QA could not tell whether they match the bonus that was really claimed. The widget now tells this endpoint the moment
-// a bonus is claimed (the bonus, the source table's value, and the inquiry and amount that bonus implies) and when the claim is undone;
-// the QA tab reads them through /crosscheck (step "chatlog") and compares them with what was logged.
-//
-// Stored in the same Cloudflare KV namespace as the Unknown ticks (binding UNKNOWN_TICKS), the facts in the key's metadata:
-//   claim:<thread id>:<agent>:<program>   (thread not known yet: claim:c-<chat id>:...)   expires after 120 days
-//   meta:claims-since                     when the first claim arrived: chats older than that have no claims on record
-// Without the binding the endpoint answers { ok: false, notConfigured: true } and the widget carries on.
-// No authentication, like the other widget endpoints (see HANDOVER.md); the inputs are checked and capped.
-
 export const CLAIM_TTL_SECONDS = 120 * 24 * 3600;
 const reply = (statusCode, body) => ({ statusCode, body: JSON.stringify(body) });
 const clean = (value) => String(value ?? "").trim();
@@ -32,7 +21,6 @@ export async function handler(event) {
     if ((threadId && !ID.test(threadId)) || (chatId && !ID.test(chatId))) return reply(400, { ok: false, error: "Invalid chat id." });
 
     if (body.remove === true) {
-      // An unclaim clears every bonus of this agent on this chat, whichever id the claim was stored under.
       const prefixes = [threadId && claimPrefix(threadId, "", agent), chatId && claimPrefix("", chatId, agent)].filter(Boolean);
       for (const prefix of prefixes) {
         const listed = await kv.list({ prefix, limit: 100 });

@@ -2,7 +2,6 @@ import { adapt } from "./_lib/adapt.js";
 import { isOnBehalfRefusal, readingAs, refusalResponse } from "./_lib/ticket-actor.js";
 import { json, ticketError, ticketGet, withOnBehalf } from "./_lib/tickets.js";
 
-// A ticket read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
 const STATUS_TTL_MS = 4_000;
 
 const mapComment = (comment) => ({
@@ -16,7 +15,6 @@ const mapComment = (comment) => ({
   ...(Array.isArray(comment.replies) ? { replies: comment.replies.map(mapComment) } : {}),
 });
 
-// A ticket record from the ticket API as the widget gets it (ticket-update.js answers with the same shape, without the thread).
 export function mapTicket(record) {
   const recordFields = record.fields && !Array.isArray(record.fields) ? record.fields : {};
   return {
@@ -53,10 +51,6 @@ export async function handler(event) {
     reading = await readingAs(event.env, input.author);
     if (reading.response) return reading.response;
     const data = await ticketGet(event.env, withOnBehalf(`/tickets/${encodeURIComponent(ref)}`, reading.email), { ttlMs: STATUS_TTL_MS, fresh });
-    // The current API wraps a single record as { ticket, fields }, where
-    // top-level fields is the field catalog. Older deployments returned the
-    // ticket directly. Support both shapes and never mistake the catalog
-    // array for the ticket's field-value object.
     const record = data.ticket || data.record || data;
     return json(200, { ok: true, ticket: mapTicket(record) });
   } catch (err) {

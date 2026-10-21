@@ -3,25 +3,6 @@ import { updateRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 import { readOwnershipMerged, ownedBy } from "./_lib/ca-row.js";
 import { runWithRequestStart } from "./_lib/lark.js";
 
-// "Released amount" is a Number field in Lark. The frontend's display
-// string (e.g. "LTV - Test: Pass RM18") isn't usable directly — sending it
-// causes NumberFieldConvFail, and worse, label text like "Top 10 P&L - Test"
-// carries digits of its own that a naive number-extraction would grab
-// instead of the real amount. So the frontend also sends releasedAmountRaw
-// (just the source's display value, e.g. "Pass RM18", no label prefix) —
-// pull the number from that.
-//
-// Confirmed bug (2026-08-30): a "first number anywhere in the string" grab
-// pulled RM15 out of a claim whose actual amount was RM18 — the real "SW
-// Check" text apparently carries other numeric content (a night index/date
-// fragment) ahead of the actual "RM<amount>" — same class of bug as Grace
-// Period's "Deposit 100 - Bonus 18" mixing two numbers. Now prefers the
-// number immediately after "RM" specifically, since every Top 10 P&L/LTV
-// example seen is formatted "Pass RM<amount>" — only falls back to the old
-// first-number grab if there's no "RM" in the string at all.
-//
-// No number found (no bonus claimed, or a non-numeric status like
-// "Claimed") -> write null so the field stays blank.
 function extractAmount(str) {
   const s = String(str || "");
   const rmMatch = s.match(/RM\s*(-?\d+(?:\.\d+)?)/i);
@@ -30,10 +11,6 @@ function extractAmount(str) {
   return match ? Number(match[0]) : null;
 }
 
-// Lark Date fields expect a millisecond epoch number over the API, not a
-// "YYYY-MM-DD" string (same category of mismatch as the earlier
-// NumberFieldConvFail/UserFieldConvFail issues on this table) — the card's
-// <input type="date"> gives "YYYY-MM-DD", so convert it here.
 function toEpochMs(dateStr) {
   if (!dateStr) return null;
   const ms = Date.parse(dateStr + "T00:00:00Z");
@@ -59,11 +36,6 @@ async function recordHandler(event) {
     var vs96FeedbackQuery1 = String(body.vs96FeedbackQuery1 || "").trim();
     var vs96FeedbackQuery2 = String(body.vs96FeedbackQuery2 || "").trim();
 
-    // Every write here is to an existing row -- never one stamped with a
-    // different Agent Name. After a chat transfer (PC crash / lost
-    // connection) each agent keeps their own record; without this, a
-    // shared browser's background auto-record could overwrite the first
-    // agent's row with the second agent's name.
     if (!recordId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId is required" }) };
     }
@@ -76,10 +48,6 @@ async function recordHandler(event) {
         error: "This case is logged under " + ownership.owner + " — not changed. Press Look up to log your own record." }) };
     }
 
-    // Unclaim: blank the four claim-related fields on the existing row.
-    // The row itself is kept (never deleted) and every other field (agent,
-    // brand, link, D.O.B, telegram...) is left untouched -- Lark's update
-    // only changes the fields sent.
     if (body.unclaim) {
       if (!recordId) {
         return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId is required" }) };
@@ -93,9 +61,6 @@ async function recordHandler(event) {
       return { statusCode: 200, body: JSON.stringify({ ok: true, record: cleared }) };
     }
 
-    // Link-only: the chat link resolved after Look Up already created the
-    // row (LiveChat's real chat_id takes ~2s to resolve) -- fill it in now
-    // instead of waiting for the final submit.
     if (body.linkOnly) {
       if (!recordId || !chatLink) {
         return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId and chatLink are required" }) };
@@ -121,21 +86,8 @@ async function recordHandler(event) {
       "Status": status,
       "Released amount": extractAmount(releasedAmountRaw !== undefined ? releasedAmountRaw : releasedAmount),
       "Claim Secret": !!claimSecret,
-      // Field is named exactly "link" (lowercase) on Customer Approaching,
-      // and is Lark's Link field type — NOT plain text, so it needs the
-      // {link, text} object shape or Lark rejects it, same as the earlier
-      // Number/Select field-type mismatches on this table. chatLink comes
-      // from activeChats[].link, which app.js only fills in once
-      // livechat-chat-status.js resolves the real chat_id via list_chats
-      // (~2s after a chat opens) — null if recorded before that resolves.
       "link": chatLink ? { link: chatLink, text: chatLink } : null,
-      // Plain field on Customer Approaching itself, filled in by CS directly
-      // (not a Lookup from anywhere) — dob is a "YYYY-MM-DD" string from the
-      // card's date input, or "" if left blank.
       "Player D.O.B": toEpochMs(dob),
-      // Was previously a UI-only toggle with no write path at all — the
-      // card's Telegram switch (auto-detected, but CS-editable) now actually
-      // reaches this Checkbox field on submit.
       "Telegram": !!telegram,
       "Query 1 Feedback (VS96 Feedback)": vs96FeedbackQuery1 || null,
       "Query 2 Feedback (VS96 Feedback)": vs96FeedbackQuery2 || null

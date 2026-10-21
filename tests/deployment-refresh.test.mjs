@@ -8,7 +8,6 @@ const OLD = 'a'.repeat(40), NEW = 'b'.repeat(40), NEWER = 'c'.repeat(40);
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const DAY = 24 * 60 * 60 * 1000;
 
-// A tiny fake page: reloads, notice, the ⟳ button, timers, listeners and every fetch.
 function boot({ meta = 'development', version = OLD, safe = true } = {}) {
   const s = { version, ok: true, hidden: false, clock: 1_000_000, reloads: 0, fetched: [], banner: null, intervals: [], listeners: {}, store: new Map() };
   const el = (tag) => ({ tag, style: {}, textContent: '', children: [], setAttribute() {}, append(...c) { this.children.push(...c); } });
@@ -46,7 +45,7 @@ test('unstamped (git-push) pages: first read is the baseline; an unchanged versi
 });
 
 test('a new version shows the notice and highlights ⟳, and NEVER reloads on its own', async () => {
-  const p = boot({ safe: true });                               // even when everything says it would be safe and idle
+  const p = boot({ safe: true });
   await flush();
   p.s.version = NEW; await p.poll(); await flush();
   assert.equal(p.notice(), 'New version available — click ⟳ Refresh at the top to update.');
@@ -54,12 +53,11 @@ test('a new version shows the notice and highlights ⟳, and NEVER reloads on it
   assert.equal(p.w.deploymentUpdatePending(), true);
   assert.equal(p.button.classes.has('update-pending'), true);
   assert.match(p.button.title, /New version available/);
-  // time passes: a day of polls, retries, visibility changes, activity
   for (let i = 0; i < 200; i += 1) {
     p.s.clock += DAY / 200;
     await p.poll(); await flush();
     p.emit('visibilitychange'); p.emit('keydown'); p.emit('pointerdown');
-    p.s.intervals.forEach((t) => t.fn());                       // every timer the script ever registered
+    p.s.intervals.forEach((t) => t.fn());
   }
   assert.equal(p.s.reloads, 0, 'no automatic reload path exists any more');
 });
@@ -109,7 +107,7 @@ test('errors, non-JSON and malformed versions are "no information": no baseline,
   assert.equal(p.w.deploymentUpdatePending(), false);
   p.s.ok = false; p.s.version = NEW; await p.poll(); await flush();
   assert.equal(p.w.deploymentUpdatePending(), false);
-  p.s.ok = true; p.s.version = OLD; await p.poll(); await flush();     // first GOOD answer becomes the baseline
+  p.s.ok = true; p.s.version = OLD; await p.poll(); await flush();
   assert.equal(p.w.deploymentUpdatePending(), false);
   p.s.version = NEW; await p.poll(); await flush();
   assert.equal(p.w.deploymentUpdatePending(), true);

@@ -70,7 +70,6 @@ test("one account failing is reported beside the other's agents; the widget tabl
     assert.match(body.signInTableError, /lark down/);
     assert.equal(body.agents.every((a) => a.signedIn === false), true);
   } finally { restore(); }
-  // Both accounts failing is a failure, not an empty list.
   const original = globalThis.fetch;
   try {
     globalThis.fetch = async (url) => {

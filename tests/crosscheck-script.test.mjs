@@ -21,7 +21,6 @@ test('the summary counts rows per agent email, busiest first', () => {
   assert.deepEqual(summarize([{ email: 'a@x' }, { email: 'b@x' }, { email: 'a@x' }]), [['a@x', 2], ['b@x', 1]]);
 });
 
-// A fake of the site's /crosscheck steps.
 function fakeSite({ recorded = [], existing = [], archives = {}, notConfigured = [], pendingByAccount = {}, aloneReply = {}, knownAgents = [], outreachByAccount = {} }) {
   const calls = [];
   const step = async (body) => {

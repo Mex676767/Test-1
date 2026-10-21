@@ -2,11 +2,6 @@ import { adapt } from "./_lib/adapt.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
 import { defaultMarketFor, rememberDefaultMarket } from "./_lib/default-market.js";
 
-// The signed-in agent's default ticket market (see _lib/default-market.js).
-//   POST { author: { accountKey, agentToken } }            -> { ok, market }          ("" = not chosen yet)
-//   POST { author: { accountKey, agentToken }, market }    -> { ok, market, saved }   (saved only while none is set; otherwise the
-//                                                             existing market comes back and nothing changes)
-// LiveChat says who the token belongs to; the browser's word is never used for the identity.
 function reply(statusCode, body) { return { statusCode, body: JSON.stringify(body) }; }
 
 export async function handler(event) {

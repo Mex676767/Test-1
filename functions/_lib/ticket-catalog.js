@@ -1,11 +1,3 @@
-// The ticket system's own choice lists, as its API docs page shows them (https://tickets.96ghq.com/api-docs, "Fields you can post").
-// FALLBACK ONLY: the ticket API now serves these lists live (GET /markets, /departments, /fields/choices) and ticket-config.js uses them;
-// this snapshot of that page is used for any list the live call cannot return.
-// Each entry is [display label, stored value]; a bare string is both. Departments and markets are posted by code (the value).
-//
-// Keep it current: when the ticket team changes a list, re-read the docs page (expand every "+N more") and update this file. Values
-// seen on real tickets that are not listed here are still offered (see ticket-config.js), so a stale snapshot hides nothing.
-// Replace this file with a live read as soon as the ticket API offers the lists as JSON.
 export const CATALOG_SNAPSHOT_DATE = "2026-10-14";
 
 const RAW = {
@@ -20,5 +12,4 @@ const RAW = {
 
 const entry = (item) => (Array.isArray(item) ? { label: item[0], value: item[1] } : { label: item, value: item });
 
-// field key -> [{ label, value }]. toDepartment holds the departments (value = code); market holds the markets (value = code).
 export const TICKET_CATALOG = Object.freeze(Object.fromEntries(Object.entries(RAW).map(([key, items]) => [key, Object.freeze(items.map(entry))])));

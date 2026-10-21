@@ -4,9 +4,6 @@ import { readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// Cloudflare refuses to publish a Function whose module, while loading, generates random values, sets a timer or calls fetch()
-// ("Disallowed operation called within global scope"). Node allows all of that, so ordinary tests cannot see it: import every
-// module with those operations made to throw, exactly as the platform does.
 const root = dirname(fileURLToPath(import.meta.url));
 const modules = [];
 (function walk(dir) {

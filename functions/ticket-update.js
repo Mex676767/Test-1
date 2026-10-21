@@ -4,19 +4,6 @@ import { rememberTicketEmail } from "./_lib/ticket-email.js";
 import { json, resetTicketReadCache, ticketError, ticketRequest, ticketSettings } from "./_lib/tickets.js";
 import { mapTicket } from "./ticket-status.js";
 
-// Changes a ticket as the signed-in agent when TICKETS_ON_BEHALF_OF is on (see ticket-actor.js), through the ticket API's
-// PATCH /tickets/<ref>: fields (status and query type included), the department holding it, the market and who is assigned, in ONE
-// atomic request. The ticket system applies the agent's own roles, so a field they may only view, or a ticket outside their scope, is
-// refused with its own message. Not here: adding or removing files (the widget does not offer it yet).
-//
-//   POST { ref, author, fields?, toDepartment?, market?, assignees?, expect? }
-//     fields      { "<field key or label>": value | null }   null clears a field; a list field takes { add: [...], remove: [...] }
-//     toDepartment  a department code, name or id
-//     market      a market code (a string) or null to clear it; leave it out to leave the market alone
-//     assignees   { add: [email | name | id], remove: [id | email | name] }
-//     expect      { "<field key or label>": the value the agent read } -- compare-and-set: if the ticket no longer holds it,
-//                 nothing changes and the answer is 412 with `mismatched`.
-//   -> 200 { ok, ref, changed: [...], visible, ticket, actedAs? }   (changed [] = nothing needed to change)
 const MAX_NAMES = 50;
 const MAX_LIST = 100;
 
@@ -25,7 +12,6 @@ const isScalar = (value) => value === null || ["string", "number", "boolean"].in
 const isListChange = (value) => isPlainObject(value) && Object.keys(value).every((key) => key === "add" || key === "remove")
   && Object.values(value).every((list) => Array.isArray(list) && list.length <= MAX_LIST && list.every((item) => ["string", "number"].includes(typeof item)));
 
-// { body } for the ticket API (without onBehalfOf) or { error } for a request that is malformed or changes nothing.
 export function buildUpdate(input) {
   const body = {};
   if (input.fields !== undefined) {
@@ -77,7 +63,7 @@ export async function handler(event) {
         method: "PATCH",
         body: JSON.stringify({ ...built.body, ...(email ? { onBehalfOf: email } : {}) }),
       });
-      resetTicketReadCache(); // a read made a moment ago would show the old values
+      resetTicketReadCache();
       if (email && acting.source === "entered") {
         const save = rememberTicketEmail(acting.agentLogin.accountKey, acting.agentLogin.login, email);
         if (event.waitUntil) event.waitUntil(save); else await save;

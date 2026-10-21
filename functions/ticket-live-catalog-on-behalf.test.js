@@ -12,7 +12,6 @@ const withFetch = async (impl, run) => { const original = globalThis.fetch; glob
 const reset = () => { resetTicketConfigCache(); resetTicketRateLimit(); resetTicketReadCache(); };
 const env = { TICKETS_API_KEY: "k" };
 
-// ---- the live catalog ---------------------------------------------------------------------------
 const TICKETS = { ok: true, fields: [{ key: "status", label: "Status", type: "SELECT", isActive: true }, { key: "remarks", label: "Remarks", type: "LONGTEXT", isActive: true }], tickets: [{ ref: "TK1", fields: { status: "OPEN" } }] };
 const LIVE = {
   markets: { ok: true, markets: [{ id: 1, code: "BDT", label: "Bangladesh", currency: "BDT" }, { id: 3, code: "WOWMYR", label: "WOW88 Malaysia", currency: "MYR" }] },
@@ -56,7 +55,6 @@ test("one list failing falls back to the snapshot for that list only", async () 
   });
 });
 
-// ---- raising a ticket on behalf of the agent ----------------------------------------------------------
 const TOKENS = { "tok-alice": { account_id: "uuid-alice", email: "alice@x.com", client_id: "c1" } };
 function network({ ticketReplies = [] } = {}) {
   const original = globalThis.fetch;
@@ -255,8 +253,6 @@ test("switched off, nothing about the agent is sent or needed; switched on, a ti
     assert.equal(net.posts.length, 0);
   } finally { net.restore(); }
 });
-
-// ---- the Ticket Email mapping (an agent with two LiveChat accounts has two different emails) ------------------
 
 const row = (account, login, name, ticketEmail = "") => ({ fields: { "LiveChat Account": account, "LiveChat Login": login, "Agent Name": name, "Ticket Email": ticketEmail } });
 

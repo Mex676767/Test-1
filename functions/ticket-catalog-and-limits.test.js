@@ -11,7 +11,6 @@ const reply = (body, status = 200, headers = {}) => new Response(JSON.stringify(
 const withFetch = async (impl, run) => { const original = globalThis.fetch; globalThis.fetch = impl; try { return await run(); } finally { globalThis.fetch = original; } };
 const reset = () => { resetTicketConfigCache(); resetTicketRateLimit(); resetTicketReadCache(); };
 
-// ---- the catalog --------------------------------------------------------------------------------
 test("the catalog holds every list the ticket system's docs page shows, with no repeats", () => {
   const counts = Object.fromEntries(Object.entries(TICKET_CATALOG).map(([key, items]) => [key, items.length]));
   assert.deepEqual(counts, { toDepartment: 20, market: 9, query_type: 29, status: 13, member_platform: 76, payment_gateway: 68, member_level: 20 });
@@ -71,7 +70,6 @@ test("config: an unseen department or market from tickets is added; ids come fro
   });
 });
 
-// ---- the rate limit and the read cache ------------------------------------------------------------
 test("a 429 stops this isolate calling for Retry-After seconds, and the agent is told when to try again", async () => {
   reset();
   let upstream = 0;

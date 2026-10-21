@@ -2,9 +2,6 @@ import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
 
-// Who is the signed-in agent, as a chat knows them? LiveChat's login id (account_id) is a UUID, but a chat lists an agent by
-// their EMAIL, and Blast needs that to add the agent to an open chat (add_user_to_chat answers "`user_id` not found" for the
-// UUID). The browser's own word about who it is is never used: LiveChat is asked with the agent's token.
 export async function handler(event) {
   try {
     const { accountKey, agentToken } = JSON.parse(event.body || "{}");

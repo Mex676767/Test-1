@@ -15,7 +15,6 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 const isToken = (url) => String(url).includes("tenant_access_token");
 const lookup = (env = {}) => handler({ body: JSON.stringify({ username: "Player1", brand: "PP", picName: "Agent A", link: LINK }), env });
 
-// Fake Lark: bonus tables answer normally (VIP Booster eligible), the case-table behaviour is injected.
 async function withLark({ caseSearch, create }, run) {
   initEnv({ ...ENV });
   const calls = { creates: [], caseSearches: 0 };
@@ -129,12 +128,11 @@ test("a healthy case row still comes back with an id, no warning, and the post-c
   });
 });
 
-// ---- Lark's REAL rejection of a URL field is URLFieldConvFail (code 1254068), which names no "link" ----------
 test("URLFieldConvFail (1254068) on the link column falls back to ONE link-less create; the row is saved with no warning", async () => {
   await withLark({
     caseSearch: noBlankRow,
     create: (body, n) => (body.fields && "link" in body.fields)
-      ? json({ code: 1254068, msg: "URLFieldConvFail" })      // Lark's actual answer: no mention of "link" in the message
+      ? json({ code: 1254068, msg: "URLFieldConvFail" })
       : created(),
   }, async (calls) => {
     const body = JSON.parse((await lookup()).body);
@@ -171,7 +169,6 @@ test("the same code on a link-LESS create is not retried again, and timeouts / 5
   }
 });
 
-// ---- repeat lookups: the previous row is only read/cleaned up when it is a DIFFERENT row ------------------------
 const blankRow = (id) => ({ record_id: id, fields: { Username: "player1", Brand: "PP", "Agent Name": "Agent A", link: { link: LINK, text: LINK } } });
 const lookupAgain = (previousRecordId) => handler({ body: JSON.stringify({ username: "Player1", brand: "PP", picName: "Agent A", link: LINK, previousRecordId }), env: {} });
 

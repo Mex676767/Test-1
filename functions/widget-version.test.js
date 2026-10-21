@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { handler, resetWidgetVersionCache } from "./widget-version.js";
 
-// Fake static-asset binding: serves the given files, counting fetches.
 function assets(files, { failPath } = {}) {
   const served = [];
   return {

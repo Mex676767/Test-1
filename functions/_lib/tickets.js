@@ -1,12 +1,5 @@
 const DEFAULT_BASE_URL = "https://tickets.96ghq.com/api/v1";
 
-// reads: the key for the polling reads (ticket list, one ticket, the agent roster). TICKETS_API_KEY_READS, when set, is a second key of the same kind
-// used only for those, because the ticket system's limit (120 calls a minute) is per key: with reads on their own key, agents polling for news can
-// never use up the calls a claim, an edit or a comment needs. Unset: everything uses TICKETS_API_KEY as before.
-// The read keys: TICKETS_API_KEY_READS (one key, or several separated by commas) and any numbered variables TICKETS_API_KEY_READS_1, _2 ... or
-// TICKETS_API_KEY1, TICKETS_API_KEY2 ... (TICKETS_API_KEY itself, without a number, is the key for everything that writes and is never one of them).
-// The agents are spread over them by a stable hash of their email (one agent always uses the same key, so their reads stay cached together), so
-// every key carries a share of the polling and the total limit is the sum. Numbered ones are taken in numeric order, so the spread is stable.
 export function readKeys(env = {}) {
   const numbered = Object.keys(env)
     .map((name) => ({ name, match: /^TICKETS_API_KEY(?:_READS_?)?(\d+)$/.exec(name) }))
@@ -31,7 +24,6 @@ function config(env = {}, { reads = false, path = "" } = {}) {
   return { apiKey, baseUrl };
 }
 
-// The key and base URL, for the one call that is not JSON (a picture; see ticket-attachment.js).
 export function ticketCredentials(env = {}) { return config(env); }
 
 export function ticketSettings(env = {}) {
@@ -48,15 +40,11 @@ export function ticketSettings(env = {}) {
   };
 }
 
-// A hung ticket service must not hang the function. JSON calls get 15 s; multipart (attachment uploads) 30 s.
-// A caller-provided signal is still honoured alongside the deadline.
 const TICKET_TIMEOUT_MS = 15_000;
 const TICKET_UPLOAD_TIMEOUT_MS = 30_000;
 
-// The ticket API allows each key 120 requests a minute, shared by every agent, and answers 429 with Retry-After (seconds to the next
-// minute). After a 429 this isolate stops calling for that long: more calls would only be refused too and push the count up again.
 const DEFAULT_RETRY_AFTER_S = 20;
-const rateLimitedUntil = new Map(); // api key -> time until which this isolate stops calling with it (each key has its own limit)
+const rateLimitedUntil = new Map();
 export function resetTicketRateLimit() { rateLimitedUntil.clear(); }
 
 function busyError(seconds) {
@@ -117,7 +105,6 @@ export async function ticketRequest(env, path, options = {}) {
     const error = new Error(data.error || `Ticket service returned HTTP ${response.status}`);
     error.statusCode = response.status;
     if (data.duplicateOf) error.duplicateOf = String(data.duplicateOf);
-    // An update (PATCH) answers with a machine-readable code and, when it has several problems or a failed expect, their details.
     if (data.code) error.ticketCode = String(data.code);
     if (data.problems && typeof data.problems === "object") error.problems = data.problems;
     if (Array.isArray(data.mismatched)) error.mismatched = data.mismatched;
@@ -126,12 +113,9 @@ export async function ticketRequest(env, path, options = {}) {
   return data;
 }
 
-// Reads (a ticket, the inbox list) repeat constantly: every agent's widget re-reads open tickets every 30 s. A copy up to `ttlMs` old
-// is shared by every agent on this isolate and identical reads in flight at once become one call, which keeps the shared 120 a minute
-// for what is new. `fresh: true` (an agent pressing Refresh or searching) skips the stored copy but still shares an in-flight read.
 const MAX_CACHED_READS = 300;
-const readCache = new Map(); // key -> { at, data }
-const readsInFlight = new Map(); // key -> Promise
+const readCache = new Map();
+const readsInFlight = new Map();
 export function resetTicketReadCache() { readCache.clear(); readsInFlight.clear(); }
 
 export async function ticketGet(env, path, { ttlMs = 0, fresh = false } = {}) {
@@ -153,8 +137,6 @@ export async function ticketGet(env, path, { ttlMs = 0, fresh = false } = {}) {
   return pending;
 }
 
-// A read as the signed-in agent: the ticket API takes the person's email as onBehalfOf on any GET (keys that act for others require it
-// on every request). It is part of the path, so each person's reads are cached on their own.
 export function withOnBehalf(path, email) {
   return email ? `${path}${path.includes("?") ? "&" : "?"}onBehalfOf=${encodeURIComponent(email)}` : path;
 }

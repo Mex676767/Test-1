@@ -7,7 +7,6 @@ import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 const ENV = { LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_UNRECORDED: "unrec-table", LIVECHAT_CLIENT_ID: "client-1" };
 const row = (id, email, thread, status, date = 1) => ({ record_id: id, fields: { "Thread ID": thread, "Chat ID": "C-" + thread, "Writer Email": email, Status: status, "Chat Date": date, Customer: "Zimito " + thread } });
 
-// The fake Lark honours the "is" conditions of a search, so a test shows that only the signed-in agent's rows are touched.
 function world({ rows, accounts, uuid = "uuid-1" }) {
   const log = { searches: [], updates: [] };
   const original = globalThis.fetch;
@@ -68,7 +67,6 @@ test("another agent's chat cannot be resolved by this agent", async (t) => {
 });
 
 test("refuses a bad login, bad details and a thread id that is not a plain id; reports a missing email and a missing table", async (t) => {
-  // (a login id of its own: the server remembers the email it found for a login for an hour)
   const w = world({ rows: rows(), uuid: "uuid-without-email" });
   t.after(w.restore);
   assert.equal((await call({ accountKey: "lc1", agentToken: "nope", action: "list" })).loginExpired, true);

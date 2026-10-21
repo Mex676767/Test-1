@@ -1,8 +1,5 @@
-// "Who do you want to check?": an optional multi-choice list of agents, in the same custom style as the calendar. Nothing chosen means
-// everybody. Markup: <span class="ap"> with a .ap-display button and a .ap-pop popup.
 const nameKey = (name) => String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
 
-// The label on the button for a choice: "All agents", the one name, or "3 agents".
 export function pickerLabel(selectedNames, total) {
   if (!selectedNames.length) return total ? `All agents (${total})` : "All agents";
   return selectedNames.length === 1 ? selectedNames[0] : `${selectedNames.length} agents`;
@@ -11,8 +8,8 @@ export function pickerLabel(selectedNames, total) {
 export function attachAgentPicker(root, { onOpen = () => {} } = {}) {
   const display = root.querySelector(".ap-display");
   const popup = root.querySelector(".ap-pop");
-  let choices = []; // [{ name, emails }]
-  let selected = new Set(); // nameKey values
+  let choices = [];
+  let selected = new Set();
   let query = "";
   let message = "";
 
@@ -62,7 +59,6 @@ export function attachAgentPicker(root, { onOpen = () => {} } = {}) {
   syncDisplay();
 
   return {
-    // The agents to choose from; a choice that is no longer in the list is dropped.
     setChoices(list) {
       choices = list;
       message = "";
@@ -73,7 +69,6 @@ export function attachAgentPicker(root, { onOpen = () => {} } = {}) {
     },
     setMessage(text) { message = text; if (!popup.hidden) render(); },
     selectedNames: names,
-    // The LiveChat emails of the chosen agents (an agent can have two logins), or null when nothing is chosen = everybody.
     selectedEmails() {
       const chosen = choices.filter((choice) => selected.has(nameKey(choice.name)));
       return chosen.length ? chosen.flatMap((choice) => choice.emails) : null;

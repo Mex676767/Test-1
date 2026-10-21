@@ -1,8 +1,3 @@
-// Synthetic Lark Bitable for load simulation. No network, no credentials, no
-// real data. Models: per-call latency, a sliding-window quota (Lark documents
-// 20 req/s for records/search), 429 "TooManyRequest" (code 1254290), field
-// validation on filters, page_size/page_token paging, OR/AND filters.
-
 function mulberry32(seed) {
   return () => {
     seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
@@ -19,20 +14,6 @@ export function fieldText(v) {
   return String(v).trim();
 }
 
-// limitStatus: HTTP status that accompanies code 1254290 (undocumented; 429, 200 or 400).
-// perCondMs: extra latency per filter condition, to test whether OR-50 queries stay cheap.
-// hangAfterWrite: the next N create/batch_create calls WRITE their rows and then never answer (until the caller aborts),
-// like a Lark call that times out after committing. client_token: a repeat of a token replays the stored answer and
-// writes nothing (Lark's documented idempotency).
-// batch_update, as measured against real Lark on 2026-10-07 (production base, a test table):
-//   - valid batch: every record applied, reply data.records in request order with record_id + the fields that were sent
-//   - an unknown record_id: the WHOLE call is rejected and nothing is applied. HTTP 200, code 1254043, msg "record not found,id = <id>"
-//   - an invalid field value (text into a number column; list the column in table.numberFields): the WHOLE call is rejected and nothing
-//     is applied. HTTP 200, code 1254061 "NumberFieldConvFail"; the record is NOT named in the reply
-//   - the same record_id twice: success, the last value wins
-//   - client_token on create and batch_create: a repeat returns the SAME record(s), no second row (see `tokens` below)
-// batchUpdateAtomic (default true = the measured behaviour). false is a hypothetical Lark that applies the others and omits an unknown
-// record_id from the reply; the code must not corrupt data under it either.
 export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs = 0.05, perCondMs = 0, quota = 20, enforce = true, seed = 7, limitStatus = 429, shuffleBatch = false, dropFromBatch = 0, hangAfterWrite = 0, batchUpdateAtomic = true }) {
   const rnd = mulberry32(seed);
   let hangs = hangAfterWrite;
@@ -103,19 +84,19 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
       const tableId = u.pathname.match(/tables\/([^/]+)\//)?.[1] || u.pathname.match(/tables\/([^/]+)$/)?.[1];
       const table = tables[tableId];
       if (!table) return json({ code: 1254004, msg: "table not found" });
-      stats.order.push(kind);                                    // order in which calls ACTUALLY reached Lark
+      stats.order.push(kind);
       if (kind === "batchUpdate") {
         await sleep(latency(0), init.signal);
         const wanted = body.records || [];
         const known = wanted.filter((r) => table.rows.some((row) => row.record_id === r.record_id));
-        for (const r of wanted) {                                  // the first problem, in request order, rejects the whole call
+        for (const r of wanted) {
           if (!known.includes(r) && batchUpdateAtomic) return notFound(r.record_id);
           if (badNumberIn(table, r.fields)) return numberFail();
         }
         const updated = known.map((r) => {
           const row = table.rows.find((x) => x.record_id === r.record_id);
           row.fields = { ...row.fields, ...(r.fields || {}) };
-          return { record_id: row.record_id, fields: r.fields || {} };   // real Lark: only the fields that were sent, in request order
+          return { record_id: row.record_id, fields: r.fields || {} };
         });
         return json({ code: 0, data: { records: updated } });
       }
@@ -138,7 +119,7 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
       }
       const finishWrite = async (payload) => {
         if (clientToken) tokens.set(clientToken, payload);
-        if (hangs > 0) { hangs--; stats.hung++; await sleep(600_000, init.signal); }   // committed, but the answer never arrives
+        if (hangs > 0) { hangs--; stats.hung++; await sleep(600_000, init.signal); }
         return json(payload);
       };
       if (kind === "batchCreate") {
@@ -148,7 +129,7 @@ export function createFakeLark({ tables, medianMs = 200, sigma = 0.4, perRowMs =
           table.rows.push(rec);
           return rec;
         });
-        if (shuffleBatch) created = created.reverse();          // Lark does not document result order
+        if (shuffleBatch) created = created.reverse();
         if (dropFromBatch) created = created.slice(0, created.length - dropFromBatch);
         return finishWrite({ code: 0, data: { records: created } });
       }

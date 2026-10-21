@@ -5,7 +5,6 @@ import { readFileSync } from 'node:fs';
 
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
-// The saved-answer version stamp and the helper that decides whether a saved "did not write" is still trusted.
 const verdictCode = () => app.match(/const AGENT_WROTE_VERSION = .*;/)[0] + '\n' + fn('agentWroteVerdict');
 
 function harness({ flag = true, chat = {}, tokens = { lc1: 'tok' }, replies = [] } = {}) {
@@ -91,7 +90,6 @@ test('a chat counts as theirs once they acted, wrote, or LiveChat could not tell
   assert.equal(touched({ agentWrote: false, status: 'Solved' }), true, 'an action still wins');
 });
 
-// ---- the sweep gives an unchecked chat to submitRecord only when the login is on --------------------
 function sweepWith({ flag, agentWrote }) {
   const submits = [];
   const st = {};

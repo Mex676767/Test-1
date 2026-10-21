@@ -1,9 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { checkQaLogin } from "./crosscheck.js";
 
-// Is this signed-in LiveChat login marked QA in the Agent Logins table (Role = QA)? Asked by the installed widget right after an agent
-// signs in: a QA person gets the QA view (QA, Tickets and Knowledge tabs only). The token is checked with LiveChat, never the browser's
-// word; the decision itself is checkQaLogin (shared with the QA page's /crosscheck access). Read-only.
 const reply = (statusCode, body) => ({ statusCode, body: JSON.stringify(body) });
 
 export async function handler(event) {

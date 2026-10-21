@@ -3,37 +3,7 @@ import { searchRecords, getRecord, deleteRecord, toDisplay, TABLE_CUSTOMER_APPRO
 import { LIVECHAT_PATS, accountKeyForPat } from "./_lib/livechat.js";
 import { CA, CA_SUMMARY_FIELDS, summarizeRow, parseChatLink, archiveUrl, isBlank } from "./_lib/ca-row.js";
 
-// Server-side half of Needs Attention. The browser-side list (app.js's
-// getIncompleteChats) only knows about chats THIS browser remembers in
-// localStorage -- an incognito window closing, cleared site data, a
-// different PC, etc. and an unfinished case silently drops out of view,
-// leaving a stray Customer Approaching row with just Username/Brand/Agent
-// Name that nobody's list ever shows (confirmed live: several such rows
-// with no Needs Attention card on anyone's widget). Lark itself is the
-// source of truth here instead: every row lark-search.js created on Look Up
-// for this agent that still has no Inquiry AND no Status.
-//
-// Scoped to one Agent Name -- each agent only sees rows stamped with the
-// name they picked in Settings, never another agent's.
-//
-// When a row has its chat link (saved at Look Up since e0bfcb0), LiveChat
-// is asked whether that exact thread has actually ended: still going ->
-// not listed (the agent is mid-case); ended -> listed. Rows without a link
-// (older ones) fall back to an age rule.
-//
-// POST { agentName, localRecordIds? }    -> { ok, records, resolvedIds }
-//   resolvedIds: which of the browser's own locally-flagged record ids are
-//   no longer blank in Lark (recorded from another browser/tab, or
-//   removed) -- the widget drops those from its local list.
-// POST { agentName, deleteRecordId }     -> removes that one row, but only
-//   after re-checking it on Lark's side: same Agent Name, still no Inquiry
-//   and no Status. A row that got filled in meanwhile is never deleted.
-
-// No chat link to check: a row younger than this is most likely a case
-// still being worked on.
 const MIN_AGE_NO_LINK_MS = 30 * 60 * 1000;
-// Chat known to have ended: short grace so the widget's own auto-record
-// on close gets a chance to fill the row first.
 const MIN_AGE_ENDED_MS = 3 * 60 * 1000;
 async function removeCompletedTwinDuplicate(row) {
   const exactLink = String(row.link || "").trim().replace(/\/$/, "");
@@ -53,12 +23,7 @@ async function removeCompletedTwinDuplicate(row) {
   return true;
 }
 
-// Resolves both status and the owning LiveChat account without exposing its
-// credential. A direct chat id is reliable even after the thread drops out
-// of list_chats' recent window; the list fallback covers archive-only links.
 async function inspectThread(chatId, threadId, preferredAccountKey) {
-  // Check the sidebar's own account first. Account 2 no longer pays for a
-  // guaranteed failed Account 1 request on every Needs Attention refresh.
   const orderedPats = [...LIVECHAT_PATS].sort((a, b) =>
     Number(accountKeyForPat(b) === preferredAccountKey) - Number(accountKeyForPat(a) === preferredAccountKey)
   );
@@ -71,7 +36,7 @@ async function inspectThread(chatId, threadId, preferredAccountKey) {
           body: JSON.stringify({ chat_id: chatId, thread_id: threadId }),
         });
         const data = await res.json();
-        if (!data || data.error || !data.thread) continue; // not this account's chat -- try the next
+        if (!data || data.error || !data.thread) continue;
         return {
           active: typeof data.thread.active === "boolean" ? data.thread.active : null,
           accountKey: accountKeyForPat(pat),
@@ -93,7 +58,7 @@ async function inspectThread(chatId, threadId, preferredAccountKey) {
           accountKey: accountKeyForPat(pat),
         };
       }
-    } catch (_) { /* try the next account */ }
+    } catch (_) { }
   }
   return { active: null, accountKey: "" };
 }
@@ -125,7 +90,6 @@ export async function handler(event) {
       { field_name: CA.status, operator: "isEmpty", value: [] },
     ], undefined, { pageSize: 500, automaticFields: true, fieldNames: CA_SUMMARY_FIELDS });
 
-    // Re-check on our side too, in case Lark's filter ever loosely matches.
     const blank = items
       .map(summarizeRow)
       .filter((r) => r.agent === agent && !r.inquiry.length && !r.status);
@@ -141,19 +105,13 @@ export async function handler(event) {
         ? await inspectThread(chatId, threadId, accountKey)
         : { active: null, accountKey: "" };
       const { active } = inspected;
-      // When the row's account can be established, never leak it into the
-      // other account's sidebar. Unidentifiable legacy rows remain visible
-      // with an "account unknown" marker so they are not silently lost.
       if (accountKey && inspected.accountKey && inspected.accountKey !== accountKey) return null;
-      if (active === true) return null; // chat still going -- agent is mid-case
+      if (active === true) return null;
       if (active === null && now - r.createdAt < MIN_AGE_NO_LINK_MS) return null;
-      // Once the chat has ended, remove only an empty row whose exact saved
-      // link also belongs to a completed row. All rows containing Inquiry
-      // remain untouched, allowing several legitimate cases in one chat.
       if (active === false) {
         try {
           if (await removeCompletedTwinDuplicate(r)) return null;
-        } catch (_) { /* keep it visible on any uncertainty */ }
+        } catch (_) { }
       }
       return {
         recordId: r.recordId,
@@ -163,7 +121,6 @@ export async function handler(event) {
         threadId,
         chatEnded: active === false,
         accountKey: inspected.accountKey,
-        // Ended chats only open under /archives/{thread_id}.
         openUrl: active === false ? archiveUrl(threadId) : (r.link || archiveUrl(threadId)),
       };
     }));

@@ -42,7 +42,6 @@ export async function handler(event) {
       totalSize += Number(file.size) || 0;
       if (counts.get(field) > 6) return json(400, { ok: false, error: `${field} allows at most 6 files` });
       if (!file.size) return json(400, { ok: false, error: `${file.name || "Attachment"} is empty` });
-      // An image goes to R2 and may be larger; anything attached to the ticket stays within the ticket service's 1MB.
       const limitMb = useImageBucket(event.env) && isStoredImage(file) ? 5 : 1;
       if (file.size >= limitMb * 1024 * 1024) return json(400, { ok: false, error: `${file.name || "Attachment"} must be under ${limitMb}MB` });
       if (!allowedTypes.has(file.type)) return json(400, { ok: false, error: `${file.name || "Attachment"} must be PNG, JPG, WEBP, or PDF` });
@@ -50,9 +49,6 @@ export async function handler(event) {
     }
     if (totalSize > 10 * 1024 * 1024) return json(413, { ok: false, error: "The complete ticket request must be under 10MB" });
 
-    // Who raised it. LiveChat is asked with the agent's own token, so the browser cannot choose the author; anything the browser put in
-    // the author fields is overwritten. The ticket gets the agent's LiveChat id and email in the fields named by
-    // TICKETS_AUTHOR_ID_FIELD / TICKETS_AUTHOR_EMAIL_FIELD, and (TICKETS_ON_BEHALF_OF) is raised as that person (see ticket-actor.js).
     const fields = { ...body.fields };
     const authorIdField = String(event.env?.TICKETS_AUTHOR_ID_FIELD || "").trim();
     const authorEmailField = String(event.env?.TICKETS_AUTHOR_EMAIL_FIELD || "").trim();
@@ -68,8 +64,6 @@ export async function handler(event) {
     const onBehalfEmail = onBehalf ? acting.email : "";
     if (onBehalf && !onBehalfEmail) return needTicketEmail("");
 
-    // Images go to the R2 bucket and the ticket gets their links (in the remarks unless TICKETS_IMAGE_LINKS_FIELD names another
-    // field). Without the bucket binding they are attached as before. PDFs are always attached.
     let imageKeys = [];
     let sent = attachments;
     if (useImageBucket(event.env) && attachments.some(({ file }) => isStoredImage(file))) {
@@ -95,14 +89,12 @@ export async function handler(event) {
 
     try {
       const data = await ticketRequest(event.env, "/tickets", { method: "POST", body: requestBody });
-      // An email the agent typed is saved on their row (once, and only if neither of their rows has a Ticket Email yet).
       if (onBehalfEmail && acting.source === "entered") {
         const save = rememberTicketEmail(acting.agentLogin.accountKey, acting.agentLogin.login, onBehalfEmail);
         if (event.waitUntil) event.waitUntil(save); else await save;
       }
       return json(201, { ok: true, id: data.id, ref: data.ref, attachments: data.attachments || [], images: imageKeys.length, ...(onBehalfEmail ? { actedAs: onBehalfEmail } : {}) });
     } catch (err) {
-      // Nothing was created, so no ticket points to these images.
       await deleteTicketImages(event.env, imageKeys);
       if (onBehalfEmail && isOnBehalfRefusal(err)) return refusalResponse(err, onBehalfEmail, acting.source);
       throw err;

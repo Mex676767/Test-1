@@ -11,7 +11,6 @@ const author = { accountKey: "lc1", agentToken: "tok-alice" };
 const base = { TICKETS_API_KEY: "key-main", TICKETS_ON_BEHALF_OF: "1", LIVECHAT_CLIENT_ID: "c1" };
 const withReads = { ...base, TICKETS_API_KEY_READS: "key-reads" };
 
-// answer(key, method, path): the fake ticket system, which sees which key each call carries.
 function network(answer) {
   const original = globalThis.fetch;
   const calls = [];

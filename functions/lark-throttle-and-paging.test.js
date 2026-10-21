@@ -19,8 +19,6 @@ const withFetch = async (impl, run) => {
 const isToken = (url) => String(url).includes("tenant_access_token");
 const usernameCond = [{ field_name: "Username", operator: "is", value: ["player1"] }];
 
-// Lark's TooManyRequest is documented as code 1254290; the HTTP status that
-// accompanies it is not documented, so it must be recognised from the code.
 for (const status of [200, 400]) {
   test(`Lark code 1254290 is treated as rate limiting even with HTTP ${status}`, async () => {
     initEnv({ ...ENV });
@@ -58,7 +56,6 @@ test("a failed blank-row lookup never creates a replacement row, and the bonus r
     const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ url: text, method: options.method || "GET", body });
     if (text.includes("customer-table") && text.endsWith("/records")) return json({ code: 0, data: { record: { record_id: "rec-new" } } });
-    // The only search that fails is the case-row dedupe lookup (Inquiry/Status isEmpty predicates).
     if (text.includes("customer-table") && (body.filter?.conditions || []).some((c) => c.field_name === "Inquiry")) {
       return json({ code: 1254290, msg: "TooManyRequest" }, 429);
     }
@@ -134,7 +131,6 @@ test("batched rows keep matching Brand across Lark field shapes (text array, str
   });
 });
 
-// ---- shared-gate protocol (v2) -------------------------------------------------
 const rows200 = (data) => new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json", "x-lark-batched": "1" } });
 async function concurrentBatchedSearches({ protocol }) {
   let inFlight = 0, peak = 0;
@@ -191,7 +187,7 @@ test("without the v2 flag the shared permit uses the legacy bare acquire() every
     acquire: async (...args) => { calls.push(args); return { ticket: "t", retryAfterMs: 0 }; },
     release: async () => {}, penalize: async () => {}, searchBatch: async () => { throw new Error("n/a"); },
   };
-  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub } });   // no LARK_QUEUE_PROTOCOL
+  initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub } });
   const { createRecord } = await import("./_lib/lark.js");
   await withFetch(async (url) => isToken(url)
     ? json({ code: 0, tenant_access_token: "t", expire: 3600 })
@@ -228,7 +224,6 @@ test("the blank-case lookup is projected to the columns it re-checks, and still 
   assert.deepEqual([...caSearchBody.field_names].sort(), ["Agent Name", "Brand", "Inquiry", "Status", "Username", "link"].sort());
 });
 
-// ---- opt-in batched row creation -----------------------------------------------------
 async function createWith({ flag, stub }) {
   initEnv({ ...ENV, LARK_SEARCH_QUEUE: { idFromName: () => "g", get: () => stub },
     ...(flag ? { LARK_QUEUE_PROTOCOL: "v2", LARK_BATCH_CREATE: "1" } : {}) });
@@ -294,7 +289,6 @@ test("a record that appears on two pages is returned to the caller exactly once"
   });
 });
 
-// ---- item 2: write throttling is classified from Lark's code, not just HTTP 429 ----------------------------
 async function writeWithQueueSpy(responseFor) {
   const spy = { acquired: [], released: [], penalized: [] };
   const stub = {
@@ -313,7 +307,7 @@ async function writeWithQueueSpy(responseFor) {
 }
 
 test("a create throttled with code 1254290 on HTTP 200 releases the permit as rate-limited and cools the shared queue down", async () => {
-  const r = await writeWithQueueSpy(() => json({ code: 1254290, msg: "TooManyRequest" }));   // HTTP 200!
+  const r = await writeWithQueueSpy(() => json({ code: 1254290, msg: "TooManyRequest" }));
   assert.equal(r.error.rateLimited, true);
   assert.equal(r.error.retryable, true);
   assert.equal(r.error.code, 1254290);

@@ -2,7 +2,6 @@ import { adapt } from "./_lib/adapt.js";
 import { isOnBehalfRefusal, readingAs, refusalResponse } from "./_lib/ticket-actor.js";
 import { json, ticketError, ticketGet, withOnBehalf } from "./_lib/tickets.js";
 
-// An inbox read up to this old is shared by every agent on the isolate (see ticketGet); ?fresh=1 skips it.
 const LIST_TTL_MS = 8_000;
 
 function cleanTicket(ticket) {
@@ -31,15 +30,10 @@ export async function handler(event) {
   const q = String((post ? input.q : event.queryStringParameters?.q) || "").trim();
   if (q.length > 200) return json(400, { ok: false, error: "Search is too long" });
   const fresh = post ? input.fresh === true : event.queryStringParameters?.fresh === "1";
-  // mine: only the tickets the signed-in agent raised or is assigned to, asked of the ticket system itself ("me" there is the person the
-  // request is made as). The 100 newest tickets of everyone would hold few or none of an agent's own.
-  // agent: a ticket-system user id (from /ticket-agents): the same, for that person. who is what the ticket system calls "me" or their id.
   const mine = post ? input.mine === true : event.queryStringParameters?.mine === "1";
   const agentInput = String((post ? input.agent : event.queryStringParameters?.agent) ?? "").trim();
   if (agentInput && !/^\d{1,12}$/.test(agentInput)) return json(400, { ok: false, error: "That is not an agent id." });
   const who = agentInput || (mine ? "me" : "");
-  // status / department / market: narrowed by the ticket system itself, so they reach every ticket and not only the 100 newest ones read here.
-  // status is a choice value (PYM_SOLVED), department and market are ids.
   const pick = (name) => String((post ? input[name] : event.queryStringParameters?.[name]) ?? "").trim();
   const status = pick("status");
   const department = pick("department");
@@ -55,14 +49,11 @@ export async function handler(event) {
   try {
     reading = await readingAs(event.env, input.author);
     if (reading.response) return reading.response;
-    // size 250 and sort=created are for the notification poll: a new comment does not move a ticket's updatedAt, so the 100 most recently updated
-    // tickets can miss the one a comment came in on; the agent's tickets by creation date (up to 250) hold every ticket they are waiting on.
     const size = pick("size") === "250" ? 250 : 100;
     const orderKey = pick("sort") === "created" ? "createdAt" : "updatedAt";
     const params = new URLSearchParams({ pageSize: String(size), sort: pick("sort") === "created" ? "createdAt:desc" : "updatedAt:desc" });
     if (q) params.set("q", q);
     let data;
-    // One read of the list with these conditions; the conditions are combined with "all" unless a caller asks for "any".
     const read = (conditions, match = "all") => {
       const query = new URLSearchParams(params);
       for (const condition of conditions) query.append("c", condition);
@@ -70,14 +61,12 @@ export async function handler(event) {
       return ticketGet(event.env, withOnBehalf(`/tickets?${query}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
     };
     if (who && (narrowing.length || q)) {
-      // "Raised by or assigned to" is an OR and the narrowing (and the search text) an AND, which one request cannot say: read each side with
-      // them and merge. With one condition and a search the ticket system ANDs them, as its own page does (createdBy|is|me together with q).
       const raised = await read([`createdBy|is|${who}`, ...narrowing]);
       let assigned = null;
       try {
         assigned = await read([`assignee|is|${who}`, ...narrowing]);
       } catch (err) {
-        if (Number(err.statusCode) !== 400 || isOnBehalfRefusal(err)) throw err; // a ticket system without the assignee condition: raised by only
+        if (Number(err.statusCode) !== 400 || isOnBehalfRefusal(err)) throw err;
       }
       const byRef = new Map();
       for (const ticket of [...(raised.tickets || []), ...(assigned?.tickets || [])]) if (!byRef.has(ticket.ref)) byRef.set(ticket.ref, ticket);
@@ -91,7 +80,6 @@ export async function handler(event) {
       try {
         data = await ticketGet(event.env, withOnBehalf(`/tickets?${raisedOrAssigned}`, reading.email), { ttlMs: LIST_TTL_MS, fresh });
       } catch (err) {
-        // A ticket system that does not take the assignee condition still takes "raised by me", which is what is asked for most.
         if (Number(err.statusCode) !== 400 || isOnBehalfRefusal(err)) throw err;
         const raisedOnly = new URLSearchParams(params);
         raisedOnly.append("c", `createdBy|is|${who}`);

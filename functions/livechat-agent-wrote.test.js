@@ -86,7 +86,6 @@ test("a LiveChat error is reported as not ok, never as 'did not write'", async (
   assert.match(out.error, /Chat not found/);
 });
 
-// LiveChat's login id is a UUID, but a chat marks an agent's messages with their email (seen on a real chat).
 const uuidInfo = (id) => ({ account_id: id, client_id: "client-1" });
 const chatBy = (...authors) => ({ users, thread: { events: [msg("cust-1"), ...authors.map((a) => msg(a))] } });
 

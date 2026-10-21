@@ -12,8 +12,6 @@ const ENV = {
 const NAMES = ["96 Edwin", "96 Mexha", "96 Teh"];
 const row = (id, account, login, name, lockedAt = 1000) => ({ record_id: id, fields: { "LiveChat Account": account, "LiveChat Login": login, "Agent Name": name, "Locked At": lockedAt } });
 
-// A tiny fake of LiveChat's token info and the Lark table. `table` is the live list of rows; `onCreate` lets a test slip another
-// agent's row in at the moment of creation to simulate a race.
 function world({ table = [], tokens = {}, onCreate } = {}) {
   const log = { created: [], deleted: [] };
   const original = globalThis.fetch;
@@ -108,7 +106,6 @@ test("a name another login already holds on this account is refused", async (t) 
 });
 
 test("a simultaneous claim: the earlier row wins and the later one removes its own row", async (t) => {
-  // Bob's row lands (earlier) between Alice's check and her create.
   const w = world({ ...alice, onCreate: (table) => table.push(row("r-bob", "lc1", "bob@x.com", "96 Teh", 5)) });
   t.after(w.restore);
   const out = await call({ accountKey: "lc1", agentToken: "tok-alice", name: "96 Teh" });
@@ -139,8 +136,6 @@ test("rejects a bad token, another account's token, an unknown name and a missin
   assert.equal(w.log.created.length, 0);
 });
 
-// ---- the Livechat Email column: filled in once per login, never blocking a login ----------------------
-// (a login id of its own per test: the server remembers the email it found for a login for an hour)
 function emailWorld(t, { table = [], email = "Alice@X.com", fail = false, uuid = "uuid-email-0" } = {}) {
   const log = { updated: [], created: [], accountCalls: 0 };
   const original = globalThis.fetch;
@@ -200,7 +195,6 @@ test("if LiveChat will not give the email, the login still works and the row is 
   assert.deepEqual(log.updated, []);
 });
 
-// ---- a known login is recognised from a shared copy of the table; anything else reads the table as it is now ----
 test("a login already in the table is found from the shared copy (one read); a new login re-reads the table fresh", async (t) => {
   const reads = [];
   const original = globalThis.fetch;

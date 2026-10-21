@@ -1,17 +1,3 @@
-#!/usr/bin/env node
-// How long does ONE everyday lookup take? Sends single lookups, one at a time, a few seconds apart (so each one meets an idle queue,
-// like a real agent's lookup between bursts), and prints each time plus p50 / p95, with /queue-stats snapshots before and after.
-//
-//   QUEUE_STATS_KEY=...  node scripts/lookup-latency.mjs --base https://test-1-7wp.pages.dev --allow-production-reads [--count 10] [--spacing-ms 5000]
-//
-// What it sends:
-//  * default: `preview: true` lookups (read only: the same ~12 searches a real lookup makes, but NO Customer Approaching row is created);
-//  * --with-case-row --i-understand-this-creates-rows: real lookups with a chat link, which also claim / create the chat's row
-//    (that is what an agent's lookup does, so it is the honest number). The usernames are zz...: delete those rows afterwards.
-// Guarded like the load test (scripts/stress-guard.mjs): production needs --allow-production-reads and the queue stats key (the
-// variable named by --stats-key-env, default QUEUE_STATS_KEY; its value is never printed). It refuses to start unless the queue is idle and at its base
-// gap (--base-gap-ms, default 250), and stops, printing the snapshots and exiting non-zero, if a lookup is answered with a non-HTTP-200
-// (more than --max-non-200, default 2) or Lark throttled while it ran.
 import { checkRunStart, checkRunEnd, DEFAULT_BASE_GAP_MS, DEFAULT_MAX_NON_200 } from "./stress-guard.mjs";
 
 const PRODUCTION_HOSTS = ["test-1-7wp.pages.dev"];

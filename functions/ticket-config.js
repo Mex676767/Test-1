@@ -3,11 +3,8 @@ import { CATALOG_SNAPSHOT_DATE, TICKET_CATALOG } from "./_lib/ticket-catalog.js"
 import { actingAs, flag, needTicketEmail } from "./_lib/ticket-actor.js";
 import { json, ticketError, ticketRequest, ticketSettings, withOnBehalf } from "./_lib/tickets.js";
 
-// The catalog is the same for every agent and changes rarely, but every open widget refetched it (a 100-ticket
-// list) on its options timer. Cache the successful result per isolate for 5 minutes; the manual Refresh button
-// sends ?fresh=1 and always bypasses it.
 const CONFIG_TTL_MS = 5 * 60_000;
-let cachedConfig = null; // { key, at, body }
+let cachedConfig = null;
 export function resetTicketConfigCache() { cachedConfig = null; }
 
 const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
@@ -15,9 +12,6 @@ const normalizeOption = (option) => (typeof option === "string"
   ? { value: option, label: option, isActive: true }
   : { value: option?.value, label: option?.label ?? option?.value, isActive: option?.isActive !== false });
 
-// The choices of one SELECT / MULTISELECT field: whatever the API itself lists (it does not yet), then the ticket system's own list
-// (ticket-catalog.js, with its display labels), then any value real tickets carry that neither knows (a choice added after the
-// snapshot), so a stale snapshot never hides something agents can use.
 function fieldOptions(field, observedValues) {
   const options = [];
   const add = (option) => {
@@ -32,8 +26,6 @@ function fieldOptions(field, observedValues) {
   return options;
 }
 
-// Departments and markets: the catalog's entries (code + label) carry the ids seen on real tickets; without one the code stands in
-// as the id (the widget posts the code either way). A department or market seen on a ticket but not in the catalog is added.
 function mergeByCode(catalogItems, observedItems, build) {
   const observedByCode = new Map(observedItems.map((item) => [String(item.code).toLowerCase(), item]));
   const merged = catalogItems.map((item) => build(item, observedByCode.get(String(item.code).toLowerCase())));
@@ -43,11 +35,6 @@ function mergeByCode(catalogItems, observedItems, build) {
   return merged;
 }
 
-// The ticket API's own lists (GET /markets, /departments, /fields/choices): live from its database, with real ids, labels and an active
-// flag per choice. Each is read on its own and an answer without the expected list is treated as missing, so a failure (or a ticket
-// system that does not have the call yet) falls back to the snapshot (ticket-catalog.js) for that part only.
-// GET /fields entries say whether the person may fill them (postable) and whether they are required; a ticket list's field catalog does not,
-// so only an answer that carries them is taken as the form.
 const formFields = (list) => (Array.isArray(list) && list.length && list.every((field) => field && typeof field.key === "string" && "postable" in field) ? list : null);
 
 async function readLiveCatalog(env, email) {
@@ -82,7 +69,6 @@ export async function handler(event) {
       });
     }
 
-    // A key that acts for others needs the person's email on every read: the signed-in agent's, when the widget sends who that is.
     let email = "";
     if (flag(event.env?.TICKETS_ON_BEHALF_OF) && input.author) {
       const acting = await actingAs(event.env, input.author);
@@ -91,10 +77,6 @@ export async function handler(event) {
       email = acting.email;
     }
 
-    // The list response is the API's only field-catalog endpoint. Strip all
-    // ticket records here so no unrelated customer data reaches the browser.
-    // GET /fields is the ticket form itself (required, defaults, choices, limits, for this person). Only without it is a page of 100 tickets
-    // read to learn the form, as before.
     const live = await readLiveCatalog(event.env, email);
     const data = live.fields ? { tickets: [], fields: live.fields } : await ticketRequest(event.env, withOnBehalf("/tickets?pageSize=100", email), { reads: true });
     const tickets = Array.isArray(data.tickets) ? data.tickets : [];

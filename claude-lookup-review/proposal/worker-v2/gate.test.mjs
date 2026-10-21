@@ -1,5 +1,3 @@
-// node --no-warnings --test proposal/worker-v2/gate.test.mjs
-// Behavioural tests for the proposed gate/batcher against the synthetic Lark.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -41,7 +39,7 @@ test("batch-while-busy: 100 staggered same-table callers use few upstream querie
   const { lark, d, done } = await setup({ tables: { t1: mkTable(100) }, gap: 60 });
   try {
     const out = await Promise.all(Array.from({ length: 100 }, async (_, i) => {
-      await new Promise((r) => setTimeout(r, i * 3));               // spread over ~300 ms, far beyond a 25 ms window
+      await new Promise((r) => setTimeout(r, i * 3));
       return { i, res: await d.searchBatch(req("t1", `u${i}`)) };
     }));
     for (const { i, res } of out) {
@@ -57,7 +55,7 @@ test("gate never exceeds concurrency or start spacing, and serves waiters FIFO",
   try {
     const order = [], starts = [];
     const tickets = await Promise.all(Array.from({ length: 8 }, async (_, i) => {
-      await new Promise((r) => setTimeout(r, i));            // deterministic arrival order
+      await new Promise((r) => setTimeout(r, i));
       const p = await d.acquire("read", `w${i}`); order.push(i); starts.push(Date.now());
       await new Promise((r) => setTimeout(r, 30)); await d.release(p.ticket); return p.ticket;
     }));
@@ -71,7 +69,7 @@ test("gate never exceeds concurrency or start spacing, and serves waiters FIFO",
 test("expired callers are dropped before a query is built (cancelled lookups do not consume quota)", async () => {
   const { lark, d, done } = await setup({ tables: { t1: mkTable(10) }, gap: 200 });
   try {
-    const hold = d.acquire(); const hold2 = d.acquire(); const hold3 = d.acquire(); const hold4 = d.acquire(); // saturate the gate
+    const hold = d.acquire(); const hold2 = d.acquire(); const hold3 = d.acquire(); const hold4 = d.acquire();
     const dead = d.searchBatch({ ...req("t1", "u1"), expiresAt: Date.now() + 50 });
     setTimeout(async () => { for (const p of await Promise.all([hold, hold2, hold3, hold4])) if (p.ticket) await d.release(p.ticket); }, 300);
     const res = await dead;
@@ -94,7 +92,7 @@ test("a normalisation mismatch (Lark matches case-insensitively) never drops row
 });
 
 test("a merged result that fits the row cap is paged, not bisected (50 users x 120 rows = 12 pages)", async () => {
-  const { lark, d, done } = await setup({ tables: { t1: mkTable(40, 60) } });   // 40 users x 60 x 2 brands = 4800 rows
+  const { lark, d, done } = await setup({ tables: { t1: mkTable(40, 60) } });
   try {
     const out = await Promise.all(Array.from({ length: 40 }, (_, i) => d.searchBatch(req("t1", `u${i}`))));
     assert.ok(out.every((r) => r.status === 200 && rowsFor(r).length === 120));
@@ -104,7 +102,7 @@ test("a merged result that fits the row cap is paged, not bisected (50 users x 1
 });
 
 test("a result larger than the row cap is split using Lark's `total` before paging, and every caller is still answered", async () => {
-  const { lark, d, done } = await setup({ tables: { t1: mkTable(40, 150) } });   // 12,000 rows > 10,000 cap
+  const { lark, d, done } = await setup({ tables: { t1: mkTable(40, 150) } });
   try {
     const out = await Promise.all(Array.from({ length: 40 }, (_, i) => d.searchBatch(req("t1", `u${i}`))));
     assert.ok(out.every((r) => r.status === 200 && rowsFor(r).length === 300));
@@ -136,12 +134,12 @@ test("a waiter that re-polls acquire() with the same id keeps its place in line 
   try {
     const hold = await d.acquire("read", "hold");
     assert.ok(hold.ticket);
-    const a1 = await d.acquire("write", "A");                  // times out while the gate is held
+    const a1 = await d.acquire("write", "A");
     assert.equal(a1.ticket, null);
     let bGranted = false;
     const bPromise = d.acquire("write", "B").then((p) => { bGranted = true; return p; });
     await new Promise((r) => setTimeout(r, 30));
-    await d.release(hold.ticket);                              // frees the slot: A is older than B
+    await d.release(hold.ticket);
     const a2 = await d.acquire("write", "A");
     assert.ok(a2.ticket, "A is served first after re-polling");
     assert.equal(bGranted, false, "B did not jump ahead of A");
@@ -279,22 +277,21 @@ test("queries that differ only in automatic_fields share one merged query", asyn
 test("legacy bare acquire() (current Pages code) never holds the call past its 250 ms RPC timeout and never leaks a slot", async () => {
   const { d, done } = await setup({ tables: { t1: mkTable(1) }, conc: 1, gap: 5 });
   try {
-    const first = await d.acquire();                       // gate free: granted immediately
+    const first = await d.acquire();
     assert.ok(first.ticket);
     const startedAt = Date.now();
-    const second = await d.acquire();                      // gate saturated: must answer "retry", fast
+    const second = await d.acquire();
     assert.equal(second.ticket, null);
     assert.ok(second.retryAfterMs > 0);
     assert.ok(Date.now() - startedAt < 250, "answers inside the legacy client's RPC timeout");
     await d.release(first.ticket);
-    const third = await d.acquire();                       // the cancelled waiter must not be holding the slot
+    const third = await d.acquire();
     assert.ok(third.ticket, "no slot leaked by the timed-out legacy waiter");
     await d.release(third.ticket);
     assert.equal(d.getStats().active, 0);
   } finally { done(); }
 });
 
-// ---- batched creates -----------------------------------------------------------------
 const createReq = (table, fields) => ({
   url: `https://open.larksuite.com/open-apis/bitable/v1/apps/base/tables/${table}/records`, method: "POST",
   headers: { authorization: "Bearer x", "content-type": "application/json" }, body: JSON.stringify({ fields }),
@@ -367,7 +364,6 @@ test("creates outrank nothing: reads that arrived within the aging window are se
   } finally { done(); }
 });
 
-// ---- review fixes: paging, pruning, write priority ----------------------------------------------
 test("a request that already carries a page_token is never merged (it would restart at page 1)", async () => {
   const { lark, d, done } = await setup({ tables: { t1: mkTable(3) } });
   try {
@@ -406,11 +402,9 @@ test("expired heavy / kill-switch / orphan-strike entries are deleted when read 
     d.heavy.set("k|someone", past); d.noBatchUntil.set("k", past); d.orphanStrikes.set("k", { n: 1, first: past - 120_000 });
     d.pruneExpired();
     assert.deepEqual(d.getMapSizes(), { heavy: 0, noBatch: 0, orphanStrikes: 0 });
-    // swept automatically as searches flow, without an explicit call
     d.heavy.set("k|someone", past); d.noBatchUntil.set("k", past); d.orphanStrikes.set("k", { n: 1, first: past - 120_000 });
     for (let i = 0; i < 50; i++) await d.searchBatch(req("t1", `u${i % 3}`));
     assert.deepEqual(d.getMapSizes(), { heavy: 0, noBatch: 0, orphanStrikes: 0 });
-    // a live entry survives the sweep
     d.heavy.set("k|someone", Date.now() + 60_000); d.pruneExpired();
     assert.equal(d.getMapSizes().heavy, 1);
   } finally { done(); }
@@ -436,16 +430,13 @@ test("a create retried after a 429 keeps WRITE priority (not demoted to the read
   } finally { done(); }
 });
 
-// ======================================================================================
-// Step 0: diagnostics -- permit wait/hold per class and Lark latency per call type
-// ======================================================================================
 test("getStats reports permit wait and hold per class, and Lark latency per call type", async () => {
   const { d, done } = await setup({ tables: { t1: mkTable(3), ca: caTable() }, conc: 1, gap: 5, median: 15 });
   try {
     const first = await d.acquire("write", "w1");
-    const second = d.acquire("write", "w2");                       // has to wait for the first to be released
+    const second = d.acquire("write", "w2");
     await new Promise((r) => setTimeout(r, 80));
-    await d.release(first.ticket);                                  // first held the slot ~80 ms
+    await d.release(first.ticket);
     const got = await second;
     await new Promise((r) => setTimeout(r, 30));
     await d.release(got.ticket);
@@ -486,9 +477,6 @@ test("a held slot is given back when the caller's deadline has already passed be
   } finally { done(); }
 });
 
-// ======================================================================================
-// Step 2: identical creates share ONE row
-// ======================================================================================
 test("two identical creates (same table + fields) at the same moment make ONE row and return the SAME record id", async () => {
   const tables = { ca: caTable() };
   const { lark, d, done } = await setup({ tables });
@@ -551,7 +539,7 @@ test("forgetCreated(recordId): a row that was deleted or completed is never hand
     await d.forgetCreated(recordOf(first).record_id);
     const next = await d.createBatch(createReq("ca", caFields(2)));
     assert.notEqual(recordOf(next).record_id, recordOf(first).record_id);
-    await d.forgetCreated("not-a-known-id");                       // harmless
+    await d.forgetCreated("not-a-known-id");
   } finally { done(); }
 });
 
@@ -586,9 +574,6 @@ test("many identical pairs inside one burst: 10 chats x 2 callers = 10 rows, eac
   } finally { done(); }
 });
 
-// ======================================================================================
-// Step 3: client_token + one retry + 15 s write timeout
-// ======================================================================================
 const tokenOf = (url) => new URL(String(url)).searchParams.get("client_token");
 function spyOnWrites() {
   const real = globalThis.fetch, writes = [];
@@ -604,8 +589,8 @@ test("every create (lone or batched) carries a client_token, and different batch
   const { d, done } = await setup({ tables: { ca: caTable() }, gap: 10 });
   try {
     const writes = spyOnWrites();
-    await d.createBatch(createReq("ca", caFields(1)));                                          // lone
-    await Promise.all([2, 3, 4].map((i) => d.createBatch(createReq("ca", caFields(i)))));         // batched
+    await d.createBatch(createReq("ca", caFields(1)));
+    await Promise.all([2, 3, 4].map((i) => d.createBatch(createReq("ca", caFields(i)))));
     assert.ok(writes.length >= 2);
     for (const w of writes) assert.match(w.token || "", /^[0-9a-f-]{36}$/);
     assert.equal(new Set(writes.map((w) => w.token)).size, writes.length);
@@ -692,9 +677,6 @@ test("writes get a 15 s upstream timeout, searches keep 6 s (checked in the sour
   } finally { done(); }
 });
 
-// ======================================================================================
-// Item A: the queue orders every step of a request by the request's START time
-// ======================================================================================
 const caRow = (id, fields = {}) => ({ record_id: id, created_time: 1, fields: { Username: "p", Brand: "PP", "Agent Name": "Agent A", ...fields } });
 const recordUrl = (id, table = "ca") => `https://open.larksuite.com/open-apis/bitable/v1/apps/base/tables/${table}/records/${id}`;
 const call = (method, id, extra = {}, body) => ({ url: recordUrl(id), method, headers: { authorization: "Bearer x", "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), ...extra });
@@ -705,12 +687,12 @@ test("A: an older lookup's create runs before newer lookups' reads that were alr
     const { lark, d, done } = await setup({ tables: { ca: caTable(), t1: mkTable(2), t2: mkTable(2), t3: mkTable(2) }, conc: 1, gap: 20 });
     try {
       const base = Date.now();
-      const hold = await d.acquire("read", "hold");                               // gate busy: everything below queues up
+      const hold = await d.acquire("read", "hold");
       const stamp = (ms) => (stamped ? { requestStartedAt: base + ms } : {});
-      const newerReads = ["t1", "t2", "t3"].map((t, i) => d.searchBatch({ ...req(t, "u0"), ...stamp(1_000 + i) }));   // newer requests, waiting first
+      const newerReads = ["t1", "t2", "t3"].map((t, i) => d.searchBatch({ ...req(t, "u0"), ...stamp(1_000 + i) }));
       await new Promise((r) => setTimeout(r, 10));
-      const olderCreate = d.createBatch({ ...createReq("ca", caFields(1)), ...stamp(0) });                          // OLDER request's create, arrives later
-      await new Promise((r) => setTimeout(r, 80));                                  // every bucket is now waiting at the gate
+      const olderCreate = d.createBatch({ ...createReq("ca", caFields(1)), ...stamp(0) });
+      await new Promise((r) => setTimeout(r, 80));
       await d.release(hold.ticket);
       await Promise.all([...newerReads, olderCreate]);
       return lark.stats.order.filter((k) => k !== "token");
@@ -738,8 +720,6 @@ test("A: a submit's PUT runs before the GETs of newer submits that are still wai
       return d.larkCall(call("PUT", id, { requestStartedAt: startedAt }, { fields: { Status: "Solved" } }));
     };
     await Promise.all(ids.map((id, i) => submit(id, base + i * 100)));
-    // A GET that was already granted when the PUT was queued may run first (that is one pipeline stage), but no submit
-    // that is TWO or more positions younger may start its GET before this submit's PUT.
     for (let i = 0; i < ids.length - 2; i++) {
       const put = seen.indexOf(`PUT ${ids[i]}`);
       for (let j = i + 2; j < ids.length; j++) assert.ok(put < seen.indexOf(`GET ${ids[j]}`), `PUT ${ids[i]} before GET ${ids[j]} (order: ${seen.join(", ")})`);
@@ -770,7 +750,7 @@ test("A: writes WITHOUT a request start keep the 3 s write delay; a legacy acqui
     const hold = await d.acquire("read", "hold");
     const write = d.acquire("write", "w").then((p) => { order.push("write"); return p; });
     await new Promise((r) => setTimeout(r, 20));
-    const read = d.acquire("read", "r").then((p) => { order.push("read"); return p; });   // arrived later, but writes wait 3 s
+    const read = d.acquire("read", "r").then((p) => { order.push("read"); return p; });
     await d.release(hold.ticket);
     const first = await Promise.race([write, read]);
     assert.equal(order[0], "read", "an un-stamped write is still delayed behind a read that arrived within 3 s");
@@ -799,9 +779,6 @@ test("A: acquire() with a request start orders by it, and a stamped write is not
   } finally { done(); }
 });
 
-// ======================================================================================
-// Item B: record get / update / delete run INSIDE the DO
-// ======================================================================================
 test("B: larkCall holds the slot for Lark's latency only, and records latency per call type", async () => {
   const { lark, d, done } = await setup({ tables: { ca: caTableWith(caRow("r1")) }, median: 60, gap: 5 });
   try {
@@ -825,8 +802,8 @@ test("B: a write the DO accepted is applied exactly once even if the caller has 
   const tables = { ca: caTableWith(caRow("r1")) };
   const { lark, d, done } = await setup({ tables, conc: 1, gap: 10 });
   try {
-    const hold = await d.acquire("read", "hold");                                 // the write has to queue
-    void d.larkCall(call("PUT", "r1", { requestStartedAt: Date.now() }, { fields: { Status: "Solved", Inquiry: ["Others"] } }));   // nobody awaits it: the caller is gone
+    const hold = await d.acquire("read", "hold");
+    void d.larkCall(call("PUT", "r1", { requestStartedAt: Date.now() }, { fields: { Status: "Solved", Inquiry: ["Others"] } }));
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(lark.stats.update || 0, 0, "still queued");
     await d.release(hold.ticket);
@@ -869,9 +846,6 @@ test("B: updating or deleting a row through the DO also drops it from the create
   } finally { done(); }
 });
 
-// ======================================================================================
-// Item D: shared cached reads + permit labels
-// ======================================================================================
 const listFieldsUrl = "https://open.larksuite.com/open-apis/bitable/v1/apps/base/tables/ca/fields?page_size=100";
 const fieldsCall = (extra = {}) => ({ url: listFieldsUrl, method: "GET", headers: { authorization: "Bearer x" }, cacheKey: "fields::ca", ttlMs: 300, staleMs: 10_000, label: "fields", ...extra });
 
@@ -927,9 +901,6 @@ test("D: permit labels are counted per purpose; unknown or odd labels are groupe
   } finally { done(); }
 });
 
-// ======================================================================================
-// Items A + B + C end to end: the real Pages code against the real DO and the fake Lark
-// ======================================================================================
 import { readOwnershipMerged } from "../../../functions/_lib/ca-row.js";
 import { handler as recordHandler } from "../../../functions/lark-record.js";
 import { runWithRequestStart as runWithRequestStartE2E } from "../../../functions/_lib/lark.js";
@@ -998,9 +969,6 @@ test("A: a Pages request stamps its start on all its steps, so an older submit f
   } finally { done(); }
 });
 
-// ======================================================================================
-// Follow-up 2: writes to the same record run one at a time, newest wins
-// ======================================================================================
 const putCall = (id, fields, extra = {}) => ({ url: recordUrl(id), method: "PUT", headers: { authorization: "Bearer x", "content-type": "application/json" }, body: JSON.stringify({ fields }), ...extra });
 function spyOnPuts(id) {
   const real = globalThis.fetch, puts = [];
@@ -1015,7 +983,7 @@ test("2: Unsolved then Solved for one record, both queued -> ONE Lark PUT, final
   const tables = { ca: caTableWith(caRow("r1")) };
   const { lark, d, done } = await setup({ tables, conc: 1, gap: 20 });
   try {
-    const hold = await d.acquire("read", "hold");                                // keep the gate busy so both writes queue
+    const hold = await d.acquire("read", "hold");
     const puts = spyOnPuts("r1");
     const first = d.larkCall(putCall("r1", { Status: "Unsolved", Inquiry: ["Others"] }));
     const second = d.larkCall(putCall("r1", { Status: "Solved" }));
@@ -1038,7 +1006,7 @@ test("2: an older write already IN FLIGHT is never cancelled: the newer one runs
   try {
     const puts = spyOnPuts("r1");
     const older = d.larkCall(putCall("r1", { Status: "Unsolved" }));
-    await new Promise((r) => setTimeout(r, 30));                                  // the older PUT is now on its way to Lark
+    await new Promise((r) => setTimeout(r, 30));
     const newer = d.larkCall(putCall("r1", { Status: "Solved" }));
     await Promise.all([older, newer]);
     assert.deepEqual(puts.map((p) => p.Status), ["Unsolved", "Solved"], "in order, newest last");
@@ -1087,7 +1055,7 @@ test("2: the 90 s write deadline is kept (a queued write is dropped only after i
     const hold = await d.acquire("read", "hold");
     const short = d.larkCall(putCall("r1", { Status: "A" }, { expiresAt: Date.now() + 150 }));
     const long = d.larkCall(putCall("r1", { Status: "B" }, { expiresAt: Date.now() + 90_000 }));
-    await new Promise((r) => setTimeout(r, 250));                                 // past the short deadline
+    await new Promise((r) => setTimeout(r, 250));
     await d.release(hold.ticket);
     const [a, b] = await Promise.all([short, long]);
     assert.equal(a.status, 200, "merged into the write that has the longer deadline");
@@ -1095,9 +1063,6 @@ test("2: the 90 s write deadline is kept (a queued write is dropped only after i
   } finally { done(); }
 });
 
-// ======================================================================================
-// Follow-up 3: instrumentation
-// ======================================================================================
 test("3a: reportCounters adds up what Pages reports, rejects odd names, and bounds the set", async () => {
   const { d, done } = await setup({ tables: { t1: mkTable(1) } });
   try {
@@ -1130,8 +1095,8 @@ test("3c: per-minute history: starts, 429s, queue-wait p95 and peak queue per mi
   try {
     const minute0 = Math.floor(Date.now() / 60_000);
     await Promise.all(Array.from({ length: 6 }, (_, i) => d.acquire("read", `a${i}`).then((p) => d.release(p.ticket))));
-    offset += 60_000;                                                              // next minute
-    const first = await d.acquire("read", "b0"); await d.release(first.ticket, true, 1);   // one 429
+    offset += 60_000;
+    const first = await d.acquire("read", "b0"); await d.release(first.ticket, true, 1);
     offset += 3 * 60_000;
     const last = await d.acquire("read", "c0"); await d.release(last.ticket);
     const pm = d.getStats().perMinute;
@@ -1145,20 +1110,16 @@ test("3c: per-minute history: starts, 429s, queue-wait p95 and peak queue per mi
     assert.equal(pm.limited[at(minute0 + 1)], 1, "the 429 was counted in the minute it happened");
     assert.equal(pm.starts[at(minute0 + 4)], 1);
     assert.equal(at(minute0 + 2), -1, "idle minutes are not stored");
-    // 24 h window: a day later the old minutes are gone, and the ring never grows past 1,440
     offset += 25 * 3_600_000;
     const later = await d.acquire("read", "d0"); await d.release(later.ticket);
     const after = d.getStats().perMinute;
     assert.ok(after.minutes.every((m) => m > Math.floor(Date.now() / 60_000) - 1440));
     assert.equal(after.minutes.includes(minute0), false);
-    for (let i = 0; i < 1600; i++) { offset += 60_000; d.minuteNow().starts++; }      // 1,600 busy minutes in a row
+    for (let i = 0; i < 1600; i++) { offset += 60_000; d.minuteNow().starts++; }
     assert.ok(d.getStats().perMinute.minutes.length <= 1440);
   } finally { Date.now = realNow; done(); }
 });
 
-// ======================================================================================
-// Follow-up 4: batch_update (OFF unless Pages calls updateBatch)
-// ======================================================================================
 const manyRows = (n) => Array.from({ length: n }, (_, i) => caRow(`b${i}`, { Username: `p${i}` }));
 function spyOnBatchUpdates() {
   const real = globalThis.fetch, bodies = [];
@@ -1224,11 +1185,10 @@ test("4: two writes for ONE record inside a burst become one entry (newest wins)
     assert.equal(bodies.flat().filter((r) => r.record_id === "b0").length, 1, "b0 appears once in the batch");
     assert.equal(tables.ca.rows[0].fields.Status, "Solved");
     assert.equal(d.getStats().writesSuperseded, 1);
-    // a newer write that arrives while that batch is in flight goes AFTER it
     bodies.length = 0;
     const first = d.updateBatch(putCall("b1", { Status: "X1" }, { requestStartedAt: Date.now() }));
     const second = d.updateBatch(putCall("b2", { Status: "Y1" }, { requestStartedAt: Date.now() }));
-    await new Promise((r) => setTimeout(r, 40));                                // the batch holding b1 and b2 is now in flight
+    await new Promise((r) => setTimeout(r, 40));
     const later = d.updateBatch(putCall("b1", { Status: "X2" }, { requestStartedAt: Date.now() }));
     await Promise.all([first, second, later]);
     assert.equal(tables.ca.rows[1].fields.Status, "X2", "the newer write was applied last");
@@ -1258,8 +1218,6 @@ test("4: a transient failure is retried ONCE with the same body; a second failur
   } finally { done(); }
 });
 
-// ---- batch_update against the REAL Lark behaviour (measured 2026-10-07, see LARK_BATCH_UPDATE_NOTES.md): errors are HTTP 200 + a code, the whole
-// call is rejected and nothing is applied. 1254043 names the record in msg; field-value errors (1254061 NumberFieldConvFail) do not.
 const fiftyUpdateRows = () => manyRows(50);
 const fiftyCalls = (d, ids, fields = { Status: "Solved" }) => Promise.all(ids.map((id) => d.updateBatch(putCall(id, fields, { requestStartedAt: Date.now() }))));
 const idsOf = (n) => Array.from({ length: n }, (_, i) => `b${i}`);
@@ -1473,7 +1431,6 @@ test("4: the update memory rule still holds: a row updated through a batch is dr
   } finally { done(); }
 });
 
-// Pages + real DO + fake Lark, flag on: 409s are decided BEFORE the batch
 test("4: end to end with the flag on: refused (409) rows never enter a batch; the rest share a few batch_update calls", async () => {
   const rows = fiftyRows((i) => (i % 10 === 7 ? "Agent B" : "Agent A"));
   const { lark, d, done } = await setup({ tables: { ca: { rows, schema: caSchema } }, gap: 20, conc: 3 });
@@ -1493,16 +1450,13 @@ test("4: end to end with the flag on: refused (409) rows never enter a batch; th
   } finally { done(); }
 });
 
-// ======================================================================================
-// Token lane: tenant-token permits do not use the read/write gate
-// ======================================================================================
 const holdFor = async (d, kind, id, ms = 10) => { const p = await d.acquire(kind, id); await new Promise((r) => setTimeout(r, ms)); await d.release(p.ticket); return Date.now(); };
 
 test("TOKEN: a token permit is granted at once even while the read/write gate is completely busy, and it takes nothing from it", async () => {
   const { d, done } = await setup({ tables: { t1: mkTable(1) }, conc: 1, gap: 300, env: { TOKEN_GAP_MS: 5 } });
   try {
-    const hold = await d.acquire("read", "hold");                                   // the only read/write slot is taken
-    const queuedRead = d.acquire("read", "r1");                                     // and a read is waiting
+    const hold = await d.acquire("read", "hold");
+    const queuedRead = d.acquire("read", "r1");
     const queuedWrite = d.acquire("write", "w1");
     const startedAt = Date.now();
     const token = await d.acquire("token", "t1");
@@ -1576,11 +1530,11 @@ test("TOKEN: a rate-limited token reply cools the token lane only; the main gate
     assert.equal(stats.tokenLimited, 1);
     assert.equal(stats.gapMs, 20, "the main gate did not slow down");
     const started = Date.now();
-    const next = await d.acquire("token", "t2");                                  // waits out the token lane's own cooldown (>= 1 s)
+    const next = await d.acquire("token", "t2");
     assert.ok(next.ticket);
     assert.ok(Date.now() - started >= 900, "token lane cooled down");
     await d.release(next.ticket);
-    const read = await d.acquire("read", "r1");                                   // reads never waited for it
+    const read = await d.acquire("read", "r1");
     assert.ok(read.ticket);
     await d.release(read.ticket);
   } finally { done(); }
@@ -1590,7 +1544,7 @@ test("TOKEN: an abandoned token waiter does not hold the lane (cancelled entries
   const { d, done } = await setup({ tables: { t1: mkTable(1) }, env: { TOKEN_CONCURRENCY: 1, TOKEN_GAP_MS: 5 } });
   try {
     const first = await d.acquire("token", "a");
-    const abandoned = d.acquire("token", "b", undefined, undefined);              // queued, then the caller never comes back for it
+    const abandoned = d.acquire("token", "b", undefined, undefined);
     await d.release(first.ticket);
     const p = await abandoned;
     assert.ok(p.ticket);
@@ -1599,9 +1553,6 @@ test("TOKEN: an abandoned token waiter does not hold the lane (cancelled entries
   } finally { done(); }
 });
 
-// ======================================================================================
-// Per-minute: search / update p95, token-lane starts, distinct isolate ids
-// ======================================================================================
 test("MINUTE: search p95, update p95, token-lane starts and distinct Pages isolates are recorded per minute", async () => {
   const tables = { t1: mkTable(3), ca: caTableWith(caRow("r1"), caRow("r2")) };
   const { d, done } = await setup({ tables, gap: 5, median: 30 });
@@ -1611,10 +1562,10 @@ test("MINUTE: search p95, update p95, token-lane starts and distinct Pages isola
     await d.updateBatch(putCall("r2", { Status: "Solved" }, { requestStartedAt: Date.now() }));
     const t = await d.acquire("token", "t1"); await d.release(t.ticket);
     await d.reportCounters({}, "isolate-aaaa-1111");
-    await d.reportCounters({ x: 1 }, "isolate-aaaa-1111");                          // same isolate again: counted once
+    await d.reportCounters({ x: 1 }, "isolate-aaaa-1111");
     await d.reportCounters({}, "isolate-bbbb-2222");
-    await d.reportCounters({}, "bad id with spaces");                               // ignored
-    await d.reportCounters({}, 12345);                                              // ignored
+    await d.reportCounters({}, "bad id with spaces");
+    await d.reportCounters({}, 12345);
     const pm = d.getStats().perMinute;
     assert.deepEqual(Object.keys(pm).sort(), ["isolates", "limited", "limitedOther", "limitedSearch", "limitedWrite", "maxStartsPerSec", "minutes", "peakQueue", "searchP95", "starts", "tokenStarts", "totalStarts", "updateP95", "waitP95"]);
     const last = pm.minutes.length - 1;
@@ -1627,9 +1578,6 @@ test("MINUTE: search p95, update p95, token-lane starts and distinct Pages isola
   } finally { done(); }
 });
 
-// ======================================================================================
-// Secrets never leave the queue in text
-// ======================================================================================
 test("SECRETS: a token-shaped string in an upstream error is scrubbed from the reply, and nothing token-like is in the stats", async () => {
   const secret = "t-SECRETSECRETSECRETSECRET0123";
   const { d, done } = await setup({ tables: { t1: mkTable(1) }, gap: 5 });
@@ -1650,10 +1598,6 @@ test("SECRETS: a token-shaped string in an upstream error is scrubbed from the r
   } finally { done(); }
 });
 
-// ======================================================================================
-// Throttle visibility: every 429 is counted by call label and by Lark code, logged with what Lark said, and the per-minute
-// history says which kind of call was throttled and how many requests really left for Lark (gate + token lane).
-// ======================================================================================
 function captureWarnings() {
   const real = console.warn, lines = [];
   console.warn = (...args) => { lines.push(args.map(String).join(" ")); };
@@ -1757,9 +1701,6 @@ test("MINUTE: totalStarts counts gate starts AND token-lane starts (the real req
   } finally { done(); }
 });
 
-// ======================================================================================
-// Burst allowance (GATE_BURST): a token bucket on the start spacing. Off by default (1 = today's behaviour).
-// ======================================================================================
 async function grantTimes(d, n, kind = "read") {
   const t0 = Date.now(), times = [], held = [];
   await Promise.all(Array.from({ length: n }, (_, i) => d.acquire(kind, `w${i}`).then((p) => { times.push(Date.now() - t0); held.push(p); })));
@@ -1831,13 +1772,13 @@ test("BURST: a Lark throttle empties the bucket and forces a bucket of 1 for 60 
   try {
     const first = await grantTimes(d, 6);
     assert.ok(first.times[5] <= 60, "burst allowed while healthy");
-    await d.release(first.held[0].ticket, true, 0);                               // Lark said 1254290
+    await d.release(first.held[0].ticket, true, 0);
     const stats = d.getStats();
     assert.equal(stats.limited, 1); assert.equal(stats.throttlesWhileBursting, 1, "the throttle came right after a burst");
     assert.equal(stats.burst.effective, 1);
     const off = Date.parse(stats.burst.offUntil) - Date.now();
     assert.ok(off > 58_000 && off <= 60_000, `bucket of 1 for about 60 s: ${off} ms left`);
-    const second = await grantTimes(d, 4);                                         // waits out the cooldown (>= 1 s), then one start per (doubled) gap
+    const second = await grantTimes(d, 4);
     for (let i = 1; i < 4; i++) assert.ok(second.times[i] - second.times[i - 1] >= 150, `no back-to-back starts after a throttle: ${second.times[i] - second.times[i - 1]} ms`);
     for (const p of [...first.held.slice(1), ...second.held]) await d.release(p.ticket);
   } finally { warn.restore(); done(); }

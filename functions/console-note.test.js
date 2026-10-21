@@ -20,8 +20,6 @@ const TOKENS = {
   "tok-newbie": { account_id: "newbie@x.com", client_id: "client-1" },
 };
 
-// A fake of LiveChat's token info, the Lark agent-logins table and the console. Nothing real is ever called: an address the fake does
-// not know throws.
 function world({ consoleReply, consoleThrows, larkThrows = false } = {}) {
   const log = { console: [], lark: 0 };
   const original = globalThis.fetch;
@@ -101,7 +99,7 @@ test("no LiveChat login, a login LiveChat does not know, or one from the other a
   t.after(w.restore);
   for (const body of [
     { ...good, agentToken: "" }, { ...good, accountKey: "lc9" }, { ...good, agentToken: "forged" },
-    { ...good, accountKey: "lc1", agentToken: "tok-bob" }, // bob's token comes from account 2's app
+    { ...good, accountKey: "lc1", agentToken: "tok-bob" },
   ]) {
     const out = await call(body);
     assert.equal(out.status, 401, JSON.stringify(body));
@@ -152,7 +150,7 @@ test("what the console says becomes a plain message and never leaks the key", as
     [400, { error: "unknown brand" }, /did not accept the note: unknown brand/],
     [401, { error: "unauthorized" }, /Tell your admin/],
     [500, { error: "boom" }, /could not save the note/],
-    [200, {}, /could not save the note/], // a 200 that does not say saved is not a success
+    [200, {}, /could not save the note/],
   ];
   for (const [status, body, pattern] of cases) {
     const w = world({ consoleReply: { status, body } });

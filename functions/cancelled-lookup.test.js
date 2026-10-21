@@ -2,8 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { initEnv, runWithRequestStart, searchRecords } from "./_lib/lark.js";
 
-// A cancelled lookup (the agent clicked Cancel, or switched chat) leaves its pending searches unsettled for good. The next lookup
-// of the same player must not wait on them. Fakes only: a stub queue, no Lark.
 const ENV = { LARK_APP_ID: "cl-app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base-token", LARK_TABLE_CUSTOMER_APPROACHING: "customer-table", LARK_TABLE_BONUS_CONFIG: "config-table" };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 const ok = (data) => ({ status: 200, statusText: "OK", headers: [["content-type", "application/json"]], body: JSON.stringify({ code: 0, data }) });
@@ -34,7 +32,7 @@ test("a search left hanging by a cancelled request is not joined by the next req
   const stub = makeStub(async () => (++n === 1 ? never() : ok({ items: [{ record_id: "r1", fields: {} }], has_more: false })));
   initEnv(env(stub));
   await withFetch(async () => {
-    void runWithRequestStart(() => searchRecords("customer-table", where, undefined, { timeoutMs: 60_000 })).catch(() => {});   // the cancelled lookup
+    void runWithRequestStart(() => searchRecords("customer-table", where, undefined, { timeoutMs: 60_000 })).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 20));
     const retry = runWithRequestStart(() => searchRecords("customer-table", where, undefined, { timeoutMs: 60_000 }));
     assert.equal(await settles(retry, 1_500), "settled", "the retry makes its own search instead of waiting on the dead one");

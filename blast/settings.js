@@ -113,7 +113,6 @@ function render() {
     msgList.appendChild(row);
   });
 
-  // Bind events
   msgList.querySelectorAll('.msg-textarea').forEach(ta => {
     ta.addEventListener('input', (e) => {
       messages[parseInt(e.target.dataset.index)] = e.target.value;
@@ -135,7 +134,6 @@ addMsg.addEventListener('click', () => {
   if (messages.length < 6) {
     messages.push('');
     render();
-    // Focus last textarea
     setTimeout(() => {
       const areas = msgList.querySelectorAll('.msg-textarea');
       areas[areas.length - 1].focus();

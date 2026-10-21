@@ -1,6 +1,3 @@
-// Shared helpers for reading Customer Approaching rows back out of Lark --
-// used by lark-stale-records.js (Needs Attention) and lark-chat-records.js
-// (rebuilding a chat's card from Lark when the browser has no saved copy).
 import { toDisplay, getRecord, searchRecords, larkClientStats, noteCounter, TABLE_CUSTOMER_APPROACHING } from "./lark.js";
 
 export const CA = {
@@ -10,15 +7,11 @@ export const CA = {
   vs96FeedbackQuery2: "Query 2 Feedback (VS96 Feedback)",
 };
 
-// Every Customer Approaching column summarizeRow() reads. Searches that feed summarizeRow ask Lark for
-// exactly these (plus automatic_fields), not the table's full row with all its lookup/formula columns.
-// A test records the fields summarizeRow touches, so this list cannot silently fall behind it.
 export const CA_SUMMARY_FIELDS = [
   CA.username, CA.brand, CA.agentName, CA.inquiry, CA.status, CA.link, CA.amount, CA.claimSecret,
   CA.dob, CA.telegram, CA.vs96FeedbackQuery1, CA.vs96FeedbackQuery2,
 ];
 
-// "link" is a Lark Link field -- {link, text}, sometimes wrapped in an array.
 export function linkUrl(v) {
   if (!v) return "";
   if (Array.isArray(v)) return linkUrl(v[0]);
@@ -26,8 +19,6 @@ export function linkUrl(v) {
   return String(v);
 }
 
-// LiveChat links: /chats/{chat_id}/{thread_id} while live, /archives/{thread_id}
-// once ended. The thread id (second id) is what every card is keyed by.
 export function parseChatLink(url) {
   const s = String(url || "");
   const live = s.match(/\/chats\/([^/?#]+)\/([^/?#]+)/);
@@ -57,7 +48,6 @@ function toNumberOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Everything the widget needs to rebuild one case on a card.
 export function summarizeRow(r) {
   const f = r.fields || {};
   const link = linkUrl(f[CA.link]).trim();
@@ -80,10 +70,6 @@ export function summarizeRow(r) {
   };
 }
 
-// Who a Customer Approaching row belongs to. When a chat gets transferred
-// (agent's PC crashed / lost connection), each agent keeps their OWN row --
-// so nothing may ever delete or overwrite a row stamped with a different
-// Agent Name. A row with no Agent Name (older data) belongs to nobody yet.
 export async function readOwnership(recordId) {
   const rec = await getRecord(TABLE_CUSTOMER_APPROACHING, recordId);
   const f = (rec && rec.fields) || {};
@@ -93,14 +79,6 @@ export async function readOwnership(recordId) {
   };
 }
 
-// Who owns this row, WITHOUT a single-record GET in the common case: one search by Username (columns Agent Name / Inquiry / Status
-// only). The queue merges concurrent searches for different usernames into one Lark query, so many submits at once cost a few
-// calls instead of one GET each. The row is found by record_id in the answer.
-//
-// The search may only ALLOW a write, and only when it says the row's owner is exactly THIS agent. Anything else -- the row is not in
-// the result (index lag, the agent changed the username, an old widget that sends no username), the owner is blank, the owner is
-// someone else, the search failed -- is decided by the ordinary single-record GET, i.e. by Lark's current truth. Each fallback is
-// counted by reason (larkClientStats.ownershipFallbackReasons, and reported to the queue's stats).
 export async function readOwnershipMerged(recordId, username, agentName) {
   const name = String(username || "").trim().toLowerCase();
   const me = String(agentName || "").trim();

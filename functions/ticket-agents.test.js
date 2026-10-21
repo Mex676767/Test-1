@@ -11,7 +11,6 @@ const author = { accountKey: "lc1", agentToken: "tok-alice" };
 const person = (id, name, email = `${name.toLowerCase()}@x.com`) => ({ id, name, email });
 const ticket = (n, raisedBy, assignees = []) => ({ ref: `TK${n}`, raisedBy, assignees, fields: {} });
 
-// pages: the tickets of each page in order; total: what the ticket system says there are.
 function network({ pages, total }) {
   const original = globalThis.fetch;
   const urls = [];

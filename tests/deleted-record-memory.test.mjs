@@ -33,7 +33,7 @@ test('a record this browser deleted is remembered, can be forgotten, and expires
   h.clock.now += 2 * 60_000;
   assert.equal(h.run("isDeletedRecord('rec1')"), false, 'forgotten after an hour');
   assert.equal(h.run("isDeletedRecord('')"), false);
-  h.run("rememberDeletedRecord('')");   // nothing to remember, must not throw
+  h.run("rememberDeletedRecord('')");
 });
 
 test('unreadable or blocked storage never breaks anything', () => {
@@ -42,7 +42,6 @@ test('unreadable or blocked storage never breaks anything', () => {
   assert.equal(vm.runInContext("rememberDeletedRecord('r'); forgetDeletedRecord('r'); isDeletedRecord('r')", context), false);
 });
 
-// ---- restoring a card from Lark must ignore rows this browser just deleted ---------------------
 function restoreHarness(records, deleted) {
   const st = {};
   const logs = [];
@@ -95,7 +94,6 @@ test('every place the widget deletes a record remembers it, and the stale list s
 });
 
 const NEWLINE = String.fromCharCode(10);
-// ---- the Lark-side list: Lark says "no Inquiry/Status", so it shows unless a real reason hides it ------
 function staleList({ stale, local = {}, deletedAgoMs = null }) {
   const clock = { now: 10_000_000 };
   const context = vm.createContext({

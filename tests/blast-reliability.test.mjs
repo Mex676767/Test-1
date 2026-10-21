@@ -4,7 +4,6 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {webcrypto} from 'node:crypto';
 
-// Fakes only: no LiveChat, no network. A fake LiveChat keeps each chat's events, so "sent exactly once" can be checked.
 function boot({chats, identity, failures = {}}) {
   const values = new Map([
     ['ca-livechat-agent-token:lc2', 'mock-token'],
@@ -36,7 +35,7 @@ function boot({chats, identity, failures = {}}) {
       counters[name] = (counters[name] || 0) + 1;
       const failure = failures[name]?.(counters[name], body);
       calls.push({name, id, body});
-      if (failure === 'lost-before') throw new TypeError('Failed to fetch');            // the request never arrived
+      if (failure === 'lost-before') throw new TypeError('Failed to fetch');
       if (name === 'upload_file') return Response.json({url: 'https://cdn.test/img.png'});
       if (name === 'add_user_to_chat') {
         if (!String(body.user_id).includes('@')) return Response.json({error: {type: 'validation', message: '`user_id` not found'}}, {status: 422});
@@ -50,7 +49,7 @@ function boot({chats, identity, failures = {}}) {
       if (name === 'get_chat') return Response.json({thread: {active: chats[id].active, events: sent[id] || []}});
       if (name === 'send_event') {
         (sent[id] ||= []).push(body.event);
-        if (failure === 'lost-after') throw new TypeError('Failed to fetch');           // it arrived, the answer was lost
+        if (failure === 'lost-after') throw new TypeError('Failed to fetch');
         return Response.json({event_id: 'e'});
       }
       return Response.json({});

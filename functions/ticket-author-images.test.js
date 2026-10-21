@@ -4,7 +4,6 @@ import { handler as createHandler } from "./ticket-create.js";
 import { onRequest as imageOnRequest } from "./ticket-image.js";
 import { initEnv as initLiveChatEnv } from "./_lib/livechat.js";
 
-// A fake R2 bucket and a fake network: LiveChat's token info, the ticket API. Nothing real is called.
 function fakeBucket() {
   const objects = new Map();
   return {
@@ -36,7 +35,7 @@ function fakeNetwork({ ticketOk = true, tokens = { "tok-alice": { account_id: "u
 }
 
 const baseEnv = { TICKETS_API_KEY: "k" };
-const PNG_HEAD = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]; // what a real PNG starts with: files are checked by their bytes
+const PNG_HEAD = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const PDF_HEAD = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31];
 const withHead = (head, size) => { const bytes = new Uint8Array(size); bytes.set(head); return bytes; };
 const png = (name = "a.png") => new File([new Uint8Array([...PNG_HEAD, 1, 2, 3])], name, { type: "image/png" });
@@ -63,7 +62,7 @@ test("images go to R2 and the ticket gets their links; PDFs stay attachments", a
     assert.equal(stored.httpMetadata.contentType, "image/png");
     const fields = sentFields(net.tickets[0]);
     assert.equal(fields.remarks, `slip attached\n\nImages:\nhttps://test-1-7wp.pages.dev/ticket-image?k=${encodeURIComponent(key)}`);
-    assert.equal(net.tickets[0].get("attachment").name, "a.pdf"); // only the PDF is attached
+    assert.equal(net.tickets[0].get("attachment").name, "a.pdf");
     assert.equal(net.tickets[0].getAll("attachment").length, 1);
   } finally { net.restore(); }
 });

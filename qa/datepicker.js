@@ -1,7 +1,3 @@
-// A custom calendar for the QA page, in the look of the widget's D.O.B. calendar (the native <input type="date"> popup cannot be
-// styled). Each picker is <span class="dp"> holding a hidden <input> (the value, "YYYY-MM-DD" or ""), a display button and a popup.
-// Setting `input.value` from outside is picked up with input.dispatchEvent(new Event("input")); the picker fires "change" on the
-// input when the person picks a day.
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const pad = (n) => String(n).padStart(2, "0");
@@ -12,10 +8,9 @@ const parse = (value) => {
 };
 const todayParts = () => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() }; };
 
-// The 6 rows x 7 days (Monday first) shown for a month; days of the neighbouring months are included and marked.
 export function calendarDays(year, month) {
   const first = new Date(year, month, 1);
-  const offset = (first.getDay() + 6) % 7; // Monday = 0
+  const offset = (first.getDay() + 6) % 7;
   return Array.from({ length: 42 }, (_, i) => {
     const date = new Date(year, month, 1 - offset + i);
     return { year: date.getFullYear(), month: date.getMonth(), day: date.getDate(), otherMonth: date.getMonth() !== month };
@@ -29,7 +24,7 @@ export function attachDatePicker(root, { placeholder = "dd/mm/yyyy", firstYear =
   const display = root.querySelector(".dp-display");
   const popup = root.querySelector(".dp-pop");
   let view = todayParts();
-  let jump = ""; // "month" | "year" | "": which jump list is open
+  let jump = "";
 
   const close = () => { popup.hidden = true; jump = ""; display.setAttribute("aria-expanded", "false"); };
   const syncDisplay = () => { display.textContent = displayDate(input.value) || placeholder; display.classList.toggle("placeholder", !input.value); };
@@ -99,7 +94,7 @@ export function attachDatePicker(root, { placeholder = "dd/mm/yyyy", firstYear =
 
   document.addEventListener("click", (event) => { if (!root.contains(event.target)) close(); });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
-  input.addEventListener("input", syncDisplay); // a value set from outside
+  input.addEventListener("input", syncDisplay);
   syncDisplay();
   return { setValue(value) { input.value = value; syncDisplay(); } };
 }
