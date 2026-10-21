@@ -20,7 +20,7 @@ function accountWorld({ reply = { ok: true, enabled: true, status: 'found', emai
   const calls = { fetches: 0, timers: [], renders: [] };
   const state = { chat: { escalation: {} }, other: { escalation: {} } };
   const context = vm.createContext({
-    state, Object, Date, Number, String, JSON, escapeHtml, queueMicrotask,
+    state, Object, Date, Number, String, JSON, escapeHtml, queueMicrotask, SETTINGS_ICONS: { ticket: '' },
     setTimeout: (callback, ms) => { calls.timers.push({ callback, ms }); },
     currentLiveChatAccount: 'lc1', ticketConfigError: '', ticketFields: [{ key: 'member_id' }], fetchTicketConfig: async () => {},
     ticketAuthor: () => ({ accountKey: 'lc1', agentToken: 't' }), storeTicketEmail: () => {}, showTicketProblem: () => {},

@@ -1353,3 +1353,70 @@ body { font-size: 13px; }
 .ticket-thumb-pdf { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 5px; background: var(--surface); font-size: 10px; font-weight: 700; }
 .ticket-comment-attach { justify-self: start; }
 .ticket-thumb-error { padding: 0 6px 6px; color: var(--danger); font-size: 10px; line-height: 1.3; white-space: normal; }
+
+.settings-overlay {
+  background: radial-gradient(120% 55% at 50% 0%, color-mix(in srgb, var(--blue) 13%, var(--bg)) 0%, var(--bg) 62%);
+  backdrop-filter: blur(6px);
+}
+.settings-panel { padding: 22px 16px 28px; }
+.settings-head { align-items: center; margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.settings-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.settings-head-icon {
+  display: grid; place-items: center; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+  color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--border));
+  background: linear-gradient(145deg, color-mix(in srgb, var(--blue) 22%, var(--surface)), color-mix(in srgb, var(--blue) 8%, var(--surface)));
+}
+.settings-head-icon svg { width: 20px; height: 20px; }
+.settings-title-block > span { font-size: 20px; letter-spacing: -.01em; }
+.settings-close { width: 32px; height: 32px; border-radius: 50%; background: var(--surface); transition: border-color .15s, color .15s, transform .15s; }
+.settings-close:hover { transform: rotate(90deg); }
+.settings-card {
+  margin-bottom: 14px; padding: 16px; border-radius: 16px; border: 1px solid var(--border); background: var(--surface);
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 30px rgba(0,0,0,.18);
+}
+.settings-section-title { gap: 10px; margin-bottom: 14px; font-size: 13px; letter-spacing: .01em; }
+.settings-section-icon { width: 26px; height: 26px; border-radius: 8px; background: color-mix(in srgb, var(--blue) 16%, transparent); }
+.settings-section-icon svg { width: 14px; height: 14px; }
+.settings-card .settings-hint { margin-bottom: 12px; font-size: 12px; }
+.settings-card .settings-hint:last-child { margin-bottom: 0; }
+.settings-identity {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+}
+.settings-avatar {
+  display: grid; place-items: center; flex: 0 0 auto; width: 42px; height: 42px; border-radius: 50%;
+  color: #fff; font-size: 17px; font-weight: 700;
+  background: linear-gradient(145deg, var(--blue), color-mix(in srgb, var(--blue) 55%, var(--teal)));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--blue) 30%, transparent);
+}
+.settings-identity-text { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; }
+.settings-identity-text strong { font-size: 13.5px; line-height: 1.3; overflow-wrap: anywhere; }
+.settings-role {
+  padding: 2px 9px; border-radius: 999px; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--blue); background: color-mix(in srgb, var(--blue) 15%, transparent);
+}
+.settings-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.settings-chips span {
+  padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-muted); font-size: 11px; font-weight: 600;
+}
+.settings-card .secondary-btn, .settings-card .settings-signout {
+  display: block; width: 100%; min-height: 38px; margin-top: 10px; padding: 9px 12px; border-radius: 10px;
+  font-size: 12px; transition: border-color .15s, color .15s, background .15s;
+}
+.settings-card .secondary-btn:hover { background: color-mix(in srgb, var(--blue) 10%, var(--surface-2)); }
+.settings-card .settings-hint + .secondary-btn { margin-top: 0; }
+.settings-card .ticket-account {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 12px;
+  background: color-mix(in srgb, var(--teal) 8%, var(--surface-2));
+}
+.settings-card .ticket-account-bad { background: color-mix(in srgb, var(--danger) 9%, var(--surface-2)); }
+.settings-card .ticket-account-warn { background: color-mix(in srgb, var(--gold) 9%, var(--surface-2)); }
+#settingsTicketNotes { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 11.5px; }
+.settings-card .input.settings-text { min-height: 42px; padding: 10px 12px; font-size: 13.5px; }
+.settings-card .settings-select { padding: 10px 12px; font-size: 13.5px; }
+.settings-failures { margin-top: 0; border-radius: 12px; background: var(--surface-2); }
+.settings-save { min-height: 44px; margin-top: 4px; border-radius: 12px; font-size: 13px; }
+.settings-diagnostics { margin-top: 16px; }
+.settings-diagnostics > summary { padding: 6px 4px 10px; font-size: 11px; letter-spacing: .04em; }
+.settings-diagnostics-list { border-radius: 12px; }

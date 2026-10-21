@@ -171,6 +171,13 @@ function saveAgent(name) {
   if (typeof resumePendingLookups === "function") resumePendingLookups();
 }
 
+const SETTINGS_ICONS = {
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
+  ticket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9a2 2 0 0 0 0 6v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a2 2 0 0 1 0-6V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z"/><path d="M13 5v14" stroke-dasharray="2 3"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>',
+};
+
 function openSettingsPanel() {
   const customerService = isCustomerServiceView() || qaView;
   document.getElementById("settingsOverlay")?.remove();
@@ -179,18 +186,24 @@ function openSettingsPanel() {
   const overlay = document.createElement("div");
   overlay.id = "settingsOverlay";
   overlay.className = "settings-overlay";
+  const accountRole = qaView ? "QA" : "Customer Service";
+  const accountTabs = qaView ? ["QA", "Retention", "Blast", "Tickets"] : ["Tickets", "Knowledge"];
+  const accountInitial = (String(selectedAgent || "").match(/[A-Za-z]/) || [accountRole.charAt(0)])[0].toUpperCase();
   overlay.innerHTML = `
     <div class="settings-panel">
       <div class="settings-head">
-        <div class="settings-title-block">
-          <span>Settings</span>
-          <small>Agent preferences and diagnostics</small>
+        <div class="settings-title-wrap">
+          <span class="settings-head-icon">${SETTINGS_ICONS.gear}</span>
+          <div class="settings-title-block">
+            <span>Settings</span>
+            <small>Agent preferences and diagnostics</small>
+          </div>
         </div>
         ${selectedAgent || customerService ? `<button class="settings-close" id="settingsClose">✕</button>` : ""}
       </div>
-      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span>Account</span></div><p class="settings-hint">${qaView ? (selectedAgent ? `You are signed in with LiveChat as QA. The QA, Retention, Blast and Tickets tabs are available to you; chats you take on Retention are recorded as ${escapeHtml(selectedAgent)}.` : "You are signed in with LiveChat as QA. The QA, Retention, Blast and Tickets tabs are available to you. To record chats you cover on Retention you need an agent name: choose it with the button below.") :"You are signed in with LiveChat as Customer Service. Tickets and Knowledge are available to you."}</p>${qaView && !selectedAgent ? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name</button>` : ""}${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
+      ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span class="settings-section-icon">${SETTINGS_ICONS.user}</span><span>Account</span></div><div class="settings-identity"><span class="settings-avatar">${escapeHtml(accountInitial)}</span><div class="settings-identity-text"><strong>${selectedAgent ? escapeHtml(selectedAgent) : "No agent name yet"}</strong><span class="settings-role">${accountRole}</span></div></div><div class="settings-chips" aria-label="Tabs available to you">${accountTabs.map((tab) => `<span>${tab}</span>`).join("")}</div><p class="settings-hint">${qaView ? (selectedAgent ? "Signed in with LiveChat as QA. Chats you take on Retention are recorded under this name." : "Signed in with LiveChat as QA. To record chats you cover on Retention you need an agent name: choose it with the button below.") : "Signed in with LiveChat as Customer Service."}</p>${qaView && !selectedAgent ? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name</button>` : ""}${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
-        <div class="settings-section-title"><span>Agent</span></div>
+        <div class="settings-section-title"><span class="settings-section-icon">${SETTINGS_ICONS.user}</span><span>Agent</span></div>
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
         ${AGENT_LOGIN_LIVE
           ? `<div class="input settings-text" id="agentLockedName">${agentLocked ? escapeHtml(selectedAgent) : "Signing in with LiveChat…"}</div>${agentLocked ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}`
@@ -206,7 +219,7 @@ function openSettingsPanel() {
       ${ticketAccountSettingsVisible() ? `<div class="settings-card" id="settingsTicketAccountCard">${renderTicketAccountSettings()}</div>` : ""}
 
       <div class="settings-card">
-        <div class="settings-section-title"><span class="settings-section-icon">↗</span><span>Blast history</span></div>
+        <div class="settings-section-title"><span class="settings-section-icon">${SETTINGS_ICONS.send}</span><span>Blast history</span></div>
         <details class="settings-failures">
           <summary>Skipped or failed chats <span>${failureLog.length}</span></summary>
           <div class="settings-failure-list">
@@ -4439,7 +4452,7 @@ function ticketAccountSettingsChat() {
 function renderTicketAccountSettings() {
   const chatId = ticketAccountSettingsChat();
   const line = renderTicketAccountLine(chatId, { always: true });
-  return `<div class="settings-section-title"><span>Ticket account</span></div>
+  return `<div class="settings-section-title"><span class="settings-section-icon">${SETTINGS_ICONS.ticket}</span><span>Ticket account</span></div>
     <p class="settings-hint">The ticket-system account your tickets, comments and edits are made as.</p>
     ${line || '<p class="settings-hint">Not checked yet.</p>'}
     <p class="settings-hint" id="settingsTicketNotes">${renderTicketNotesStatus()}</p>
