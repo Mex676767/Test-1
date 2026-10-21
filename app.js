@@ -203,10 +203,10 @@ function openSettingsPanel() {
       </div>
       ${customerService ? `<div class="settings-card"><div class="settings-section-title"><span class="settings-section-icon">${SETTINGS_ICONS.user}</span><span>Account</span></div><div class="settings-identity"><span class="settings-avatar">${escapeHtml(accountInitial)}</span><div class="settings-identity-text"><strong>${selectedAgent ? escapeHtml(selectedAgent) : "No agent name yet"}</strong><span class="settings-role">${accountRole}</span></div></div><div class="settings-chips" aria-label="Tabs available to you">${accountTabs.map((tab) => `<span>${tab}</span>`).join("")}</div><p class="settings-hint">${qaView ? (selectedAgent ? "Signed in with LiveChat as QA. Chats you take on Retention are recorded under this name." : "Signed in with LiveChat as QA. To record chats you cover on Retention you need an agent name: choose it with the button below.") : "Signed in with LiveChat as Customer Service."}</p>${qaView && !selectedAgent ? `<button type="button" class="secondary-btn" id="settingsQaName">Choose my agent name</button>` : ""}${AGENT_LOGIN_LIVE ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}</div>` : `
       <div class="settings-card">
-        <div class="settings-section-title"><span class="settings-section-icon">${SETTINGS_ICONS.user}</span><span>Agent</span></div>
+        <div class="settings-section-title"><span class="settings-section-icon">${SETTINGS_ICONS.user}</span><span>Agent</span>${AGENT_LOGIN_LIVE && agentLocked ? `<span class="settings-role settings-role-end">Retention</span>` : ""}</div>${AGENT_LOGIN_LIVE && agentLocked ? `<div class="settings-chips" aria-label="Tabs available to you">${(BLAST_LIVE ? ["Retention", "Blast"] : ["Retention"]).map((tab) => `<span>${tab}</span>`).join("")}</div>` : ""}
         <p class="settings-hint">${AGENT_LOGIN_LIVE ? (agentLocked ? "Your name comes from your LiveChat login and can't be changed here." : "Your name comes from your LiveChat login. It appears here as soon as the sign-in finishes.") : "Choose the name recorded on every submitted case."}</p>
         ${AGENT_LOGIN_LIVE
-          ? `<div class="input settings-text" id="agentLockedName">${agentLocked ? escapeHtml(selectedAgent) : "Signing in with LiveChat…"}</div>${agentLocked ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}`
+          ? `<div class="input settings-text" id="agentLockedName"${agentLocked ? ` data-initial="${escapeHtml(accountInitial)}"` : ""}>${agentLocked ? escapeHtml(selectedAgent) : "Signing in with LiveChat…"}</div>${agentLocked ? `<button type="button" class="secondary-btn settings-signout" id="settingsSignOut">Sign out of LiveChat</button>` : ""}`
           : agentOptions.length
           ? `<select class="input settings-select" id="agentSelect">
                <option value="">Choose your name</option>
@@ -3815,6 +3815,16 @@ function ticketTitle(ticket) {
   return ticket.fields?.query_type ? ticketValueDisplay("query_type", ticket.fields.query_type) : ticketFieldDisplay(ticket.fields?.title || "Ticket");
 }
 
+function ticketRaisedByLabel(ticket) {
+  return ticket?.raisedBy?.name || ticket?.raisedBy?.email || "";
+}
+
+function ticketRaisedDateLabel(ticket) {
+  const date = new Date(ticket?.createdAt);
+  if (!ticket?.createdAt || !Number.isFinite(date.getTime())) return "";
+  return date.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}
+
 function ticketUpdatedLabel(ticket) {
   const date = new Date(ticket.updatedAt || ticket.createdAt);
   if (!Number.isFinite(date.getTime())) return "";
@@ -4053,6 +4063,7 @@ function renderTicketExplorer(chatId) {
       <span class="ticket-inbox-row-top"><span class="ticket-inbox-ref">${escapeHtml(ticket.ref)}</span><span class="ticket-inbox-status ${ticketStatusTone(ticket)}">${escapeHtml(ticketStatusLabel(ticket))}</span></span>
       <strong class="ticket-inbox-row-title">${escapeHtml(ticketTitle(ticket))}</strong>
       <span class="ticket-inbox-row-meta"><span>${escapeHtml(ticket.fields?.member_id || "No player ID")}${ticket.fields?.member_platform || ticket.fields?.brand ? ` · ${escapeHtml(ticketValueDisplay("member_platform", ticket.fields.member_platform || ticket.fields.brand))}` : ""}</span><span>${escapeHtml(ticket.currentDepartment?.name || ticket.currentDepartment?.code || "Unassigned")}</span></span>
+      <span class="ticket-inbox-row-meta ticket-inbox-row-raised"><span>${ticketRaisedByLabel(ticket) ? `Raised by ${escapeHtml(ticketRaisedByLabel(ticket))}` : "Raiser unknown"}</span><span>${escapeHtml(ticketRaisedDateLabel(ticket))}</span></span>
       <span class="ticket-inbox-row-bottom"><span>${Number(ticket.commentCount || 0)} comment${Number(ticket.commentCount || 0) === 1 ? "" : "s"}</span><span>${escapeHtml(ticketUpdatedLabel(ticket))}</span></span>
     </button></div>`).join("") : '<div class="ticket-inbox-empty">No tickets match. Try another search or clear the filters.</div>'}</div>
     ${Number(list?.total) > tickets.length ? `<p class="ticket-inbox-limit">Loaded ${tickets.length} of ${Number(list.total)} tickets. Search to narrow the results.</p>` : ""}`}

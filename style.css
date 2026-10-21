@@ -1420,3 +1420,13 @@ body { font-size: 13px; }
 .settings-diagnostics { margin-top: 16px; }
 .settings-diagnostics > summary { padding: 6px 4px 10px; font-size: 11px; letter-spacing: .04em; }
 .settings-diagnostics-list { border-radius: 12px; }
+
+.settings-role-end { margin-left: auto; }
+#agentLockedName[data-initial] { display: flex; align-items: center; gap: 12px; min-height: 66px; padding: 12px; border-radius: 12px; font-size: 13.5px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; background: var(--surface-2); }
+#agentLockedName[data-initial]::before {
+  content: attr(data-initial); display: grid; place-items: center; flex: 0 0 auto; width: 42px; height: 42px; border-radius: 50%;
+  color: #fff; font-size: 17px; font-weight: 700; background: linear-gradient(145deg, var(--blue), color-mix(in srgb, var(--blue) 55%, var(--teal)));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--blue) 30%, transparent);
+}
+.ticket-inbox-row-raised { margin-top: 2px; color: var(--text-faint); }
+.ticket-inbox-row-raised > span:last-child { max-width: none; white-space: nowrap; }

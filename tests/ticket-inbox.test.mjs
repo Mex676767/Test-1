@@ -31,7 +31,7 @@ function widget() {
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     fetch: async url => { requests.push(url); return { json: async () => ({ ok: true, tickets: [], total: 0 }) }; },
   });
-  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketUiIcon', 'ticketScopedWho', 'ticketServerFilters', 'ticketListStale', 'ticketMatchesAgent', 'ticketActiveList', 'fetchTicketList', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'ticketReadAuthor', 'ticketReadFailure', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
+  vm.runInContext(['ticketWorkspaceView', 'ticketStatusTone', 'ticketStatusLabel', 'ticketTitle', 'ticketUpdatedLabel', 'ticketRaisedByLabel', 'ticketRaisedDateLabel', 'ticketUiIcon', 'ticketScopedWho', 'ticketServerFilters', 'ticketListStale', 'ticketMatchesAgent', 'ticketActiveList', 'fetchTicketList', 'renderTicketExplorer', 'renderTicketStatus', 'renderEscalationSection', 'ticketReadAuthor', 'ticketReadFailure', 'searchTickets', 'refreshTicketInbox'].map(fn).join('\n'), context);
   context.renderTicketSlot = () => {};
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
@@ -683,4 +683,22 @@ test('the "ticket account not found" dialog is the same centred card as the clai
   assert.match(dialog, /ticket-problem-status/, 'a wrong email still gets its message');
   const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
   assert.ok(!/^\.ticket-problem \{ max-width: 420px; \}/m.test(css), 'the old narrow top-aligned panel style is gone');
+});
+
+test('a ticket row shows who raised the ticket and the date it was raised, below the player line', () => {
+  const c = vm.createContext({ Date, Number });
+  vm.runInContext(fn('ticketRaisedByLabel') + '\n' + fn('ticketRaisedDateLabel'), c);
+  const by = (ticket) => vm.runInContext('ticketRaisedByLabel(' + JSON.stringify(ticket) + ')', c);
+  const on = (ticket) => vm.runInContext('ticketRaisedDateLabel(' + JSON.stringify(ticket) + ')', c);
+  assert.equal(by({ raisedBy: { name: 'R.Maxine', email: 'm@x.com' } }), 'R.Maxine');
+  assert.equal(by({ raisedBy: { email: 'm@x.com' } }), 'm@x.com', 'no name: the email');
+  assert.equal(by({ raisedBy: null }), '');
+  assert.match(on({ createdAt: '2026-10-21T13:12:00Z' }), /21|Oct/, 'a readable day and month');
+  assert.equal(on({}), '');
+  assert.equal(on({ createdAt: 'not a date' }), '');
+  const row = app.slice(app.indexOf('class="ticket-inbox-row-meta"'), app.indexOf('class="ticket-inbox-row-bottom"'));
+  assert.match(row, /ticket-inbox-row-raised/);
+  assert.match(row, /Raised by \$\{escapeHtml\(ticketRaisedByLabel\(ticket\)\)\}/);
+  assert.match(row, /ticketRaisedDateLabel\(ticket\)/);
+  assert.ok(row.indexOf('member_id') < row.indexOf('ticket-inbox-row-raised'), 'the player line stays above it');
 });
