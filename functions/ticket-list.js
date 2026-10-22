@@ -53,6 +53,8 @@ export async function handler(event) {
     const orderKey = pick("sort") === "created" ? "createdAt" : "updatedAt";
     const params = new URLSearchParams({ pageSize: String(size), sort: pick("sort") === "created" ? "createdAt:desc" : "updatedAt:desc" });
     if (q) params.set("q", q);
+    const page = Number(pick("page"));
+    if (Number.isInteger(page) && page > 1 && page <= 50) params.set("page", String(page));
     let data;
     const read = (conditions, match = "all") => {
       const query = new URLSearchParams(params);

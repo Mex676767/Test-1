@@ -4066,7 +4066,7 @@ function renderTicketExplorer(chatId) {
       <span class="ticket-inbox-row-meta ticket-inbox-row-raised"><span>${ticketRaisedByLabel(ticket) ? `Raised by ${escapeHtml(ticketRaisedByLabel(ticket))}` : "Raiser unknown"}</span><span>${escapeHtml(ticketRaisedDateLabel(ticket))}</span></span>
       <span class="ticket-inbox-row-bottom"><span>${Number(ticket.commentCount || 0)} comment${Number(ticket.commentCount || 0) === 1 ? "" : "s"}</span><span>${escapeHtml(ticketUpdatedLabel(ticket))}</span></span>
     </button></div>`).join("") : '<div class="ticket-inbox-empty">No tickets match. Try another search or clear the filters.</div>'}</div>
-    ${Number(list?.total) > tickets.length ? `<p class="ticket-inbox-limit">Loaded ${tickets.length} of ${Number(list.total)} tickets. Search to narrow the results.</p>` : ""}`}
+    ${Number(list?.total) > tickets.length ? `<div class="ticket-inbox-limit"><p>Loaded ${tickets.length} of ${Number(list.total)} tickets. ${list.loadingAll ? "Loading the rest…" : "Search to narrow the results, or load them all."}</p>${list.loadingAll ? "" : `<button type="button" class="secondary-btn ticket-load-all" data-action="loadAllTickets" data-chat="${escapeHtml(chatId)}">Load all ${Math.min(Number(list.total), TICKET_PAGE_SIZE * TICKET_LOAD_ALL_MAX_PAGES)} tickets</button>`}${list.loadAllNote ? `<p class="ticket-inbox-limit-error">${escapeHtml(list.loadAllNote)}</p>` : ""}</div>` : ""}`}
   </section>`;
 }
 
@@ -4674,17 +4674,53 @@ async function loadTicketStatus(chatId, ref, { silent = false, fresh = true } = 
   return data.ticket;
 }
 
-async function fetchTicketList(chatId, query, { fresh = true, who = "" } = {}) {
+async function fetchTicketList(chatId, query, { fresh = true, who = "", page = 1 } = {}) {
   const author = ticketReadAuthor(state[chatId]);
   const q = String(query || "").trim();
   const scope = who === "me" ? { mine: true } : who ? { agent: who } : {};
   const narrowing = ticketServerFilters(chatId);
   const res = author
-    ? await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q, fresh, author, ...scope, ...narrowing }) })
-    : await fetch(`/ticket-list?q=${encodeURIComponent(q)}${fresh ? "&fresh=1" : ""}${who === "me" ? "&mine=1" : who ? `&agent=${encodeURIComponent(who)}` : ""}${Object.entries(narrowing).map(([key, value]) => `&${key}=${encodeURIComponent(value)}`).join("")}`);
+    ? await fetch("/ticket-list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q, fresh, author, ...scope, ...narrowing, ...(page > 1 ? { page } : {}) }) })
+    : await fetch(`/ticket-list?q=${encodeURIComponent(q)}${fresh ? "&fresh=1" : ""}${who === "me" ? "&mine=1" : who ? `&agent=${encodeURIComponent(who)}` : ""}${Object.entries(narrowing).map(([key, value]) => `&${key}=${encodeURIComponent(value)}`).join("")}${page > 1 ? `&page=${page}` : ""}`);
   const data = await res.json();
   if (!data.ok) throw ticketReadFailure(chatId, data, "Ticket search failed");
   return data;
+}
+
+const TICKET_PAGE_SIZE = 100;
+const TICKET_LOAD_ALL_MAX_PAGES = 20;
+const ticketLoadAllInFlight = new Set();
+async function loadAllTickets(chatId) {
+  const result = ticketSearchResultsByChat.get(chatId);
+  if (!result || result.loading || ticketLoadAllInFlight.has(chatId)) return;
+  const agent = state[chatId]?.ticketExplorerAgent;
+  const who = ticketScopedWho(agent);
+  const scoped = Boolean(who && result.mine && result.mineFor === agent);
+  const target = scoped ? result.mine : result;
+  ticketLoadAllInFlight.add(chatId);
+  target.loadingAll = true;
+  target.loadAllNote = "";
+  renderTicketSlot(chatId);
+  try {
+    const pages = Math.min(Math.ceil(Number(target.total || 0) / TICKET_PAGE_SIZE), TICKET_LOAD_ALL_MAX_PAGES);
+    for (let page = 2; page <= pages; page += 1) {
+      const data = await fetchTicketList(chatId, result.query || "", { fresh: false, who: scoped ? who : "", page });
+      if (ticketSearchResultsByChat.get(chatId) !== result) return;
+      const known = new Set(target.tickets.map((ticket) => ticket.ref));
+      const more = (data.tickets || []).filter((ticket) => !known.has(ticket.ref));
+      target.tickets = [...target.tickets, ...more];
+      target.total = Math.max(Number(data.total || 0), target.tickets.length);
+      renderTicketSlot(chatId);
+      if (!more.length) break;
+    }
+  } catch (err) {
+    ticketPollBackoff(err);
+    target.loadAllNote = `Could not load the rest: ${err.message}`;
+  } finally {
+    target.loadingAll = false;
+    ticketLoadAllInFlight.delete(chatId);
+    renderTicketSlot(chatId);
+  }
 }
 
 function ticketServerFilters(chatId) {
@@ -5350,6 +5386,11 @@ chatListEl.addEventListener("click", async (e) => {
     if (!ticketSearchResultsByChat.has(chatId) && !ticketAccountBlocks()) void refreshTicketInbox(chatId, "", "all", { fresh: false });
     else if (btn.dataset.action === "clearTicketFilters" && ticketListStale(chatId)) void refreshTicketInbox(chatId, ticketSearchResultsByChat.get(chatId).query || "", ticketSearchResultsByChat.get(chatId).mode || "all", { fresh: false });
     saveState();
+    return;
+  }
+
+  if (btn.dataset.action === "loadAllTickets") {
+    void loadAllTickets(chatId);
     return;
   }
 

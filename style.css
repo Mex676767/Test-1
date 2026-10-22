@@ -1430,3 +1430,6 @@ body { font-size: 13px; }
 }
 .ticket-inbox-row-raised { margin-top: 2px; color: var(--text-faint); }
 .ticket-inbox-row-raised > span:last-child { max-width: none; white-space: nowrap; }
+.ticket-inbox-limit p { margin: 0 0 8px; }
+.ticket-load-all { width: 100%; min-height: 36px; border-radius: 10px; }
+.ticket-inbox-limit .ticket-inbox-limit-error { margin: 8px 0 0; color: var(--danger); }

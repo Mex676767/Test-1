@@ -9,7 +9,7 @@ function widget() {
   const state = { chat: { escalation: {}, ticketView: 'list' } };
   const requests = [];
   const context = vm.createContext({
-    state, Map, Set, Date, Number, String,
+    state, Map, Set, Date, Number, String, TICKET_PAGE_SIZE: 100, TICKET_LOAD_ALL_MAX_PAGES: 20,
     previewMode: true, ticketConfigError: '', ticketDepartments: [], ticketMarkets: [], 
     ticketFields: [{ key: 'member_id' }], liveChatAgentTokens: () => ({}), currentLiveChatAccount: '', storedTicketEmail: () => '', queueMicrotask, showTicketProblem() {},
     TICKET_FIELD_SPECS: [{ stateKey: 'memberUserId' }, { stateKey: 'remarks' }, { stateKey: 'amount' }],
@@ -701,4 +701,34 @@ test('a ticket row shows who raised the ticket and the date it was raised, below
   assert.match(row, /Raised by \$\{escapeHtml\(ticketRaisedByLabel\(ticket\)\)\}/);
   assert.match(row, /ticketRaisedDateLabel\(ticket\)/);
   assert.ok(row.indexOf('member_id') < row.indexOf('ticket-inbox-row-raised'), 'the player line stays above it');
+});
+
+test('Load all tickets: the rest of the list is read page by page, each ticket once, and the button is on the "Loaded x of y" note', async () => {
+  const make = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => ({ ref: 'TK' + (from + i) }));
+  const run = async ({ pagesReply, total = 217 }) => {
+    const calls = [];
+    const result = { loading: false, tickets: make(1, 100), total, query: '' };
+    const c = vm.createContext({
+      Map, Set, Math, Number, Array, Boolean, TICKET_PAGE_SIZE: 100, TICKET_LOAD_ALL_MAX_PAGES: 20,
+      state: { c1: { ticketExplorerAgent: 'all' } }, ticketSearchResultsByChat: new Map([['c1', result]]), ticketLoadAllInFlight: new Set(),
+      ticketScopedWho: () => '', renderTicketSlot: () => {}, ticketPollBackoff: () => {},
+      fetchTicketList: async (chatId, query, options) => { calls.push(options.page); return pagesReply(options.page); },
+    });
+    vm.runInContext(fn('loadAllTickets'), c);
+    await vm.runInContext('loadAllTickets("c1")', c);
+    return { result, calls };
+  };
+  const ok = await run({ pagesReply: (page) => ({ total: 217, tickets: page === 2 ? make(101, 200) : make(201, 217) }) });
+  assert.deepEqual(ok.calls, [2, 3]);
+  assert.equal(ok.result.tickets.length, 217);
+  assert.equal(new Set(ok.result.tickets.map((t) => t.ref)).size, 217);
+  assert.equal(ok.result.loadingAll, false);
+  const overlap = await run({ pagesReply: () => ({ total: 217, tickets: make(1, 100) }) });
+  assert.deepEqual(overlap.calls, [2], 'a page with nothing new stops the loop');
+  assert.equal(overlap.result.tickets.length, 100);
+  const failed = await run({ pagesReply: () => { throw new Error('Ticket system busy'); } });
+  assert.match(failed.result.loadAllNote, /Could not load the rest: Ticket system busy/);
+  assert.equal(failed.result.tickets.length, 100, 'what was loaded stays');
+  assert.match(app, /data-action="loadAllTickets"/);
+  assert.match(app, /btn\.dataset\.action === "loadAllTickets"/);
 });
