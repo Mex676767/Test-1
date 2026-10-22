@@ -138,3 +138,16 @@ test("the two sides of my tickets are merged by the sort that was asked, up to t
     assert.deepEqual(JSON.parse(result.body).tickets.map((item) => item.ref), ["A", "C", "B"], "newest created first");
   } finally { net.restore(); }
 });
+
+test("page asks the ticket system for that page of the list; page 1, nothing, or nonsense sends no page", async () => {
+  const net = network();
+  try {
+    await list({ page: 3 });
+    assert.equal(net.urls[0].searchParams.get("page"), "3");
+    await list({ page: 1 });
+    await list({ page: "x" });
+    await list({ page: 9999 });
+    await list({});
+    for (const url of net.urls.slice(1)) assert.equal(url.searchParams.get("page"), null);
+  } finally { net.restore(); }
+});
