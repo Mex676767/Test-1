@@ -146,6 +146,13 @@ test('the note box is wired in beside the case, and claiming, looking up and rec
   assert.ok(!/ConsoleNote|noteUi/.test(claim), 'claiming does not touch notes');
 });
 
+test('a finished lookup repaints the note slot in place, so the box appears without a full redraw', () => {
+  const run = app.match(/async function runLookup\([^)]*\) \{[\s\S]*?\n\}/)[0];
+  assert.match(run, /const noteSlot = currentCard\.querySelector\("\.note-slot"\);/);
+  assert.match(run, /if \(noteSlot\) noteSlot\.innerHTML = renderNoteSection\(chatId\);/);
+  assert.ok(!/await[^\n]*renderNoteSection/.test(run), 'the lookup never waits on the note box');
+});
+
 test('the box offers Relationship note and Action log; the choice decides where the note is sent', async () => {
   const h = harness({ state: looked(), reply: { ok: true, saved: true } });
   const html = h.renderNoteSection('c1');
