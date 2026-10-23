@@ -1386,7 +1386,9 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
           const playerInfo = currentCard.querySelector(".player-info-slot");
           const ticketSlot = currentCard.querySelector(".ticket-slot");
           const autoFields = currentCard.querySelector(".auto-fields-slot");
+          const noteSlot = currentCard.querySelector(".note-slot");
           if (playerInfo) playerInfo.innerHTML = renderPlayerInfo(chatId);
+          if (noteSlot) noteSlot.innerHTML = renderNoteSection(chatId);
           if (ticketSlot) ticketSlot.innerHTML = renderTickets(chatId);
           if (autoFields) autoFields.innerHTML = renderAutoFields(chatId);
         }
