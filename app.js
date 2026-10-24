@@ -2662,31 +2662,37 @@ async function claimHalloween(chatId, btn, card) {
   }
   if (!s.brand || !s.username) { setStatus("Look up the player first. Nothing was claimed.", "error"); return; }
 
-  if (!previewMode && !(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
+  const chatDef = activeChats.find((c) => c.chatId === chatId);
+  const claimBody = (preview) => JSON.stringify({
+    action: "claim", preview, day: h.day, username: s.username, brand: s.brand,
+    choice: s.halloweenChoice, deposit: s.halloweenDeposit,
+    shared: h.state === "day2" ? !!s.halloweenShared : !!s.halloweenShared && !!h.canShare,
+    shareMethod: s.halloweenMethod, postLink: s.halloweenPostLink,
+    agentName: selectedAgent, chatLink: s.chatUrl || chatDef?.link || "",
+  });
+  const postClaim = async (preview) => (await fetch("/halloween-claim", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: claimBody(preview),
+  })).json();
+
+  if (!previewMode) {
+    // Check every rule first, so a claim the server would refuse never leaves a ticket behind.
+    let verdict;
+    try { verdict = await postClaim(true); } catch (err) { verdict = { ok: false, error: err.message }; }
+    if (!verdict.ok) { setStatus(`${verdict.error || "The claim could not be checked."} Nothing was claimed.`, "error"); return; }
+    if (!(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
+  }
   card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
   btn = card.querySelector(".hw-claim") || btn;
 
-  const chatDef = activeChats.find((c) => c.chatId === chatId);
   btn.disabled = true;
   btn.textContent = "…";
   claimWriteInFlight.add(chatId);
   let data;
   try {
-    const res = await fetch("/halloween-claim", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "claim", preview: previewMode, day: h.day, username: s.username, brand: s.brand,
-        choice: s.halloweenChoice, deposit: s.halloweenDeposit,
-        shared: h.state === "day2" ? !!s.halloweenShared : !!s.halloweenShared && !!h.canShare,
-        shareMethod: s.halloweenMethod, postLink: s.halloweenPostLink,
-        agentName: selectedAgent, chatLink: s.chatUrl || chatDef?.link || "",
-      }),
-    });
-    data = await res.json();
+    data = await postClaim(previewMode);
     if (!data.ok) throw new Error(data.error || "Claim failed");
   } catch (err) {
-    setStatus(`Halloween claim failed: ${err.message}. The ticket was already raised; press Claim again to retry the save.`, "error");
+    setStatus(`Halloween claim failed: ${err.message}. If a ticket was already raised for it, check that ticket before claiming again.`, "error");
     btn.disabled = false;
     btn.textContent = `Claim Day ${h.day}`;
     return;

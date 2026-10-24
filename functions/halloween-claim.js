@@ -1,5 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
-import { createRecord, updateRecord, deleteRecord, listFields, TABLE_HALLOWEEN } from "./_lib/lark.js";
+import { createRecord, updateRecord, deleteRecord, listFields, toDisplay, TABLE_HALLOWEEN } from "./_lib/lark.js";
 import {
   F, malaysiaToday, planClaim, planUnclaim, checkFields, shapeFields,
 } from "./_lib/halloween.js";
@@ -7,6 +7,10 @@ import { readHalloweenRow, readPlayerTier, readOptionMaps } from "./_lib/hallowe
 
 const reply = (statusCode, body) => ({ statusCode, headers: { "Cache-Control": "no-store" }, body: JSON.stringify(body) });
 const clean = (value, max = 200) => String(value ?? "").trim().slice(0, max);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Pauses (ms) between the re-checks after a write; Lark's search can lag a little behind its writes.
+const settleDelays = (env) => String(env?.HALLOWEEN_SETTLE_MS ?? "700,800").split(",").map((n) => Math.max(0, Number(n) || 0));
+const sameClaimant = (fields, agent, chatLink) => toDisplay(fields?.[F.agent]).trim() === agent && toDisplay(fields?.[F.chatLink]).trim() === chatLink;
 
 function describeCheck(check) {
   const parts = [];
@@ -61,16 +65,34 @@ export async function handler(event) {
     if (dryRun) return reply(200, { ok: true, dryRun: true, ...summary, fields: values });
 
     const shaped = shapeFields(values, catalog);
+    const agent = clean(body.agentName, 120);
+    const chatLink = clean(body.chatLink, 500);
+    const delays = settleDelays(event.env);
+    const lost = () => reply(200, { ok: false, error: `This player's Day ${plan.day} was claimed a moment ago by someone else.` });
+
     if (plan.kind === "update") {
       await updateRecord(TABLE_HALLOWEEN, row.record_id, shaped);
+      // Two agents claiming the same day at the same moment both pass the check above. The later write is the one that
+      // stays in the row, so whoever is still named in it once the writes have settled owns the claim; the other is refused.
+      if (agent || chatLink) {
+        for (const wait of delays) {
+          await sleep(wait);
+          const current = await readHalloweenRow(username, brand).catch(() => null);
+          if (current && !sameClaimant(current.fields, agent, chatLink)) return lost();
+        }
+      }
       return reply(200, { ok: true, ...summary, recordId: row.record_id });
     }
 
     const created = await createRecord(TABLE_HALLOWEEN, shaped);
-    const oldest = await readHalloweenRow(username, brand).catch(() => null);
-    if (oldest && oldest.record_id !== created.record_id) {
-      await deleteRecord(TABLE_HALLOWEEN, created.record_id).catch(() => { });
-      return reply(200, { ok: false, error: "This player's Day 1 was claimed a moment ago by someone else." });
+    // Lark's search can lag behind its writes, so look again a couple of times: the oldest row stays, the others remove themselves.
+    for (const wait of delays) {
+      await sleep(wait);
+      const oldest = await readHalloweenRow(username, brand).catch(() => null);
+      if (oldest && oldest.record_id !== created.record_id) {
+        await deleteRecord(TABLE_HALLOWEEN, created.record_id).catch(() => { });
+        return lost();
+      }
     }
     return reply(200, { ok: true, ...summary, recordId: created.record_id });
   } catch (err) {

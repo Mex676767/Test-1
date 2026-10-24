@@ -217,7 +217,7 @@ test("values are shaped for each Lark field type, and an unknown field is an err
 // ---- endpoint, against a fake Lark ------------------------------------------------------------
 let tableCounter = 0;
 
-function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [] } = {}) {
+function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [], lagMs = 0 } = {}) {
   const hw = `hw-table-${++tableCounter}`;
   const pnl = `pnl-table-${tableCounter}`;
   initEnv({
@@ -239,11 +239,11 @@ function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [] } =
     }
     if (href.includes(`/tables/${hw}/records/search`)) {
       const conditions = JSON.parse(options.body).filter.conditions;
-      const items = store.rows.filter((item) => conditions.every((c) => String(item.fields[c.field_name]).toLowerCase() === String(c.value[0]).toLowerCase()));
+      const items = store.rows.filter((item) => (item.visibleAt || 0) <= Date.now() && conditions.every((c) => String(item.fields[c.field_name]).toLowerCase() === String(c.value[0]).toLowerCase()));
       return ok({ items, has_more: false });
     }
     if (href.includes(`/tables/${hw}/records`) && method === "POST") {
-      const record = { record_id: `rec${store.nextId++}`, created_time: store.nextId, fields: JSON.parse(options.body).fields };
+      const record = { record_id: `rec${store.nextId++}`, created_time: store.nextId, visibleAt: Date.now() + lagMs, fields: JSON.parse(options.body).fields };
       store.rows.push(record);
       store.writes.push(["create", record.record_id, record.fields]);
       return ok({ record });
@@ -267,7 +267,7 @@ function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [] } =
 }
 
 const call = async (body, date, extraEnv = {}) => {
-  const result = await claimHandler({ httpMethod: "POST", body: JSON.stringify({ username: "ZZAli", brand: "EZ", agentName: "Aina", chatLink: "https://chat/1", ...body }), env: { HALLOWEEN_TEST_DATE: date, ...extraEnv } });
+  const result = await claimHandler({ httpMethod: "POST", body: JSON.stringify({ username: "ZZAli", brand: "EZ", agentName: "Aina", chatLink: "https://chat/1", ...body }), env: { HALLOWEEN_TEST_DATE: date, HALLOWEEN_SETTLE_MS: "0,0", ...extraEnv } });
   return JSON.parse(result.body);
 };
 
@@ -385,6 +385,39 @@ test("unclaim reverts only that day, and refuses to leave a later day orphaned",
   assert.equal(lark.store.rows[0].fields[F.shareMethod], undefined);
   assert.equal((await call({ action: "unclaim", day: 1 }, "2026-10-28")).ok, true);
   assert.equal(lark.store.rows.length, 0);
+});
+
+test("two agents claim Day 1 at the same moment: one wins and no duplicate row is left, even when Lark's search lags", async (t) => {
+  const lark = startFakeLark({ lagMs: 60 });
+  t.after(lark.stop);
+  const results = await Promise.all(Array.from({ length: 8 }, (_, i) => call(
+    { action: "claim", day: 1, choice: "TRICK", deposit: 350, agentName: `Agent${i}`, chatLink: `https://chat/${i}` },
+    "2026-10-26", { HALLOWEEN_SETTLE_MS: "100,100" },
+  )));
+  assert.equal(results.filter((r) => r.ok).length, 1, JSON.stringify(results.map((r) => r.error || "ok")));
+  assert.equal(lark.store.rows.length, 1, "the losers removed their own rows");
+  assert.match(results.find((r) => !r.ok).error, /claimed a moment ago by someone else/);
+});
+
+test("two agents claim Day 2 at the same moment: only one is accepted and the row names that agent", async (t) => {
+  const lark = startFakeLark({ rows: [day1Row()] });
+  t.after(lark.stop);
+  const results = await Promise.all(Array.from({ length: 8 }, async (_, i) => ({
+    i,
+    answer: await call({ action: "claim", day: 2, agentName: `Agent${i}`, chatLink: `https://chat/${i}` }, "2026-10-27", { HALLOWEEN_SETTLE_MS: "40,40" }),
+  })));
+  const accepted = results.filter((r) => r.answer.ok);
+  assert.equal(accepted.length, 1, JSON.stringify(results.map((r) => r.answer.error || "ok")));
+  assert.equal(lark.store.rows.length, 1);
+  assert.equal(lark.store.rows[0].fields[F.agent], `Agent${accepted[0].i}`);
+  assert.equal(lark.store.rows[0].fields[F.day2Base], 28);
+});
+
+test("a single agent's claim is never refused by the settle check", async (t) => {
+  const lark = startFakeLark({ rows: [day1Row()] });
+  t.after(lark.stop);
+  const answer = await call({ action: "claim", day: 2, agentName: "Solo", chatLink: "https://chat/solo" }, "2026-10-27", { HALLOWEEN_SETTLE_MS: "30,30" });
+  assert.equal(answer.ok, true, JSON.stringify(answer));
 });
 
 test("without LARK_TABLE_HALLOWEEN the endpoint says so and the lookup shows no Halloween card", async () => {
