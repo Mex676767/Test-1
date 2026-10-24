@@ -3371,7 +3371,7 @@ const AUTO_TICKET_PROGRAMS = {
   ltvTest: { label: "LTV", keyword: "LTV" },
   gracePeriod: { label: "Grace Period", keyword: "Grace Period" },
   riskPlayer: { label: "Risk Player", keyword: "Risk Player" },
-  halloween: { label: "Halloween", keyword: "Complain Players" },
+  halloween: { label: "Halloween", keyword: "Complain Players", remark: "3X Turnover Team" },
 };
 const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market";
 let agentDefaultMarket = { account: "", code: "" };
@@ -3424,6 +3424,11 @@ function buildClaimTicketFields(s, programKey, amount, market) {
   const fields = { [memberField.key]: username, [brandField.key]: brand, [queryField.key]: query.value };
   const amountField = need("amount");
   if (amountField) fields[amountField.key] = number;
+  if (program.remark) {
+    const remarksField = need("remarks");
+    if (!remarksField) return { error: `The ticket form has no Remarks field, so the "${program.remark}" remark cannot be added.` };
+    fields[remarksField.key] = program.remark;
+  }
   const transactionField = need("transactionId");
   if (transactionField) fields[transactionField.key] = randomTransactionId();
   const statusField = need("status");
@@ -3633,7 +3638,7 @@ async function raiseClaimTicket(chatId, programKey, amount) {
     return await openClaimTicketModal({
       title: `Raise a ticket to claim ${program.label}`,
       intro: `Claiming ${escapeHtml(program.label)} raises a ticket for <strong>${escapeHtml(check.departmentName)}</strong> first. Add the proof below.`,
-      rows: [["Player", s.username], ["Query type", check.query.label || check.query.value], ["Amount", String(amount)], ["Level", AUTO_TICKET_LEVEL]],
+      rows: [["Player", s.username], ["Query type", check.query.label || check.query.value], ["Amount", String(amount)], ["Level", AUTO_TICKET_LEVEL], ...(program.remark ? [["Remarks", program.remark]] : [])],
       markets,
       market: stored.code,
       marketLocked: stored.locked,
