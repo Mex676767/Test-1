@@ -90,10 +90,13 @@ export function dayNumber(brand, today) {
   return diff + 1;
 }
 
+export const MAX_DEPOSIT = 1_000_000;
+const asText = (value) => (typeof value === "string" || typeof value === "number" ? String(value) : "");
+
 export function day1Bonus(deposit, choice) {
-  const amount = Number(String(deposit ?? "").replace(/,/g, "").trim());
-  const pick = String(choice || "").trim().toUpperCase();
-  if (!Number.isFinite(amount) || amount <= 0 || (pick !== "TRICK" && pick !== "TREAT")) return null;
+  const amount = Number(asText(deposit).replace(/,/g, "").trim() || NaN);
+  const pick = typeof choice === "string" ? choice.trim().toUpperCase() : "";
+  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_DEPOSIT || (pick !== "TRICK" && pick !== "TREAT")) return null;
   const row = DAY1_TABLE.find((item) => amount >= item.min);
   if (!row) return null;
   return {
@@ -178,6 +181,8 @@ export function halloweenStatus({ brand, tierText, row, today, maps }) {
 }
 
 const clean = (value, max = 500) => String(value ?? "").trim().slice(0, max);
+// A web address the agent pasted: http(s) or a bare domain; never another scheme (javascript:, data:), spaces or markup.
+export const isPostLink = (link) => !/[\s<>"'`]/.test(link) && (/^https?:\/\//i.test(link) || !/^[a-z][a-z0-9+.-]*:/i.test(link));
 
 // Decide whether a claim is allowed and which fields to write. Never trusts amounts from the browser.
 export function planClaim({ brand, tierText, row, today, nowMs, input = {}, agent = "", chatLink = "", maps }) {
@@ -186,7 +191,7 @@ export function planClaim({ brand, tierText, row, today, nowMs, input = {}, agen
   if (!CAMPAIGN[key]) return fail(`${brand || "This brand"} is not part of the Halloween promotion.`);
   const day = dayNumber(brand, today);
   if (!day) return fail(`The Halloween window for ${key} is not open today.`);
-  if (input.day !== undefined && Number(input.day) !== day) return fail(`It is Day ${day} now, not Day ${input.day}. Look up the player again.`);
+  if (input.day != null && Number(input.day) !== day) return fail(`It is Day ${day} now, not Day ${input.day}. Look up the player again.`);
   const tier = normalizeTier(tierText);
   if (!tier) return fail("Halloween is for Tier 3 and Tier V players only.");
   const progress = row ? readProgress(row.fields, maps) : null;
@@ -218,6 +223,7 @@ export function planClaim({ brand, tierText, row, today, nowMs, input = {}, agen
       if (method !== METHOD_POST && method !== METHOD_FRIENDS) return fail("Choose how the player shared: social post or 5 friends.");
       const link = clean(input.postLink);
       if (method === METHOD_POST && !link) return fail("Enter the link of the player's post.");
+      if (method === METHOD_POST && !isPostLink(link)) return fail("The post link must be a web address with no spaces (https://…).");
       fields[F.day2Share] = SHARE_EXTRA;
       fields[F.shareMethod] = method;
       if (method === METHOD_POST) fields[F.postLink] = link;

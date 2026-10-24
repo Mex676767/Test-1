@@ -420,6 +420,48 @@ test("a single agent's claim is never refused by the settle check", async (t) =>
   assert.equal(answer.ok, true, JSON.stringify(answer));
 });
 
+test("bad input is refused cleanly: nothing crashes and nothing is written", async (t) => {
+  const lark = startFakeLark();
+  t.after(lark.stop);
+  const refused = async (label, body, date = "2026-10-26") => {
+    const answer = await call({ action: "claim", day: 1, choice: "TRICK", deposit: 350, ...body }, date);
+    assert.equal(answer.ok, false, `${label} must be refused: ${JSON.stringify(answer)}`);
+  };
+  for (const deposit of [null, -5, 0, 49, "abc", "", true, [], {}, "0x10", 1e21, 999_999_999, "1e309"]) await refused(`deposit ${JSON.stringify(deposit)}`, { deposit });
+  for (const choice of ["", "MAYBE", 1, null, ["TRICK"], {}]) await refused(`choice ${JSON.stringify(choice)}`, { choice });
+  for (const username of ["", "   ", {}, null, ["a"], true]) await refused(`username ${JSON.stringify(username)}`, { username });
+  for (const brand of ["", "PP", "EZEZ", {}, null, 123]) await refused(`brand ${JSON.stringify(brand)}`, { brand });
+  for (const day of [0, 2, 3, 4, -1, 1.5, "x", {}]) await refused(`day ${JSON.stringify(day)}`, { day });
+
+  for (const [label, raw] of [["not json", "{oops"], ["json null", "null"], ["json array", "[]"], ["json string", "\"x\""], ["number", "5"]]) {
+    const result = await claimHandler({ httpMethod: "POST", body: raw, env: { HALLOWEEN_TEST_DATE: "2026-10-26" } });
+    assert.equal(result.statusCode, 400, `${label} is a 400, not a crash`);
+  }
+  assert.deepEqual(lark.store.writes, []);
+  assert.equal(({}).polluted, undefined);
+});
+
+test("a deposit typed with spaces, commas or in capitals is still understood", async (t) => {
+  const lark = startFakeLark();
+  t.after(lark.stop);
+  const answer = await call({ action: "claim", preview: true, day: 1, choice: " trick ", deposit: " 1,000 " }, "2026-10-26");
+  assert.equal(answer.ok, true, JSON.stringify(answer));
+  assert.equal(answer.amount, 200);
+  assert.equal((await call({ action: "claim", preview: true, day: null, choice: "TREAT", deposit: 300 }, "2026-10-26")).ok, true, "a null day means the browser did not say which day");
+});
+
+test("a social post link must be a plain web address", async (t) => {
+  const lark = startFakeLark({ rows: [day1Row()] });
+  t.after(lark.stop);
+  const withLink = (postLink) => call({ action: "claim", preview: true, day: 2, shared: true, shareMethod: "Social post", postLink }, "2026-10-27");
+  for (const bad of ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x", "<img src=x onerror=alert(1)>", "has a space", "https://x.test/\"onmouseover=\"x", "vbscript:x"]) {
+    assert.equal((await withLink(bad)).ok, false, `${bad} must be refused`);
+  }
+  for (const good of ["https://facebook.com/p/1", "http://x.test/a?b=1&c=2", "facebook.com/p/1", "HTTPS://X.TEST/P"]) {
+    assert.equal((await withLink(good)).ok, true, `${good} must be accepted`);
+  }
+});
+
 test("without LARK_TABLE_HALLOWEEN the endpoint says so and the lookup shows no Halloween card", async () => {
   initEnv({ LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base" });
   const result = JSON.parse((await claimHandler({ httpMethod: "POST", body: "{}", env: {} })).body);

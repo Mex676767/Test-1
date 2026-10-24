@@ -10,6 +10,14 @@ const clean = (value, max = 200) => String(value ?? "").trim().slice(0, max);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Pauses (ms) between the re-checks after a write; Lark's search can lag a little behind its writes.
 const settleDelays = (env) => String(env?.HALLOWEEN_SETTLE_MS ?? "700,800").split(",").map((n) => Math.max(0, Number(n) || 0));
+// Lark can fail a call at random: the re-checks and the cleanup are what stop double claims, so they get a few tries.
+async function retry(work, tries = 4) {
+  let last;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try { return await work(); } catch (error) { last = error; await sleep(30 * (attempt + 1)); }
+  }
+  throw last;
+}
 const sameClaimant = (fields, agent, chatLink) => toDisplay(fields?.[F.agent]).trim() === agent && toDisplay(fields?.[F.chatLink]).trim() === chatLink;
 
 function describeCheck(check) {
@@ -31,9 +39,12 @@ export async function handler(event) {
     if (event.httpMethod === "GET") return reply(200, { ok: true, matches: check.ok, missing: check.missing, wrongType: check.wrongType, missingOptions: check.missingOptions, fieldCount: catalog.length });
     if (event.httpMethod !== "POST") return reply(405, { ok: false, error: "Method not allowed" });
 
-    const body = JSON.parse(event.body || "{}");
-    const username = clean(body.username).toLowerCase();
-    const brand = clean(body.brand, 40);
+    let body;
+    try { body = JSON.parse(event.body || "{}"); } catch (_) { return reply(400, { ok: false, error: "The request was not valid JSON." }); }
+    if (!body || typeof body !== "object" || Array.isArray(body)) return reply(400, { ok: false, error: "The request body must be a JSON object." });
+    const text = (value, max) => (typeof value === "string" || typeof value === "number" ? clean(value, max) : "");
+    const username = text(body.username, 200).toLowerCase();
+    const brand = text(body.brand, 40);
     if (!username || !brand) return reply(400, { ok: false, error: "username and brand are required" });
     if (!check.ok) return reply(200, { ok: false, error: `The Halloween table is not set up correctly (${describeCheck(check)}).`, fieldCheck: check });
 
@@ -77,7 +88,7 @@ export async function handler(event) {
       if (agent || chatLink) {
         for (const wait of delays) {
           await sleep(wait);
-          const current = await readHalloweenRow(username, brand).catch(() => null);
+          const current = await retry(() => readHalloweenRow(username, brand)).catch(() => null);
           if (current && !sameClaimant(current.fields, agent, chatLink)) return lost();
         }
       }
@@ -88,9 +99,9 @@ export async function handler(event) {
     // Lark's search can lag behind its writes, so look again a couple of times: the oldest row stays, the others remove themselves.
     for (const wait of delays) {
       await sleep(wait);
-      const oldest = await readHalloweenRow(username, brand).catch(() => null);
+      const oldest = await retry(() => readHalloweenRow(username, brand)).catch(() => null);
       if (oldest && oldest.record_id !== created.record_id) {
-        await deleteRecord(TABLE_HALLOWEEN, created.record_id).catch(() => { });
+        await retry(() => deleteRecord(TABLE_HALLOWEEN, created.record_id)).catch((error) => console.warn("Halloween duplicate row not removed", created.record_id, String(error?.message || error).slice(0, 100)));
         return lost();
       }
     }
