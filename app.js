@@ -2679,6 +2679,10 @@ async function claimHalloween(chatId, btn, card) {
     let verdict;
     try { verdict = await postClaim(true); } catch (err) { verdict = { ok: false, error: err.message }; }
     if (!verdict.ok) { setStatus(`${verdict.error || "The claim could not be checked."} Nothing was claimed.`, "error"); return; }
+    if (Number(verdict.amount) !== Number(input.amount)) {
+      setStatus(`This claim is now RM${verdict.amount}, not RM${input.amount} (the player's tier or the day changed). Look up the player again. Nothing was claimed.`, "error");
+      return;
+    }
     if (!(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
   }
   card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;

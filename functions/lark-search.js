@@ -8,7 +8,7 @@ import {
 } from "./_lib/lark.js";
 import { readOwnership, ownedBy, summarizeRow, parseChatLink } from "./_lib/ca-row.js";
 import { isConfiguredBonusEligible, listBonusConfigs } from "./_lib/bonus-config.js";
-import { halloweenStatus, malaysiaToday, dayNumber } from "./_lib/halloween.js";
+import { halloweenStatus, malaysiaToday, dayNumber, brandKey, testDateFor } from "./_lib/halloween.js";
 import { readHalloweenRow, readOptionMaps } from "./_lib/halloween-io.js";
 
 const FIRST_PASS_TIMEOUT_MS = 22_000;
@@ -388,9 +388,9 @@ async function lookupHandler(event, hardEnd) {
       )),
 
       optionalLookup("Halloween", async () => {
-        const today = malaysiaToday(Date.now(), event.env?.HALLOWEEN_TEST_DATE);
+        const today = malaysiaToday(Date.now(), testDateFor(event.env, event.headers));
         if (!TABLE_HALLOWEEN || !dayNumber(brandVal, today)) return null;
-        const row = await readHalloweenRow(uname, brandVal, { timeoutMs: budget.searchMs });
+        const row = await readHalloweenRow(uname, brandKey(brandVal), { timeoutMs: budget.searchMs });
         return { row, today, maps: row ? await readOptionMaps() : {} };
       }, { failed: true }),
     ]);

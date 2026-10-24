@@ -81,6 +81,13 @@ export function malaysiaToday(nowMs = Date.now(), override = "") {
   return new Date(nowMs + 8 * 3600_000).toISOString().slice(0, 10);
 }
 
+// The production site never takes the test date, even if HALLOWEEN_TEST_DATE is set there by mistake.
+export const PRODUCTION_HOST = "test-1-7wp.pages.dev";
+export function testDateFor(env, headers) {
+  const host = String(headers?.host || "").trim().toLowerCase().replace(/:\d+$/, "");
+  return host === PRODUCTION_HOST ? "" : String(env?.HALLOWEEN_TEST_DATE || "");
+}
+
 // 1, 2 or 3 inside the brand's window; 0 when the brand is not in the campaign or the window is closed.
 export function dayNumber(brand, today) {
   const campaign = CAMPAIGN[brandKey(brand)];

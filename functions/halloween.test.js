@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CAMPAIGN, DAY1_TABLE, F, brandKey, checkFields, day1Bonus, dayNumber, halloweenStatus, malaysiaToday,
-  normalizeTier, planClaim, planUnclaim, shapeFields,
+  normalizeTier, planClaim, planUnclaim, shapeFields, testDateFor,
 } from "./_lib/halloween.js";
 import { initEnv } from "./_lib/lark.js";
 import { handler as claimHandler } from "./halloween-claim.js";
@@ -217,7 +217,7 @@ test("values are shaped for each Lark field type, and an unknown field is an err
 // ---- endpoint, against a fake Lark ------------------------------------------------------------
 let tableCounter = 0;
 
-function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [], lagMs = 0 } = {}) {
+function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [], lagMs = 0, latencyMs = 0 } = {}) {
   const hw = `hw-table-${++tableCounter}`;
   const pnl = `pnl-table-${tableCounter}`;
   initEnv({
@@ -232,6 +232,7 @@ function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [], la
     const href = String(url);
     if (href.includes("tenant_access_token")) return { json: async () => ({ code: 0, tenant_access_token: "token", expire: 3600 }) };
     const method = options.method || "GET";
+    if (latencyMs) await new Promise((resolve) => setTimeout(resolve, Math.random() * latencyMs));
     if (href.includes(`/tables/${hw}/fields`)) return ok({ items: catalog });
     if (href.includes(`/tables/${pnl}/fields`)) return ok({ items: [{ field_name: "Tier", type: 3, property: { options: [] } }] });
     if (href.includes(`/tables/${pnl}/records/search`)) {
@@ -251,6 +252,7 @@ function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [], la
     const recordMatch = href.match(new RegExp(`/tables/${hw}/records/([^/?]+)`));
     if (recordMatch && method === "PUT") {
       const target = store.rows.find((item) => item.record_id === recordMatch[1]);
+      if (!target) return { json: async () => ({ code: 1254043, msg: "RecordIdNotFound" }) };
       const fields = JSON.parse(options.body).fields;
       for (const [name, value] of Object.entries(fields)) { if (value === null) delete target.fields[name]; else target.fields[name] = value; }
       store.writes.push(["update", target.record_id, fields]);
@@ -460,6 +462,62 @@ test("a social post link must be a plain web address", async (t) => {
   for (const good of ["https://facebook.com/p/1", "http://x.test/a?b=1&c=2", "facebook.com/p/1", "HTTPS://X.TEST/P"]) {
     assert.equal((await withLink(good)).ok, true, `${good} must be accepted`);
   }
+});
+
+test("an undo landing at the same moment as the next day's claim never leaves a later day on top of an undone one", async () => {
+  const env = { HALLOWEEN_SETTLE_MS: "40,40" };
+  for (let run = 0; run < 10; run++) {
+    const lark = startFakeLark({ latencyMs: 15, rows: [day1Row({ [F.day2Claimed]: 5, [F.day2Base]: 28 })] });
+    try {
+      const [, day3] = await Promise.all([
+        call({ action: "unclaim", day: 2 }, "2026-10-28", env),
+        call({ action: "claim", day: 3, agentName: "B", chatLink: "https://chat/b" }, "2026-10-28", env),
+      ]);
+      const fields = lark.store.rows[0].fields;
+      assert.ok(!(fields[F.day3Claimed] && !fields[F.day2Claimed]), `run ${run}: Day 3 left without Day 2`);
+      if (!fields[F.day2Claimed]) assert.equal(day3.ok, false, `run ${run}: Day 3 must be refused once Day 2 is undone`);
+    } finally { lark.stop(); }
+  }
+  for (let run = 0; run < 10; run++) {
+    const lark = startFakeLark({ latencyMs: 15, rows: [day1Row()] });
+    try {
+      const [, day2] = await Promise.all([
+        call({ action: "unclaim", day: 1 }, "2026-10-27", env),
+        call({ action: "claim", day: 2, agentName: "B", chatLink: "https://chat/b" }, "2026-10-27", env),
+      ]);
+      if (!lark.store.rows.length) assert.equal(day2.ok, false, `run ${run}: Day 2 accepted although the row is gone`);
+      if (!day2.ok) assert.doesNotMatch(String(day2.error), /RecordIdNotFound|Lark update failed/, `run ${run}: a raw Lark error reached the agent`);
+    } finally { lark.stop(); }
+  }
+});
+
+test("any spelling of the brand is stored and searched as the dropdown's form, so a player can never get two Day 1 rows", async (t) => {
+  const lark = startFakeLark();
+  t.after(lark.stop);
+  assert.equal((await call({ action: "claim", day: 1, brand: "ez", choice: "TRICK", deposit: 350 }, "2026-10-26")).ok, true);
+  assert.equal(lark.store.rows[0].fields[F.brand], "EZ");
+  for (const brand of ["EZ", "EZ96", " ez96 ", "Ez"]) {
+    assert.equal((await call({ action: "claim", day: 1, brand, choice: "TREAT", deposit: 500 }, "2026-10-26")).ok, false, `${brand} must find the same row`);
+  }
+  assert.equal(lark.store.rows.length, 1);
+});
+
+test("the production site ignores HALLOWEEN_TEST_DATE even if it is set there by mistake", async (t) => {
+  const lark = startFakeLark();
+  t.after(lark.stop);
+  const body = JSON.stringify({ action: "claim", preview: true, day: 1, username: "zzali", brand: "EZ", choice: "TRICK", deposit: 350 });
+  const ask = async (env, host) => {
+    const answer = JSON.parse((await claimHandler({ httpMethod: "POST", body, env: { HALLOWEEN_SETTLE_MS: "0,0", ...env }, headers: { host } })).body);
+    return { ok: answer.ok, error: answer.error };
+  };
+  assert.deepEqual(
+    await ask({ HALLOWEEN_TEST_DATE: "2026-10-26" }, "test-1-7wp.pages.dev"),
+    await ask({}, "test-1-7wp.pages.dev"),
+    "on production the test date changes nothing",
+  );
+  assert.deepEqual(await ask({ HALLOWEEN_TEST_DATE: "2026-10-26" }, "feat-halloween-trick-or-trea.test-1-7wp.pages.dev"), { ok: true, error: undefined });
+  assert.equal(testDateFor({ HALLOWEEN_TEST_DATE: "2026-10-26" }, { host: "TEST-1-7WP.pages.dev:443" }), "");
+  assert.equal(testDateFor({ HALLOWEEN_TEST_DATE: "2026-10-26" }, { host: "31018ce8.test-1-7wp.pages.dev" }), "2026-10-26");
 });
 
 test("without LARK_TABLE_HALLOWEEN the endpoint says so and the lookup shows no Halloween card", async () => {

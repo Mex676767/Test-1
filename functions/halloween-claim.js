@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { createRecord, updateRecord, deleteRecord, listFields, toDisplay, TABLE_HALLOWEEN } from "./_lib/lark.js";
 import {
-  F, malaysiaToday, planClaim, planUnclaim, checkFields, shapeFields,
+  F, brandKey, malaysiaToday, testDateFor, planClaim, planUnclaim, checkFields, shapeFields,
 } from "./_lib/halloween.js";
 import { readHalloweenRow, readPlayerTier, readOptionMaps } from "./_lib/halloween-io.js";
 
@@ -18,6 +18,7 @@ async function retry(work, tries = 4) {
   }
   throw last;
 }
+const hasValue = (value) => value !== undefined && value !== null && value !== "" && !(Array.isArray(value) && !value.length);
 const sameClaimant = (fields, agent, chatLink) => toDisplay(fields?.[F.agent]).trim() === agent && toDisplay(fields?.[F.chatLink]).trim() === chatLink;
 
 function describeCheck(check) {
@@ -44,12 +45,13 @@ export async function handler(event) {
     if (!body || typeof body !== "object" || Array.isArray(body)) return reply(400, { ok: false, error: "The request body must be a JSON object." });
     const text = (value, max) => (typeof value === "string" || typeof value === "number" ? clean(value, max) : "");
     const username = text(body.username, 200).toLowerCase();
-    const brand = text(body.brand, 40);
+    // Always the dropdown's form ("EZ"), whatever spelling arrives ("ez", "EZ96"), so one player can never get two rows.
+    const brand = brandKey(text(body.brand, 40));
     if (!username || !brand) return reply(400, { ok: false, error: "username and brand are required" });
     if (!check.ok) return reply(200, { ok: false, error: `The Halloween table is not set up correctly (${describeCheck(check)}).`, fieldCheck: check });
 
     const nowMs = Date.now();
-    const today = malaysiaToday(nowMs, event.env?.HALLOWEEN_TEST_DATE);
+    const today = malaysiaToday(nowMs, testDateFor(event.env, event.headers));
     const dryRun = body.preview === true;
     const [row, maps] = await Promise.all([readHalloweenRow(username, brand), readOptionMaps()]);
 
@@ -80,16 +82,29 @@ export async function handler(event) {
     const chatLink = clean(body.chatLink, 500);
     const delays = settleDelays(event.env);
     const lost = () => reply(200, { ok: false, error: `This player's Day ${plan.day} was claimed a moment ago by someone else.` });
+    const undone = () => reply(200, { ok: false, error: "This player's Day 1 was undone a moment ago. Look up the player again." });
 
     if (plan.kind === "update") {
-      await updateRecord(TABLE_HALLOWEEN, row.record_id, shaped);
+      try {
+        await updateRecord(TABLE_HALLOWEEN, row.record_id, shaped);
+      } catch (error) {
+        // The row was removed between our read and our write: someone undid this player's Day 1 at that moment.
+        if (/RecordIdNotFound|record.{0,20}not.{0,10}found|1254043/i.test(`${error?.code} ${error?.larkMsg} ${error?.message}`)) return undone();
+        throw error;
+      }
       // Two agents claiming the same day at the same moment both pass the check above. The later write is the one that
       // stays in the row, so whoever is still named in it once the writes have settled owns the claim; the other is refused.
-      if (agent || chatLink) {
-        for (const wait of delays) {
-          await sleep(wait);
-          const current = await retry(() => readHalloweenRow(username, brand)).catch(() => null);
-          if (current && !sameClaimant(current.fields, agent, chatLink)) return lost();
+      // An undo of an earlier day can land at the same moment too: a claim never stays on top of a day that was undone.
+      for (const wait of delays) {
+        await sleep(wait);
+        const current = await retry(() => readHalloweenRow(username, brand)).catch(() => undefined);
+        if (current === null) return undone();
+        if (!current) continue;
+        if ((agent || chatLink) && !sameClaimant(current.fields, agent, chatLink)) return lost();
+        if (plan.day === 3 && !hasValue(current.fields[F.day2Claimed])) {
+          await retry(() => updateRecord(TABLE_HALLOWEEN, row.record_id, { [F.day3Base]: null, [F.day3Share]: null, [F.day3Claimed]: null }))
+            .catch((error) => console.warn("Halloween Day 3 not reverted", row.record_id, String(error?.message || error).slice(0, 100)));
+          return reply(200, { ok: false, error: "Day 2 was undone a moment ago, so Day 3 is not available. Look up the player again." });
         }
       }
       return reply(200, { ok: true, ...summary, recordId: row.record_id });
