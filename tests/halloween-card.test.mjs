@@ -84,3 +84,27 @@ test('Day 2 and Day 3 amounts add the share extra only when allowed', () => {
   assert.equal(amount({ ...base, day: 3, state: 'day3', canShare: true, shareMethod: '5 friends' }, { halloweenShared: true }), 56);
   assert.equal(amount({ ...base, tier: 'Tier 3', redPacket: 18, state: 'day2' }, { halloweenShared: true, halloweenMethod: '5 friends' }), 46);
 });
+
+test('admin preview can show every Halloween card state, and the switch only exists in admin preview', () => {
+  const statesSource = app.match(/const HALLOWEEN_PREVIEW_STATES = \[[\s\S]*?\];/)[0];
+  const extra = [statesSource, 'let halloweenPreviewKey = "day2";', grab('halloweenPreviewSample'), grab('renderHalloweenPreviewSwitch')].join('\n');
+  const expected = {
+    day1: /Player's choice/, day2: /Did the player share today\?/, day3: /share again today/, day3NoShare: /did not share on Day 2/,
+    low: /below RM300/, done: /already claimed/, tier: /Tier 3 and Tier V players only/,
+  };
+  const keys = [];
+  for (const preview of [true, false]) {
+    const context = vm.createContext({ state: { A: { claimedPrograms: {} } }, previewMode: preview, BONUS_SHOWCASE_PREVIEW: preview, HALLOWEEN_METHODS: ['Social post', '5 friends'], HALLOWEEN_INQUIRY_PREFIX: 'Halloween Day ' });
+    vm.runInContext(source + '\n' + extra + '\nthis.keys = HALLOWEEN_PREVIEW_STATES.map(([key]) => key);', context);
+    if (!preview) { assert.equal(context.renderHalloweenPreviewSwitch('A'), '', 'agents never see the switch'); continue; }
+    keys.push(...context.keys);
+    assert.match(context.renderHalloweenPreviewSwitch('A'), /data-action="halloweenPreviewState"/);
+    for (const key of context.keys) {
+      context.state.A.matchedRow = { halloween: context.halloweenPreviewSample(key) };
+      const html = context.renderHalloweenCard('A');
+      assert.match(html, expected[key], `${key} renders its own state`);
+      assertSafe(html, key);
+    }
+  }
+  assert.deepEqual(keys, Object.keys(expected));
+});
