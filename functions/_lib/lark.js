@@ -8,6 +8,7 @@ let TABLE_VS96_FEEDBACK;
 let TABLE_BONUS_CONFIG;
 let TABLE_AGENT_LOGINS;
 let TABLE_UNRECORDED;
+let TABLE_HALLOWEEN;
 import { AsyncLocalStorage } from "node:async_hooks";
 import { queueStubFrom } from "./queue-stub.js";
 let LARK_SEARCH_QUEUE;
@@ -49,6 +50,7 @@ export function initEnv(env) {
   TABLE_BONUS_CONFIG = env.LARK_TABLE_BONUS_CONFIG;
   TABLE_AGENT_LOGINS = env.LARK_TABLE_AGENT_LOGINS;
   TABLE_UNRECORDED = env.LARK_TABLE_UNRECORDED;
+  TABLE_HALLOWEEN = env.LARK_TABLE_HALLOWEEN;
 }
 
 const requestContext = new AsyncLocalStorage();
@@ -945,4 +947,5 @@ export {
   TABLE_BONUS_CONFIG,
   TABLE_AGENT_LOGINS,
   TABLE_UNRECORDED,
+  TABLE_HALLOWEEN,
 };

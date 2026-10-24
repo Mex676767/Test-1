@@ -4,10 +4,12 @@ import {
   TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
-  TABLE_TELEGRAM28, TABLE_MOONCAKE, TABLE_VS96_FEEDBACK,
+  TABLE_TELEGRAM28, TABLE_MOONCAKE, TABLE_VS96_FEEDBACK, TABLE_HALLOWEEN,
 } from "./_lib/lark.js";
 import { readOwnership, ownedBy, summarizeRow, parseChatLink } from "./_lib/ca-row.js";
 import { isConfiguredBonusEligible, listBonusConfigs } from "./_lib/bonus-config.js";
+import { halloweenStatus, malaysiaToday, dayNumber } from "./_lib/halloween.js";
+import { readHalloweenRow, readOptionMaps } from "./_lib/halloween-io.js";
 
 const FIRST_PASS_TIMEOUT_MS = 22_000;
 const RETRY_MIN_MS = 3_000;
@@ -274,6 +276,7 @@ async function lookupHandler(event, hardEnd) {
       redeemTask,
       mooncakeTask,
       vs96Task,
+      halloweenTask,
     ] = await Promise.all([
       optionalLookup("Other-brand check", async () => {
         const caUsernameOnly = await search(TABLE_CUSTOMER_APPROACHING, [
@@ -383,6 +386,13 @@ async function lookupHandler(event, hardEnd) {
         undefined,
         { fieldNames: [F.status, "Time of Inspection"] }
       )),
+
+      optionalLookup("Halloween", async () => {
+        const today = malaysiaToday(Date.now(), event.env?.HALLOWEEN_TEST_DATE);
+        if (!TABLE_HALLOWEEN || !dayNumber(brandVal, today)) return null;
+        const row = await readHalloweenRow(uname, brandVal, { timeoutMs: budget.searchMs });
+        return { row, today, maps: row ? await readOptionMaps() : {} };
+      }, { failed: true }),
     ]);
     const { configs: configuredBonusConfigs, lookups: configuredBonusTasks } = await configuredBonusLookupsP;
     const [
@@ -398,6 +408,7 @@ async function lookupHandler(event, hardEnd) {
       redeemRow,
       mooncakeRow,
       vs96Row,
+      halloweenRead,
       ...configuredBonusValues
     ] = await (async () => {
       budget.searchMs = Math.max(retryMinMs, Math.min(RETRY_MAX_MS, startedAt + lookupBudgetMs - Date.now()));
@@ -414,10 +425,16 @@ async function lookupHandler(event, hardEnd) {
       redeemTask,
       mooncakeTask,
       vs96Task,
+      halloweenTask,
       ...configuredBonusTasks,
       ]);
     })();
     const { tier, customerName, notVip } = pnlInfo;
+    const halloween = halloweenRead?.failed
+      ? { state: "closed", failed: true, message: "Halloween progress could not be read. Press Look Up again." }
+      : halloweenRead
+        ? halloweenStatus({ brand: brandVal, tierText: tier, row: halloweenRead.row, today: halloweenRead.today, maps: halloweenRead.maps })
+        : null;
     const configuredBonuses = Object.fromEntries(configuredBonusConfigs.map((config, index) => [
       config.key,
       configuredBonusValues[index],
@@ -483,6 +500,7 @@ async function lookupHandler(event, hardEnd) {
             : null,
           mooncake: mooncakeRow ? toDisplay(mooncakeRow.fields[F.status]) : "",
           vs96Feedback: vs96Row ? toDisplay(vs96Row.fields[F.status]) : "",
+          ...(halloween ? { halloween } : {}),
           ...configuredBonuses,
         },
       }),
