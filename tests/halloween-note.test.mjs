@@ -26,22 +26,19 @@ test('RM300+ Day 1 claim writes an Action log note that says Day 2 and Day 3 are
   const { calls, ui } = await run({ claim: { choice: 'TRICK', deposit: 350, amount: 120, track: 'RM300+' }, answer: { ok: true, saved: true } });
   assert.equal(calls.posted.length, 1);
   assert.equal(calls.posted[0].type, 'action', 'goes to the Action log, not the Relationship notes');
-  assert.match(calls.posted[0].note, /TRICK, deposit RM350 -> bonus RM120/);
-  assert.match(calls.posted[0].note, /^.*Eligible for Day 2 and Day 3 \(Day 1 deposit is RM300 or more\)\.$/);
-  assert.doesNotMatch(calls.posted[0].note, /Not eligible/);
+  assert.equal(calls.posted[0].note, 'Halloween Day 1: deposited RM350 (RM300 or more), eligible for Day 2 and Day 3.');
   assert.equal(ui.notes, null, 'the shown note list is refreshed');
   assert.deepEqual(calls.status.map((item) => item.kind), ['success']);
 });
 
 test('a deposit below RM300 says the player is not eligible for Day 2 and Day 3', async () => {
   const { calls } = await run({ claim: { choice: 'TREAT', deposit: 200, amount: 30, track: 'Below RM300' }, answer: { ok: true, saved: true } });
-  assert.match(calls.posted[0].note, /TREAT, deposit RM200 -> bonus RM30/);
-  assert.match(calls.posted[0].note, /Not eligible for Day 2 and Day 3 \(Day 1 deposit is below RM300\)\./);
+  assert.equal(calls.posted[0].note, 'Halloween Day 1: deposited RM200 (below RM300), not eligible for Day 2 and Day 3.');
 });
 
 test('the deposit typed in the card is used if the server does not return one', async () => {
   const { calls } = await run({ claim: { choice: 'TRICK', amount: 120, track: 'RM300+' }, answer: { ok: true, saved: true } });
-  assert.match(calls.posted[0].note, /deposit RM350/);
+  assert.match(calls.posted[0].note, /deposited RM350 /);
 });
 
 test('a note that cannot be saved only warns the agent; nothing is undone', async () => {

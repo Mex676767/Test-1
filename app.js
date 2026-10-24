@@ -2728,10 +2728,9 @@ async function addHalloweenActionNote(chatId, claim) {
   if (!s || consoleNoteBlocker(s)) return;
   const eligible = claim.track === "RM300+";
   const deposit = claim.deposit ?? s.halloweenDeposit;
-  const note = `Halloween Day 1 claimed: ${claim.choice}, deposit RM${deposit} -> bonus RM${claim.amount}. `
-    + (eligible
-      ? "Eligible for Day 2 and Day 3 (Day 1 deposit is RM300 or more)."
-      : "Not eligible for Day 2 and Day 3 (Day 1 deposit is below RM300).");
+  const note = eligible
+    ? `Halloween Day 1: deposited RM${deposit} (RM300 or more), eligible for Day 2 and Day 3.`
+    : `Halloween Day 1: deposited RM${deposit} (below RM300), not eligible for Day 2 and Day 3.`;
   const answer = await postConsoleNote(s, { note, type: "action" });
   if (answer && answer.ok && answer.saved) {
     noteUi(chatId).notes = null;
