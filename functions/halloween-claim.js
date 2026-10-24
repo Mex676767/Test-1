@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { createRecord, updateRecord, deleteRecord, listFields, toDisplay, TABLE_HALLOWEEN } from "./_lib/lark.js";
 import {
-  F, brandKey, malaysiaToday, testDateFor, planClaim, planUnclaim, checkFields, shapeFields,
+  F, brandKey, dayNumber, normalizeTier, readProgress, malaysiaToday, testDateFor, planClaim, planUnclaim, checkFields, shapeFields,
 } from "./_lib/halloween.js";
 import { readHalloweenRow, readPlayerTier, readOptionMaps } from "./_lib/halloween-io.js";
 
@@ -65,7 +65,9 @@ export async function handler(event) {
       return reply(200, { ok: true, undone: Number(body.day) });
     }
 
-    const tierText = await readPlayerTier(username, brand);
+    // Day 2 and Day 3 are paid at the tier saved on Day 1, so the P&L table is only read when that is missing.
+    const savedTier = row && dayNumber(brand, today) > 1 ? normalizeTier(readProgress(row.fields, maps).tier) : "";
+    const tierText = savedTier || await readPlayerTier(username, brand);
     const plan = planClaim({
       brand, tierText, row, today, nowMs, maps,
       input: { day: body.day, choice: body.choice, deposit: body.deposit, shared: body.shared === true, shareMethod: body.shareMethod, postLink: body.postLink },

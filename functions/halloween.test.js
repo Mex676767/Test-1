@@ -104,7 +104,11 @@ test("the card state follows the day, the track and what was claimed", () => {
   const day2 = status("2026-10-27", day1Row());
   assert.equal(day2.state, "day2");
   assert.equal(day2.redPacket, 28);
-  assert.equal(status("2026-10-27", day1Row(), "Tier 3").redPacket, 18);
+  assert.equal(status("2026-10-27", day1Row(), "Tier 3").redPacket, 28, "Day 2 pays the tier saved on Day 1 (Tier V), not today's");
+  assert.equal(status("2026-10-27", day1Row({ [F.tier]: "Tier 3" }), "Tier V").redPacket, 18, "an upgrade after Day 1 does not raise the reward");
+  assert.equal(status("2026-10-27", day1Row(), "Tier 2").state, "day2", "a drop to Tier 2 after Day 1 does not block Day 2");
+  assert.equal(status("2026-10-27", day1Row(), "Tier 2").tier, "Tier V");
+  assert.equal(status("2026-10-26", null, "Tier 2").state, "closed", "Day 1 still needs Tier 3 or Tier V on the day");
   assert.equal(status("2026-10-27", day1Row({ [F.day2Claimed]: 5, [F.day2Base]: 28 })).state, "done");
   assert.equal(status("2026-10-28", day1Row()).state, "closed", "Day 3 needs Day 2");
   const day3Shared = status("2026-10-28", day1Row({ [F.day2Claimed]: 5, [F.day2Base]: 28, [F.day2Share]: 28, [F.shareMethod]: "Social post" }));
@@ -150,14 +154,16 @@ test("Day 2: below RM300 gets nothing; RM300+ gets the red packet, plus RM28 onl
   const plain = day2({ input: { day: 2, shared: false } });
   assert.equal(plain.amount, 28);
   assert.deepEqual(plain.fields, { [F.day2Base]: 28, [F.day2Claimed]: 1000, [F.agent]: "Aina", [F.chatLink]: "https://chat/1" });
-  assert.equal(day2({ tierText: "Tier 3", input: { day: 2 } }).amount, 18);
+  assert.equal(day2({ row: day1Row({ [F.tier]: "Tier 3" }), tierText: "Tier V", input: { day: 2 } }).amount, 18, "the Day 1 tier pays");
+  assert.equal(day2({ tierText: "Tier 2", input: { day: 2 } }).amount, 28, "a drop to Tier 2 after Day 1 neither blocks nor changes Day 2");
+  assert.equal(day2({ row: day1Row({ [F.tier]: "" }), tierText: "Tier 3", input: { day: 2 } }).amount, 18, "today's tier only if the saved one is missing");
 
   const shared = day2({ input: { day: 2, shared: true, shareMethod: "Social post", postLink: "https://fb.com/p/1" } });
   assert.equal(shared.amount, 56);
   assert.equal(shared.fields[F.day2Share], 28);
   assert.equal(shared.fields[F.shareMethod], "Social post");
   assert.equal(shared.fields[F.postLink], "https://fb.com/p/1");
-  assert.equal(day2({ tierText: "Tier 3", input: { day: 2, shared: true, shareMethod: "5 friends" } }).amount, 46);
+  assert.equal(day2({ row: day1Row({ [F.tier]: "Tier 3" }), input: { day: 2, shared: true, shareMethod: "5 friends" } }).amount, 46);
   assert.equal(day2({ input: { day: 2, shared: true, shareMethod: "5 friends" } }).fields[F.postLink], undefined);
 
   assert.match(day2({ input: { day: 2, shared: true } }).error, /how the player shared/);
@@ -322,6 +328,18 @@ test("a three-day run writes one Halloween row and fills it a day at a time", as
   assert.equal(day3.amount, 56);
   assert.equal(lark.store.rows[0].fields[F.day3Share], 28);
   assert.equal((await call({ action: "claim", day: 3 }, "2026-10-28")).ok, false);
+});
+
+test("Day 2 and Day 3 pay the tier saved on Day 1, even if the P&L table now says another tier", async (t) => {
+  const lark = startFakeLark({ tier: "Tier 2", rows: [day1Row({ [F.tier]: "Tier 3" })] });
+  t.after(lark.stop);
+  const day2 = await call({ action: "claim", day: 2 }, "2026-10-27");
+  assert.equal(day2.ok, true, JSON.stringify(day2));
+  assert.equal(day2.amount, 18);
+  assert.equal(lark.store.rows[0].fields[F.day2Base], 18);
+  const day3 = await call({ action: "claim", day: 3, shared: false }, "2026-10-28");
+  assert.equal(day3.ok, true, JSON.stringify(day3));
+  assert.equal(day3.amount, 18);
 });
 
 test("a RM200 player gets the RM100 row on Day 1 and nothing on Day 2 or Day 3", async (t) => {

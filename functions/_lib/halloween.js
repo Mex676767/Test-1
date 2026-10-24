@@ -152,16 +152,24 @@ const rowStatusShape = (progress) => ({
   postLink: progress.postLink,
 });
 
+// Day 1 uses the player's tier on that day. Day 2 and Day 3 use the tier saved on the Day 1 row, so a tier change
+// mid-campaign neither changes nor blocks the reward (today's tier is only used if the saved one is unusable).
+export function campaignTier(day, progress, tierText) {
+  if (day > 1 && progress) return normalizeTier(progress.tier) || normalizeTier(tierText);
+  return normalizeTier(tierText);
+}
+
 // What the widget card should show right now. Returns null when nothing should be shown (not our brand / window closed).
 export function halloweenStatus({ brand, tierText, row, today, maps }) {
   const day = dayNumber(brand, today);
   if (!day) return null;
   const key = brandKey(brand);
+  const progress = row ? readProgress(row.fields, maps) : null;
   const base = {
     day,
     brand: key,
     fullBrand: CAMPAIGN[key].full,
-    tier: normalizeTier(tierText),
+    tier: campaignTier(day, progress, tierText),
     tierRaw: String(tierText || "").trim(),
     shareExtra: SHARE_EXTRA,
   };
@@ -169,7 +177,6 @@ export function halloweenStatus({ brand, tierText, row, today, maps }) {
     return { ...base, state: "closed", message: `Halloween is for Tier 3 and Tier V players only. This player's tier: ${base.tierRaw || "not found"}.` };
   }
   const redPacket = RED_PACKET[base.tier];
-  const progress = row ? readProgress(row.fields, maps) : null;
   const common = { ...base, redPacket, recordId: row?.record_id || row?.recordId || "", ...(progress ? rowStatusShape(progress) : {}) };
 
   if (day === 1) {
@@ -199,9 +206,9 @@ export function planClaim({ brand, tierText, row, today, nowMs, input = {}, agen
   const day = dayNumber(brand, today);
   if (!day) return fail(`The Halloween window for ${key} is not open today.`);
   if (input.day != null && Number(input.day) !== day) return fail(`It is Day ${day} now, not Day ${input.day}. Look up the player again.`);
-  const tier = normalizeTier(tierText);
-  if (!tier) return fail("Halloween is for Tier 3 and Tier V players only.");
   const progress = row ? readProgress(row.fields, maps) : null;
+  const tier = campaignTier(day, progress, tierText);
+  if (!tier) return fail("Halloween is for Tier 3 and Tier V players only.");
   const who = { [F.agent]: clean(agent, 120), [F.chatLink]: clean(chatLink, 500) };
 
   if (day === 1) {
