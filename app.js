@@ -2616,7 +2616,7 @@ function renderHalloweenCard(chatId) {
       <div class="ticket-btns">
         <button class="claim-btn hw-claim" data-action="claim" data-program="halloween" data-chat="${chatId}" ${title2 ? `title="${escapeHtml(title2)}"` : ""} ${disabled ? "disabled" : ""}>Claim Day ${h.day}</button>
       </div>
-      <div class="hw-hint">Claiming raises a VVIP Complain Players ticket.</div>
+      <div class="hw-hint">${previewMode ? "Admin preview: no ticket is raised and nothing is saved." : "Claiming raises a VVIP Complain Players ticket."}</div>
     </div>`;
 }
 
@@ -2662,7 +2662,7 @@ async function claimHalloween(chatId, btn, card) {
   }
   if (!s.brand || !s.username) { setStatus("Look up the player first. Nothing was claimed.", "error"); return; }
 
-  if (!(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
+  if (!previewMode && !(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
   card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
   btn = card.querySelector(".hw-claim") || btn;
 
