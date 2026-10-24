@@ -132,6 +132,19 @@ test('the ticket carries exactly what was asked for, with status Open, and leave
   assert.equal(out.departmentName, 'PAYMENT MYR/PHP/PKR');
 });
 
+test('a Halloween claim ticket carries the remark "3X Turnover Team"; other bonuses still leave Remarks empty', () => {
+  const withComplain = FIELDS.map((field) => (field.key === 'query_type' ? { ...field, options: [...field.options, { value: 'vvip_complain_players', label: 'VVIP Complain Players' }] } : field));
+  const w = world({ fields: withComplain });
+  const out = plain(w.run('buildClaimTicketFields(state.chat1, "halloween", "120", "MYR")'));
+  assert.equal(out.error, undefined);
+  assert.equal(out.fields.remarks, '3X Turnover Team');
+  assert.equal(out.fields.query_type, 'vvip_complain_players');
+  assert.equal(out.fields.amount, 120);
+  assert.equal(plain(w.run('buildClaimTicketFields(state.chat1, "topPnl", "58", "MYR")')).fields.remarks, undefined);
+  const noRemarks = world({ fields: withComplain.filter((field) => field.key !== 'remarks') });
+  assert.match(plain(noRemarks.run('buildClaimTicketFields(state.chat1, "halloween", "120", "MYR")')).error, /no Remarks field.*3X Turnover Team/);
+});
+
 test('status: the ticket system default is used, else its Open option, so a required Status never blocks the claim', () => {
   const status = (extra) => plain(world({ fields: FIELDS.map((field) => (field.key === 'status' ? { ...field, ...extra } : field)) }).run('buildClaimTicketFields(state.chat1, "topPnl", "58", "MYR")')).fields.status;
   assert.equal(status({ options: [{ value: 'SOLVED', label: 'Solved' }, { value: 'open_ticket', label: 'Open' }] }), 'open_ticket');
