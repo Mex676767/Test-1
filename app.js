@@ -2759,7 +2759,10 @@ async function undoHalloween(chatId) {
   const res = await fetch("/halloween-claim", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "unclaim", preview: previewMode, day, username: s.username, brand: s.brand }),
+    body: JSON.stringify({
+      action: "unclaim", preview: previewMode, day, username: s.username, brand: s.brand,
+      agentName: selectedAgent, chatLink: s.chatUrl || activeChats.find((c) => c.chatId === chatId)?.link || "",
+    }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "The Halloween row could not be reverted");

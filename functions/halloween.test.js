@@ -538,6 +538,35 @@ test("the production site ignores HALLOWEEN_TEST_DATE even if it is set there by
   assert.equal(testDateFor({ HALLOWEEN_TEST_DATE: "2026-10-26" }, { host: "31018ce8.test-1-7wp.pages.dev" }), "2026-10-26");
 });
 
+test("only the agent who claimed a day, from the same chat, can undo it", async (t) => {
+  const lark = startFakeLark({ rows: [day1Row()] });
+  t.after(lark.stop);
+  const asA = { agentName: "Aina", chatLink: "https://chat/a" };
+  const asB = { agentName: "Bala", chatLink: "https://chat/b" };
+  assert.equal((await call({ action: "claim", day: 2, ...asA }, "2026-10-27")).ok, true);
+
+  const stranger = await call({ action: "unclaim", day: 2, ...asB }, "2026-10-27");
+  assert.equal(stranger.ok, false);
+  assert.equal(stranger.notOwner, true);
+  assert.match(stranger.error, /Only Aina, in the chat where it was claimed, can undo Day 2/);
+  assert.equal((await call({ action: "unclaim", day: 2, agentName: "Aina", chatLink: "https://chat/other" }, "2026-10-27")).ok, false, "same agent, wrong chat");
+  assert.equal(lark.store.rows[0].fields[F.day2Base], 28, "Day 2 is still claimed");
+
+  assert.equal((await call({ action: "unclaim", day: 2, ...asA }, "2026-10-27")).ok, true);
+  assert.equal(lark.store.rows[0].fields[F.day2Claimed], undefined);
+  assert.equal(lark.store.rows[0].fields[F.agent], undefined, "the claimant of the undone day is cleared");
+  assert.equal((await call({ action: "unclaim", day: 1, ...asB }, "2026-10-27")).ok, true, "with no claimant saved, the earlier day can be undone");
+  assert.equal(lark.store.rows.length, 0);
+});
+
+test("undo in admin preview changes and checks nothing, whatever the table holds", async (t) => {
+  const lark = startFakeLark({ rows: [day1Row({ [F.day2Claimed]: 5, [F.day2Base]: 28, [F.day3Claimed]: 6, [F.day3Base]: 28, [F.agent]: "Someone" })] });
+  t.after(lark.stop);
+  const answer = await call({ action: "unclaim", preview: true, day: 2, agentName: "Preview" }, "2026-10-28");
+  assert.equal(answer.ok, true);
+  assert.deepEqual(lark.store.writes, []);
+});
+
 test("without LARK_TABLE_HALLOWEEN the endpoint says so and the lookup shows no Halloween card", async () => {
   initEnv({ LARK_APP_ID: "app", LARK_APP_SECRET: "secret", LARK_BASE_APP_TOKEN: "base" });
   const result = JSON.parse((await claimHandler({ httpMethod: "POST", body: "{}", env: {} })).body);

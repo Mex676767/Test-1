@@ -56,12 +56,24 @@ export async function handler(event) {
     const [row, maps] = await Promise.all([readHalloweenRow(username, brand), readOptionMaps()]);
 
     if (body.action === "unclaim") {
+      // An admin-preview claim never wrote anything, so undoing it has nothing to check or change.
+      if (dryRun) return reply(200, { ok: true, dryRun: true });
       const plan = planUnclaim({ day: Number(body.day), row, maps });
       if (!plan.ok) return reply(200, { ok: false, error: plan.error });
-      if (dryRun) return reply(200, { ok: true, dryRun: true, kind: plan.kind });
       if (plan.kind === "none") return reply(200, { ok: true, undone: Number(body.day), alreadyUndone: true });
+      // Only the agent who made the latest claim, from the same chat, may undo it. This stops mistakes (a wrong chat, an
+      // old case); it is not security, because the API has no login yet. A row with no saved claimant can be undone by anyone.
+      const savedAgent = toDisplay(row.fields[F.agent]).trim();
+      const savedChat = toDisplay(row.fields[F.chatLink]).trim();
+      if ((savedAgent || savedChat) && !sameClaimant(row.fields, clean(body.agentName, 120), clean(body.chatLink, 500))) {
+        return reply(200, {
+          ok: false, notOwner: true,
+          error: `Only ${savedAgent || "the agent who claimed it"}, in the chat where it was claimed, can undo Day ${Number(body.day)}. Ask them, or change the row in Lark.`,
+        });
+      }
       if (plan.kind === "delete") await deleteRecord(TABLE_HALLOWEEN, row.record_id);
-      else await updateRecord(TABLE_HALLOWEEN, row.record_id, Object.fromEntries(plan.clear.map((name) => [name, null])));
+      // The saved agent and chat belong to the day being undone; clearing them lets the earlier day be undone next.
+      else await updateRecord(TABLE_HALLOWEEN, row.record_id, Object.fromEntries([...plan.clear, F.agent, F.chatLink].map((name) => [name, null])));
       return reply(200, { ok: true, undone: Number(body.day) });
     }
 
@@ -102,12 +114,13 @@ export async function handler(event) {
         const current = await retry(() => readHalloweenRow(username, brand)).catch(() => undefined);
         if (current === null) return undone();
         if (!current) continue;
-        if ((agent || chatLink) && !sameClaimant(current.fields, agent, chatLink)) return lost();
+        // Checked first: an undo of Day 2 also clears the saved agent, and Day 3 must never stay on top of an undone Day 2.
         if (plan.day === 3 && !hasValue(current.fields[F.day2Claimed])) {
           await retry(() => updateRecord(TABLE_HALLOWEEN, row.record_id, { [F.day3Base]: null, [F.day3Share]: null, [F.day3Claimed]: null }))
             .catch((error) => console.warn("Halloween Day 3 not reverted", row.record_id, String(error?.message || error).slice(0, 100)));
           return reply(200, { ok: false, error: "Day 2 was undone a moment ago, so Day 3 is not available. Look up the player again." });
         }
+        if ((agent || chatLink) && !sameClaimant(current.fields, agent, chatLink)) return lost();
       }
       return reply(200, { ok: true, ...summary, recordId: row.record_id });
     }
