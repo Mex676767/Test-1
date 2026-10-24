@@ -2476,6 +2476,32 @@ async function editCaseFlow(chatId, caseNo) {
 const HALLOWEEN_INQUIRY_PREFIX = "Halloween Day ";
 const HALLOWEEN_METHODS = ["Social post", "5 friends"];
 
+// Admin preview only: sample Halloween card states, switched with the chips shown above the card.
+const HALLOWEEN_PREVIEW_STATES = [
+  ["day1", "Day 1"], ["day2", "Day 2"], ["day3", "Day 3"], ["day3NoShare", "Day 3, no Day 2 share"],
+  ["low", "Below RM300"], ["done", "Already claimed"], ["tier", "Not Tier 3/V"],
+];
+let halloweenPreviewKey = "day2";
+
+function halloweenPreviewSample(key = halloweenPreviewKey) {
+  const base = { brand: "EZ", fullBrand: "EZ96", tier: "Tier V", redPacket: 28, shareExtra: 28 };
+  const history = { choice: "TRICK", track: "RM300+", day1Deposit: 350, day1Bonus: 120 };
+  const table = [{ min: 500, trick: 200, treat: 150 }, { min: 300, trick: 120, treat: 90 }, { min: 100, trick: 40, treat: 30 }, { min: 50, trick: 18, treat: 15 }];
+  if (key === "day1") return { ...base, day: 1, state: "day1", table };
+  if (key === "day3") return { ...base, ...history, day: 3, state: "day3", canShare: true, shareMethod: "Social post", postLink: "https://facebook.com/example/posts/1", day2Total: 56, day2Shared: true };
+  if (key === "day3NoShare") return { ...base, ...history, day: 3, state: "day3", canShare: false, shareMethod: "", day2Total: 28, day2Shared: false };
+  if (key === "low") return { ...base, day: 2, state: "closed", choice: "TREAT", track: "Below RM300", day1Deposit: 200, day1Bonus: 30, message: "No Day 2 reward: the Day 1 deposit was below RM300." };
+  if (key === "done") return { ...base, ...history, day: 2, state: "done", day2Total: 56, message: "Day 2 already claimed: RM56." };
+  if (key === "tier") return { ...base, tier: "", tierRaw: "Tier 2", day: 1, state: "closed", message: "Halloween is for Tier 3 and Tier V players only. This player's tier: Tier 2." };
+  return { ...base, ...history, day: 2, state: "day2" };
+}
+
+function renderHalloweenPreviewSwitch(chatId) {
+  if (!previewMode || !BONUS_SHOWCASE_PREVIEW) return "";
+  return `<div class="hw-preview-switch"><span>Admin preview · show the Halloween card as:</span>${HALLOWEEN_PREVIEW_STATES.map(([key, label]) =>
+    `<button type="button" class="hw-chip ${halloweenPreviewKey === key ? "on" : ""}" data-action="halloweenPreviewState" data-chat="${chatId}" data-value="${key}">${escapeHtml(label)}</button>`).join("")}</div>`;
+}
+
 function resetHalloweenInput(s) {
   s.halloweenChoice = "";
   s.halloweenDeposit = "";
@@ -2540,7 +2566,7 @@ function renderHalloweenCard(chatId) {
         <div class="ticket-body">${inner}</div>
       </div>
     </div>`;
-  const subLine = h.day ? `Day ${h.day} of 3 · ${escapeHtml(h.fullBrand || "")} · ${escapeHtml(h.tier || "")}` : "";
+  const subLine = h.day ? `Day ${h.day} of 3 · ${escapeHtml(h.fullBrand || "")} · ${escapeHtml(h.tier || h.tierRaw || "tier not found")}` : "";
 
   if (!claimed && !halloweenActionable(h)) {
     return wrap(`${title}<div class="ticket-meta">${subLine}</div><div class="hw-note ${h.state === "done" ? "ok" : ""}">${escapeHtml(h.message || "")}</div>`, "locked");
@@ -2829,7 +2855,7 @@ function renderTickets(chatId) {
   }
 
   const alreadyClaimedOne = Object.values(s.claimedPrograms).some(Boolean);
-  return `<div class="ticket-stack">` + renderHalloweenCard(chatId) + defs.map((d) => {
+  return `<div class="ticket-stack">` + (r.halloween ? renderHalloweenPreviewSwitch(chatId) : "") + renderHalloweenCard(chatId) + defs.map((d) => {
     const claimed = d.key === "gracePeriod" ? !!d.done : !!s.claimedPrograms[d.key];
     const locked = d.excludeFromLock ? false : (alreadyClaimedOne && !claimed);
     const feedbackComplete = !d.requiresFeedback || !!(
@@ -5167,10 +5193,7 @@ function applyPreviewSampleState(chat) {
       telegram28: { status: "Eligible · RM28" },
       redeemCode: { status: "SUNNY-88" },
       specialReload: { status: "Eligible Angpao" },
-      halloween: {
-        day: 2, state: "day2", brand: "EZ", fullBrand: "EZ96", tier: "Tier V", redPacket: 28, shareExtra: 28,
-        choice: "TRICK", track: "RM300+", day1Deposit: 350, day1Bonus: 120,
-      },
+      halloween: halloweenPreviewSample(),
     });
     configuredBonusPrograms.forEach((program, index) => {
       if (sample.matchedRow[program.key] === undefined) {
@@ -5803,6 +5826,23 @@ chatListEl.addEventListener("click", async (e) => {
     if (forcing) { s.isUnknown = false; reportUnknownTick(chatId, false, true); }
     const previousRecordId = (!s.logged && s.caRecordId && ownsCaseRecord(s)) ? s.caRecordId : null;
     await runLookup(chatId, { username, brand, telegramNow, link: s.chatUrl || chatDef?.link || "", previousRecordId, forcing, btn });
+  }
+
+  if (btn.dataset.action === "halloweenPreviewState") {
+    if (!s || !previewMode || !HALLOWEEN_PREVIEW_STATES.some(([key]) => key === btn.dataset.value)) return;
+    halloweenPreviewKey = btn.dataset.value;
+    if (s.matchedRow) s.matchedRow.halloween = halloweenPreviewSample();
+    if (s.claimedPrograms?.halloween) {
+      delete s.claimedPrograms.halloween;
+      s.inquiry = [];
+      s.status = "";
+      s.releasedBonusAmount = "";
+      s.releasedAmountRaw = "";
+    }
+    resetHalloweenInput(s);
+    saveState();
+    renderChats(activeChats);
+    return;
   }
 
   if (btn.dataset.action === "halloweenPick") {

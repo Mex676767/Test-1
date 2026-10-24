@@ -1475,3 +1475,4 @@ body { font-size: 13px; }
 .hw-note.ok { color: var(--teal); }
 .hw-hint { font-size: 10.5px; color: var(--text-faint); line-height: 1.35; }
 .hw-hint a { color: var(--blue); }
+.hw-preview-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-faint); padding: 2px 0 4px; }
