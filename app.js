@@ -945,6 +945,7 @@ function hasAnyBonus(chatId) {
   if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) return true;
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
   if (r.specialReload) return true;
+  if (halloweenActionable(r.halloween)) return true;
   return false;
 }
 
@@ -1324,7 +1325,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     s.claimedPrograms = {};
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = "";
+    s.riskReloadAmount = ""; resetHalloweenInput(s);
     s.gracePeriodActivated = false;
     s.releasedBonusAmount = "";
     s.releasedAmountRaw = "";
@@ -1840,6 +1841,7 @@ let inquiryOptions = [
   "Missing Fund", "Sms Promo", "Telegram", "Birthday", "LuckyDraw",
   "Goal321", "TO NOT UPDATED", "Rescue Bonus", "TOP Deposit",
   "Maintenance", "Telegram Transition Message", "Unclear Inquiries",
+  "Halloween Day 1", "Halloween Day 2", "Halloween Day 3",
 ];
 async function fetchInquiryOptions({ fresh = false } = {}) {
   try {
@@ -2266,6 +2268,7 @@ const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
   "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount",
+  "halloweenChoice", "halloweenDeposit", "halloweenShared", "halloweenMethod", "halloweenPostLink", "halloweenClaim",
 ];
 const CASE_KEYS = [
   ...CASE_CONTENT_KEYS,
@@ -2320,7 +2323,7 @@ function snapshotCase(s) {
 function loadCaseInto(s, snap) {
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
-  s.riskReloadAmount = "";
+  s.riskReloadAmount = ""; resetHalloweenInput(s);
   s.claimTickets = {};
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
 }
@@ -2412,7 +2415,7 @@ async function addCaseFlow(chatId) {
     s.gracePeriodActivated = false;
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = "";
+    s.riskReloadAmount = ""; resetHalloweenInput(s);
     s.inquiry = [];
     s.status = "";
     s.releasedBonusAmount = "";
@@ -2468,7 +2471,311 @@ async function editCaseFlow(chatId, caseNo) {
   }
 }
 
+// ---- Halloween "Trick or Treat" card -------------------------------------------------------
+// The server decides the day, the tier and what is allowed (row.halloween). The card only collects input.
+const HALLOWEEN_INQUIRY_PREFIX = "Halloween Day ";
+const HALLOWEEN_METHODS = ["Social post", "5 friends"];
+
+function resetHalloweenInput(s) {
+  s.halloweenChoice = "";
+  s.halloweenDeposit = "";
+  s.halloweenShared = false;
+  s.halloweenMethod = "";
+  s.halloweenPostLink = "";
+  s.halloweenClaim = null;
+}
+
+function halloweenActionable(h) {
+  return !!h && (h.state === "day1" || h.state === "day2" || h.state === "day3");
+}
+
+// What the agent has entered so far and what it would pay. Mirrors the server rules; the server re-checks everything.
+function halloweenInput(s, h) {
+  const result = { valid: false, amount: 0, error: "", sub: "", next: "" };
+  if (!halloweenActionable(h)) return result;
+  if (h.state === "day1") {
+    const raw = String(s.halloweenDeposit || "").replace(/,/g, "").trim();
+    const deposit = Number(raw);
+    const table = Array.isArray(h.table) ? h.table : [];
+    if (!s.halloweenChoice) { result.error = "Pick TRICK or TREAT first."; return result; }
+    if (!raw || !Number.isFinite(deposit) || deposit <= 0) { result.error = "Enter the customer's Day 1 deposit."; return result; }
+    const row = table.find((item) => deposit >= item.min);
+    if (!row) { result.error = "A deposit below RM50 does not qualify."; return result; }
+    result.valid = true;
+    result.amount = s.halloweenChoice === "TRICK" ? row.trick : row.treat;
+    result.sub = `${s.halloweenChoice} · RM${row.min} row · x3 turnover`;
+    result.next = deposit >= 300
+      ? `Unlocks Day 2 and Day 3: RM${h.redPacket} each, or RM${h.redPacket + h.shareExtra} if the player shares.`
+      : "Below RM300: Day 1 bonus only, no Day 2 or Day 3.";
+    return result;
+  }
+  const sharing = h.state === "day2" ? !!s.halloweenShared : !!s.halloweenShared && !!h.canShare;
+  const method = h.state === "day3" ? h.shareMethod : s.halloweenMethod;
+  if (sharing && h.state === "day2") {
+    if (!method) { result.error = "Choose how the player shared."; return result; }
+    if (method === "Social post" && !String(s.halloweenPostLink || "").trim()) { result.error = "Enter the link of the player's post."; return result; }
+  }
+  result.valid = true;
+  result.amount = h.redPacket + (sharing ? h.shareExtra : 0);
+  result.sub = sharing ? `RM${h.redPacket} red packet + RM${h.shareExtra} share extra · x3 turnover` : `RM${h.redPacket} red packet · x3 turnover`;
+  result.next = h.state === "day2" ? "Sharing today is also needed for the Day 3 share extra." : "";
+  return result;
+}
+
+function halloweenChip(chatId, field, value, label, active) {
+  return `<button type="button" class="hw-chip ${active ? "on" : ""}" data-action="halloweenPick" data-chat="${chatId}" data-field="${field}" data-value="${escapeHtml(value)}">${escapeHtml(label)}</button>`;
+}
+
+function renderHalloweenCard(chatId) {
+  const s = state[chatId];
+  const h = s.matchedRow?.halloween;
+  if (!h) return "";
+  const claimed = !!s.claimedPrograms.halloween;
+  const otherClaimed = Object.entries(s.claimedPrograms || {}).some(([key, active]) => key !== "halloween" && active);
+  const title = `<div class="ticket-name">Halloween · Trick or Treat</div>`;
+  const wrap = (inner, extraClass = "") => `
+    <div class="ticket bonus-tone-orange ticket-halloween ${extraClass}">
+      <div class="ticket-main">
+        <div class="ticket-icon" aria-hidden="true">🎃</div>
+        <div class="ticket-body">${inner}</div>
+      </div>
+    </div>`;
+  const subLine = h.day ? `Day ${h.day} of 3 · ${escapeHtml(h.fullBrand || "")} · ${escapeHtml(h.tier || "")}` : "";
+
+  if (!claimed && !halloweenActionable(h)) {
+    return wrap(`${title}<div class="ticket-meta">${subLine}</div><div class="hw-note ${h.state === "done" ? "ok" : ""}">${escapeHtml(h.message || "")}</div>`, "locked");
+  }
+
+  const history = h.state === "day1" ? "" : `
+    <div class="hw-history">
+      <div><span>Day 1</span><span>${escapeHtml(h.choice || "")} · RM${escapeHtml(String(h.day1Deposit || 0))} → RM${escapeHtml(String(h.day1Bonus || 0))}</span></div>
+      ${h.state === "day3" ? `<div><span>Day 2</span><span>RM${escapeHtml(String(h.day2Total || 0))}${h.day2Shared ? ` · shared (${escapeHtml(h.shareMethod || "")})` : " · not shared"}</span></div>` : ""}
+    </div>`;
+
+  if (claimed) {
+    const info = s.halloweenClaim || {};
+    const day = info.day || h.day;
+    const amount = info.amount ?? String(s.releasedBonusAmount || "").split(" | ")[0];
+    return `
+    <div class="ticket bonus-tone-orange ticket-halloween">
+      <div class="ticket-main">
+        <div class="ticket-icon" aria-hidden="true">🎃</div>
+        <div class="ticket-body">${title}<div class="ticket-meta">Day ${escapeHtml(String(day))} claimed${amount ? ` · RM${escapeHtml(String(amount))}` : ""}</div></div>
+      </div>
+      <div class="ticket-btns"><button class="claim-btn claimed" data-action="unclaim" data-program="halloween" data-chat="${chatId}" title="Click again to unclaim">✓ Claimed</button></div>
+    </div>`;
+  }
+
+  const input = halloweenInput(s, h);
+  let controls = "";
+  if (h.state === "day1") {
+    controls = `
+      <div class="hw-label">Player's choice (once per campaign)</div>
+      <div class="hw-chips">${["TRICK", "TREAT"].map((value) => halloweenChip(chatId, "choice", value, value, s.halloweenChoice === value)).join("")}</div>
+      <label class="hw-field"><span>Customer deposit (RM)</span>
+        <input type="text" inputmode="decimal" class="hw-deposit" data-chat="${chatId}" placeholder="Enter deposit amount" value="${escapeHtml(s.halloweenDeposit || "")}" />
+      </label>`;
+  } else if (h.state === "day2") {
+    controls = `
+      <div class="hw-label">Did the player share today?</div>
+      <div class="hw-chips">${halloweenChip(chatId, "shared", "no", "Not shared", !s.halloweenShared)}${halloweenChip(chatId, "shared", "yes", "Shared", !!s.halloweenShared)}</div>
+      ${s.halloweenShared ? `
+        <div class="hw-label">How did they share?</div>
+        <div class="hw-chips">${HALLOWEEN_METHODS.map((value) => halloweenChip(chatId, "method", value, value === "Social post" ? "Social post" : "5 friends", s.halloweenMethod === value)).join("")}</div>
+        ${s.halloweenMethod === "Social post" ? `<input type="text" class="hw-link" data-chat="${chatId}" placeholder="Link of the player's post" value="${escapeHtml(s.halloweenPostLink || "")}" />` : ""}
+        ${s.halloweenMethod === "5 friends" ? `<div class="hw-hint">Check the screenshot shows the image sent to 5 different friends today.</div>` : ""}` : ""}`;
+  } else if (h.state === "day3") {
+    const safeLink = /^https?:\/\//i.test(h.postLink || "") ? h.postLink : "";
+    controls = h.canShare ? `
+      <div class="hw-label">Did the player share again today?</div>
+      <div class="hw-chips">${halloweenChip(chatId, "shared", "no", "Not shared", !s.halloweenShared)}${halloweenChip(chatId, "shared", "yes", "Shared", !!s.halloweenShared)}</div>
+      ${s.halloweenShared ? (h.shareMethod === "Social post"
+        ? `<div class="hw-hint">Same post as Day 2 must still be live${safeLink ? `: <a href="${escapeHtml(safeLink)}" target="_blank" rel="noopener">open the post</a>` : ""}</div>`
+        : `<div class="hw-hint">Check the screenshot shows the image sent to 5 different friends today.</div>`) : ""}`
+      : `<div class="hw-hint">No share extra today: the player did not share on Day 2. Base red packet only.</div>`;
+  }
+
+  const disabled = otherClaimed || !input.valid;
+  const title2 = otherClaimed ? "Another bonus is already claimed on this chat" : (input.valid ? "" : input.error);
+  return `
+    <div class="ticket bonus-tone-orange ticket-halloween hw-active ${otherClaimed ? "locked" : ""}">
+      <div class="ticket-main">
+        <div class="ticket-icon" aria-hidden="true">🎃</div>
+        <div class="ticket-body">${title}<div class="ticket-meta">${subLine}</div></div>
+      </div>
+      <div class="hw-body">
+        ${history}
+        ${controls}
+        <div class="hw-preview ${input.valid ? "ready" : ""}">
+          <span>Claim amount</span>
+          <strong class="hw-amount">${input.valid ? `RM${input.amount}` : "—"}</strong>
+          <small class="hw-sub">${escapeHtml(input.valid ? input.sub : input.error)}</small>
+        </div>
+        <div class="hw-note hw-next">${escapeHtml(input.next)}</div>
+      </div>
+      <div class="ticket-btns">
+        <button class="claim-btn hw-claim" data-action="claim" data-program="halloween" data-chat="${chatId}" ${title2 ? `title="${escapeHtml(title2)}"` : ""} ${disabled ? "disabled" : ""}>Claim Day ${h.day}</button>
+      </div>
+      <div class="hw-hint">${previewMode ? "Admin preview: no ticket is raised and nothing is saved." : "Claiming raises a VVIP Complain Players ticket."}</div>
+    </div>`;
+}
+
+// Refresh the amount line and the Claim button while the agent types, without redrawing the inputs.
+function patchHalloweenCard(chatId, scope) {
+  const s = state[chatId];
+  const h = s?.matchedRow?.halloween;
+  const ticket = scope?.closest(".ticket-halloween");
+  if (!h || !ticket) return;
+  const input = halloweenInput(s, h);
+  const otherClaimed = Object.entries(s.claimedPrograms || {}).some(([key, active]) => key !== "halloween" && active);
+  ticket.querySelector(".hw-preview")?.classList.toggle("ready", input.valid);
+  const amount = ticket.querySelector(".hw-amount");
+  if (amount) amount.textContent = input.valid ? `RM${input.amount}` : "—";
+  const sub = ticket.querySelector(".hw-sub");
+  if (sub) sub.textContent = input.valid ? input.sub : input.error;
+  const next = ticket.querySelector(".hw-next");
+  if (next) next.textContent = input.next;
+  const button = ticket.querySelector(".hw-claim");
+  if (button) {
+    button.disabled = otherClaimed || !input.valid;
+    button.title = otherClaimed ? "Another bonus is already claimed on this chat" : (input.valid ? "" : input.error);
+  }
+}
+
+function halloweenDayClaimed(s) {
+  for (const inquiry of s.inquiry || []) {
+    if (String(inquiry).startsWith(HALLOWEEN_INQUIRY_PREFIX)) return Number(String(inquiry).slice(HALLOWEEN_INQUIRY_PREFIX.length)) || 0;
+  }
+  return s.halloweenClaim?.day || 0;
+}
+
+async function claimHalloween(chatId, btn, card) {
+  const s = state[chatId];
+  const h = s?.matchedRow?.halloween;
+  if (!s || !halloweenActionable(h)) return;
+  const input = halloweenInput(s, h);
+  if (!input.valid) { setStatus(input.error, "error"); return; }
+  const inquiry = `${HALLOWEEN_INQUIRY_PREFIX}${h.day}`;
+  if (!inquiryOptions.includes(inquiry)) {
+    setStatus(`Add "${inquiry}" to the Inquiry options in the Customer Approaching table first. Nothing was claimed.`, "error");
+    return;
+  }
+  if (!s.brand || !s.username) { setStatus("Look up the player first. Nothing was claimed.", "error"); return; }
+
+  const chatDef = activeChats.find((c) => c.chatId === chatId);
+  const claimBody = (preview) => JSON.stringify({
+    action: "claim", preview, day: h.day, username: s.username, brand: s.brand,
+    choice: s.halloweenChoice, deposit: s.halloweenDeposit,
+    shared: h.state === "day2" ? !!s.halloweenShared : !!s.halloweenShared && !!h.canShare,
+    shareMethod: s.halloweenMethod, postLink: s.halloweenPostLink,
+    agentName: selectedAgent, chatLink: s.chatUrl || chatDef?.link || "",
+  });
+  const postClaim = async (preview) => (await fetch("/halloween-claim", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: claimBody(preview),
+  })).json();
+
+  if (!previewMode) {
+    // Check every rule first, so a claim the server would refuse never leaves a ticket behind.
+    let verdict;
+    try { verdict = await postClaim(true); } catch (err) { verdict = { ok: false, error: err.message }; }
+    if (!verdict.ok) { setStatus(`${verdict.error || "The claim could not be checked."} Nothing was claimed.`, "error"); return; }
+    if (Number(verdict.amount) !== Number(input.amount)) {
+      setStatus(`This claim is now RM${verdict.amount}, not RM${input.amount} (the player's tier or the day changed). Look up the player again. Nothing was claimed.`, "error");
+      return;
+    }
+    if (!(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
+  }
+  card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
+  btn = card.querySelector(".hw-claim") || btn;
+
+  btn.disabled = true;
+  btn.textContent = "…";
+  claimWriteInFlight.add(chatId);
+  let data;
+  try {
+    data = await postClaim(previewMode);
+    if (!data.ok) throw new Error(data.error || "Claim failed");
+  } catch (err) {
+    setStatus(`Halloween claim failed: ${err.message}. If a ticket was already raised for it, check that ticket before claiming again.`, "error");
+    btn.disabled = false;
+    btn.textContent = `Claim Day ${h.day}`;
+    return;
+  } finally {
+    claimWriteInFlight.delete(chatId);
+  }
+
+  const amount = String(data.amount);
+  s.claimedPrograms.halloween = true;
+  s.halloweenClaim = { day: h.day, amount: data.amount };
+  logCaseOrigin(chatId, `halloween day ${h.day} claimed`);
+  s.releasedBonusAmount = amount;
+  s.releasedAmountRaw = amount;
+  if (!s.claimSecretManual) s.claimSecret = true;
+  if (!s.escalation.amount) s.escalation.amount = amount;
+  s.inquiry = [inquiry];
+  s.status = "Given";
+  reportClaim(chatId, { program: "halloween", label: `Halloween Day ${h.day}`, source: s.halloweenChoice || "", inquiry, amount });
+
+  card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+  card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
+  refreshInquiryChips(card, chatId);
+  card.querySelector(".inquiry-dropdown").innerHTML = renderInquiryDropdown(chatId, "");
+  refreshStatusChip(card, chatId);
+  card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
+
+  if (!previewMode) {
+    await submitRecord(chatId, { auto: true, reason: `${inquiry} claimed` });
+    if (h.day === 1) await addHalloweenActionNote(chatId, data);
+  } else {
+    setStatus("Preview claim checked against Lark. Nothing was saved.", "success");
+  }
+}
+
+// After a real Day 1 claim: write an Action log note saying whether the player can claim Day 2 and Day 3.
+// The claim is already saved, so a failed note only shows a warning and never undoes anything.
+async function addHalloweenActionNote(chatId, claim) {
+  const s = state[chatId];
+  if (!s || consoleNoteBlocker(s)) return;
+  const eligible = claim.track === "RM300+";
+  const deposit = claim.deposit ?? s.halloweenDeposit;
+  const note = eligible
+    ? `Halloween Day 1: deposited RM${deposit} (RM300 or more), eligible for Day 2 and Day 3.`
+    : `Halloween Day 1: deposited RM${deposit} (below RM300), not eligible for Day 2 and Day 3.`;
+  const answer = await postConsoleNote(s, { note, type: "action" });
+  if (answer && answer.ok && answer.saved) {
+    noteUi(chatId).notes = null;
+    paintNoteSection(chatId);
+    setStatus("Halloween Day 1 claimed. Action log note added.", "success");
+  } else {
+    setStatus(`Halloween Day 1 is claimed, but the Action log note was not saved: ${(answer && answer.error) || "unknown problem"} Add it by hand.`, "error");
+  }
+}
+
+// Undo the Halloween table side of a claim. Throws if the server refuses, so the unclaim stops.
+async function undoHalloween(chatId) {
+  const s = state[chatId];
+  const day = halloweenDayClaimed(s);
+  if (!day) return;
+  const res = await fetch("/halloween-claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "unclaim", preview: previewMode, day, username: s.username, brand: s.brand,
+      agentName: selectedAgent, chatLink: s.chatUrl || activeChats.find((c) => c.chatId === chatId)?.link || "",
+    }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "The Halloween row could not be reverted");
+  s.halloweenClaim = null;
+  s.halloweenChoice = "";
+  s.halloweenDeposit = "";
+  s.halloweenShared = false;
+  s.halloweenMethod = "";
+  s.halloweenPostLink = "";
+}
+
 function renderTickets(chatId) {
+
   const s = state[chatId];
   if (s.matchedRow === undefined) {
     return `<div class="ticket empty">Enter a username and press Look up to check bonuses</div>`;
@@ -2517,12 +2824,12 @@ function renderTickets(chatId) {
     defs.push({ key: "specialReload", kind: "special", label: "Special Reload (Ang Pao)", display: r.specialReload.status });
   }
 
-  if (!defs.length) {
+  if (!defs.length && !r.halloween) {
     return `<div class="ticket empty">No active bonuses for this player right now</div>`;
   }
 
   const alreadyClaimedOne = Object.values(s.claimedPrograms).some(Boolean);
-  return `<div class="ticket-stack">` + defs.map((d) => {
+  return `<div class="ticket-stack">` + renderHalloweenCard(chatId) + defs.map((d) => {
     const claimed = d.key === "gracePeriod" ? !!d.done : !!s.claimedPrograms[d.key];
     const locked = d.excludeFromLock ? false : (alreadyClaimedOne && !claimed);
     const feedbackComplete = !d.requiresFeedback || !!(
@@ -3038,6 +3345,7 @@ const AUTO_TICKET_PROGRAMS = {
   ltvTest: { label: "LTV", keyword: "LTV" },
   gracePeriod: { label: "Grace Period", keyword: "Grace Period" },
   riskPlayer: { label: "Risk Player", keyword: "Risk Player" },
+  halloween: { label: "Halloween", keyword: "Complain Players" },
 };
 const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market";
 let agentDefaultMarket = { account: "", code: "" };
@@ -3662,6 +3970,7 @@ function claimedProgramsFromSavedCase(row) {
   for (const config of configuredBonusPrograms) {
     if (inquiries.includes(config.inquiry)) claimed[config.key] = true;
   }
+  if (inquiries.some((inquiry) => String(inquiry).startsWith(HALLOWEEN_INQUIRY_PREFIX))) claimed.halloween = true;
   return claimed;
 }
 
@@ -4858,6 +5167,10 @@ function applyPreviewSampleState(chat) {
       telegram28: { status: "Eligible · RM28" },
       redeemCode: { status: "SUNNY-88" },
       specialReload: { status: "Eligible Angpao" },
+      halloween: {
+        day: 2, state: "day2", brand: "EZ", fullBrand: "EZ96", tier: "Tier V", redPacket: 28, shareExtra: 28,
+        choice: "TRICK", track: "RM300+", day1Deposit: 350, day1Bonus: 120,
+      },
     });
     configuredBonusPrograms.forEach((program, index) => {
       if (sample.matchedRow[program.key] === undefined) {
@@ -5492,9 +5805,29 @@ chatListEl.addEventListener("click", async (e) => {
     await runLookup(chatId, { username, brand, telegramNow, link: s.chatUrl || chatDef?.link || "", previousRecordId, forcing, btn });
   }
 
+  if (btn.dataset.action === "halloweenPick") {
+    if (!s || s.claimedPrograms.halloween) return;
+    const field = btn.dataset.field;
+    const value = btn.dataset.value;
+    if (field === "choice") s.halloweenChoice = value;
+    if (field === "shared") {
+      s.halloweenShared = value === "yes";
+      if (!s.halloweenShared) { s.halloweenMethod = ""; s.halloweenPostLink = ""; }
+    }
+    if (field === "method") s.halloweenMethod = value;
+    saveState();
+    card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+    return;
+  }
+
   if (btn.dataset.action === "claim") {
     const programKey = btn.dataset.program;
     const r = s.matchedRow;
+
+    if (programKey === "halloween") {
+      await claimHalloween(chatId, btn, card);
+      return;
+    }
 
     if (programKey === "vs96Feedback" && (
       !String(s.vs96FeedbackQuery1 || "").trim()
@@ -5626,6 +5959,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.unclaimInFlight = true;
     btn.disabled = true;
     try {
+      if (programKey === "halloween") await undoHalloween(chatId);
       if (!previewMode && s.logged && s.caRecordId && !s.isUnknown) {
         const res = await fetch("/lark-record", {
           method: "POST",
@@ -6043,6 +6377,25 @@ chatListEl.addEventListener("input", (e) => {
     if (note) note.textContent = complete
       ? "✓ Both feedback answers collected"
       : "Fill in both feedback answers before claiming.";
+    saveState();
+    return;
+  }
+  const halloweenField = e.target.closest(".hw-deposit, .hw-link");
+  if (halloweenField) {
+    const chatId = halloweenField.dataset.chat;
+    const s = state[chatId];
+    if (!s) return;
+    if (halloweenField.classList.contains("hw-deposit")) {
+      const cleaned = halloweenField.value.replace(/[^0-9.]/g, "");
+      const decimalAt = cleaned.indexOf(".");
+      halloweenField.value = decimalAt < 0
+        ? cleaned
+        : cleaned.slice(0, decimalAt + 1) + cleaned.slice(decimalAt + 1).replaceAll(".", "");
+      s.halloweenDeposit = halloweenField.value;
+    } else {
+      s.halloweenPostLink = halloweenField.value;
+    }
+    patchHalloweenCard(chatId, halloweenField);
     saveState();
     return;
   }

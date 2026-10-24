@@ -27,7 +27,7 @@ function widget({ persisted = {}, agent = 'Agent A', focus = null, storage, cloc
     logDiagnostic: (text, kind) => calls.diag.push({ text, kind }),
     renderChats: () => { calls.render++; }, scheduleNeedsAttentionRefresh: () => {}, saveState: () => { const copy = JSON.parse(JSON.stringify(state)); for (const s of Object.values(copy)) { delete s.lookupInFlight; delete s.unclaimInFlight; } widgetSaved.set(instance, copy); },
     setUnknown: (chatId, value) => { state[chatId].isUnknown = value; },
-    chatListEl: { querySelectorAll: () => [] }, renderPlayerInfo: () => '', renderTickets: () => '', renderAutoFields: () => '',
+    chatListEl: { querySelectorAll: () => [] }, renderPlayerInfo: () => '', renderTickets: () => '', renderAutoFields: () => '', resetHalloweenInput: () => {},
     escapeHtml: (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]),
     fetchBonusRow: (...args) => { calls.fetch.push(args); return fetchBonusRow ? fetchBonusRow(...args) : Promise.resolve(okResult()); },
     document: { getElementById: (id) => els.get(id) || null, createElement: () => ({ dataset: {}, classList: { add() {} } }), body: { appendChild: (el) => els.set(el.id, el) } },

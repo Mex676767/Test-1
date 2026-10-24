@@ -1433,3 +1433,45 @@ body { font-size: 13px; }
 .ticket-inbox-limit p { margin: 0 0 8px; }
 .ticket-load-all { width: 100%; min-height: 36px; border-radius: 10px; }
 .ticket-inbox-limit .ticket-inbox-limit-error { margin: 8px 0 0; color: var(--danger); }
+/* Halloween Trick or Treat card */
+.ticket.ticket-halloween.hw-active {
+  display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 8px;
+}
+.ticket-halloween .hw-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ticket-halloween .ticket-btns .claim-btn { width: 100%; }
+.ticket-halloween.hw-active .ticket-btns { width: 100%; }
+.hw-label { color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
+.hw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.hw-chip {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);
+  border-radius: 7px; padding: 5px 11px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.hw-chip:hover { border-color: var(--bonus-accent, var(--gold)); }
+.hw-chip.on {
+  border-color: var(--bonus-accent, var(--gold)); color: var(--bonus-accent, var(--gold));
+  background: color-mix(in srgb, var(--bonus-accent, var(--gold)) 14%, var(--surface));
+}
+.hw-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.hw-field > span { color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.hw-deposit, .hw-link {
+  width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 9px; background: var(--surface-2); color: var(--text);
+  font: 12px "Cascadia Mono", Consolas, monospace;
+}
+.hw-deposit:focus, .hw-link:focus { outline: none; border-color: var(--bonus-accent, var(--gold)); }
+.hw-preview {
+  display: flex; flex-direction: column; justify-content: center; gap: 1px;
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--surface-2);
+}
+.hw-preview > span { color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+.hw-preview strong { color: var(--text-muted); font-size: 16px; font-weight: 800; }
+.hw-preview.ready strong { color: var(--bonus-accent, var(--gold)); }
+.hw-preview small { color: var(--text-faint); font-size: 10px; }
+.hw-history { border: 1px solid var(--border); border-radius: 8px; padding: 5px 9px; background: var(--surface-2); font-size: 11px; }
+.hw-history > div { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.hw-history > div > span:first-child { color: var(--text-faint); }
+.hw-note { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+.hw-note:empty { display: none; }
+.hw-note.ok { color: var(--teal); }
+.hw-hint { font-size: 10.5px; color: var(--text-faint); line-height: 1.35; }
+.hw-hint a { color: var(--blue); }
