@@ -292,6 +292,8 @@ test("a three-day run writes one Halloween row and fills it a day at a time", as
   const day1 = await call({ action: "claim", day: 1, choice: "TRICK", deposit: "350" }, "2026-10-26");
   assert.equal(day1.ok, true, JSON.stringify(day1));
   assert.equal(day1.amount, 120);
+  assert.equal(day1.deposit, 350, "the server returns the deposit it used, for the Action log note");
+  assert.equal(day1.track, "RM300+");
   assert.equal(lark.store.rows.length, 1);
   const saved = lark.store.rows[0].fields;
   assert.equal(saved[F.uid], "zzali", "the username is stored lower-case, like the other tables");

@@ -57,7 +57,7 @@ export async function handler(event) {
     if (!plan.ok) return reply(200, { ok: false, error: plan.error });
 
     const values = plan.kind === "create" ? { [F.uid]: username, [F.brand]: brand, ...plan.fields } : plan.fields;
-    const summary = { day: plan.day, amount: plan.amount, tier: plan.tier, shared: plan.shared, base: plan.base, track: plan.track, choice: plan.choice };
+    const summary = { day: plan.day, amount: plan.amount, tier: plan.tier, shared: plan.shared, base: plan.base, track: plan.track, choice: plan.choice, deposit: plan.deposit };
     if (dryRun) return reply(200, { ok: true, dryRun: true, ...summary, fields: values });
 
     const shaped = shapeFields(values, catalog);

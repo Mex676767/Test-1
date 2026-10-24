@@ -2715,8 +2715,30 @@ async function claimHalloween(chatId, btn, card) {
 
   if (!previewMode) {
     await submitRecord(chatId, { auto: true, reason: `${inquiry} claimed` });
+    if (h.day === 1) await addHalloweenActionNote(chatId, data);
   } else {
     setStatus("Preview claim checked against Lark. Nothing was saved.", "success");
+  }
+}
+
+// After a real Day 1 claim: write an Action log note saying whether the player can claim Day 2 and Day 3.
+// The claim is already saved, so a failed note only shows a warning and never undoes anything.
+async function addHalloweenActionNote(chatId, claim) {
+  const s = state[chatId];
+  if (!s || consoleNoteBlocker(s)) return;
+  const eligible = claim.track === "RM300+";
+  const deposit = claim.deposit ?? s.halloweenDeposit;
+  const note = `Halloween Day 1 claimed: ${claim.choice}, deposit RM${deposit} -> bonus RM${claim.amount}. `
+    + (eligible
+      ? "Eligible for Day 2 and Day 3 (Day 1 deposit is RM300 or more)."
+      : "Not eligible for Day 2 and Day 3 (Day 1 deposit is below RM300).");
+  const answer = await postConsoleNote(s, { note, type: "action" });
+  if (answer && answer.ok && answer.saved) {
+    noteUi(chatId).notes = null;
+    paintNoteSection(chatId);
+    setStatus("Halloween Day 1 claimed. Action log note added.", "success");
+  } else {
+    setStatus(`Halloween Day 1 is claimed, but the Action log note was not saved: ${(answer && answer.error) || "unknown problem"} Add it by hand.`, "error");
   }
 }
 
