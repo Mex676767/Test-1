@@ -145,6 +145,30 @@ test('a Halloween claim ticket carries the remark "3X Turnover Team"; other bonu
   assert.match(plain(noRemarks.run('buildClaimTicketFields(state.chat1, "halloween", "120", "MYR")')).error, /no Remarks field.*3X Turnover Team/);
 });
 
+test('Halloween in admin preview opens the same proof popup, but submitting it creates no ticket; other bonuses still create one', async () => {
+  const withComplain = FIELDS.map((field) => (field.key === 'query_type' ? { ...field, options: [...field.options, { value: 'vvip_complain_players', label: 'VVIP Complain Players' }] } : field));
+  let seen;
+  const halloween = world({ fields: withComplain, preview: true, modal: async (options) => { seen = options; return (await options.onSubmit({ files: [new File([new Uint8Array([1])], 'proof.png', { type: 'image/png' })], market: 'MYR', ticketEmail: '' })).ok; } });
+  assert.equal(await halloween.run('raiseClaimTicket("chat1", "halloween", "120")'), true);
+  assert.equal(halloween.calls.modals, 1, 'the popup opened');
+  assert.match(seen.previewNote, /no ticket is created/);
+  assert.deepEqual(plain(seen.rows.find((row) => row[0] === 'Remarks')), ['Remarks', '3X Turnover Team']);
+  assert.equal(halloween.calls.fetches.filter((call) => call.url === '/ticket-create').length, 0, 'nothing was sent to the ticket system');
+  assert.deepEqual(plain(halloween.run('state.chat1.claimTickets')), {}, 'no ticket ref is remembered');
+  assert.equal(await halloween.run('raiseClaimTicket("chat1", "halloween", "120")'), true);
+  assert.equal(halloween.calls.modals, 2, 'it can be opened again');
+
+  const other = world({ fields: withComplain, preview: true, modal: async (options) => { seen = options; return (await options.onSubmit({ files: [new File([new Uint8Array([1])], 'proof.png', { type: 'image/png' })], market: 'MYR', ticketEmail: '' })).ok; } });
+  assert.equal(await other.run('raiseClaimTicket("chat1", "ltvTest", "88")'), true);
+  assert.match(seen.previewNote, /creates a real ticket/);
+  assert.equal(other.calls.fetches.filter((call) => call.url === '/ticket-create').length, 1);
+
+  const live = world({ fields: withComplain, preview: false, live: true });
+  assert.equal(await live.run('raiseClaimTicket("chat1", "halloween", "120")'), true);
+  assert.equal(live.calls.fetches.filter((call) => call.url === '/ticket-create').length, 1, 'a live Halloween claim still creates the ticket');
+  assert.equal(plain(live.run('state.chat1.claimTickets')).halloween, 'TK2610190001');
+});
+
 test('status: the ticket system default is used, else its Open option, so a required Status never blocks the claim', () => {
   const status = (extra) => plain(world({ fields: FIELDS.map((field) => (field.key === 'status' ? { ...field, ...extra } : field)) }).run('buildClaimTicketFields(state.chat1, "topPnl", "58", "MYR")')).fields.status;
   assert.equal(status({ options: [{ value: 'SOLVED', label: 'Solved' }, { value: 'open_ticket', label: 'Open' }] }), 'open_ticket');

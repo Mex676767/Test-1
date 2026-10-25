@@ -2642,7 +2642,7 @@ function renderHalloweenCard(chatId) {
       <div class="ticket-btns">
         <button class="claim-btn hw-claim" data-action="claim" data-program="halloween" data-chat="${chatId}" ${title2 ? `title="${escapeHtml(title2)}"` : ""} ${disabled ? "disabled" : ""}>Claim Day ${h.day}</button>
       </div>
-      <div class="hw-hint">${previewMode ? "Admin preview: no ticket is raised and nothing is saved." : "Claiming raises a VVIP Complain Players ticket."}</div>
+      <div class="hw-hint">${previewMode ? "Admin preview: the ticket form opens, but no ticket is created and nothing is saved." : "Claiming raises a VVIP Complain Players ticket."}</div>
     </div>`;
 }
 
@@ -2709,8 +2709,8 @@ async function claimHalloween(chatId, btn, card) {
       setStatus(`This claim is now RM${verdict.amount}, not RM${input.amount} (the player's tier or the day changed). Look up the player again. Nothing was claimed.`, "error");
       return;
     }
-    if (!(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
   }
+  if (!(await raiseClaimTicket(chatId, "halloween", input.amount))) return;
   card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
   btn = card.querySelector(".hw-claim") || btn;
 
@@ -3428,7 +3428,7 @@ const AUTO_TICKET_PROGRAMS = {
   ltvTest: { label: "LTV", keyword: "LTV" },
   gracePeriod: { label: "Grace Period", keyword: "Grace Period" },
   riskPlayer: { label: "Risk Player", keyword: "Risk Player" },
-  halloween: { label: "Halloween", keyword: "Complain Players", remark: "3X Turnover Team" },
+  halloween: { label: "Halloween", keyword: "Complain Players", remark: "3X Turnover Team", simulateInPreview: true },
 };
 const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market";
 let agentDefaultMarket = { account: "", code: "" };
@@ -3692,6 +3692,8 @@ async function raiseClaimTicket(chatId, programKey, amount) {
     const check = buildClaimTicketFields(s, programKey, amount, stored.code || "-");
     if (check.error) { setStatus(`${check.error} Nothing was claimed.`, "error"); return false; }
     const markets = ticketMarkets.map((item) => ({ value: String(item.code || item.id), label: item.label || item.code || String(item.id) }));
+    // Admin preview of a bonus that asks for it: the form looks and works like the live one, but submitting creates nothing.
+    const simulate = previewMode && program.simulateInPreview === true;
     return await openClaimTicketModal({
       title: `Raise a ticket to claim ${program.label}`,
       intro: `Claiming ${escapeHtml(program.label)} raises a ticket for <strong>${escapeHtml(check.departmentName)}</strong> first. Add the proof below.`,
@@ -3699,8 +3701,9 @@ async function raiseClaimTicket(chatId, programKey, amount) {
       markets,
       market: stored.code,
       marketLocked: stored.locked,
-      previewNote: previewMode ? "Admin preview: this creates a real ticket." : "",
+      previewNote: simulate ? "Admin preview: no ticket is created and nothing is sent. This is how the live form looks." : previewMode ? "Admin preview: this creates a real ticket." : "",
       onSubmit: async ({ files, market, ticketEmail }) => {
+        if (simulate) return { ok: true };
         try {
           if (ticketEmail) s.escalation.ticketEmail = ticketEmail;
           const marketCode = stored.locked ? stored.code : await saveDefaultMarket(s, market);
