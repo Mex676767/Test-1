@@ -2753,7 +2753,7 @@ async function claimHalloween(chatId, btn, card) {
     await submitRecord(chatId, { auto: true, reason: `${inquiry} claimed` });
     if (h.day === 1) await addHalloweenActionNote(chatId, data);
   } else {
-    setStatus("Preview claim checked against Lark. Nothing was saved.", "success");
+    setStatus(halloweenPreviewClaimText(h.day, data.amount), "success");
   }
 }
 
@@ -2820,6 +2820,17 @@ async function voidHalloweenTicket(chatId, extra = "") {
   } catch (err) {
     setStatus(`Halloween claim undone, but ticket ${ref} could not be voided (${err.message}). Void it by hand.${extra}`, "error");
   }
+}
+
+// Admin preview only: say what a real claim or undo would do. Nothing is sent or saved.
+function halloweenPreviewClaimText(day, amount) {
+  return `Preview: Halloween Day ${day} claim of RM${amount} checked against Lark. In a live chat this would raise a VVIP Complain Players ticket (Remarks: 3X Turnover Team), `
+    + `save the Halloween table row and a Customer Approaching row (Halloween Day ${day}, Given, RM${amount})${day === 1 ? ", and add an Action log note" : ""}. Nothing was saved.`;
+}
+
+function halloweenPreviewUndoText(day) {
+  return `Preview: in a live chat, undoing Halloween Day ${day} would revert it in the Halloween table, clear the Customer Approaching row and set the ticket to X. VOID TICKET`
+    + `${day === 1 ? ", and remove the Day 1 Action log note" : ""}. Nothing was changed.`;
 }
 
 // Undo the Halloween table side of a claim. Throws if the server refuses, so the unclaim stops.
@@ -6095,7 +6106,10 @@ chatListEl.addEventListener("click", async (e) => {
     refreshStatusChip(card, chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     renderChats(activeChats);
-    if (programKey === "halloween") {
+    if (programKey === "halloween" && previewMode) {
+      setStatus(halloweenPreviewUndoText(s.halloweenUndoneDay || 0), "success");
+      s.halloweenUndoneDay = 0;
+    } else if (programKey === "halloween") {
       const extra = await removeHalloweenActionNote(chatId);
       await voidHalloweenTicket(chatId, extra);
     }

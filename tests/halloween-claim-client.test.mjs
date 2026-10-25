@@ -9,7 +9,7 @@ const grab = (name) => {
   assert.ok(match, `found ${name} in app.js`);
   return match[0];
 };
-const source = ['halloweenActionable', 'halloweenInput', 'claimHalloween'].map(grab).join('\n');
+const source = ['halloweenActionable', 'halloweenInput', 'halloweenPreviewClaimText', 'halloweenPreviewUndoText', 'claimHalloween'].map(grab).join('\n');
 
 // A Day 2 card for a Tier 3 player (RM18), ready to claim without sharing.
 function widget({ verdict, preview = false }) {
@@ -37,7 +37,7 @@ function widget({ verdict, preview = false }) {
     submitRecord: async () => { calls.submitted++; }, addHalloweenActionNote: async () => {},
   });
   vm.runInContext(source, context);
-  return { run: () => context.claimHalloween('A', button, card), calls, s };
+  return { run: () => context.claimHalloween('A', button, card), calls, s, context };
 }
 
 test('the ticket is raised for the amount the server confirmed, after the rules were checked', async () => {
@@ -73,6 +73,17 @@ test('admin preview never raises a ticket and only sends a check', async () => {
   assert.deepEqual(w.calls.tickets, []);
   assert.ok(w.calls.posts.every((post) => post.preview === true));
   assert.equal(w.calls.submitted, 0);
+  assert.match(w.calls.status.at(-1).text, /^Preview: Halloween Day 2 claim of RM18 checked against Lark\. In a live chat this would raise a VVIP Complain Players ticket \(Remarks: 3X Turnover Team\)/);
+  assert.match(w.calls.status.at(-1).text, /Nothing was saved\.$/);
+  assert.doesNotMatch(w.calls.status.at(-1).text, /Action log note/, 'Day 2 adds no Action log note');
+});
+
+test('the admin preview texts say what a live claim and undo would do, per day', () => {
+  const text = (code) => vm.runInContext(code, widget({ verdict: { ok: true, amount: 1 } }).context);
+  assert.match(text('halloweenPreviewClaimText(1, 120)'), /claim of RM120.*Customer Approaching row \(Halloween Day 1, Given, RM120\), and add an Action log note\. Nothing was saved\.$/);
+  assert.doesNotMatch(text('halloweenPreviewClaimText(3, 56)'), /Action log/);
+  assert.match(text('halloweenPreviewUndoText(1)'), /X\. VOID TICKET, and remove the Day 1 Action log note\. Nothing was changed\.$/);
+  assert.match(text('halloweenPreviewUndoText(2)'), /X\. VOID TICKET\. Nothing was changed\.$/);
 });
 
 function voidWidget({ reply, preview = false, ref = 'TK2610260001' } = {}) {
