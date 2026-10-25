@@ -31,7 +31,7 @@ export const INQUIRY_PREFIX = "Halloween Day ";
 
 // Brand as stored in the Brand dropdown (digits stripped) -> full name used on tickets and the day it opens.
 export const CAMPAIGN = {
-  EZ: { full: "EZ96", start: "2026-10-26" },
+  OG: { full: "OG321", start: "2026-10-26" },
   NOW: { full: "NOW32", start: "2026-10-26" },
   JUS: { full: "JUS22", start: "2026-10-26" },
   FUN: { full: "FUN36", start: "2026-10-27" },
@@ -43,7 +43,7 @@ export const CAMPAIGN = {
   AC: { full: "AC69", start: "2026-10-29" },
   ONG: { full: "ONG66", start: "2026-10-29" },
   VS: { full: "VS96", start: "2026-10-29" },
-  OG: { full: "OG321", start: "2026-10-30" },
+  EZ: { full: "EZ96", start: "2026-10-30" },
   SK: { full: "SK69", start: "2026-10-30" },
   HOT: { full: "HOT321", start: "2026-10-30" },
   RM: { full: "RM68", start: "2026-10-31" },

@@ -2777,6 +2777,51 @@ async function addHalloweenActionNote(chatId, claim) {
   }
 }
 
+// Undoing a Day 1 claim also removes the Action log line that claim wrote ("Halloween Day 1: deposited …"). The console only
+// removes a line the widget itself wrote, never anything an agent typed. Returns a sentence to add to the undo message.
+async function removeHalloweenActionNote(chatId) {
+  const s = state[chatId];
+  const undoneDay = s?.halloweenUndoneDay;
+  if (s) s.halloweenUndoneDay = 0;
+  if (!s || previewMode || undoneDay !== 1 || consoleNoteBlocker(s)) return "";
+  const answer = await postConsoleNote(s, { remove: true, startsWith: "Halloween Day 1:", type: "action" });
+  if (answer && answer.ok) {
+    noteUi(chatId).notes = null;
+    paintNoteSection(chatId);
+    return answer.removed ? " The Action log note was removed." : " There was no Action log note to remove.";
+  }
+  return ` The Action log note could not be removed (${(answer && answer.error) || "unknown problem"}). Remove it by hand.`;
+}
+
+// After a Halloween claim is undone: set its ticket to the ticket system's void status, so the agent doesn't have to.
+// If that fails, the undo still stands and the agent is told to void the ticket by hand.
+async function voidHalloweenTicket(chatId, extra = "") {
+  const s = state[chatId];
+  const ref = s?.claimTickets?.halloween;
+  if (previewMode) return;
+  if (!ref) {
+    if (extra) setStatus(`Halloween claim undone.${extra}`, extra.includes("could not") ? "error" : "success");
+    return;
+  }
+  try {
+    if (!ticketFields.length) await fetchTicketConfig({ fresh: true });
+    const statusField = ticketFieldFor(TICKET_FIELD_SPECS.find((spec) => spec.stateKey === "status"));
+    const voidOption = ticketFieldOptions(statusField).find((option) => /void/i.test(`${option.label} ${option.value}`));
+    const res = await fetch("/ticket-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref, fields: { [statusField?.key || "status"]: voidOption?.value || "X_VOID_TICKET" }, author: ticketAuthor(s) }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "the ticket system refused the change");
+    delete s.claimTickets.halloween;
+    saveState();
+    setStatus(`Halloween claim undone. Ticket ${ref} is now ${voidOption?.label || "X. VOID TICKET"}.${extra}`, extra.includes("could not") ? "error" : "success");
+  } catch (err) {
+    setStatus(`Halloween claim undone, but ticket ${ref} could not be voided (${err.message}). Void it by hand.${extra}`, "error");
+  }
+}
+
 // Undo the Halloween table side of a claim. Throws if the server refuses, so the unclaim stops.
 async function undoHalloween(chatId) {
   const s = state[chatId];
@@ -2792,6 +2837,7 @@ async function undoHalloween(chatId) {
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "The Halloween row could not be reverted");
+  s.halloweenUndoneDay = day;
   s.halloweenClaim = null;
   s.halloweenChoice = "";
   s.halloweenDeposit = "";
@@ -6049,6 +6095,10 @@ chatListEl.addEventListener("click", async (e) => {
     refreshStatusChip(card, chatId);
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     renderChats(activeChats);
+    if (programKey === "halloween") {
+      const extra = await removeHalloweenActionNote(chatId);
+      await voidHalloweenTicket(chatId, extra);
+    }
   }
 
   if (btn.dataset.action === "reactivateGracePeriod") {

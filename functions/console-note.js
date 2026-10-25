@@ -86,8 +86,12 @@ export async function handler(event) {
     const type = input.type === undefined || input.type === "relationship" ? "relationship" : input.type === "action" ? "action" : "";
     if (!type) return reply(400, { ok: false, error: "Bad request." });
     const list = input.list === true;
+    const remove = input.remove === true;
+    const startsWith = clean(input.startsWith);
+    // Removing is only for the Halloween Action log line the widget wrote itself ("Halloween Day 1:" and so on).
+    if (remove && (type !== "action" || list || !/^Halloween Day [123]:/.test(startsWith))) return reply(400, { ok: false, error: "Bad request." });
     const note = clean(input.note);
-    if (!list) {
+    if (!list && !remove) {
       if (!note) return reply(400, { ok: false, error: "Write the note first." });
       if (note.length > NOTE_MAX) return reply(400, { ok: false, error: `The note is too long (${note.length} of ${NOTE_MAX} characters).` });
     }
@@ -112,6 +116,19 @@ export async function handler(event) {
     }
 
     if (tooMany(agent.login)) return reply(429, { ok: false, error: "Too many notes in a minute. Wait a little and try again." });
+    if (remove) {
+      // The console removes one line the widget wrote, never the whole contact and never an agent's own text.
+      const result = await callConsole(`${base}/api/ext/action/remove`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ player_key: username, brand, starts_with: startsWith, author: agent.name }),
+      });
+      if (result.unknown) return reply(200, { ok: false, unsure: true, error: "The console did not answer, so the note may still be there. Check the player's Action log." });
+      if (result.status === 200 && typeof result.data?.removed === "boolean") return reply(200, { ok: true, removed: result.data.removed });
+      if (result.status === 404) return reply(200, { ok: false, error: "This player is not in the console, so there is no note to remove." });
+      if (result.status === 429) return reply(200, { ok: false, error: "Too many requests right now. Wait a minute and try again." });
+      return reply(200, { ok: false, error: "The console could not remove the note. Try again in a moment." });
+    }
     const result = await callConsole(`${base}${type === "action" ? "/api/ext/action" : "/api/ext/note"}`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },

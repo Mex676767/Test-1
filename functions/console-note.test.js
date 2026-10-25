@@ -243,6 +243,51 @@ test("an action entry the console did not confirm is never reported as saved, an
   assert.match(unsure.error, /Action log/);
 });
 
+test("removing the Halloween Day 1 Action log line goes to the console's remove route with the verified author", async (t) => {
+  const w = world({ consoleReply: { status: 200, body: { removed: true, player_key: "swecin", deletedRow: false } } });
+  t.after(w.restore);
+  const out = await call({ ...good, type: "action", note: undefined, remove: true, startsWith: "Halloween Day 1:", author: "Somebody Else" });
+  assert.equal(out.ok, true);
+  assert.equal(out.removed, true);
+  const sent = w.log.console[0];
+  assert.equal(sent.url, `${CONSOLE}/api/ext/action/remove`);
+  assert.equal(sent.method, "POST");
+  assert.equal(sent.headers["x-widget-token"], KEY);
+  assert.deepEqual(sent.body, { player_key: "swecin", brand: "SPIN321", starts_with: "Halloween Day 1:", author: "96 Raven - VIP RTN SNR MY" });
+  assert.ok(!out.raw.includes(KEY), "no secret comes back to the browser");
+});
+
+test("a removal the console says found nothing is still a success (already undone); other answers are explained", async (t) => {
+  const answer = async (consoleReply) => { const w = world({ consoleReply }); try { return await call({ ...good, type: "action", remove: true, startsWith: "Halloween Day 1:" }); } finally { w.restore(); } };
+  const none = await answer({ status: 200, body: { removed: false, player_key: "swecin" } });
+  assert.equal(none.ok, true);
+  assert.equal(none.removed, false);
+  assert.match((await answer({ status: 404, body: { error: "player not found in the console" } })).error, /not in the console/);
+  assert.match((await answer({ status: 401, body: { error: "unauthorized" } })).error, /could not remove the note/);
+  assert.equal((await answer({ status: 200, body: {} })).ok, false, "an answer without removed:true/false is never reported as done");
+  assert.equal((await answer({ status: 500, body: {} })).ok, false);
+  const w = world({ consoleThrows: new Error("timed out") });
+  t.after(w.restore);
+  const unsure = await call({ ...good, type: "action", remove: true, startsWith: "Halloween Day 1:" });
+  assert.equal(unsure.unsure, true);
+});
+
+test("only a Halloween Action log line can be removed; nothing is sent to the console otherwise", async (t) => {
+  const w = world();
+  t.after(w.restore);
+  for (const body of [
+    { type: "action", remove: true, startsWith: "Call back Friday" },
+    { type: "action", remove: true, startsWith: "" },
+    { type: "action", remove: true },
+    { type: "action", remove: true, startsWith: "Halloween Day 4:" },
+    { type: "relationship", remove: true, startsWith: "Halloween Day 1:" },
+    { remove: true, startsWith: "Halloween Day 1:" },
+    { type: "action", remove: true, list: true, startsWith: "Halloween Day 1:" },
+  ]) assert.equal((await call({ ...good, ...body })).status, 400, JSON.stringify(body));
+  assert.equal(w.log.console.length, 0);
+  assert.equal((await call({ accountKey: "lc1", agentToken: "tok-newbie", username: "x", brand: "OG", type: "action", remove: true, startsWith: "Halloween Day 1:" })).ok, false, "an agent without a bound name is refused");
+});
+
 test("listing the Action log reads /api/ext/actions", async (t) => {
   const w = world({ consoleReply: { status: 200, body: { actions: [{ note: "[widget · raven · 10:00] call", status: null, created_by: "raven (widget)", created_at: "2026-10-18 10:00:00", snapshot_date: "2026-10-18" }] } } });
   t.after(w.restore);
