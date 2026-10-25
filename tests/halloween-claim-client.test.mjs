@@ -67,10 +67,10 @@ test('a claim the server would refuse never raises a ticket', async () => {
   assert.match(w.calls.status.at(-1).text, /already claimed.*Nothing was claimed/);
 });
 
-test('admin preview never raises a ticket and only sends a check', async () => {
+test('admin preview opens the ticket step like the other bonuses and only sends a check', async () => {
   const w = widget({ verdict: { ok: true, day: 2, amount: 18 }, preview: true });
   await w.run();
-  assert.deepEqual(w.calls.tickets, []);
+  assert.deepEqual(w.calls.tickets, [{ program: 'halloween', amount: 18 }], 'the proof popup is part of the flow in preview too (it creates nothing there)');
   assert.ok(w.calls.posts.every((post) => post.preview === true));
   assert.equal(w.calls.submitted, 0);
   assert.match(w.calls.status.at(-1).text, /^Preview: Halloween Day 2 claim of RM18 checked against Lark\. In a live chat this would raise a VVIP Complain Players ticket \(Remarks: 3X Turnover Team\)/);
