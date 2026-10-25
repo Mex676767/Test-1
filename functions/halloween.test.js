@@ -32,7 +32,7 @@ function goodCatalog() {
 
 const row = (fields, id = "rec1") => ({ record_id: id, created_time: 1, fields });
 const day1Row = (extra = {}) => row({
-  [F.uid]: "zzali", [F.brand]: "EZ", [F.tier]: "Tier V", [F.choice]: "TRICK",
+  [F.uid]: "zzali", [F.brand]: "NOW", [F.tier]: "Tier V", [F.choice]: "TRICK",
   [F.day1Deposit]: 350, [F.day1Bonus]: 120, [F.track]: "RM300+", [F.day1Claimed]: 1, ...extra,
 });
 const lowRow = () => day1Row({ [F.choice]: "TREAT", [F.day1Deposit]: 200, [F.day1Bonus]: 30, [F.track]: "Below RM300" });
@@ -46,20 +46,26 @@ test("19 Zyra brands, in 6 staggered groups, each stored without digits", () => 
     (starts[value.start] ||= []).push(key);
   }
   assert.deepEqual(Object.keys(starts).sort(), ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31"]);
-  assert.deepEqual(starts["2026-10-26"], ["EZ", "NOW", "JUS"]);
+  assert.deepEqual(starts["2026-10-26"], ["OG", "NOW", "JUS"]);
+  assert.deepEqual(starts["2026-10-30"], ["EZ", "SK", "HOT"]);
   assert.deepEqual(starts["2026-10-31"], ["RM", "BM", "SA", "JK"]);
 });
 
 test("a brand's window is its send date plus two days, Malaysia time", () => {
-  assert.equal(dayNumber("EZ", "2026-10-25"), 0);
-  assert.equal(dayNumber("EZ", "2026-10-26"), 1);
-  assert.equal(dayNumber("EZ", "2026-10-27"), 2);
-  assert.equal(dayNumber("EZ", "2026-10-28"), 3);
-  assert.equal(dayNumber("EZ", "2026-10-29"), 0);
+  assert.equal(dayNumber("NOW", "2026-10-25"), 0);
+  assert.equal(dayNumber("NOW", "2026-10-26"), 1);
+  assert.equal(dayNumber("NOW", "2026-10-27"), 2);
+  assert.equal(dayNumber("NOW", "2026-10-28"), 3);
+  assert.equal(dayNumber("NOW", "2026-10-29"), 0);
   assert.equal(dayNumber("RM", "2026-11-02"), 3);
   assert.equal(dayNumber("RM", "2026-11-03"), 0);
-  assert.equal(dayNumber("EZ96", "2026-10-26"), 1, "a full brand name still resolves");
+  assert.equal(dayNumber("NOW32", "2026-10-26"), 1, "a full brand name still resolves");
   assert.equal(dayNumber("PP", "2026-10-27"), 0, "a brand outside the campaign never opens");
+  assert.equal(dayNumber("OG", "2026-10-26"), 1, "OG321 is in Group 1");
+  assert.equal(dayNumber("EZ", "2026-10-26"), 0, "EZ96 moved to Group 5");
+  assert.equal(dayNumber("EZ96", "2026-10-30"), 1);
+  assert.equal(dayNumber("EZ", "2026-11-01"), 3);
+  assert.equal(dayNumber("EZ", "2026-11-02"), 0);
   assert.equal(malaysiaToday(Date.parse("2026-10-25T15:59:00Z")), "2026-10-25");
   assert.equal(malaysiaToday(Date.parse("2026-10-25T16:00:00Z")), "2026-10-26");
   assert.equal(malaysiaToday(Date.now(), "2026-10-27"), "2026-10-27");
@@ -90,7 +96,7 @@ test("Day 1 bonus pays the highest table row reached, and the track follows the 
 });
 
 test("the card state follows the day, the track and what was claimed", () => {
-  const status = (today, r, tierText = "Tier V", brand = "EZ") => halloweenStatus({ brand, tierText, row: r, today });
+  const status = (today, r, tierText = "Tier V", brand = "NOW") => halloweenStatus({ brand, tierText, row: r, today });
   assert.equal(status("2026-10-25", null), null, "before the send date nothing shows");
   assert.equal(status("2026-10-29", day1Row()), null, "after Day 3 nothing shows");
   assert.equal(halloweenStatus({ brand: "PP", tierText: "Tier V", row: null, today: "2026-10-26" }), null);
@@ -120,7 +126,7 @@ test("the card state follows the day, the track and what was claimed", () => {
   assert.equal(status("2026-10-28", day1Row({ [F.day2Claimed]: 5, [F.day2Base]: 28, [F.day3Claimed]: 6, [F.day3Base]: 28 })).state, "done");
 });
 
-const claim = (over) => planClaim({ brand: "EZ", tierText: "Tier V", row: null, today: "2026-10-26", nowMs: 1000, agent: "Aina", chatLink: "https://chat/1", ...over });
+const claim = (over) => planClaim({ brand: "NOW", tierText: "Tier V", row: null, today: "2026-10-26", nowMs: 1000, agent: "Aina", chatLink: "https://chat/1", ...over });
 
 test("Day 1 claim: choice and deposit decide the amount, the browser's amount is never used", () => {
   const plan = claim({ input: { day: 1, choice: "TRICK", deposit: "350", amount: 99999 } });
@@ -209,7 +215,7 @@ test("the table check reports missing fields, wrong types and missing options", 
   assert.deepEqual(report.missing, [F.day3Share]);
   assert.deepEqual(report.wrongType.map((item) => item.field), [F.day1Deposit]);
   assert.deepEqual(report.missingOptions.filter((item) => item.field === F.track).map((item) => item.option), ["RM300+"]);
-  assert.deepEqual(report.missingOptions.filter((item) => item.field === F.brand).map((item) => item.option), ["EZ", "NOW"]);
+  assert.deepEqual(report.missingOptions.filter((item) => item.field === F.brand).map((item) => item.option), ["OG", "NOW"]);
 });
 
 test("values are shaped for each Lark field type, and an unknown field is an error", () => {
@@ -242,7 +248,7 @@ function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [], la
     if (href.includes(`/tables/${hw}/fields`)) return ok({ items: catalog });
     if (href.includes(`/tables/${pnl}/fields`)) return ok({ items: [{ field_name: "Tier", type: 3, property: { options: [] } }] });
     if (href.includes(`/tables/${pnl}/records/search`)) {
-      return ok({ items: tier === null ? [] : [{ record_id: "p1", fields: { Username: "zzali", Brand: "EZ", Tier: tier } }], has_more: false });
+      return ok({ items: tier === null ? [] : [{ record_id: "p1", fields: { Username: "zzali", Brand: "NOW", Tier: tier } }], has_more: false });
     }
     if (href.includes(`/tables/${hw}/records/search`)) {
       const conditions = JSON.parse(options.body).filter.conditions;
@@ -275,7 +281,7 @@ function startFakeLark({ catalog = goodCatalog(), tier = "Tier V", rows = [], la
 }
 
 const call = async (body, date, extraEnv = {}) => {
-  const result = await claimHandler({ httpMethod: "POST", body: JSON.stringify({ username: "ZZAli", brand: "EZ", agentName: "Aina", chatLink: "https://chat/1", ...body }), env: { HALLOWEEN_TEST_DATE: date, HALLOWEEN_SETTLE_MS: "0,0", ...extraEnv } });
+  const result = await claimHandler({ httpMethod: "POST", body: JSON.stringify({ username: "ZZAli", brand: "NOW", agentName: "Aina", chatLink: "https://chat/1", ...body }), env: { HALLOWEEN_TEST_DATE: date, HALLOWEEN_SETTLE_MS: "0,0", ...extraEnv } });
   return JSON.parse(result.body);
 };
 
@@ -305,7 +311,7 @@ test("a three-day run writes one Halloween row and fills it a day at a time", as
   assert.equal(lark.store.rows.length, 1);
   const saved = lark.store.rows[0].fields;
   assert.equal(saved[F.uid], "zzali", "the username is stored lower-case, like the other tables");
-  assert.equal(saved[F.brand], "EZ");
+  assert.equal(saved[F.brand], "NOW");
   assert.equal(saved[F.tier], "Tier V");
   assert.equal(saved[F.track], "RM300+");
   assert.equal(saved[F.day1Bonus], 120);
@@ -512,9 +518,9 @@ test("an undo landing at the same moment as the next day's claim never leaves a 
 test("any spelling of the brand is stored and searched as the dropdown's form, so a player can never get two Day 1 rows", async (t) => {
   const lark = startFakeLark();
   t.after(lark.stop);
-  assert.equal((await call({ action: "claim", day: 1, brand: "ez", choice: "TRICK", deposit: 350 }, "2026-10-26")).ok, true);
-  assert.equal(lark.store.rows[0].fields[F.brand], "EZ");
-  for (const brand of ["EZ", "EZ96", " ez96 ", "Ez"]) {
+  assert.equal((await call({ action: "claim", day: 1, brand: "now", choice: "TRICK", deposit: 350 }, "2026-10-26")).ok, true);
+  assert.equal(lark.store.rows[0].fields[F.brand], "NOW");
+  for (const brand of ["NOW", "NOW32", " now32 ", "Now"]) {
     assert.equal((await call({ action: "claim", day: 1, brand, choice: "TREAT", deposit: 500 }, "2026-10-26")).ok, false, `${brand} must find the same row`);
   }
   assert.equal(lark.store.rows.length, 1);
@@ -523,7 +529,7 @@ test("any spelling of the brand is stored and searched as the dropdown's form, s
 test("the production site ignores HALLOWEEN_TEST_DATE even if it is set there by mistake", async (t) => {
   const lark = startFakeLark();
   t.after(lark.stop);
-  const body = JSON.stringify({ action: "claim", preview: true, day: 1, username: "zzali", brand: "EZ", choice: "TRICK", deposit: 350 });
+  const body = JSON.stringify({ action: "claim", preview: true, day: 1, username: "zzali", brand: "NOW", choice: "TRICK", deposit: 350 });
   const ask = async (env, host) => {
     const answer = JSON.parse((await claimHandler({ httpMethod: "POST", body, env: { HALLOWEEN_SETTLE_MS: "0,0", ...env }, headers: { host } })).body);
     return { ok: answer.ok, error: answer.error };
@@ -585,16 +591,16 @@ test("the lookup returns the Halloween card state only for campaign brands insid
     assert.equal(result.statusCode, 200, result.body);
     return JSON.parse(result.body).row;
   };
-  const day1 = (await look("EZ", "2026-10-26")).halloween;
+  const day1 = (await look("NOW", "2026-10-26")).halloween;
   assert.equal(day1.state, "day1");
-  assert.equal(day1.fullBrand, "EZ96");
+  assert.equal(day1.fullBrand, "NOW32");
   assert.equal(day1.tier, "Tier V");
   assert.equal(day1.table.length, 4);
-  assert.equal((await look("EZ", "2026-10-25")).halloween, undefined, "before the send date");
-  assert.equal((await look("EZ", "2026-10-29")).halloween, undefined, "after Day 3");
+  assert.equal((await look("NOW", "2026-10-25")).halloween, undefined, "before the send date");
+  assert.equal((await look("NOW", "2026-10-29")).halloween, undefined, "after Day 3");
   assert.equal((await look("PP", "2026-10-26")).halloween, undefined, "not a campaign brand");
 
   lark.store.rows.push(day1Row());
-  assert.equal((await look("EZ", "2026-10-26")).halloween.state, "done");
-  assert.equal((await look("EZ", "2026-10-27")).halloween.state, "day2");
+  assert.equal((await look("NOW", "2026-10-26")).halloween.state, "done");
+  assert.equal((await look("NOW", "2026-10-27")).halloween.state, "day2");
 });

@@ -42,7 +42,7 @@ function runChaos({ seed: seedStart, players, failRate, lagMs }) {
     if (href.includes("/tables/pnl/fields")) return reply({ items: [{ field_name: "Tier", type: 3, property: { options: [] } }] });
     if (href.includes("/tables/pnl/records/search")) {
       const who = JSON.parse(options.body).filter.conditions.find((c) => c.field_name === "Username").value[0];
-      return reply({ items: tiers[who] ? [{ record_id: `p${who}`, fields: { Username: who, Brand: "EZ", Tier: tiers[who] } }] : [], has_more: false });
+      return reply({ items: tiers[who] ? [{ record_id: `p${who}`, fields: { Username: who, Brand: "NOW", Tier: tiers[who] } }] : [], has_more: false });
     }
     if (href.includes("/tables/hw/records/search")) {
       const failed = flake(); if (failed) return failed;
@@ -73,7 +73,7 @@ function runChaos({ seed: seedStart, players, failRate, lagMs }) {
   const dates = ["2026-10-26", "2026-10-27", "2026-10-28"];
   const accepted = {};
   const post = async (name, day, extra) => {
-    const body = { action: "claim", day, username: name, brand: "EZ", agentName: `Agent${Math.floor(rand() * 5)}`, chatLink: `https://chat/${Math.floor(rand() * 1e6)}`, ...extra };
+    const body = { action: "claim", day, username: name, brand: "NOW", agentName: `Agent${Math.floor(rand() * 5)}`, chatLink: `https://chat/${Math.floor(rand() * 1e6)}`, ...extra };
     const result = await handler({ httpMethod: "POST", body: JSON.stringify(body), env: { HALLOWEEN_TEST_DATE: dates[day - 1], HALLOWEEN_SETTLE_MS: "300,300" } });
     if (JSON.parse(result.body).ok) accepted[`${name}:${day}`] = (accepted[`${name}:${day}`] || 0) + 1;
   };
