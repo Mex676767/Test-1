@@ -46,3 +46,11 @@ body{font-family:Inter,-apple-system,"Segoe UI",sans-serif}
   .knowledge-shell{display:flex;flex-direction:column}.knowledge-workspace{display:contents}.knowledge-library{order:1}.detect-card{order:2;margin-top:12px}.guide-panel{order:3;margin-top:12px;min-height:380px}
   .category-tabs{display:flex}.category-btn{width:auto}.results-list{max-height:280px}
 }
+
+:root[data-theme="dark"]{--rose:#e9708f;--orange:#e8905a;--green:#7bc96f;--cyan:#4cc3dd}
+:root[data-theme="light"]{--rose:#c2426a;--orange:#b8581f;--green:#3f8f35;--cyan:#16809b}
+.category-btn[data-tone="rose"],.result-card[data-tone="rose"]{--tone:var(--rose)}
+.category-btn[data-tone="orange"],.result-card[data-tone="orange"]{--tone:var(--orange)}
+.category-btn[data-tone="green"],.result-card[data-tone="green"]{--tone:var(--green)}
+.category-btn[data-tone="cyan"],.result-card[data-tone="cyan"]{--tone:var(--cyan)}
+.category-btn>.tone-dot{width:8px;height:8px;margin:0 4px 0 5px;border-radius:50%;background:var(--tone)}
