@@ -145,6 +145,19 @@ test('a Halloween claim ticket carries the remark "3X Turnover Team"; other bonu
   assert.match(plain(noRemarks.run('buildClaimTicketFields(state.chat1, "halloween", "120", "MYR")')).error, /no Remarks field.*3X Turnover Team/);
 });
 
+test('a Telegram RM28 claim raises a VVIP Complain Players ticket (amount falls back to 28); VS96 Feedback raises none', () => {
+  const withComplain = FIELDS.map((field) => (field.key === 'query_type' ? { ...field, options: [...field.options, { value: 'vvip_complain_players', label: 'VVIP Complain Players' }] } : field));
+  const w = world({ fields: withComplain });
+  const telegram = plain(w.run('buildClaimTicketFields(state.chat1, "telegram28", "28", "MYR")'));
+  assert.equal(telegram.error, undefined);
+  assert.equal(telegram.fields.query_type, 'vvip_complain_players');
+  assert.equal(telegram.fields.amount, 28);
+  assert.equal(telegram.fields.remarks, undefined);
+  assert.equal(plain(w.run('buildClaimTicketFields(state.chat1, "telegram28", "", "MYR")')).fields.amount, 28, 'amount missing in the table: RM28 by name');
+  assert.equal(w.run('AUTO_TICKET_PROGRAMS.vs96Feedback'), undefined, 'VS96 Feedback is a redeem code: no ticket');
+  assert.equal(plain(w.run('buildClaimTicketFields(state.chat1, "topPnl", "", "MYR")')).error?.includes('amount could not be read'), true, 'other bonuses still need an amount');
+});
+
 test('Halloween in admin preview opens the same proof popup, but submitting it creates no ticket; other bonuses still create one', async () => {
   const withComplain = FIELDS.map((field) => (field.key === 'query_type' ? { ...field, options: [...field.options, { value: 'vvip_complain_players', label: 'VVIP Complain Players' }] } : field));
   let seen;

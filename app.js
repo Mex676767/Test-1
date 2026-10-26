@@ -2793,33 +2793,40 @@ async function removeHalloweenActionNote(chatId) {
   return ` The Action log note could not be removed (${(answer && answer.error) || "unknown problem"}). Remove it by hand.`;
 }
 
-// After a Halloween claim is undone: set its ticket to the ticket system's void status, so the agent doesn't have to.
-// If that fails, the undo still stands and the agent is told to void the ticket by hand.
-async function voidHalloweenTicket(chatId, extra = "") {
+// After a claim is undone: set the ticket(s) raised for the claim to the ticket system's void status, so the agent doesn't have to.
+// An undo clears every claim on the case, so every ticket raised for it is voided. If that fails, the undo still stands and the
+// agent is told to void the ticket by hand. Halloween never has a ticket in admin preview (it only simulates one).
+async function voidClaimTickets(chatId, label = "Claim", extra = "") {
   const s = state[chatId];
-  const ref = s?.claimTickets?.halloween;
-  if (previewMode) return;
-  if (!ref) {
-    if (extra) setStatus(`Halloween claim undone.${extra}`, extra.includes("could not") ? "error" : "success");
+  const entries = Object.entries(s?.claimTickets || {});
+  if (!entries.length) {
+    if (extra) setStatus(`${label} claim undone.${extra}`, extra.includes("could not") ? "error" : "success");
     return;
   }
-  try {
-    if (!ticketFields.length) await fetchTicketConfig({ fresh: true });
-    const statusField = ticketFieldFor(TICKET_FIELD_SPECS.find((spec) => spec.stateKey === "status"));
-    const voidOption = ticketFieldOptions(statusField).find((option) => /void/i.test(`${option.label} ${option.value}`));
-    const res = await fetch("/ticket-update", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref, fields: { [statusField?.key || "status"]: voidOption?.value || "X_VOID_TICKET" }, author: ticketAuthor(s) }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || "the ticket system refused the change");
-    delete s.claimTickets.halloween;
-    saveState();
-    setStatus(`Halloween claim undone. Ticket ${ref} is now ${voidOption?.label || "X. VOID TICKET"}.${extra}`, extra.includes("could not") ? "error" : "success");
-  } catch (err) {
-    setStatus(`Halloween claim undone, but ticket ${ref} could not be voided (${err.message}). Void it by hand.${extra}`, "error");
+  const voided = [];
+  let voidLabel = "X. VOID TICKET";
+  for (const [key, ref] of entries) {
+    try {
+      if (!ticketFields.length) await fetchTicketConfig({ fresh: true });
+      const statusField = ticketFieldFor(TICKET_FIELD_SPECS.find((spec) => spec.stateKey === "status"));
+      const voidOption = ticketFieldOptions(statusField).find((option) => /void/i.test(`${option.label} ${option.value}`));
+      const res = await fetch("/ticket-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ref, fields: { [statusField?.key || "status"]: voidOption?.value || "X_VOID_TICKET" }, author: ticketAuthor(s) }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "the ticket system refused the change");
+      delete s.claimTickets[key];
+      saveState();
+      voided.push(ref);
+      voidLabel = voidOption?.label || voidLabel;
+    } catch (err) {
+      setStatus(`${label} claim undone, but ticket ${ref} could not be voided (${err.message}). Void it by hand.${extra}`, "error");
+      return;
+    }
   }
+  setStatus(`${label} claim undone. Ticket ${voided.join(", ")} ${voided.length > 1 ? "are" : "is"} now ${voidLabel}.${extra}`, extra.includes("could not") ? "error" : "success");
 }
 
 // Admin preview only: say what a real claim or undo would do. Nothing is sent or saved.
@@ -3429,6 +3436,7 @@ const AUTO_TICKET_PROGRAMS = {
   gracePeriod: { label: "Grace Period", keyword: "Grace Period" },
   riskPlayer: { label: "Risk Player", keyword: "Risk Player" },
   halloween: { label: "Halloween", keyword: "Complain Players", remark: "3X Turnover Team", simulateInPreview: true },
+  telegram28: { label: "Telegram RM28", keyword: "Complain Players", defaultAmount: 28 },
 };
 const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market";
 let agentDefaultMarket = { account: "", code: "" };
@@ -3472,7 +3480,8 @@ function buildClaimTicketFields(s, programKey, amount, market) {
   if (!username) return { error: "Look up the player's username first." };
   const brand = String(s.escalation?.brand || "").trim();
   if (!brand) return { error: "The brand of this chat is not known yet, so the ticket cannot be raised." };
-  const number = Number(String(amount ?? "").replace(/,/g, ""));
+  const parsedAmount = Number(String(amount ?? "").replace(/,/g, ""));
+  const number = parsedAmount > 0 || !program.defaultAmount ? parsedAmount : program.defaultAmount;
   if (!Number.isFinite(number) || number <= 0) return { error: `The ${program.label} amount could not be read, so the ticket cannot be raised.` };
   const query = autoTicketQueryOption(ticketFieldOptions(queryField), program.keyword);
   if (!query) return { error: `No ticket query type contains "${program.keyword}", so no ticket can be raised. Ask your admin.` };
@@ -3697,7 +3706,7 @@ async function raiseClaimTicket(chatId, programKey, amount) {
     return await openClaimTicketModal({
       title: `Raise a ticket to claim ${program.label}`,
       intro: `Claiming ${escapeHtml(program.label)} raises a ticket for <strong>${escapeHtml(check.departmentName)}</strong> first. Add the proof below.`,
-      rows: [["Player", s.username], ["Query type", check.query.label || check.query.value], ["Amount", String(amount)], ["Level", AUTO_TICKET_LEVEL], ...(program.remark ? [["Remarks", program.remark]] : [])],
+      rows: [["Player", s.username], ["Query type", check.query.label || check.query.value], ["Amount", String(Number(amount) > 0 ? amount : program.defaultAmount ?? amount)],["Level", AUTO_TICKET_LEVEL], ...(program.remark ? [["Remarks", program.remark]] : [])],
       markets,
       market: stored.code,
       marketLocked: stored.locked,
@@ -5983,7 +5992,8 @@ chatListEl.addEventListener("click", async (e) => {
     }
 
     if (programKey !== "gracePeriod" && AUTO_TICKET_PROGRAMS[programKey]) {
-      const ticketAmount = riskClaim?.valid ? riskClaim.formattedClaim : programHasAmount(programKey) ? extractAmountNumber(r?.[programKey]) : "";
+      const ticketSource = programKey === "telegram28" ? r?.telegram28?.status : r?.[programKey];
+      const ticketAmount = riskClaim?.valid ? riskClaim.formattedClaim : programHasAmount(programKey) ? extractAmountNumber(ticketSource) : "";
       if (!(await raiseClaimTicket(chatId, programKey, ticketAmount))) return;
       card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
     }
@@ -6112,9 +6122,9 @@ chatListEl.addEventListener("click", async (e) => {
     if (programKey === "halloween" && previewMode) {
       setStatus(halloweenPreviewUndoText(s.halloweenUndoneDay || 0), "success");
       s.halloweenUndoneDay = 0;
-    } else if (programKey === "halloween") {
-      const extra = await removeHalloweenActionNote(chatId);
-      await voidHalloweenTicket(chatId, extra);
+    } else {
+      const extra = programKey === "halloween" ? await removeHalloweenActionNote(chatId) : "";
+      await voidClaimTickets(chatId, programKey === "halloween" ? "Halloween" : AUTO_TICKET_PROGRAMS[programKey]?.label || "Bonus", extra);
     }
   }
 

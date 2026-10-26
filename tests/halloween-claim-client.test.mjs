@@ -99,20 +99,28 @@ function voidWidget({ reply, preview = false, ref = 'TK2610260001' } = {}) {
     setStatus: (text, kind) => calls.status.push({ text, kind }),
     fetch: async (url, init) => { calls.posts.push({ url, body: JSON.parse(init.body) }); return { json: async () => reply }; },
   });
-  vm.runInContext(grab('voidHalloweenTicket'), context);
-  return { run: () => context.voidHalloweenTicket('A'), calls, s, context };
+  vm.runInContext(grab('voidClaimTickets'), context);
+  return { run: () => context.voidClaimTickets('A', 'Halloween'), calls, s, context };
 }
 
-test('undoing a Halloween claim sets its ticket to the void status', async () => {
+test('undoing a claim sets every ticket raised for the case to the void status', async () => {
   const w = voidWidget({ reply: { ok: true } });
   await w.run();
+  assert.equal(w.calls.posts.length, 2);
+  assert.ok(w.calls.posts.every((post) => post.url === '/ticket-update'));
+  assert.ok(w.calls.posts.every((post) => JSON.stringify(post.body.fields) === JSON.stringify({ status: 'X_VOID_TICKET' })));
+  assert.deepEqual(w.calls.posts.map((post) => post.body.ref), ['TK2610260001', 'TK2610260099']);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.s.claimTickets)), {}, 'a new claim will raise new tickets');
+  assert.match(w.calls.status.at(-1).text, /^Halloween claim undone\. Ticket TK2610260001, TK2610260099 are now X\. VOID TICKET\./);
+});
+
+test('a claim with a single ticket (Telegram RM28, VS96 Feedback, Top P&L...) is voided on undo too', async () => {
+  const w = voidWidget({ reply: { ok: true } });
+  w.s.claimTickets = { telegram28: 'TK2610260050' };
+  await w.context.voidClaimTickets('A', 'Telegram RM28');
   assert.equal(w.calls.posts.length, 1);
-  assert.equal(w.calls.posts[0].url, '/ticket-update');
-  assert.deepEqual(w.calls.posts[0].body.fields, { status: 'X_VOID_TICKET' });
-  assert.equal(w.calls.posts[0].body.ref, 'TK2610260001');
-  assert.equal(w.s.claimTickets.halloween, undefined, 'a new claim will raise a new ticket');
-  assert.equal(w.s.claimTickets.topPnl, 'TK2610260099', 'other tickets are untouched');
-  assert.match(w.calls.status.at(-1).text, /TK2610260001 is now X\. VOID TICKET/);
+  assert.equal(w.calls.posts[0].body.ref, 'TK2610260050');
+  assert.match(w.calls.status.at(-1).text, /^Telegram RM28 claim undone\. Ticket TK2610260050 is now X\. VOID TICKET\./);
 });
 
 test('if the ticket cannot be voided, the undo stands and the agent is told to void it by hand', async () => {
@@ -121,6 +129,7 @@ test('if the ticket cannot be voided, the undo stands and the agent is told to v
   assert.equal(w.calls.status.at(-1).kind, 'error');
   assert.match(w.calls.status.at(-1).text, /could not be voided \(You cannot change this ticket\.\)\. Void it by hand\./);
   assert.equal(w.s.claimTickets.halloween, 'TK2610260001');
+  assert.equal(w.calls.posts.length, 1, 'it stops at the first ticket that fails');
 });
 
 function removeNoteWidget({ answer, undoneDay = 1, preview = false, blocker = '' }) {
@@ -160,19 +169,16 @@ test('no note is removed for Day 2 or Day 3, in admin preview, or when notes are
 
 test('the removal result is added to the undo message, with or without a ticket to void', async () => {
   const withTicket = voidWidget({ reply: { ok: true } });
-  await withTicket.context.voidHalloweenTicket('A', ' The Action log note was removed.');
-  assert.match(withTicket.calls.status.at(-1).text, /is now X\. VOID TICKET\. The Action log note was removed\./);
+  await withTicket.context.voidClaimTickets('A', 'Halloween', ' The Action log note was removed.');
+  assert.match(withTicket.calls.status.at(-1).text, /now X\. VOID TICKET\. The Action log note was removed\./);
   const noTicket = voidWidget({ reply: { ok: true }, ref: '' });
-  await noTicket.context.voidHalloweenTicket('A', ' The Action log note could not be removed (x). Remove it by hand.');
+  await noTicket.context.voidClaimTickets('A', 'Halloween', ' The Action log note could not be removed (x). Remove it by hand.');
   assert.equal(noTicket.calls.posts.length, 0);
   assert.equal(noTicket.calls.status.at(-1).kind, 'error');
   assert.match(noTicket.calls.status.at(-1).text, /^Halloween claim undone\. The Action log note could not be removed/);
 });
 
-test('nothing is voided in admin preview or when no ticket was raised', async () => {
-  const preview = voidWidget({ reply: { ok: true }, preview: true });
-  await preview.run();
-  assert.equal(preview.calls.posts.length, 0);
+test('nothing is voided when no ticket was raised (Halloween raises none in admin preview)', async () => {
   const none = voidWidget({ reply: { ok: true }, ref: '' });
   await none.run();
   assert.equal(none.calls.posts.length, 0);

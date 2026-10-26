@@ -1173,6 +1173,7 @@ body { font-size: 13px; }
 
 .ticket-inbox-workspace { padding: 3px 4px 12px; }
 .ticket-workspace-card .ticket-inbox-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+.ticket-inbox-header { position: relative; }
 .ticket-inbox-header h2 { margin: 0; font-size: 17px; font-weight: 650; }
 .ticket-inbox-header > div { display: flex; align-items: center; gap: 8px; }
 .ticket-ui-icon { width: 16px; height: 16px; flex: 0 0 auto; }
@@ -1182,10 +1183,10 @@ body { font-size: 13px; }
 .ticket-inbox-notifications span { font-weight: 600; }
 .ticket-inbox-notifications:hover, .ticket-inbox-refresh:hover, .ticket-inbox-filter-toggle:hover { background: var(--surface-2); color: var(--text); }
 .ticket-inbox-workspace button:focus-visible, .ticket-inbox-workspace summary:focus-visible, .ticket-inbox-workspace input:focus-visible, .ticket-inbox-workspace textarea:focus-visible, .ticket-inbox-workspace select:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.ticket-bell { position: relative; display: inline-flex; }
+.ticket-bell { display: inline-flex; }
 .ticket-bell-count, .main-tab .tab-badge { min-width: 16px; padding: 1px 5px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
 .main-tab .tab-badge { display: inline-block; margin-left: 5px; }
-.ticket-bell-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.ticket-bell-panel { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 30; width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
 .ticket-bell-tabs { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
 .ticket-bell-list { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; }
 .ticket-bell-list .ticket-inbox-empty { margin: 0; padding: 16px 12px; }
