@@ -3437,7 +3437,6 @@ const AUTO_TICKET_PROGRAMS = {
   riskPlayer: { label: "Risk Player", keyword: "Risk Player" },
   halloween: { label: "Halloween", keyword: "Complain Players", remark: "3X Turnover Team", simulateInPreview: true },
   telegram28: { label: "Telegram RM28", keyword: "Complain Players", defaultAmount: 28 },
-  vs96Feedback: { label: "VS96 Feedback", keyword: "Complain Players", noAmount: true },
 };
 const DEFAULT_MARKET_LOCAL_KEY = "rc-default-market";
 let agentDefaultMarket = { account: "", code: "" };
@@ -3483,14 +3482,14 @@ function buildClaimTicketFields(s, programKey, amount, market) {
   if (!brand) return { error: "The brand of this chat is not known yet, so the ticket cannot be raised." };
   const parsedAmount = Number(String(amount ?? "").replace(/,/g, ""));
   const number = parsedAmount > 0 || !program.defaultAmount ? parsedAmount : program.defaultAmount;
-  if (!program.noAmount && (!Number.isFinite(number) || number <= 0)) return { error: `The ${program.label} amount could not be read, so the ticket cannot be raised.` };
+  if (!Number.isFinite(number) || number <= 0) return { error: `The ${program.label} amount could not be read, so the ticket cannot be raised.` };
   const query = autoTicketQueryOption(ticketFieldOptions(queryField), program.keyword);
   if (!query) return { error: `No ticket query type contains "${program.keyword}", so no ticket can be raised. Ask your admin.` };
   const marketCode = String(market || "").trim();
   if (!marketCode) return { error: "Choose your market first." };
   const fields = { [memberField.key]: username, [brandField.key]: brand, [queryField.key]: query.value };
   const amountField = need("amount");
-  if (amountField && !program.noAmount) fields[amountField.key] = number;
+  if (amountField) fields[amountField.key] = number;
   if (program.remark) {
     const remarksField = need("remarks");
     if (!remarksField) return { error: `The ticket form has no Remarks field, so the "${program.remark}" remark cannot be added.` };
@@ -3707,7 +3706,7 @@ async function raiseClaimTicket(chatId, programKey, amount) {
     return await openClaimTicketModal({
       title: `Raise a ticket to claim ${program.label}`,
       intro: `Claiming ${escapeHtml(program.label)} raises a ticket for <strong>${escapeHtml(check.departmentName)}</strong> first. Add the proof below.`,
-      rows: [["Player", s.username], ["Query type", check.query.label || check.query.value], ...(program.noAmount ? [] : [["Amount", String(Number(amount) > 0 ? amount : program.defaultAmount ?? amount)]]), ["Level", AUTO_TICKET_LEVEL], ...(program.remark ? [["Remarks", program.remark]] : [])],
+      rows: [["Player", s.username], ["Query type", check.query.label || check.query.value], ["Amount", String(Number(amount) > 0 ? amount : program.defaultAmount ?? amount)],["Level", AUTO_TICKET_LEVEL], ...(program.remark ? [["Remarks", program.remark]] : [])],
       markets,
       market: stored.code,
       marketLocked: stored.locked,
