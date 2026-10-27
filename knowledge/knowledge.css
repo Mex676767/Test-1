@@ -277,3 +277,11 @@ select.f-input{appearance:auto}
 .f-sentence .f-num{margin-top:8px}
 .f-sentence .f-area{min-height:48px}
 .f-sentence .icon-btn{min-width:32px;min-height:32px;margin-top:4px;padding:4px;background:transparent}
+
+/* Agents: no Live guide yet */
+.coming-soon{display:grid;place-items:center;padding:24px 18px}
+.coming-soon-card{display:grid;justify-items:center;gap:8px;max-width:300px;padding:28px 20px;border:1px dashed var(--border);border-radius:12px;text-align:center}
+.coming-soon-icon{display:grid;place-items:center;width:44px;height:44px;border:1px solid var(--border);border-radius:12px;background:var(--raised);color:var(--muted)}
+.coming-soon-icon svg{width:22px;height:22px}
+.coming-soon-card h3{font-size:16px}
+.coming-soon-card p{color:var(--muted);font-size:12px;line-height:1.6}

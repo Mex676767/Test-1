@@ -3,14 +3,14 @@ const IS_EMBEDDED_APP = window.self !== window.top;
 const DEPARTMENT_TABS_LIVE = true;
 const AUTO_TICKET_LIVE = true;
 const BLAST_LIVE = true;
-const KNOWLEDGE_TAB_ENABLED = false;
+const KNOWLEDGE_TAB_ENABLED = true;
 const DEPARTMENT_SEPARATION_ENABLED = true;
 const PREVIEW_LOGIN_GATE = false;
 const AUTOMATIC_DEPARTMENT_DETECTION = false;
 const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
 const AGENT_LOGIN_LIVE = new URLSearchParams(location.search).get("agentLogin") !== "0";
 const QA_VIEW_LIVE = new URLSearchParams(location.search).get("qaView") !== "0";
-const QA_VIEW_ALSO_KNOWLEDGE = false;
+const QA_VIEW_ALSO_KNOWLEDGE = true;
 let qaView = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("department") === "qa";
 
 const root = document.documentElement;
@@ -187,7 +187,7 @@ function openSettingsPanel() {
   overlay.id = "settingsOverlay";
   overlay.className = "settings-overlay";
   const accountRole = qaView ? "QA" : "Customer Service";
-  const accountTabs = qaView ? ["QA", "Retention", "Blast", "Tickets"] : ["Tickets", "Knowledge"];
+  const accountTabs = qaView ? ["QA", "Retention", "Blast", "Tickets", "Knowledge"] : ["Tickets", "Knowledge"];
   const accountInitial = (String(selectedAgent || "").match(/[A-Za-z]/) || [accountRole.charAt(0)])[0].toUpperCase();
   overlay.innerHTML = `
     <div class="settings-panel">
