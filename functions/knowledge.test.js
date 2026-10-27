@@ -163,10 +163,15 @@ test("a Live guide's picture is downloaded from Lark with the app token and serv
   assert.match(w.calls.media[0].url, /^https:\/\/open\.larksuite\.com\/open-apis\/drive\/v1\/medias\/tokABCDEFGHIJKLMN\/download/);
 });
 
-test("pictures of draft rows, rows without a picture and made-up ids are never fetched", async (t) => {
+test("a Draft row's picture is served too, so the admin preview can check it", async (t) => {
   const w = world({ rows: [...ROWS, row("recAAAAAAAA8", { Status: "Draft", Picture: [{ file_token: "tokDRAFT12345678" }] })] });
   t.after(w.restore);
-  assert.equal((await picture("recAAAAAAAA8")).statusCode, 404);
+  assert.equal((await picture("recAAAAAAAA8")).statusCode, 200);
+});
+
+test("rows without a picture and made-up ids are never fetched", async (t) => {
+  const w = world();
+  t.after(w.restore);
   assert.equal((await picture("recAAAAAAAA3")).statusCode, 404);
   assert.equal((await picture("recZZZZZZZZZ")).statusCode, 404);
   assert.equal((await picture("../../etc/passwd")).statusCode, 404);

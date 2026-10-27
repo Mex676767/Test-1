@@ -230,3 +230,37 @@ body.light-page{background:#F4F5F7}
 .widget.app-frame,.widget.app-frame.guide-open{width:100%;max-width:none;height:100dvh;min-height:0;max-height:none;border:0;border-radius:0}
 .loading-note{padding:40px 18px;text-align:center;color:var(--muted);font-size:12px}
 :root.low-power *,:root.low-power *:before,:root.low-power *:after{animation:none!important;transition:none!important}
+
+/* Admin form for adding and editing guides */
+.draft-mark{font-size:10px;line-height:1.5;border:1px solid var(--warning);color:var(--warning);border-radius:4px;padding:0 5px;white-space:nowrap}
+.page-head>.btn.primary{flex-shrink:0}
+.guide-actions .btn{min-height:36px}
+.f-form{gap:12px}
+.f-section .doc-card-head{margin-bottom:8px}
+.f-tip{margin:0 0 12px}
+.f-field{display:grid;gap:6px;margin-bottom:12px;min-width:0}
+.f-field:last-child{margin-bottom:0}
+.f-label{font-size:12px;font-weight:600}
+.f-req{color:var(--rose)}
+.f-hint{font-size:11px;line-height:1.5;color:var(--muted)}
+p.f-hint{margin:0 0 10px}
+.f-input,.f-area{width:100%;min-width:0;background:var(--raised);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:10px 12px;font-size:13px;line-height:1.5}
+.f-input{min-height:40px}
+select.f-input{appearance:auto}
+.f-area{resize:vertical;min-height:64px}
+.f-input::placeholder,.f-area::placeholder{color:var(--muted);opacity:1}
+.f-repeat{display:grid;gap:8px;padding:10px;margin-bottom:10px;border:1px solid var(--border);border-radius:10px;background:var(--raised)}
+.f-repeat .f-input,.f-repeat .f-area{background:var(--surface)}
+.f-repeat-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.f-num{display:grid;place-items:center;width:24px;height:24px;border-radius:7px;background:var(--surface);color:var(--muted);font-size:12px;font-weight:600}
+.f-tools{display:flex;gap:4px;align-items:center}
+.f-tools .icon-btn,.f-grid .icon-btn{min-width:32px;min-height:32px;padding:4px;background:transparent}
+.f-wrap{flex-wrap:wrap;margin-top:8px}
+.f-grid{display:grid;gap:6px;align-items:center;margin-bottom:6px}
+.f-grid .f-input{min-height:36px;padding:7px 9px;font-size:12px}
+.f-grid-head .f-input{font-weight:600}
+.f-preview{display:block;max-width:100%;max-height:170px;margin:0 0 10px;border:1px solid var(--border);border-radius:8px;object-fit:contain;background:var(--raised)}
+.f-error{margin:0 0 8px;color:var(--rose);font-size:12px;line-height:1.5}
+.f-form .brand-segments{flex-wrap:wrap;margin-bottom:10px}
+.f-form .brand-segment{min-height:32px}
+.actionbar .copy:disabled{opacity:.6}

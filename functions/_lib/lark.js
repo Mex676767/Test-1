@@ -817,6 +817,8 @@ async function listRecordsWith(token, tableId, pageSize = 500, { sharedCacheMs =
   return data.data.items || [];
 }
 
+export const larkBaseToken = () => BASE_APP_TOKEN;
+
 export function toDisplay(v, optionMap) {
   if (v === null || v === undefined) return "";
   if (Array.isArray(v)) return v.map((x) => toDisplay(x, optionMap)).filter(Boolean).join(", ");
