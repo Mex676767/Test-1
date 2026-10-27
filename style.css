@@ -1032,7 +1032,7 @@ body { font-size: 13px; }
 .ca-bonus-section .bonus-tone-orange { --bonus-accent: #ee9a62; }
 .ca-bonus-section .ticket[class*="bonus-tone-"] {
   border: 1px solid color-mix(in srgb, var(--bonus-accent) 40%, var(--border));
-  border-left: 3px solid var(--bonus-accent);
+  border-left: 1px solid color-mix(in srgb, var(--bonus-accent) 40%, var(--border));
   background: color-mix(in srgb, var(--bonus-accent) 7%, var(--surface));
 }
 .ca-bonus-section .ticket[class*="bonus-tone-"] .ticket-icon {
@@ -1045,8 +1045,8 @@ body { font-size: 13px; }
 .ca-bonus-section .ticket[class*="bonus-tone-"] .ticket-meta .amount,
 .ca-bonus-section .ticket[class*="bonus-tone-"] .ticket-meta .pass-value,
 .ca-bonus-section .ticket[class*="bonus-tone-"] .ticket-meta .eligible-value { color: var(--bonus-accent); }
-.ca-bonus-section .ticket-vs96 { border-color: color-mix(in srgb, var(--danger) 62%, transparent); border-left-color: var(--danger); }
-.ca-bonus-section .ticket-vs96.feedback-complete { border-color: color-mix(in srgb, var(--teal) 62%, transparent); border-left-color: var(--teal); }
+.ca-bonus-section .ticket-vs96 { border-color: color-mix(in srgb, var(--danger) 62%, transparent); }
+.ca-bonus-section .ticket-vs96.feedback-complete { border-color: color-mix(in srgb, var(--teal) 62%, transparent); }
 .vs96-feedback-input, .risk-reload-input, .risk-claim-preview { border-radius: 8px; background: var(--surface-2); }
 .risk-amount-fields label > span, .risk-claim-preview > span { font-size: 9px; }
 .ticket.empty { margin-top: 0; min-height: 54px; border-color: var(--border); background: var(--surface); }
