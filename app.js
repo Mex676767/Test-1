@@ -916,6 +916,62 @@ function graceClaimAmount(display) {
   return afterPass ? afterPass[1] : "";
 }
 
+// Grace Period instant claim: right after Activate the agent types the deposit the customer made in this chat.
+// "atLeast": the entered amount must reach the requirement; "exact": it must equal it.
+const GRACE_DEPOSIT_RULE = "atLeast";
+// Required deposit for each bonus amount, used when the Lark text does not state "Deposit N" itself
+// (Grace Period SOP: deposit RM1,000 -> bonus RM108). Add a line per bonus amount.
+const GRACE_REQUIRED_DEPOSIT_BY_BONUS = { 108: 1000 };
+
+function graceTerms(display) {
+  const text = String(display || "");
+  let bonus = graceClaimAmount(text);
+  if (!bonus) {
+    const afterPass = text.match(/\bPass\b\s*[:\-]?\s*(?:RM\s*)?(\d+(?:\.\d+)?)\s*$/i);
+    bonus = afterPass ? afterPass[1] : "";
+  }
+  const stated = text.match(/Deposit\s*[:\-]?\s*(?:RM\s*)?(\d[\d,]*(?:\.\d+)?)/i);
+  const required = stated ? Number(stated[1].replace(/,/g, "")) : (GRACE_REQUIRED_DEPOSIT_BY_BONUS[Number(bonus)] || 0);
+  return { bonus, required: Number.isFinite(required) ? required : 0 };
+}
+
+function graceDepositCheck(display, entered) {
+  const { bonus, required } = graceTerms(display);
+  const text = String(entered || "").replace(/,/g, "").trim();
+  const amount = text === "" ? 0 : Number(text);
+  const hasAmount = Number.isFinite(amount) && amount > 0;
+  const met = required > 0 && hasAmount && (GRACE_DEPOSIT_RULE === "exact" ? amount === required : amount >= required);
+  return { bonus, required, amount: hasAmount ? amount : 0, hasAmount, known: required > 0, met };
+}
+
+function graceInstantState(display, entered, otherClaimActive) {
+  const chk = graceDepositCheck(display, entered);
+  const need = chk.required ? `RM${chk.required}` : "";
+  let note;
+  if (!chk.known) note = "The required deposit for this bonus isn't set up here, so it can't be claimed yet. It can be claimed once the Grace Period status updates.";
+  else if (!chk.hasAmount) note = `Enter the amount the customer deposited in this chat (${need} needed).`;
+  else if (!chk.met) note = GRACE_DEPOSIT_RULE === "exact"
+    ? `RM${chk.amount} entered — the deposit must be exactly ${need}.`
+    : `RM${chk.amount} entered — ${need} needed.`;
+  else note = `✓ Deposit RM${chk.amount} matches the ${need} needed — ready to claim.`;
+  if (chk.met && otherClaimActive) note = "Another bonus is already claimed in this case. Undo it first.";
+  const ready = chk.met && !otherClaimActive;
+  return { ...chk, note, ready, label: chk.bonus ? `Claim RM${chk.bonus}` : "Claim" };
+}
+
+function renderGraceInstant(chatId, display, entered, otherClaimActive) {
+  const g = graceInstantState(display, entered, otherClaimActive);
+  return `
+      <div class="grace-instant" data-chat="${chatId}">
+        ${g.known ? `<label>
+          <span>Deposit made in this chat (RM)</span>
+          <input type="text" inputmode="decimal" class="grace-deposit-input" data-chat="${chatId}" placeholder="Enter deposit amount" value="${escapeHtml(entered || "")}" />
+        </label>` : ""}
+        <div class="grace-deposit-note ${g.ready ? "ready" : ""}">${escapeHtml(g.note)}</div>
+        <button class="claim-btn grace-claim-btn" data-action="claim" data-program="gracePeriod" data-chat="${chatId}" ${g.ready ? "" : "disabled"} title="${g.ready ? "" : "Enter a deposit that matches the requirement first"}">${escapeHtml(g.label)}</button>
+      </div>`;
+}
+
 const RISK_PLAYER_CAPS = { 20: 188, 30: 288, 40: 388 };
 
 function riskPlayerCalculation(display, reloadAmount) {
@@ -1327,6 +1383,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     s.vs96FeedbackQuery2 = "";
     s.riskReloadAmount = ""; resetHalloweenInput(s);
     s.gracePeriodActivated = false;
+    s.graceDepositAmount = "";
     s.releasedBonusAmount = "";
     s.releasedAmountRaw = "";
     s.claimSecret = false;
@@ -2267,7 +2324,7 @@ async function copyPlainText(value) {
 const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
-  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount",
+  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount", "graceDepositAmount",
   "halloweenChoice", "halloweenDeposit", "halloweenShared", "halloweenMethod", "halloweenPostLink", "halloweenClaim",
 ];
 const CASE_KEYS = [
@@ -2324,6 +2381,7 @@ function loadCaseInto(s, snap) {
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
   s.riskReloadAmount = ""; resetHalloweenInput(s);
+  s.graceDepositAmount = "";
   s.claimTickets = {};
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
 }
@@ -2413,6 +2471,7 @@ async function addCaseFlow(chatId) {
     s.claimedPrograms = {};
     s.claimTickets = {};
     s.gracePeriodActivated = false;
+    s.graceDepositAmount = "";
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
     s.riskReloadAmount = ""; resetHalloweenInput(s);
@@ -2888,9 +2947,11 @@ function renderTickets(chatId) {
     if (p.key === "vs96Feedback") def.requiresFeedback = true;
     if (p.key === "gracePeriod") {
       const isPass = /^\s*pass\b/i.test(r.gracePeriod);
+      const graceClaimed = !!s.claimedPrograms.gracePeriod;
       def.claimLabel = isPass ? "Activate" : "Claim";
-      def.doneLabel = isPass ? "✓ Activated" : "✓ Claimed";
-      def.done = isPass ? !!s.gracePeriodActivated : !!s.claimedPrograms.gracePeriod;
+      def.doneLabel = isPass && !graceClaimed ? "✓ Activated" : "✓ Claimed";
+      def.done = isPass ? (!!s.gracePeriodActivated || graceClaimed) : graceClaimed;
+      def.graceInstant = isPass && !!s.gracePeriodActivated && !graceClaimed;
       def.excludeFromLock = isPass;
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
@@ -2932,7 +2993,7 @@ function renderTickets(chatId) {
     const doneLabel = d.doneLabel || "✓ Claimed";
     const cardMark = BONUS_CARD_MARKS[d.key] || escapeHtml(String(d.label || "•").trim().slice(0, 1).toUpperCase());
     return `
-    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
+    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
         <div class="ticket-icon" aria-hidden="true">${cardMark}</div>
         <div class="ticket-body">
@@ -2951,6 +3012,7 @@ function renderTickets(chatId) {
             : ""
         }
       </div>
+      ${d.graceInstant ? renderGraceInstant(chatId, d.display, s.graceDepositAmount, alreadyClaimedOne) : ""}
       ${riskCalculation ? `
         <div class="risk-amount-fields">
           <label>
@@ -5258,7 +5320,7 @@ function applyPreviewSampleState(chat) {
       riskPlayer: "Eligible · 30%",
       riskExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
       topPnl: "Batch 09-09-2026 Pass RM58",
-      gracePeriod: "Pass 58",
+      gracePeriod: "Pass 108",
       graceExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
       ltvTest: "Pass RM18",
       vipBooster: "Eligible",
@@ -5318,7 +5380,7 @@ function ensureChatState(chat) {
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     liveChatAccount: currentLiveChatAccount,
-    vs96FeedbackQuery1: "", vs96FeedbackQuery2: "", riskReloadAmount: "",
+    vs96FeedbackQuery1: "", vs96FeedbackQuery2: "", riskReloadAmount: "", graceDepositAmount: "",
     logs: [], caseNo: 1, loggedSnapshot: "",
     notVipResult: false, forcedVipFor: "",
     gracePeriodActivated: false,
@@ -5961,12 +6023,22 @@ chatListEl.addEventListener("click", async (e) => {
 
     if (programKey === "gracePeriod") {
       const display = r.gracePeriod || "";
-      if (/^\s*pass\b/i.test(display)) {
+      const isPass = /^\s*pass\b/i.test(display);
+      if (isPass && s.gracePeriodActivated) {
+        // Claim right after Activate: only once the deposit entered for this chat matches the requirement.
+        const otherClaim = Object.entries(s.claimedPrograms || {}).some(([key, on]) => key !== "gracePeriod" && on);
+        const g = graceInstantState(display, s.graceDepositAmount, otherClaim);
+        if (!g.ready) {
+          setStatus(g.note, "error");
+          return;
+        }
+      }
+      if (isPass && !s.gracePeriodActivated) {
         s.gracePeriodActivated = true;
         s.inquiry = ["Grace Period"];
         s.status = "Activated";
       } else {
-        const amount = graceClaimAmount(display);
+        const amount = graceClaimAmount(display) || graceTerms(display).bonus;
         if (!(await raiseClaimTicket(chatId, "gracePeriod", amount))) return;
         card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`) || card;
         s.claimedPrograms.gracePeriod = true;
@@ -6094,7 +6166,10 @@ chatListEl.addEventListener("click", async (e) => {
     reportClaim(chatId, null);
 
     const prevFirstAmount = String(s.releasedBonusAmount || "").split(" | ")[0];
-    if (wasGraceActivationOnly) s.gracePeriodActivated = false;
+    if (wasGraceActivationOnly) {
+      s.gracePeriodActivated = false;
+      s.graceDepositAmount = "";
+    }
     s.claimedPrograms = {};
     s.inquiry = [];
     s.status = "";
@@ -6518,6 +6593,33 @@ chatListEl.addEventListener("input", (e) => {
       s.halloweenPostLink = halloweenField.value;
     }
     patchHalloweenCard(chatId, halloweenField);
+    saveState();
+    return;
+  }
+  const graceDepositInput = e.target.closest(".grace-deposit-input");
+  if (graceDepositInput) {
+    const chatId = graceDepositInput.dataset.chat;
+    const s = state[chatId];
+    if (!s) return;
+    const cleaned = graceDepositInput.value.replace(/[^0-9.]/g, "");
+    const decimalAt = cleaned.indexOf(".");
+    graceDepositInput.value = decimalAt < 0
+      ? cleaned
+      : cleaned.slice(0, decimalAt + 1) + cleaned.slice(decimalAt + 1).replaceAll(".", "");
+    s.graceDepositAmount = graceDepositInput.value;
+    const otherClaim = Object.entries(s.claimedPrograms || {}).some(([key, on]) => key !== "gracePeriod" && on);
+    const g = graceInstantState(s.matchedRow?.gracePeriod, s.graceDepositAmount, otherClaim);
+    const panel = graceDepositInput.closest(".grace-instant");
+    const note = panel?.querySelector(".grace-deposit-note");
+    if (note) {
+      note.textContent = g.note;
+      note.classList.toggle("ready", g.ready);
+    }
+    const claimBtn = panel?.querySelector(".grace-claim-btn");
+    if (claimBtn) {
+      claimBtn.disabled = !g.ready;
+      claimBtn.title = g.ready ? "" : "Enter a deposit that matches the requirement first";
+    }
     saveState();
     return;
   }
@@ -7545,6 +7647,7 @@ function caseFromLarkRow(r) {
     vs96FeedbackQuery2: r.vs96FeedbackQuery2 || "",
     claimedPrograms: claimedProgramsFromSavedCase(r),
     gracePeriodActivated: false,
+    graceDepositAmount: "",
     logged: !!((r.inquiry || []).length && r.status),
     autoRecordError: "",
     loggedSnapshot: "",
