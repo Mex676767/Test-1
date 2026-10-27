@@ -9,7 +9,7 @@ const grab = (name) => {
   assert.ok(match, `found ${name} in app.js`);
   return match[0];
 };
-const source = ['escapeHtml', 'halloweenActionable', 'halloweenInput', 'halloweenChip', 'renderHalloweenCard'].map(grab).join('\n');
+const source = ['escapeHtml', 'halloweenActionable', 'halloweenInput', 'halloweenClaimLabel', 'halloweenChip', 'renderHalloweenCard'].map(grab).join('\n');
 
 function widget(h, over = {}) {
   const s = { claimedPrograms: {}, halloweenChoice: '', halloweenDeposit: '', halloweenShared: false, halloweenMethod: '', halloweenPostLink: '', ...over };
@@ -89,7 +89,7 @@ test('admin preview can show every Halloween card state, and the switch only exi
   const statesSource = app.match(/const HALLOWEEN_PREVIEW_STATES = \[[\s\S]*?\];/)[0];
   const extra = [statesSource, 'let halloweenPreviewKey = "day2";', grab('halloweenPreviewSample'), grab('renderHalloweenPreviewSwitch')].join('\n');
   const expected = {
-    day1: /Player's choice/, day2: /Did the player share today\?/, day3: /share again today/, day3NoShare: /did not share on Day 2/,
+    day1: /Player's choice/, topup: /New total deposited today/, day2: /Did the player share today\?/, day3: /share again today/, day3NoShare: /did not share on Day 2/,
     low: /below RM300/, done: /already claimed/, tier: /Tier 3 and Tier V players only/,
   };
   const keys = [];
@@ -107,4 +107,27 @@ test('admin preview can show every Halloween card state, and the switch only exi
     }
   }
   assert.deepEqual(keys, Object.keys(expected));
+});
+
+test('Day 1 top-up: the card pays the new total\'s row minus what was already paid, with the first choice', () => {
+  const topup = { ...base, day: 1, state: 'topup', table, choice: 'TRICK', track: 'Below RM300', day1Deposit: 50, day1Bonus: 18 };
+  const input = (h, deposit) => { const ctx = widget(h, { halloweenDeposit: deposit, halloweenChoice: 'TREAT' }); return ctx.halloweenInput(ctx.state.A, h); };
+  assert.equal(input(topup, '300').amount, 102, 'RM50 → RM300 total: RM120 row minus RM18 paid');
+  assert.match(input(topup, '300').sub, /TRICK · RM300 row RM120 − RM18 already paid/, 'TRICK stays, whatever was picked before');
+  assert.match(input(topup, '300').next, /Unlocks Day 2 and Day 3/);
+  assert.equal(input(topup, '150').amount, 22);
+  assert.match(input(topup, '150').next, /Still below RM300/);
+  assert.match(input(topup, '50').error, /more than the RM50 already counted/);
+  assert.match(input(topup, '80').error, /still in the RM50 row: no extra bonus\. Next row at RM100/);
+  assert.equal(input({ ...topup, choice: 'TREAT', day1Bonus: 15 }, '500').amount, 135);
+  assert.equal(input({ ...topup, track: 'RM300+', day1Deposit: 300, day1Bonus: 120 }, '500').next, '', 'already unlocked: nothing more to say');
+
+  const html = widget(topup).renderHalloweenCard('A');
+  assert.match(html, /New total deposited today/);
+  assert.match(html, />Claim top-up</);
+  assert.match(html, /Day 1 so far/);
+  assert.doesNotMatch(html, /Player's choice/, 'the choice cannot be changed on a top-up');
+  assertSafe(widget({ ...topup, choice: HOSTILE, day1Deposit: HOSTILE, day1Bonus: HOSTILE }).renderHalloweenCard('A'), 'top-up');
+  const claimed = widget(topup, { claimedPrograms: { halloween: true }, halloweenClaim: { day: 1, amount: 102, topup: true } }).renderHalloweenCard('A');
+  assert.match(claimed, /Day 1 top-up claimed · RM102/);
 });

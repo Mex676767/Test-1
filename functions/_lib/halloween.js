@@ -11,6 +11,7 @@ export const F = {
   day1Bonus: "Day 1 Bonus",
   track: "Track",
   day1Claimed: "Day 1 Claimed",
+  day1Topups: "Day 1 Top-ups",
   day2Base: "Day 2 Base",
   day2Share: "Day 2 Share",
   day2Claimed: "Day 2 Claimed",
@@ -120,6 +121,37 @@ const asNumber = (value) => {
   const n = Number(String(toDisplay(value)).replace(/,/g, ""));
   return Number.isFinite(n) ? n : 0;
 };
+// A Lark text cell can come back split into pieces (a link becomes its own piece); join them as written, never with ", ".
+const plainText = (value) => (Array.isArray(value)
+  ? value.map((piece) => (typeof piece === "string" ? piece : String(piece?.text ?? piece?.link ?? ""))).join("")
+  : typeof value === "string" || typeof value === "number" ? String(value) : "");
+
+// ---- Day 1 top-ups --------------------------------------------------------------------------
+// A player who claimed Day 1 can deposit more the same day and claim the difference. Each top-up adds one line to the
+// "Day 1 Top-ups" column, which is both the history people read and what an undo uses to put the row back:
+//   27/10 15:02 · RM50 → RM300 · bonus RM18 → RM120 (+RM102) · 96 Mathis - VIP RTN · https://my.livechatinc.com/…
+const TOPUP_LINE = /^(.+?) · RM(\d+(?:\.\d+)?) → RM(\d+(?:\.\d+)?) · bonus RM(\d+(?:\.\d+)?) → RM(\d+(?:\.\d+)?) \(\+RM\d+(?:\.\d+)?\) · (.+) · (\S+)$/;
+const lineSafe = (value, max) => String(value ?? "").replace(/[\r\n·]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max) || "-";
+export const topupWho = (agent, chatLink) => ({ agent: lineSafe(agent, 120), chatLink: lineSafe(chatLink, 500).replace(/\s/g, "") });
+
+export function topupLine({ nowMs, fromDeposit, toDeposit, fromBonus, toBonus, agent, chatLink }) {
+  const at = new Date(nowMs + 8 * 3600_000).toISOString();
+  const who = topupWho(agent, chatLink);
+  return `${at.slice(8, 10)}/${at.slice(5, 7)} ${at.slice(11, 16)} · RM${fromDeposit} → RM${toDeposit} · bonus RM${fromBonus} → RM${toBonus} (+RM${toBonus - fromBonus}) · ${who.agent} · ${who.chatLink}`;
+}
+
+export function readTopups(text) {
+  return String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const match = TOPUP_LINE.exec(line);
+    if (!match) return { line, parsed: false };
+    return {
+      line, parsed: true, fromDeposit: Number(match[2]), toDeposit: Number(match[3]), fromBonus: Number(match[4]), toBonus: Number(match[5]),
+      agent: match[6].trim(), chatLink: match[7],
+    };
+  });
+}
+
+export const trackFor = (deposit) => (deposit >= LOW_TRACK_BELOW ? TRACK_HIGH : TRACK_LOW);
 
 // Read one Halloween row (Lark fields) into plain values. `maps` resolves option ids to names if Lark returns ids.
 export function readProgress(fields = {}, maps = {}) {
@@ -130,6 +162,7 @@ export function readProgress(fields = {}, maps = {}) {
     tier: text(F.tier),
     day1Deposit: asNumber(fields[F.day1Deposit]),
     day1Bonus: asNumber(fields[F.day1Bonus]),
+    day1Topups: plainText(fields[F.day1Topups]).trim(),
     day2Claimed: hasValue(fields[F.day2Claimed]),
     day2Base: asNumber(fields[F.day2Base]),
     day2Share: asNumber(fields[F.day2Share]),
@@ -146,18 +179,22 @@ const rowStatusShape = (progress) => ({
   track: progress.track,
   day1Deposit: progress.day1Deposit,
   day1Bonus: progress.day1Bonus,
+  topupCount: readTopups(progress.day1Topups).length,
   day2Total: progress.day2Claimed ? progress.day2Base + progress.day2Share : 0,
   day2Shared: progress.day2Share > 0,
   shareMethod: progress.shareMethod,
   postLink: progress.postLink,
 });
 
-// Day 1 uses the player's tier on that day. Day 2 and Day 3 use the tier saved on the Day 1 row, so a tier change
-// mid-campaign neither changes nor blocks the reward (today's tier is only used if the saved one is unusable).
+// A first Day 1 claim uses the player's tier on that day. After it (a Day 1 top-up, Day 2, Day 3) the tier saved on the
+// Day 1 row is used, so a tier change mid-campaign neither changes nor blocks the reward (today's tier is only used if the
+// saved one is unusable).
 export function campaignTier(day, progress, tierText) {
-  if (day > 1 && progress) return normalizeTier(progress.tier) || normalizeTier(tierText);
+  if (progress) return normalizeTier(progress.tier) || normalizeTier(tierText);
   return normalizeTier(tierText);
 }
+
+const TOP_ROW = DAY1_TABLE[0];
 
 // What the widget card should show right now. Returns null when nothing should be shown (not our brand / window closed).
 export function halloweenStatus({ brand, tierText, row, today, maps }) {
@@ -180,7 +217,11 @@ export function halloweenStatus({ brand, tierText, row, today, maps }) {
   const common = { ...base, redPacket, recordId: row?.record_id || row?.recordId || "", ...(progress ? rowStatusShape(progress) : {}) };
 
   if (day === 1) {
-    if (progress) return { ...common, state: "done", message: `Day 1 already claimed: ${progress.choice} · RM${progress.day1Bonus}.` };
+    if (progress && progress.day1Deposit >= TOP_ROW.min) {
+      return { ...common, state: "done", message: `Day 1 already claimed at the top row (RM${TOP_ROW.min}+): ${progress.choice} · RM${progress.day1Bonus}.` };
+    }
+    // Claimed earlier today: the player may have deposited more since, so the card offers a top-up.
+    if (progress) return { ...common, state: "topup", table: DAY1_TABLE, message: `Day 1 already claimed: ${progress.choice} · RM${progress.day1Deposit} deposit → RM${progress.day1Bonus}.` };
     return { ...common, state: "day1", table: DAY1_TABLE };
   }
   if (!progress) return { ...common, state: "closed", message: `Day ${day} is closed for this player: Day 1 was not claimed.` };
@@ -211,8 +252,31 @@ export function planClaim({ brand, tierText, row, today, nowMs, input = {}, agen
   if (!tier) return fail("Halloween is for Tier 3 and Tier V players only.");
   const who = { [F.agent]: clean(agent, 120), [F.chatLink]: clean(chatLink, 500) };
 
+  if (day === 1 && progress) {
+    // Top-up: deposits made later the same day count together. The choice stays the one made at the first claim; the
+    // player gets the bonus for the new total minus what was already paid. Agent and Chat Link keep the first claim's.
+    if (progress.choice !== "TRICK" && progress.choice !== "TREAT") return fail("The Day 1 row has no TRICK or TREAT choice, so a top-up cannot be worked out. Fix the row in Lark.");
+    const bonus = day1Bonus(input.deposit, progress.choice);
+    const typed = Number(asText(input.deposit).replace(/,/g, "").trim() || NaN);
+    if ((bonus ? bonus.deposit : typed) <= progress.day1Deposit) return fail(`Enter the new total deposited today: more than the RM${progress.day1Deposit} already counted.`);
+    if (!bonus) return fail("Enter the player's new total deposit for today.");
+    const extra = bonus.amount - progress.day1Bonus;
+    if (extra <= 0) {
+      const next = [...DAY1_TABLE].reverse().find((item) => item.min > bonus.deposit);
+      return fail(`RM${bonus.deposit} is still in the RM${bonus.rowMin} row, so there is no extra bonus.${next ? ` The next row starts at RM${next.min}.` : ""}`);
+    }
+    const line = topupLine({ nowMs, fromDeposit: progress.day1Deposit, toDeposit: bonus.deposit, fromBonus: progress.day1Bonus, toBonus: bonus.amount, agent, chatLink });
+    return {
+      ok: true, kind: "update", topup: true, day, amount: extra, total: bonus.amount, track: bonus.track, choice: progress.choice, deposit: bonus.deposit,
+      previousDeposit: progress.day1Deposit, previousBonus: progress.day1Bonus, tier, shared: false, line,
+      fields: {
+        [F.day1Deposit]: bonus.deposit, [F.day1Bonus]: bonus.amount, [F.track]: bonus.track,
+        [F.day1Topups]: progress.day1Topups ? `${progress.day1Topups}\n${line}` : line,
+      },
+    };
+  }
+
   if (day === 1) {
-    if (progress) return fail("This player already claimed Day 1. TRICK or TREAT can only be chosen once.");
     const bonus = day1Bonus(input.deposit, input.choice);
     if (!bonus) return fail("Pick TRICK or TREAT and enter a Day 1 deposit of RM50 or more.");
     return {
@@ -253,14 +317,29 @@ export function planClaim({ brand, tierText, row, today, nowMs, input = {}, agen
   return { ok: true, kind: "update", day, amount: redPacket + (shared ? SHARE_EXTRA : 0), base: redPacket, shared, tier, fields };
 }
 
-// Fields to blank when a day's claim is undone. Day 1 removes the whole row (see the endpoint).
-export function planUnclaim({ day, row, maps }) {
+// Fields to blank when a day's claim is undone. Day 1 removes the whole row (see the endpoint), unless it has top-ups:
+// then only the latest top-up is undone, by its own agent in its own chat, and the row goes back to the line's "before".
+export function planUnclaim({ day, row, maps, agent = "", chatLink = "" }) {
   const progress = row ? readProgress(row.fields, maps) : null;
   // Already undone (for example a retry after a half-finished unclaim): nothing to do, not an error.
   if (!progress) return { ok: true, kind: "none" };
   if (day === 1) {
     if (progress.day2Claimed) return { ok: false, error: "Day 2 was already claimed. Undo Day 2 first." };
-    return { ok: true, kind: "delete" };
+    const topups = readTopups(progress.day1Topups);
+    if (!topups.length) return { ok: true, kind: "delete" };
+    const last = topups[topups.length - 1];
+    const byHand = { ok: false, error: "The Day 1 row in the Halloween table was changed by hand, so the app cannot undo the top-up. Fix the row in Lark." };
+    if (!last.parsed || last.toDeposit !== progress.day1Deposit || last.toBonus !== progress.day1Bonus) return byHand;
+    const who = topupWho(agent, chatLink);
+    if ((last.agent !== "-" || last.chatLink !== "-") && (who.agent !== last.agent || who.chatLink !== last.chatLink)) {
+      return { ok: false, notOwner: true, error: `A top-up was claimed after this Day 1 claim. Only ${last.agent === "-" ? "the agent who made it" : last.agent}, in the chat where it was made, can undo it; undo the top-up first.` };
+    }
+    const rest = topups.slice(0, -1).map((item) => item.line).join("\n");
+    return {
+      ok: true, kind: "topup", amount: last.toBonus - last.fromBonus, fromDeposit: last.fromDeposit, toDeposit: last.toDeposit,
+      fields: { [F.day1Deposit]: last.fromDeposit, [F.day1Bonus]: last.fromBonus, [F.track]: trackFor(last.fromDeposit) },
+      clear: rest ? [] : [F.day1Topups], topups: rest,
+    };
   }
   if (day === 2) {
     if (!progress.day2Claimed) return { ok: true, kind: "none" };
@@ -285,6 +364,7 @@ export const EXPECTED_FIELDS = {
   [F.day1Bonus]: [2],
   [F.track]: SELECT_OR_TEXT,
   [F.day1Claimed]: [5],
+  [F.day1Topups]: [1],
   [F.day2Base]: [2],
   [F.day2Share]: [2],
   [F.day2Claimed]: [5],
