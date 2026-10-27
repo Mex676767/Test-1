@@ -1,6 +1,6 @@
 import { adapt } from "./_lib/adapt.js";
 import { getTenantToken } from "./_lib/lark.js";
-import { firstPicture, isLive, listKnowledgeRecords } from "./_lib/knowledge.js";
+import { firstPicture, listKnowledgeRecords } from "./_lib/knowledge.js";
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const MEDIA_URL = /^https:\/\/open\.larksuite\.com\/open-apis\/drive\/v1\/medias\/[^/?#]+\/download(\?|$)/;
@@ -9,15 +9,15 @@ const MAX_BYTES = 6 * 1024 * 1024;
 
 const plain = (statusCode, message) => ({ statusCode, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }, body: message });
 
-// Only a picture that belongs to a Live row of the Learning Group table is served,
-// so this can never be used to read any other file the Lark app can reach.
+// Only a picture attached to a row of the Learning Group table is served (Draft rows too, so the
+// admin preview can check them), so this can never be used to read any other file the Lark app can reach.
 export async function handler(event) {
   try {
     const id = String(event.queryStringParameters?.id || "").trim();
     if (!/^rec[A-Za-z0-9]{6,40}$/.test(id)) return plain(404, "Not found");
     const records = await listKnowledgeRecords();
     if (!records) return plain(404, "Not found");
-    const record = records.find((row) => row.record_id === id && isLive(row.fields));
+    const record = records.find((row) => row.record_id === id);
     const file = record && firstPicture(record.fields);
     if (!file) return plain(404, "Not found");
 
