@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CAMPAIGN, DAY1_TABLE, F, brandKey, checkFields, day1Bonus, dayNumber, halloweenStatus, malaysiaToday,
-  normalizeTier, planClaim, planUnclaim, shapeFields, testDateFor,
+  normalizeTier, planClaim, planUnclaim, readTopups, shapeFields, testDateFor, topupLine,
 } from "./_lib/halloween.js";
 import { initEnv } from "./_lib/lark.js";
 import { handler as claimHandler } from "./halloween-claim.js";
@@ -22,7 +22,7 @@ function goodCatalog() {
     selectField(F.choice, ["TRICK", "TREAT"]),
     numberField(F.day1Deposit), numberField(F.day1Bonus),
     selectField(F.track, ["Below RM300", "RM300+"]),
-    dateField(F.day1Claimed),
+    dateField(F.day1Claimed), textField(F.day1Topups),
     numberField(F.day2Base), numberField(F.day2Share), dateField(F.day2Claimed),
     numberField(F.day3Base), numberField(F.day3Share), dateField(F.day3Claimed),
     selectField(F.shareMethod, ["Social post", "5 friends"]),
@@ -101,7 +101,8 @@ test("the card state follows the day, the track and what was claimed", () => {
   assert.equal(status("2026-10-29", day1Row()), null, "after Day 3 nothing shows");
   assert.equal(halloweenStatus({ brand: "PP", tierText: "Tier V", row: null, today: "2026-10-26" }), null);
   assert.equal(status("2026-10-26", null).state, "day1");
-  assert.equal(status("2026-10-26", day1Row()).state, "done");
+  assert.equal(status("2026-10-26", day1Row()).state, "topup", "claimed earlier on Day 1: the card offers a top-up");
+  assert.equal(status("2026-10-26", day1Row({ [F.day1Deposit]: 500, [F.day1Bonus]: 200 })).state, "done", "already at the top row: nothing more to top up");
   assert.equal(status("2026-10-26", null, "Tier 2").state, "closed");
   assert.match(status("2026-10-26", null, "Tier 2").message, /Tier 2/);
   assert.equal(status("2026-10-27", null).state, "closed");
@@ -318,7 +319,7 @@ test("a three-day run writes one Halloween row and fills it a day at a time", as
   assert.equal(saved[F.agent], "Aina");
   assert.equal(typeof saved[F.day1Claimed], "number");
 
-  assert.equal((await call({ action: "claim", day: 1, choice: "TREAT", deposit: 500 }, "2026-10-26")).ok, false, "TRICK or TREAT is once only");
+  assert.equal((await call({ action: "claim", day: 1, choice: "TREAT", deposit: 349 }, "2026-10-26")).ok, false, "a second Day 1 claim is a top-up, and needs more than the total already counted");
   assert.equal(lark.store.rows.length, 1);
 
   const day2 = await call({ action: "claim", day: 2, shared: true, shareMethod: "Social post", postLink: "https://fb.com/p/1" }, "2026-10-27");
@@ -521,7 +522,7 @@ test("any spelling of the brand is stored and searched as the dropdown's form, s
   assert.equal((await call({ action: "claim", day: 1, brand: "now", choice: "TRICK", deposit: 350 }, "2026-10-26")).ok, true);
   assert.equal(lark.store.rows[0].fields[F.brand], "NOW");
   for (const brand of ["NOW", "NOW32", " now32 ", "Now"]) {
-    assert.equal((await call({ action: "claim", day: 1, brand, choice: "TREAT", deposit: 500 }, "2026-10-26")).ok, false, `${brand} must find the same row`);
+    assert.match((await call({ action: "claim", day: 1, brand, choice: "TREAT", deposit: 300 }, "2026-10-26")).error, /more than the RM350 already counted/, `${brand} must find the same row`);
   }
   assert.equal(lark.store.rows.length, 1);
 });
@@ -601,6 +602,137 @@ test("the lookup returns the Halloween card state only for campaign brands insid
   assert.equal((await look("PP", "2026-10-26")).halloween, undefined, "not a campaign brand");
 
   lark.store.rows.push(day1Row());
-  assert.equal((await look("NOW", "2026-10-26")).halloween.state, "done");
+  assert.equal((await look("NOW", "2026-10-26")).halloween.state, "topup");
   assert.equal((await look("NOW", "2026-10-27")).halloween.state, "day2");
+});
+
+// ---- Day 1 top-ups --------------------------------------------------------------------------
+const NOON_MYT = Date.parse("2026-10-26T07:05:00Z");
+const smallRow = (extra = {}) => day1Row({ [F.day1Deposit]: 50, [F.day1Bonus]: 18, [F.track]: "Below RM300", ...extra });
+
+test("a top-up line reads back exactly, whatever the agent name holds", () => {
+  const line = topupLine({ nowMs: NOON_MYT, fromDeposit: 50, toDeposit: 300, fromBonus: 18, toBonus: 120, agent: "96 Mathis · VIP\nRTN 🇲🇾", chatLink: "https://my.livechatinc.com/archives/TI1?shared=true" });
+  assert.equal(line, "26/10 15:05 · RM50 → RM300 · bonus RM18 → RM120 (+RM102) · 96 Mathis VIP RTN 🇲🇾 · https://my.livechatinc.com/archives/TI1?shared=true");
+  const [read] = readTopups(line);
+  assert.deepEqual({ ...read, line: undefined }, { line: undefined, parsed: true, fromDeposit: 50, toDeposit: 300, fromBonus: 18, toBonus: 120, agent: "96 Mathis VIP RTN 🇲🇾", chatLink: "https://my.livechatinc.com/archives/TI1?shared=true" });
+  assert.match(topupLine({ nowMs: NOON_MYT, fromDeposit: 50, toDeposit: 100, fromBonus: 18, toBonus: 40, agent: "", chatLink: "" }), / · - · -$/);
+  assert.equal(readTopups("typed by hand\n\n")[0].parsed, false);
+  assert.equal(readTopups("").length, 0);
+});
+
+test("Day 1 top-up: deposits add up, the difference is paid, the choice and the claimant stay", () => {
+  const plan = claim({ row: smallRow(), nowMs: NOON_MYT, agent: "Bala", chatLink: "https://chat/2", input: { day: 1, choice: "TREAT", deposit: "300" } });
+  assert.equal(plan.ok, true, plan.error);
+  assert.equal(plan.topup, true);
+  assert.equal(plan.amount, 102, "RM120 row minus the RM18 already paid");
+  assert.equal(plan.total, 120);
+  assert.equal(plan.choice, "TRICK", "TRICK or TREAT is chosen once");
+  assert.equal(plan.track, "RM300+");
+  assert.equal(plan.fields[F.day1Deposit], 300);
+  assert.equal(plan.fields[F.day1Bonus], 120);
+  assert.equal(plan.fields[F.track], "RM300+");
+  assert.equal(plan.fields[F.day1Topups], "26/10 15:05 · RM50 → RM300 · bonus RM18 → RM120 (+RM102) · Bala · https://chat/2");
+  assert.equal(F.agent in plan.fields || F.chatLink in plan.fields || F.day1Claimed in plan.fields, false, "the first claim's agent, chat and time stay");
+  const second = claim({ row: smallRow({ [F.day1Deposit]: 300, [F.day1Bonus]: 120, [F.track]: "RM300+", [F.day1Topups]: plan.fields[F.day1Topups] }), nowMs: NOON_MYT, input: { day: 1, deposit: 600 } });
+  assert.equal(second.amount, 80);
+  assert.equal(second.fields[F.day1Topups].split("\n").length, 2, "each top-up adds a line");
+  assert.equal(claim({ row: smallRow({ [F.choice]: "TREAT", [F.day1Bonus]: 15 }), input: { day: 1, deposit: 100 } }).amount, 15, "TREAT: RM30 row minus RM15");
+});
+
+test("Day 1 top-up is refused when the total is not higher, stays in the same row, or the day is over", () => {
+  assert.match(claim({ row: smallRow(), input: { day: 1, deposit: 50 } }).error, /more than the RM50 already counted/);
+  assert.match(claim({ row: smallRow(), input: { day: 1, deposit: 30 } }).error, /more than the RM50 already counted/);
+  assert.match(claim({ row: smallRow(), input: { day: 1, deposit: 99 } }).error, /still in the RM50 row, so there is no extra bonus\. The next row starts at RM100/);
+  assert.match(claim({ row: smallRow(), input: { day: 1, deposit: "" } }).error, /new total deposit/);
+  assert.match(claim({ row: smallRow({ [F.choice]: "" }), input: { day: 1, deposit: 300 } }).error, /no TRICK or TREAT/);
+  assert.match(claim({ row: smallRow(), today: "2026-10-27", input: { day: 1, deposit: 300 } }).error, /It is Day 2 now/, "only Day 1 has top-ups");
+  assert.match(claim({ row: smallRow(), today: "2026-10-27", input: { day: 2 } }).error, /below RM300/, "a deposit after Day 1 changes nothing");
+  assert.equal(claim({ row: smallRow(), tierText: "Tier 2", input: { day: 1, deposit: 300 } }).ok, true, "a top-up uses the tier saved on the first claim");
+});
+
+test("undo of a top-up: only the latest one, only by its agent in its chat, and never under a Day 2 claim", () => {
+  const first = topupLine({ nowMs: NOON_MYT, fromDeposit: 50, toDeposit: 300, fromBonus: 18, toBonus: 120, agent: "Bala", chatLink: "https://chat/2" });
+  const second = topupLine({ nowMs: NOON_MYT, fromDeposit: 300, toDeposit: 500, fromBonus: 120, toBonus: 200, agent: "Chen", chatLink: "https://chat/3" });
+  const twice = smallRow({ [F.day1Deposit]: 500, [F.day1Bonus]: 200, [F.track]: "RM300+", [F.day1Topups]: `${first}\n${second}` });
+  const undo = (r, agent, chatLink) => planUnclaim({ day: 1, row: r, agent, chatLink });
+  const latest = undo(twice, "Chen", "https://chat/3");
+  assert.equal(latest.kind, "topup");
+  assert.deepEqual(latest.fields, { [F.day1Deposit]: 300, [F.day1Bonus]: 120, [F.track]: "RM300+" });
+  assert.equal(latest.topups, first);
+  assert.deepEqual(latest.clear, []);
+  const refused = undo(twice, "Bala", "https://chat/2");
+  assert.equal(refused.notOwner, true);
+  assert.match(refused.error, /Only Chen, in the chat where it was made, can undo it; undo the top-up first/);
+  assert.equal(undo(twice, "Aina", "https://chat/1").notOwner, true, "the first claimant cannot remove the whole Day 1 under a top-up");
+  const once = smallRow({ [F.day1Deposit]: 300, [F.day1Bonus]: 120, [F.track]: "RM300+", [F.day1Topups]: first });
+  const back = undo(once, "Bala", "https://chat/2");
+  assert.deepEqual(back.fields, { [F.day1Deposit]: 50, [F.day1Bonus]: 18, [F.track]: "Below RM300" });
+  assert.deepEqual(back.clear, [F.day1Topups]);
+  assert.match(undo({ ...once, fields: { ...once.fields, [F.day1Deposit]: 350 } }, "Bala", "https://chat/2").error, /changed by hand/);
+  assert.match(undo({ ...once, fields: { ...once.fields, [F.day1Topups]: `${first}\nnote` } }, "Bala", "https://chat/2").error, /changed by hand/);
+  assert.match(undo({ ...once, fields: { ...once.fields, [F.day2Claimed]: 5 } }, "Bala", "https://chat/2").error, /Undo Day 2 first/);
+});
+
+test("the chat's story: RM100 claimed, RM300 topped up in another chat, Day 2 opens, and undo walks back one step at a time", async (t) => {
+  const lark = startFakeLark();
+  t.after(lark.stop);
+  const asA = { agentName: "Aina", chatLink: "https://chat/a" };
+  const asB = { agentName: "Bala", chatLink: "https://chat/b" };
+  const asC = { agentName: "Chen", chatLink: "https://chat/c" };
+  assert.equal((await call({ action: "claim", day: 1, choice: "TRICK", deposit: 100, ...asA }, "2026-10-26")).amount, 40);
+  const preview = await call({ action: "claim", preview: true, day: 1, deposit: 300, ...asB }, "2026-10-26");
+  assert.deepEqual([preview.ok, preview.topup, preview.amount], [true, true, 80]);
+  assert.equal(lark.store.writes.length, 1, "the preview wrote nothing");
+  const topped = await call({ action: "claim", day: 1, deposit: "300", ...asB }, "2026-10-26");
+  assert.deepEqual([topped.ok, topped.topup, topped.amount, topped.total, topped.deposit, topped.track], [true, true, 80, 120, 300, "RM300+"]);
+  const saved = lark.store.rows[0].fields;
+  assert.deepEqual([saved[F.day1Deposit], saved[F.day1Bonus], saved[F.track], saved[F.choice], saved[F.agent], saved[F.chatLink]], [300, 120, "RM300+", "TRICK", "Aina", "https://chat/a"]);
+  assert.match(saved[F.day1Topups], /^\d\d\/10 \d\d:\d\d · RM100 → RM300 · bonus RM40 → RM120 \(\+RM80\) · Bala · https:\/\/chat\/b$/);
+  assert.equal((await call({ action: "claim", day: 1, deposit: 600, ...asC }, "2026-10-26")).amount, 80);
+  assert.equal(lark.store.rows.length, 1);
+
+  assert.equal((await call({ action: "unclaim", day: 1, ...asA }, "2026-10-26")).notOwner, true, "Day 1 cannot be removed under its top-ups");
+  assert.equal((await call({ action: "unclaim", day: 1, ...asB }, "2026-10-26")).notOwner, true, "only the latest top-up can be undone");
+  const undoC = await call({ action: "unclaim", day: 1, ...asC }, "2026-10-26");
+  assert.deepEqual([undoC.ok, undoC.topupUndone, undoC.amount, undoC.toDeposit], [true, true, 80, 600]);
+  assert.deepEqual([saved[F.day1Deposit], saved[F.day1Bonus]], [300, 120]);
+  assert.equal(lark.store.rows[0].fields[F.day1Topups].split("\n").length, 1);
+
+  const day2 = await call({ action: "claim", day: 2, ...asB }, "2026-10-27");
+  assert.equal(day2.ok, true, "the top-up to RM300 opened Day 2");
+  assert.match((await call({ action: "unclaim", day: 1, ...asB }, "2026-10-27")).error, /Undo Day 2 first/);
+  assert.equal((await call({ action: "unclaim", day: 2, ...asB }, "2026-10-27")).ok, true);
+  assert.equal((await call({ action: "unclaim", day: 1, ...asB }, "2026-10-27")).topupUndone, true, "a top-up can still be undone after Day 1");
+  const row1 = lark.store.rows[0].fields;
+  assert.deepEqual([row1[F.day1Deposit], row1[F.day1Bonus], row1[F.track], row1[F.day1Topups]], [100, 40, "Below RM300", undefined]);
+  const undoA = await call({ action: "unclaim", day: 1, ...asA }, "2026-10-27");
+  assert.deepEqual([undoA.ok, undoA.topupUndone], [true, undefined]);
+  assert.equal(lark.store.rows.length, 0, "with no top-ups left, undoing Day 1 removes the row as before");
+});
+
+test("a top-up line Lark returns in pieces (a link becomes its own piece) is still read whole", async (t) => {
+  const line = topupLine({ nowMs: NOON_MYT, fromDeposit: 50, toDeposit: 300, fromBonus: 18, toBonus: 120, agent: "Bala", chatLink: "https://chat/b" });
+  const [head] = line.split("https://");
+  const pieces = [{ type: "text", text: head }, { type: "url", text: "https://chat/b", link: "https://chat/b" }];
+  const lark = startFakeLark({ rows: [smallRow({ [F.day1Deposit]: 300, [F.day1Bonus]: 120, [F.track]: "RM300+", [F.day1Topups]: pieces })] });
+  t.after(lark.stop);
+  const undo = await call({ action: "unclaim", day: 1, agentName: "Bala", chatLink: "https://chat/b" }, "2026-10-26");
+  assert.equal(undo.topupUndone, true, JSON.stringify(undo));
+  assert.equal(lark.store.rows[0].fields[F.day1Deposit], 50);
+});
+
+test("two agents top up the same player at the same moment: one is accepted and the row holds only its line", async (t) => {
+  const lark = startFakeLark({ rows: [smallRow()] });
+  t.after(lark.stop);
+  const results = await Promise.all(Array.from({ length: 6 }, (_, i) => call(
+    { action: "claim", day: 1, deposit: 300 + i * 10, agentName: `Agent${i}`, chatLink: `https://chat/${i}` },
+    "2026-10-26", { HALLOWEEN_SETTLE_MS: "40,40" },
+  )));
+  const accepted = results.filter((r) => r.ok);
+  assert.equal(accepted.length, 1, JSON.stringify(results.map((r) => r.error || "ok")));
+  assert.match(results.find((r) => !r.ok).error, /Another top-up for this player was claimed a moment ago/);
+  const lines = readTopups(lark.store.rows[0].fields[F.day1Topups]);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].toDeposit, accepted[0].deposit);
+  assert.equal(lark.store.rows[0].fields[F.day1Deposit], accepted[0].deposit);
 });

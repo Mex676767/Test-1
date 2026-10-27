@@ -2535,7 +2535,7 @@ const HALLOWEEN_METHODS = ["Social post", "5 friends"];
 
 // Admin preview only: sample Halloween card states, switched with the chips shown above the card.
 const HALLOWEEN_PREVIEW_STATES = [
-  ["day1", "Day 1"], ["day2", "Day 2"], ["day3", "Day 3"], ["day3NoShare", "Day 3, no Day 2 share"],
+  ["day1", "Day 1"], ["topup", "Day 1 top-up"], ["day2", "Day 2"], ["day3", "Day 3"], ["day3NoShare", "Day 3, no Day 2 share"],
   ["low", "Below RM300"], ["done", "Already claimed"], ["tier", "Not Tier 3/V"],
 ];
 let halloweenPreviewKey = "day2";
@@ -2545,6 +2545,7 @@ function halloweenPreviewSample(key = halloweenPreviewKey) {
   const history = { choice: "TRICK", track: "RM300+", day1Deposit: 350, day1Bonus: 120 };
   const table = [{ min: 500, trick: 200, treat: 150 }, { min: 300, trick: 120, treat: 90 }, { min: 100, trick: 40, treat: 30 }, { min: 50, trick: 18, treat: 15 }];
   if (key === "day1") return { ...base, day: 1, state: "day1", table };
+  if (key === "topup") return { ...base, day: 1, state: "topup", table, choice: "TRICK", track: "Below RM300", day1Deposit: 50, day1Bonus: 18, topupCount: 0, message: "Day 1 already claimed: TRICK · RM50 deposit → RM18." };
   if (key === "day3") return { ...base, ...history, day: 3, state: "day3", canShare: true, shareMethod: "Social post", postLink: "https://facebook.com/example/posts/1", day2Total: 56, day2Shared: true };
   if (key === "day3NoShare") return { ...base, ...history, day: 3, state: "day3", canShare: false, shareMethod: "", day2Total: 28, day2Shared: false };
   if (key === "low") return { ...base, day: 2, state: "closed", choice: "TREAT", track: "Below RM300", day1Deposit: 200, day1Bonus: 30, message: "No Day 2 reward: the Day 1 deposit was below RM300." };
@@ -2569,7 +2570,7 @@ function resetHalloweenInput(s) {
 }
 
 function halloweenActionable(h) {
-  return !!h && (h.state === "day1" || h.state === "day2" || h.state === "day3");
+  return !!h && (h.state === "day1" || h.state === "topup" || h.state === "day2" || h.state === "day3");
 }
 
 // What the agent has entered so far and what it would pay. Mirrors the server rules; the server re-checks everything.
@@ -2581,7 +2582,7 @@ function halloweenInput(s, h) {
     const deposit = Number(raw);
     const table = Array.isArray(h.table) ? h.table : [];
     if (!s.halloweenChoice) { result.error = "Pick TRICK or TREAT first."; return result; }
-    if (!raw || !Number.isFinite(deposit) || deposit <= 0) { result.error = "Enter the customer's Day 1 deposit."; return result; }
+    if (!raw || !Number.isFinite(deposit) || deposit <= 0) { result.error = "Enter the total the customer deposited today."; return result; }
     const row = table.find((item) => deposit >= item.min);
     if (!row) { result.error = "A deposit below RM50 does not qualify."; return result; }
     result.valid = true;
@@ -2590,6 +2591,30 @@ function halloweenInput(s, h) {
     result.next = deposit >= 300
       ? `Unlocks Day 2 and Day 3: RM${h.redPacket} each, or RM${h.redPacket + h.shareExtra} if the player shares.`
       : "Below RM300: Day 1 bonus only, no Day 2 or Day 3.";
+    return result;
+  }
+  if (h.state === "topup") {
+    // Deposits made later on Day 1 count together: pay the bonus for the new total, minus what was already paid.
+    const raw = String(s.halloweenDeposit || "").replace(/,/g, "").trim();
+    const deposit = Number(raw);
+    const table = Array.isArray(h.table) ? h.table : [];
+    const counted = Number(h.day1Deposit) || 0;
+    const paid = Number(h.day1Bonus) || 0;
+    if (!raw || !Number.isFinite(deposit) || deposit <= 0) { result.error = "Enter the customer's new total deposit for today."; return result; }
+    if (deposit <= counted) { result.error = `Enter the new total for today: more than the RM${counted} already counted.`; return result; }
+    const row = table.find((item) => deposit >= item.min);
+    const total = row ? (h.choice === "TREAT" ? row.treat : row.trick) : 0;
+    if (!row || total <= paid) {
+      const next = [...table].reverse().find((item) => item.min > deposit);
+      result.error = `RM${deposit} is still in the RM${row ? row.min : 50} row: no extra bonus.${next ? ` Next row at RM${next.min}.` : ""}`;
+      return result;
+    }
+    result.valid = true;
+    result.amount = total - paid;
+    result.sub = `${h.choice} · RM${row.min} row RM${total} − RM${paid} already paid · x3 turnover`;
+    result.next = deposit >= 300
+      ? (h.track === "RM300+" ? "" : `Unlocks Day 2 and Day 3: RM${h.redPacket} each, or RM${h.redPacket + h.shareExtra} if the player shares.`)
+      : "Still below RM300: no Day 2 or Day 3.";
     return result;
   }
   const sharing = h.state === "day2" ? !!s.halloweenShared : !!s.halloweenShared && !!h.canShare;
@@ -2603,6 +2628,10 @@ function halloweenInput(s, h) {
   result.sub = sharing ? `RM${h.redPacket} red packet + RM${h.shareExtra} share extra · x3 turnover` : `RM${h.redPacket} red packet · x3 turnover`;
   result.next = h.state === "day2" ? "Sharing today is also needed for the Day 3 share extra." : "";
   return result;
+}
+
+function halloweenClaimLabel(h) {
+  return h.state === "topup" ? "Claim top-up" : `Claim Day ${h.day}`;
 }
 
 function halloweenChip(chatId, field, value, label, active) {
@@ -2631,7 +2660,7 @@ function renderHalloweenCard(chatId) {
 
   const history = h.state === "day1" ? "" : `
     <div class="hw-history">
-      <div><span>Day 1</span><span>${escapeHtml(h.choice || "")} · RM${escapeHtml(String(h.day1Deposit || 0))} → RM${escapeHtml(String(h.day1Bonus || 0))}</span></div>
+      <div><span>Day 1${h.state === "topup" ? " so far" : ""}</span><span>${escapeHtml(h.choice || "")} · RM${escapeHtml(String(h.day1Deposit || 0))} → RM${escapeHtml(String(h.day1Bonus || 0))}${h.topupCount ? ` · ${h.topupCount} top-up${h.topupCount === 1 ? "" : "s"}` : ""}</span></div>
       ${h.state === "day3" ? `<div><span>Day 2</span><span>RM${escapeHtml(String(h.day2Total || 0))}${h.day2Shared ? ` · shared (${escapeHtml(h.shareMethod || "")})` : " · not shared"}</span></div>` : ""}
     </div>`;
 
@@ -2643,7 +2672,7 @@ function renderHalloweenCard(chatId) {
     <div class="ticket bonus-tone-orange ticket-halloween">
       <div class="ticket-main">
         <div class="ticket-icon" aria-hidden="true">🎃</div>
-        <div class="ticket-body">${title}<div class="ticket-meta">Day ${escapeHtml(String(day))} claimed${amount ? ` · RM${escapeHtml(String(amount))}` : ""}</div></div>
+        <div class="ticket-body">${title}<div class="ticket-meta">Day ${escapeHtml(String(day))}${info.topup ? " top-up" : ""} claimed${amount ? ` · RM${escapeHtml(String(amount))}` : ""}</div></div>
       </div>
       <div class="ticket-btns"><button class="claim-btn claimed" data-action="unclaim" data-program="halloween" data-chat="${chatId}" title="Click again to unclaim">✓ Claimed</button></div>
     </div>`;
@@ -2655,8 +2684,14 @@ function renderHalloweenCard(chatId) {
     controls = `
       <div class="hw-label">Player's choice (once per campaign)</div>
       <div class="hw-chips">${["TRICK", "TREAT"].map((value) => halloweenChip(chatId, "choice", value, value, s.halloweenChoice === value)).join("")}</div>
-      <label class="hw-field"><span>Customer deposit (RM)</span>
-        <input type="text" inputmode="decimal" class="hw-deposit" data-chat="${chatId}" placeholder="Enter deposit amount" value="${escapeHtml(s.halloweenDeposit || "")}" />
+      <label class="hw-field"><span>Total deposited today (RM)</span>
+        <input type="text" inputmode="decimal" class="hw-deposit" data-chat="${chatId}" placeholder="All of today's deposits added up" value="${escapeHtml(s.halloweenDeposit || "")}" />
+      </label>`;
+  } else if (h.state === "topup") {
+    controls = `
+      <div class="hw-hint">Deposited more today? Enter the new total for today (everything, including the RM${escapeHtml(String(h.day1Deposit || 0))} already counted). ${escapeHtml(h.choice || "")} stays the player's choice.</div>
+      <label class="hw-field"><span>New total deposited today (RM)</span>
+        <input type="text" inputmode="decimal" class="hw-deposit" data-chat="${chatId}" placeholder="More than RM${escapeHtml(String(h.day1Deposit || 0))}" value="${escapeHtml(s.halloweenDeposit || "")}" />
       </label>`;
   } else if (h.state === "day2") {
     controls = `
@@ -2697,7 +2732,7 @@ function renderHalloweenCard(chatId) {
         <div class="hw-note hw-next">${escapeHtml(input.next)}</div>
       </div>
       <div class="ticket-btns">
-        <button class="claim-btn hw-claim" data-action="claim" data-program="halloween" data-chat="${chatId}" ${title2 ? `title="${escapeHtml(title2)}"` : ""} ${disabled ? "disabled" : ""}>Claim Day ${h.day}</button>
+        <button class="claim-btn hw-claim" data-action="claim" data-program="halloween" data-chat="${chatId}" ${title2 ? `title="${escapeHtml(title2)}"` : ""} ${disabled ? "disabled" : ""}>${halloweenClaimLabel(h)}</button>
       </div>
       <div class="hw-hint">${previewMode ? "Admin preview: the ticket form opens, but no ticket is created and nothing is saved." : "Claiming raises a VVIP Complain Players ticket."}</div>
     </div>`;
@@ -2748,11 +2783,12 @@ async function claimHalloween(chatId, btn, card) {
   const chatDef = activeChats.find((c) => c.chatId === chatId);
   const claimBody = (preview) => JSON.stringify({
     action: "claim", preview, day: h.day, username: s.username, brand: s.brand,
-    choice: s.halloweenChoice, deposit: s.halloweenDeposit,
+    choice: h.state === "topup" ? h.choice : s.halloweenChoice, deposit: s.halloweenDeposit,
     shared: h.state === "day2" ? !!s.halloweenShared : !!s.halloweenShared && !!h.canShare,
     shareMethod: s.halloweenMethod, postLink: s.halloweenPostLink,
     agentName: selectedAgent, chatLink: s.chatUrl || chatDef?.link || "",
   });
+  const sampleCard = previewMode && BONUS_SHOWCASE_PREVIEW;
   const postClaim = async (preview) => (await fetch("/halloween-claim", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: claimBody(preview),
   })).json();
@@ -2762,6 +2798,10 @@ async function claimHalloween(chatId, btn, card) {
     let verdict;
     try { verdict = await postClaim(true); } catch (err) { verdict = { ok: false, error: err.message }; }
     if (!verdict.ok) { setStatus(`${verdict.error || "The claim could not be checked."} Nothing was claimed.`, "error"); return; }
+    if (!!verdict.topup !== (h.state === "topup")) {
+      setStatus("This player's Day 1 changed a moment ago (claimed or undone in another chat). Look up the player again. Nothing was claimed.", "error");
+      return;
+    }
     if (Number(verdict.amount) !== Number(input.amount)) {
       setStatus(`This claim is now RM${verdict.amount}, not RM${input.amount} (the player's tier or the day changed). Look up the player again. Nothing was claimed.`, "error");
       return;
@@ -2776,28 +2816,30 @@ async function claimHalloween(chatId, btn, card) {
   claimWriteInFlight.add(chatId);
   let data;
   try {
-    data = await postClaim(previewMode);
+    // A sample card (admin preview outside LiveChat) belongs to a made-up player the server cannot check, so it is simulated.
+    data = sampleCard ? { ok: true, day: h.day, amount: input.amount, ...(h.state === "topup" ? { topup: true } : {}) } : await postClaim(previewMode);
     if (!data.ok) throw new Error(data.error || "Claim failed");
   } catch (err) {
     setStatus(`Halloween claim failed: ${err.message}. If a ticket was already raised for it, check that ticket before claiming again.`, "error");
     btn.disabled = false;
-    btn.textContent = `Claim Day ${h.day}`;
+    btn.textContent = halloweenClaimLabel(h);
     return;
   } finally {
     claimWriteInFlight.delete(chatId);
   }
 
   const amount = String(data.amount);
+  const topup = !!data.topup;
   s.claimedPrograms.halloween = true;
-  s.halloweenClaim = { day: h.day, amount: data.amount };
-  logCaseOrigin(chatId, `halloween day ${h.day} claimed`);
+  s.halloweenClaim = { day: h.day, amount: data.amount, ...(topup ? { topup: true } : {}) };
+  logCaseOrigin(chatId, `halloween day ${h.day} ${topup ? "top-up " : ""}claimed`);
   s.releasedBonusAmount = amount;
   s.releasedAmountRaw = amount;
   if (!s.claimSecretManual) s.claimSecret = true;
   if (!s.escalation.amount) s.escalation.amount = amount;
   s.inquiry = [inquiry];
   s.status = "Given";
-  reportClaim(chatId, { program: "halloween", label: `Halloween Day ${h.day}`, source: s.halloweenChoice || "", inquiry, amount });
+  reportClaim(chatId, { program: "halloween", label: `Halloween Day ${h.day}${topup ? " top-up" : ""}`, source: (topup ? h.choice : s.halloweenChoice) || "", inquiry, amount });
 
   card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
   card.querySelector(".auto-fields-slot").innerHTML = renderAutoFields(chatId);
@@ -2807,10 +2849,10 @@ async function claimHalloween(chatId, btn, card) {
   card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
 
   if (!previewMode) {
-    await submitRecord(chatId, { auto: true, reason: `${inquiry} claimed` });
+    await submitRecord(chatId, { auto: true, reason: `${inquiry}${topup ? " top-up" : ""} claimed` });
     if (h.day === 1) await addHalloweenActionNote(chatId, data);
   } else {
-    setStatus(halloweenPreviewClaimText(h.day, data.amount), "success");
+    setStatus(halloweenPreviewClaimText(h.day, data.amount, topup, sampleCard), "success");
   }
 }
 
@@ -2821,27 +2863,33 @@ async function addHalloweenActionNote(chatId, claim) {
   if (!s || consoleNoteBlocker(s)) return;
   const eligible = claim.track === "RM300+";
   const deposit = claim.deposit ?? s.halloweenDeposit;
-  const note = eligible
-    ? `Halloween Day 1: deposited RM${deposit} (RM300 or more), eligible for Day 2 and Day 3.`
-    : `Halloween Day 1: deposited RM${deposit} (below RM300), not eligible for Day 2 and Day 3.`;
+  const what = claim.topup ? "Halloween Day 1 top-up" : "Halloween Day 1";
+  // A top-up note starts with its own prefix (with the new total), so undoing the top-up removes only that line.
+  const note = `${claim.topup ? halloweenTopupNotePrefix(deposit) : `Halloween Day 1: deposited RM${deposit}`} ${eligible
+    ? "(RM300 or more), eligible for Day 2 and Day 3."
+    : "(below RM300), not eligible for Day 2 and Day 3."}`;
   const answer = await postConsoleNote(s, { note, type: "action" });
   if (answer && answer.ok && answer.saved) {
     noteUi(chatId).notes = null;
     paintNoteSection(chatId);
-    setStatus("Halloween Day 1 claimed. Action log note added.", "success");
+    setStatus(`${what} claimed. Action log note added.`, "success");
   } else {
-    setStatus(`Halloween Day 1 is claimed, but the Action log note was not saved: ${(answer && answer.error) || "unknown problem"} Add it by hand.`, "error");
+    setStatus(`${what} is claimed, but the Action log note was not saved: ${(answer && answer.error) || "unknown problem"} Add it by hand.`, "error");
   }
 }
+
+const halloweenTopupNotePrefix = (deposit) => `Halloween Day 1: top-up, total deposit today RM${deposit}`;
 
 // Undoing a Day 1 claim also removes the Action log line that claim wrote ("Halloween Day 1: deposited …"). The console only
 // removes a line the widget itself wrote, never anything an agent typed. Returns a sentence to add to the undo message.
 async function removeHalloweenActionNote(chatId) {
   const s = state[chatId];
   const undoneDay = s?.halloweenUndoneDay;
-  if (s) s.halloweenUndoneDay = 0;
+  const undoneTopup = s?.halloweenUndoneTopup;
+  if (s) { s.halloweenUndoneDay = 0; s.halloweenUndoneTopup = 0; }
   if (!s || previewMode || undoneDay !== 1 || consoleNoteBlocker(s)) return "";
-  const answer = await postConsoleNote(s, { remove: true, startsWith: "Halloween Day 1:", type: "action" });
+  const startsWith = undoneTopup ? halloweenTopupNotePrefix(undoneTopup) : "Halloween Day 1:";
+  const answer = await postConsoleNote(s, { remove: true, startsWith, type: "action" });
   if (answer && answer.ok) {
     noteUi(chatId).notes = null;
     paintNoteSection(chatId);
@@ -2887,12 +2935,16 @@ async function voidClaimTickets(chatId, label = "Claim", extra = "") {
 }
 
 // Admin preview only: say what a real claim or undo would do. Nothing is sent or saved.
-function halloweenPreviewClaimText(day, amount) {
-  return `Preview: Halloween Day ${day} claim of RM${amount} checked against Lark. In a live chat this would raise a VVIP Complain Players ticket (Remarks: 3X Turnover Team), `
-    + `save the Halloween table row and a Customer Approaching row (Halloween Day ${day}, Given, RM${amount})${day === 1 ? ", and add an Action log note" : ""}. Nothing was saved.`;
+function halloweenPreviewClaimText(day, amount, topup = false, sample = false) {
+  return `Preview: Halloween Day ${day}${topup ? " top-up" : ""} claim of RM${amount} ${sample ? "on the sample card" : "checked against Lark"}. In a live chat this would raise a VVIP Complain Players ticket (Remarks: 3X Turnover Team), `
+    + `${topup ? "update the Halloween table row (new Day 1 totals and a Day 1 Top-ups line)" : "save the Halloween table row"} and a Customer Approaching row (Halloween Day ${day}, Given, RM${amount})${day === 1 ? ", and add an Action log note" : ""}. Nothing was saved.`;
 }
 
-function halloweenPreviewUndoText(day) {
+function halloweenPreviewUndoText(day, topup = false) {
+  if (topup) {
+    return "Preview: in a live chat, undoing this Halloween Day 1 top-up would put the Halloween table row back to its totals before the top-up (the first Day 1 claim stays), "
+      + "clear the Customer Approaching row, set the ticket to X. VOID TICKET and remove the top-up's Action log note. Nothing was changed.";
+  }
   return `Preview: in a live chat, undoing Halloween Day ${day} would revert it in the Halloween table, clear the Customer Approaching row and set the ticket to X. VOID TICKET`
     + `${day === 1 ? ", and remove the Day 1 Action log note" : ""}. Nothing was changed.`;
 }
@@ -2913,6 +2965,8 @@ async function undoHalloween(chatId) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "The Halloween row could not be reverted");
   s.halloweenUndoneDay = day;
+  // Live: the new total, to find the top-up's Action log note. Preview writes nothing, so it only marks that a top-up was undone.
+  s.halloweenUndoneTopup = data.topupUndone ? data.toDeposit : previewMode && s.halloweenClaim?.topup ? "preview" : 0;
   s.halloweenClaim = null;
   s.halloweenChoice = "";
   s.halloweenDeposit = "";
@@ -6205,8 +6259,9 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     renderChats(activeChats);
     if (programKey === "halloween" && previewMode) {
-      setStatus(halloweenPreviewUndoText(s.halloweenUndoneDay || 0), "success");
+      setStatus(halloweenPreviewUndoText(s.halloweenUndoneDay || 0, !!s.halloweenUndoneTopup), "success");
       s.halloweenUndoneDay = 0;
+      s.halloweenUndoneTopup = 0;
     } else {
       const extra = programKey === "halloween" ? await removeHalloweenActionNote(chatId) : "";
       await voidClaimTickets(chatId, programKey === "halloween" ? "Halloween" : AUTO_TICKET_PROGRAMS[programKey]?.label || "Bonus", extra);

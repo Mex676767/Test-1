@@ -1,7 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import { createRecord, updateRecord, deleteRecord, listFields, toDisplay, TABLE_HALLOWEEN } from "./_lib/lark.js";
 import {
-  F, brandKey, dayNumber, normalizeTier, readProgress, malaysiaToday, testDateFor, planClaim, planUnclaim, checkFields, shapeFields,
+  F, brandKey, normalizeTier, readProgress, readTopups, malaysiaToday, testDateFor, planClaim, planUnclaim, checkFields, shapeFields,
 } from "./_lib/halloween.js";
 import { readHalloweenRow, readPlayerTier, readOptionMaps } from "./_lib/halloween-io.js";
 
@@ -58,9 +58,16 @@ export async function handler(event) {
     if (body.action === "unclaim") {
       // An admin-preview claim never wrote anything, so undoing it has nothing to check or change.
       if (dryRun) return reply(200, { ok: true, dryRun: true });
-      const plan = planUnclaim({ day: Number(body.day), row, maps });
-      if (!plan.ok) return reply(200, { ok: false, error: plan.error });
+      const plan = planUnclaim({ day: Number(body.day), row, maps, agent: clean(body.agentName, 120), chatLink: clean(body.chatLink, 500) });
+      if (!plan.ok) return reply(200, { ok: false, error: plan.error, ...(plan.notOwner ? { notOwner: true } : {}) });
       if (plan.kind === "none") return reply(200, { ok: true, undone: Number(body.day), alreadyUndone: true });
+      // Undo the latest Day 1 top-up only (the plan already checked it is this agent's, from this chat).
+      if (plan.kind === "topup") {
+        const shaped = shapeFields({ ...plan.fields, ...(plan.topups ? { [F.day1Topups]: plan.topups } : {}) }, catalog);
+        for (const name of plan.clear) shaped[name] = null;
+        await updateRecord(TABLE_HALLOWEEN, row.record_id, shaped);
+        return reply(200, { ok: true, undone: 1, topupUndone: true, amount: plan.amount, fromDeposit: plan.fromDeposit, toDeposit: plan.toDeposit });
+      }
       // Only the agent who made the latest claim, from the same chat, may undo it. This stops mistakes (a wrong chat, an
       // old case); it is not security, because the API has no login yet. A row with no saved claimant can be undone by anyone.
       const savedAgent = toDisplay(row.fields[F.agent]).trim();
@@ -77,8 +84,8 @@ export async function handler(event) {
       return reply(200, { ok: true, undone: Number(body.day) });
     }
 
-    // Day 2 and Day 3 are paid at the tier saved on Day 1, so the P&L table is only read when that is missing.
-    const savedTier = row && dayNumber(brand, today) > 1 ? normalizeTier(readProgress(row.fields, maps).tier) : "";
+    // A Day 1 top-up, Day 2 and Day 3 use the tier saved on Day 1, so the P&L table is only read when that is missing.
+    const savedTier = row ? normalizeTier(readProgress(row.fields, maps).tier) : "";
     const tierText = savedTier || await readPlayerTier(username, brand);
     const plan = planClaim({
       brand, tierText, row, today, nowMs, maps,
@@ -88,7 +95,10 @@ export async function handler(event) {
     if (!plan.ok) return reply(200, { ok: false, error: plan.error });
 
     const values = plan.kind === "create" ? { [F.uid]: username, [F.brand]: brand, ...plan.fields } : plan.fields;
-    const summary = { day: plan.day, amount: plan.amount, tier: plan.tier, shared: plan.shared, base: plan.base, track: plan.track, choice: plan.choice, deposit: plan.deposit };
+    const summary = {
+      day: plan.day, amount: plan.amount, tier: plan.tier, shared: plan.shared, base: plan.base, track: plan.track, choice: plan.choice, deposit: plan.deposit,
+      ...(plan.topup ? { topup: true, total: plan.total, previousDeposit: plan.previousDeposit, previousBonus: plan.previousBonus } : {}),
+    };
     if (dryRun) return reply(200, { ok: true, dryRun: true, ...summary, fields: values });
 
     const shaped = shapeFields(values, catalog);
@@ -119,6 +129,12 @@ export async function handler(event) {
           await retry(() => updateRecord(TABLE_HALLOWEEN, row.record_id, { [F.day3Base]: null, [F.day3Share]: null, [F.day3Claimed]: null }))
             .catch((error) => console.warn("Halloween Day 3 not reverted", row.record_id, String(error?.message || error).slice(0, 100)));
           return reply(200, { ok: false, error: "Day 2 was undone a moment ago, so Day 3 is not available. Look up the player again." });
+        }
+        // A top-up keeps the first claim's agent: it owns the claim while its own line is still the latest one.
+        if (plan.topup) {
+          const latest = readTopups(readProgress(current.fields, maps).day1Topups).at(-1);
+          if (latest?.line !== plan.line) return reply(200, { ok: false, error: "Another top-up for this player was claimed a moment ago. Look up the player again." });
+          continue;
         }
         if ((agent || chatLink) && !sameClaimant(current.fields, agent, chatLink)) return lost();
       }

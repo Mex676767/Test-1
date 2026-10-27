@@ -13,7 +13,7 @@ const date = (name) => ({ field_name: name, type: 5 });
 const select = (name, options) => ({ field_name: name, type: 3, property: { options: options.map((option) => ({ id: `o${option}`, name: option })) } });
 const catalog = [
   text(F.uid), select(F.brand, Object.keys(CAMPAIGN)), select(F.tier, ["Tier 3", "Tier V"]), select(F.choice, ["TRICK", "TREAT"]),
-  number(F.day1Deposit), number(F.day1Bonus), select(F.track, ["Below RM300", "RM300+"]), date(F.day1Claimed),
+  number(F.day1Deposit), number(F.day1Bonus), select(F.track, ["Below RM300", "RM300+"]), date(F.day1Claimed), text(F.day1Topups),
   number(F.day2Base), number(F.day2Share), date(F.day2Claimed), number(F.day3Base), number(F.day3Share), date(F.day3Claimed),
   select(F.shareMethod, ["Social post", "5 friends"]), text(F.postLink), text(F.agent), text(F.chatLink),
 ];
