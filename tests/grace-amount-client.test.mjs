@@ -34,7 +34,7 @@ test('text with no amount gives nothing, so the claim keeps its old fallback', (
 
 test('the claim handler uses it and keeps the old fallback to the whole text', () => {
   const claim = app.slice(app.indexOf('if (programKey === "gracePeriod") {'), app.indexOf('// Telegram RM28 / Redeem Code / Special Reload'));
-  assert.match(claim, /const amount = graceClaimAmount\(display\);/);
+  assert.match(claim, /const amount = graceClaimAmount\(display\) \|\| graceTerms\(display\)\.bonus;/);
   assert.match(claim, /s\.releasedBonusAmount = amount \|\| display;/);
   assert.match(claim, /s\.releasedAmountRaw = amount \|\| display;/);
 });

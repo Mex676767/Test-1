@@ -534,6 +534,26 @@ body {
 .risk-claim-preview.ready strong { color: var(--gold); }
 .risk-claim-preview small { color: var(--text-faint); font-size: 9px; white-space: nowrap; }
 
+.ticket.ticket-grace-instant {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+}
+.ticket-grace-instant .grace-instant {
+  grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; width: 100%;
+}
+.grace-instant label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.grace-instant label > span {
+  color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+}
+.grace-deposit-input {
+  width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 9px; background: var(--surface); color: var(--text);
+  font: 12px "Cascadia Mono", Consolas, monospace;
+}
+.grace-deposit-input:focus { outline: none; border-color: var(--teal); }
+.grace-deposit-note { color: var(--text-muted); font-size: 10.5px; line-height: 1.35; }
+.grace-deposit-note.ready { color: var(--teal); }
+.grace-claim-btn { align-self: flex-start; }
+
 .ticket.ticket-special {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--danger) 55%, transparent);
