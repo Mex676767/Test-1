@@ -2788,6 +2788,7 @@ async function claimHalloween(chatId, btn, card) {
     shareMethod: s.halloweenMethod, postLink: s.halloweenPostLink,
     agentName: selectedAgent, chatLink: s.chatUrl || chatDef?.link || "",
   });
+  const sampleCard = previewMode && BONUS_SHOWCASE_PREVIEW;
   const postClaim = async (preview) => (await fetch("/halloween-claim", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: claimBody(preview),
   })).json();
@@ -2815,7 +2816,8 @@ async function claimHalloween(chatId, btn, card) {
   claimWriteInFlight.add(chatId);
   let data;
   try {
-    data = await postClaim(previewMode);
+    // A sample card (admin preview outside LiveChat) belongs to a made-up player the server cannot check, so it is simulated.
+    data = sampleCard ? { ok: true, day: h.day, amount: input.amount, ...(h.state === "topup" ? { topup: true } : {}) } : await postClaim(previewMode);
     if (!data.ok) throw new Error(data.error || "Claim failed");
   } catch (err) {
     setStatus(`Halloween claim failed: ${err.message}. If a ticket was already raised for it, check that ticket before claiming again.`, "error");
@@ -2850,7 +2852,7 @@ async function claimHalloween(chatId, btn, card) {
     await submitRecord(chatId, { auto: true, reason: `${inquiry}${topup ? " top-up" : ""} claimed` });
     if (h.day === 1) await addHalloweenActionNote(chatId, data);
   } else {
-    setStatus(halloweenPreviewClaimText(h.day, data.amount, topup), "success");
+    setStatus(halloweenPreviewClaimText(h.day, data.amount, topup, sampleCard), "success");
   }
 }
 
@@ -2933,12 +2935,16 @@ async function voidClaimTickets(chatId, label = "Claim", extra = "") {
 }
 
 // Admin preview only: say what a real claim or undo would do. Nothing is sent or saved.
-function halloweenPreviewClaimText(day, amount, topup = false) {
-  return `Preview: Halloween Day ${day}${topup ? " top-up" : ""} claim of RM${amount} checked against Lark. In a live chat this would raise a VVIP Complain Players ticket (Remarks: 3X Turnover Team), `
-    + `save the Halloween table row and a Customer Approaching row (Halloween Day ${day}, Given, RM${amount})${day === 1 ? ", and add an Action log note" : ""}. Nothing was saved.`;
+function halloweenPreviewClaimText(day, amount, topup = false, sample = false) {
+  return `Preview: Halloween Day ${day}${topup ? " top-up" : ""} claim of RM${amount} ${sample ? "on the sample card" : "checked against Lark"}. In a live chat this would raise a VVIP Complain Players ticket (Remarks: 3X Turnover Team), `
+    + `${topup ? "update the Halloween table row (new Day 1 totals and a Day 1 Top-ups line)" : "save the Halloween table row"} and a Customer Approaching row (Halloween Day ${day}, Given, RM${amount})${day === 1 ? ", and add an Action log note" : ""}. Nothing was saved.`;
 }
 
-function halloweenPreviewUndoText(day) {
+function halloweenPreviewUndoText(day, topup = false) {
+  if (topup) {
+    return "Preview: in a live chat, undoing this Halloween Day 1 top-up would put the Halloween table row back to its totals before the top-up (the first Day 1 claim stays), "
+      + "clear the Customer Approaching row, set the ticket to X. VOID TICKET and remove the top-up's Action log note. Nothing was changed.";
+  }
   return `Preview: in a live chat, undoing Halloween Day ${day} would revert it in the Halloween table, clear the Customer Approaching row and set the ticket to X. VOID TICKET`
     + `${day === 1 ? ", and remove the Day 1 Action log note" : ""}. Nothing was changed.`;
 }
@@ -2959,7 +2965,8 @@ async function undoHalloween(chatId) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "The Halloween row could not be reverted");
   s.halloweenUndoneDay = day;
-  s.halloweenUndoneTopup = data.topupUndone ? data.toDeposit : 0;
+  // Live: the new total, to find the top-up's Action log note. Preview writes nothing, so it only marks that a top-up was undone.
+  s.halloweenUndoneTopup = data.topupUndone ? data.toDeposit : previewMode && s.halloweenClaim?.topup ? "preview" : 0;
   s.halloweenClaim = null;
   s.halloweenChoice = "";
   s.halloweenDeposit = "";
@@ -6252,8 +6259,9 @@ chatListEl.addEventListener("click", async (e) => {
     card.querySelector(".status-dropdown").innerHTML = renderStatusDropdown(chatId);
     renderChats(activeChats);
     if (programKey === "halloween" && previewMode) {
-      setStatus(halloweenPreviewUndoText(s.halloweenUndoneDay || 0), "success");
+      setStatus(halloweenPreviewUndoText(s.halloweenUndoneDay || 0, !!s.halloweenUndoneTopup), "success");
       s.halloweenUndoneDay = 0;
+      s.halloweenUndoneTopup = 0;
     } else {
       const extra = programKey === "halloween" ? await removeHalloweenActionNote(chatId) : "";
       await voidClaimTickets(chatId, programKey === "halloween" ? "Halloween" : AUTO_TICKET_PROGRAMS[programKey]?.label || "Bonus", extra);

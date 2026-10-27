@@ -22,7 +22,7 @@ function widget({ verdict, preview = false }) {
     matchedRow: { halloween: { day: 2, state: 'day2', brand: 'EZ', fullBrand: 'EZ96', tier: 'Tier 3', redPacket: 18, shareExtra: 28 } },
   };
   const context = vm.createContext({
-    state: { A: s }, previewMode: preview, selectedAgent: 'Aina', activeChats: [{ chatId: 'A', link: 'https://chat/1' }],
+    state: { A: s }, previewMode: preview, BONUS_SHOWCASE_PREVIEW: false, selectedAgent: 'Aina', activeChats: [{ chatId: 'A', link: 'https://chat/1' }],
     HALLOWEEN_INQUIRY_PREFIX: 'Halloween Day ', inquiryOptions: ['Halloween Day 2'],
     setStatus: (text, kind) => calls.status.push({ text, kind }),
     fetch: async (url, init) => {
@@ -182,4 +182,22 @@ test('nothing is voided when no ticket was raised (Halloween raises none in admi
   const none = voidWidget({ reply: { ok: true }, ref: '' });
   await none.run();
   assert.equal(none.calls.posts.length, 0);
+});
+
+test('admin preview sample card: a Day 1 top-up is simulated end to end, nothing reaches the server', async () => {
+  const w = widget({ verdict: { ok: false, error: 'the server must not be asked' }, preview: true });
+  w.context.BONUS_SHOWCASE_PREVIEW = true;
+  w.context.inquiryOptions = ['Halloween Day 1'];
+  w.s.halloweenDeposit = '300';
+  w.s.matchedRow.halloween = {
+    day: 1, state: 'topup', brand: 'EZ', fullBrand: 'EZ96', tier: 'Tier V', redPacket: 28, shareExtra: 28, choice: 'TRICK', track: 'Below RM300', day1Deposit: 50, day1Bonus: 18,
+    table: [{ min: 500, trick: 200, treat: 150 }, { min: 300, trick: 120, treat: 90 }, { min: 100, trick: 40, treat: 30 }, { min: 50, trick: 18, treat: 15 }],
+  };
+  await w.run();
+  assert.deepEqual(w.calls.posts, [], 'a made-up sample player is never sent to the server');
+  assert.deepEqual(w.calls.tickets, [{ program: 'halloween', amount: 102 }], 'the proof popup shows the top-up amount');
+  assert.deepEqual(JSON.parse(JSON.stringify(w.s.halloweenClaim)), { day: 1, amount: 102, topup: true });
+  assert.equal(w.calls.submitted, 0);
+  assert.match(w.calls.status.at(-1).text, /^Preview: Halloween Day 1 top-up claim of RM102 on the sample card\..*new Day 1 totals and a Day 1 Top-ups line.*Nothing was saved\.$/);
+  assert.match(w.context.halloweenPreviewUndoText(1, true), /back to its totals before the top-up \(the first Day 1 claim stays\)/);
 });
