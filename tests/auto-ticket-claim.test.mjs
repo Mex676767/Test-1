@@ -187,6 +187,25 @@ test('status: the ticket system default is used, else its Open option, so a requ
   assert.equal(status({ options: [{ value: 'SOLVED', label: 'Solved' }, { value: 'open_ticket', label: 'Open' }] }), 'open_ticket');
   assert.equal(status({ defaultValue: 'NEW', options: [{ value: 'NEW', label: 'New' }, { value: 'OPEN', label: 'Open' }] }), 'NEW');
   assert.equal(status({}), 'OPEN');
+  const pym = { defaultValue: 'NEW', options: [{ value: 'NEW', label: 'New' }, { value: 'IN_PROGRESS', label: 'PYM PROCESSING' }] };
+  assert.equal(status(pym), 'IN_PROGRESS', 'PYM PROCESSING is the starting status whenever the ticket system has it');
+  assert.equal(status({ options: [{ value: 'pym_processing', label: 'Pym  Processing' }] }), 'pym_processing', 'matched by name, not by exact spelling');
+});
+
+test('status: the agent can pick another status when the ticket system refuses the default, and it goes on the ticket', async () => {
+  const fields = FIELDS.map((field) => (field.key === 'status' ? { ...field, options: [{ value: 'NEW', label: 'New' }, { value: 'PENDING', label: 'Pending' }] } : field));
+  const w = world({ fields });
+  const built = plain(w.run('buildClaimTicketFields(state.chat1, "topPnl", "58", "MYR")'));
+  assert.equal(built.status, 'OPEN', 'the default is unchanged');
+  assert.deepEqual(built.statusOptions.map((option) => option.value), ['OPEN', 'NEW', 'PENDING'], 'the refused default stays visible, the real choices are offered');
+  assert.equal(plain(w.run('buildClaimTicketFields(state.chat1, "topPnl", "58", "MYR", "PENDING")')).fields.status, 'PENDING');
+
+  const offered = [];
+  const picked = world({ fields, modal: async (options) => { offered.push(options); return (await options.onSubmit({ files: [new File([new Uint8Array([1])], 'p.png', { type: 'image/png' })], market: 'MYR', status: 'NEW', ticketEmail: '' })).ok; } });
+  assert.equal(await picked.run('raiseClaimTicket("chat1", "topPnl", "58")'), true);
+  assert.deepEqual(plain(offered[0].statuses).map((option) => option.value), ['OPEN', 'NEW', 'PENDING']);
+  assert.equal(offered[0].status, 'OPEN');
+  assert.equal(picked.calls.fetches.find((call) => call.url === '/ticket-create').body.ticket.fields.status, 'NEW', 'the chosen status is what is sent');
 });
 
 test('the ticket cannot be built without a player, a brand, a readable amount, a market or a matching query type', () => {

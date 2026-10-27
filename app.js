@@ -3529,7 +3529,7 @@ function autoTicketQueryOption(options, keyword) {
   return hits.sort((a, b) => rank(a) - rank(b))[0] || null;
 }
 
-function buildClaimTicketFields(s, programKey, amount, market) {
+function buildClaimTicketFields(s, programKey, amount, market, statusChoice) {
   const program = AUTO_TICKET_PROGRAMS[programKey];
   const need = (stateKey) => ticketFieldFor(TICKET_FIELD_SPECS.find((spec) => spec.stateKey === stateKey));
   const memberField = need("memberUserId");
@@ -3558,9 +3558,16 @@ function buildClaimTicketFields(s, programKey, amount, market) {
   const transactionField = need("transactionId");
   if (transactionField) fields[transactionField.key] = randomTransactionId();
   const statusField = need("status");
+  let statusOptions = [];
+  let status = "";
   if (statusField) {
-    const open = ticketFieldOptions(statusField).find((option) => [option.value, option.label].some((text) => String(text).trim().toLowerCase() === "open"));
-    fields[statusField.key] = statusField.defaultValue || (open ? open.value : "OPEN");
+    statusOptions = ticketFieldOptions(statusField);
+    const named = (wanted) => statusOptions.find((option) => [option.value, option.label].some((text) => ticketChoiceSlug(text) === wanted));
+    const pymProcessing = named("pym_processing");
+    const open = named("open");
+    status = String(statusChoice || "") || (pymProcessing ? pymProcessing.value : "") || statusField.defaultValue || (open ? open.value : "OPEN");
+    if (!statusOptions.some((option) => String(option.value) === String(status))) statusOptions = [{ value: status, label: status }, ...statusOptions];
+    fields[statusField.key] = status;
   }
   const levelField = need("vipLevel");
   if (levelField) {
@@ -3570,7 +3577,7 @@ function buildClaimTicketFields(s, programKey, amount, market) {
   const department = ticketDepartments.find((item) => String(item.code || "").toUpperCase() === AUTO_TICKET_DEPARTMENT);
   fields.toDepartment = department?.code || AUTO_TICKET_DEPARTMENT;
   fields.market = marketCode;
-  return { fields, query, departmentName: department?.name || AUTO_TICKET_DEPARTMENT };
+  return { fields, query, departmentName: department?.name || AUTO_TICKET_DEPARTMENT, statusOptions, status };
 }
 
 async function loadDefaultMarket(s) {
@@ -3607,7 +3614,7 @@ async function saveDefaultMarket(s, code) {
   return data.market;
 }
 
-function openClaimTicketModal({ title, intro, rows, markets, market, marketLocked, previewNote, onSubmit }) {
+function openClaimTicketModal({ title, intro, rows, markets, market, marketLocked, statuses = [], status = "", previewNote, onSubmit }) {
   return new Promise((resolve) => {
     document.getElementById("claimTicketOverlay")?.remove();
     const files = [];
@@ -3620,6 +3627,7 @@ function openClaimTicketModal({ title, intro, rows, markets, market, marketLocke
       <div class="claim-ticket-head"><span class="claim-ticket-mark" aria-hidden="true">🎫</span><div><h3 id="claimTicketTitle">${escapeHtml(title)}</h3><p class="claim-ticket-intro">${intro}</p></div></div>
       ${previewNote ? `<div class="claim-ticket-preview">${escapeHtml(previewNote)}</div>` : ""}
       <dl class="claim-ticket-summary">${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
+        ${statuses.length ? `<dt>Status</dt><dd><select class="input claim-ticket-ticket-status" aria-label="Ticket status">${statuses.map((item) => `<option value="${escapeHtml(item.value)}" ${String(item.value) === String(status) ? "selected" : ""}>${escapeHtml(item.label || item.value)}</option>`).join("")}</select><span class="claim-ticket-note">Starts as PYM PROCESSING. Change it only if the ticket system refuses it.</span></dd>` : ""}
         <dt>Market</dt><dd>${marketLocked
           ? `${escapeHtml(marketLabel(market))} <span class="claim-ticket-note">(your default market; an admin changes it)</span>`
           : `<select class="input claim-ticket-market" aria-label="Your market"><option value="">Choose your market…</option>${markets.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === market ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="claim-ticket-note">You choose this once. Only an admin can change it afterwards.</span>`}</dd></dl>
@@ -3644,6 +3652,8 @@ function openClaimTicketModal({ title, intro, rows, markets, market, marketLocke
     const emailRow = overlay.querySelector(".claim-ticket-email");
     const emailInput = emailRow.querySelector("input");
     const drop = overlay.querySelector(".claim-ticket-drop");
+    const statusSelect = overlay.querySelector(".claim-ticket-ticket-status");
+    const chosenStatus = () => (statusSelect ? statusSelect.value : status);
     const chosenMarket = () => (select ? select.value : market);
     const sync = () => { goButton.disabled = busy || !files.length || !chosenMarket(); cancelButton.disabled = busy; };
     const show = (text) => { statusLine.textContent = text; };
@@ -3686,7 +3696,7 @@ function openClaimTicketModal({ title, intro, rows, markets, market, marketLocke
       show("");
       sync();
       let result;
-      try { result = await onSubmit({ files: [...files], market: chosenMarket(), ticketEmail: emailRow.hidden ? "" : emailInput.value.trim() }); }
+      try { result = await onSubmit({ files: [...files], market: chosenMarket(), status: chosenStatus(), ticketEmail: emailRow.hidden ? "" : emailInput.value.trim() }); }
       catch (err) { result = { ok: false, error: err.message }; }
       busy = false;
       goButton.textContent = "Raise ticket and claim";
@@ -3770,15 +3780,17 @@ async function raiseClaimTicket(chatId, programKey, amount) {
       markets,
       market: stored.code,
       marketLocked: stored.locked,
+      statuses: check.statusOptions,
+      status: check.status,
       previewNote: simulate ? "Admin preview: no ticket is created and nothing is sent. This is how the live form looks." : previewMode ? "Admin preview: this creates a real ticket." : "",
-      onSubmit: async ({ files, market, ticketEmail }) => {
+      onSubmit: async ({ files, market, status, ticketEmail }) => {
         if (simulate) return { ok: true };
         try {
           if (ticketEmail) s.escalation.ticketEmail = ticketEmail;
           const marketCode = stored.locked ? stored.code : await saveDefaultMarket(s, market);
           stored.code = marketCode;
           stored.locked = true;
-          const built = buildClaimTicketFields(s, programKey, amount, marketCode);
+          const built = buildClaimTicketFields(s, programKey, amount, marketCode, status);
           if (built.error) return { ok: false, error: built.error };
           const form = new FormData();
           form.append("ticket", JSON.stringify({ fields: built.fields, author: ticketAuthor(s) }));
