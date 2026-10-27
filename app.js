@@ -918,10 +918,8 @@ function graceClaimAmount(display) {
 
 // Grace Period instant claim: right after Activate the agent types the deposit the customer made in this chat.
 // "atLeast": the entered amount must reach the requirement; "exact": it must equal it.
+// The requirement is the "Deposit N" written in the SW Check text (e.g. "Pass - Deposit 1000 - Bonus 108").
 const GRACE_DEPOSIT_RULE = "atLeast";
-// Required deposit for each bonus amount, used when the Lark text does not state "Deposit N" itself
-// (Grace Period SOP: deposit RM1,000 -> bonus RM108). Add a line per bonus amount.
-const GRACE_REQUIRED_DEPOSIT_BY_BONUS = { 108: 1000 };
 
 function graceTerms(display) {
   const text = String(display || "");
@@ -931,7 +929,7 @@ function graceTerms(display) {
     bonus = afterPass ? afterPass[1] : "";
   }
   const stated = text.match(/Deposit\s*[:\-]?\s*(?:RM\s*)?(\d[\d,]*(?:\.\d+)?)/i);
-  const required = stated ? Number(stated[1].replace(/,/g, "")) : (GRACE_REQUIRED_DEPOSIT_BY_BONUS[Number(bonus)] || 0);
+  const required = stated ? Number(stated[1].replace(/,/g, "")) : 0;
   return { bonus, required: Number.isFinite(required) ? required : 0 };
 }
 
@@ -948,7 +946,7 @@ function graceInstantState(display, entered, otherClaimActive) {
   const chk = graceDepositCheck(display, entered);
   const need = chk.required ? `RM${chk.required}` : "";
   let note;
-  if (!chk.known) note = "The required deposit for this bonus isn't set up here, so it can't be claimed yet. It can be claimed once the Grace Period status updates.";
+  if (!chk.known) note = "The Grace Period text doesn't state a required deposit, so it can't be claimed yet. It can be claimed once the Grace Period status updates.";
   else if (!chk.hasAmount) note = `Enter the amount the customer deposited in this chat (${need} needed).`;
   else if (!chk.met) note = GRACE_DEPOSIT_RULE === "exact"
     ? `RM${chk.amount} entered — the deposit must be exactly ${need}.`
@@ -5320,7 +5318,7 @@ function applyPreviewSampleState(chat) {
       riskPlayer: "Eligible · 30%",
       riskExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
       topPnl: "Batch 09-09-2026 Pass RM58",
-      gracePeriod: "Pass 108",
+      gracePeriod: "Pass - Deposit 1000 - Bonus 108",
       graceExpiryMs: Date.now() + (4 * 24 * 60 * 60 * 1000),
       ltvTest: "Pass RM18",
       vipBooster: "Eligible",

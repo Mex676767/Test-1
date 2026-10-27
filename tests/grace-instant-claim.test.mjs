@@ -11,7 +11,6 @@ const grab = (name) => {
 };
 const consts = [
   app.match(/const GRACE_DEPOSIT_RULE = "[a-zA-Z]+";/)[0],
-  app.match(/const GRACE_REQUIRED_DEPOSIT_BY_BONUS = \{[^}]*\};/)[0],
 ].join('\n');
 const functions = ['graceClaimAmount', 'graceTerms', 'graceDepositCheck', 'graceInstantState', 'renderGraceInstant'].map(grab).join('\n');
 const escapeHtml = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -22,56 +21,65 @@ const load = (rule) => {
 };
 const g = load();
 
-test('the bonus and the required deposit are read from the Grace Period text', () => {
-  assert.deepEqual({ ...g.graceTerms('Pass 108') }, { bonus: '108', required: 1000 }, 'RM108 is the RM1,000 bonus of the SOP');
-  assert.deepEqual({ ...g.graceTerms('Pass RM108') }, { bonus: '108', required: 1000 });
-  assert.deepEqual({ ...g.graceTerms('Activated : 2026-10-17 14:35 - Pass - 108') }, { bonus: '108', required: 1000 });
-  assert.deepEqual({ ...g.graceTerms('Activated: Pass - Deposit 1,500 Bonus 158') }, { bonus: '158', required: 1500 }, 'a requirement written in the text wins');
+const P108 = 'Pass - Deposit 1000 - Bonus 108';
+
+test('the bonus and the required deposit are read from the real SW Check texts', () => {
+  assert.deepEqual({ ...g.graceTerms(P108) }, { bonus: '108', required: 1000 });
+  assert.deepEqual({ ...g.graceTerms('Activated : 2026-10-16 15:09 - Pass - Deposit 500 - Bonus 58') }, { bonus: '58', required: 500 });
+  assert.deepEqual({ ...g.graceTerms('Activated : 2026-10-27 00:46 - Pass - Deposit 1000 - Bonus 108') }, { bonus: '108', required: 1000 });
+  assert.deepEqual({ ...g.graceTerms('Activated: Pass - Deposit 1,500 Bonus 158') }, { bonus: '158', required: 1500 });
 });
 
-test('a bonus with no known requirement can never be claimed instantly', () => {
+test('RM58 needs RM500: the requirement follows the text, not a fixed number', () => {
+  const p58 = 'Pass - Deposit 500 - Bonus 58';
+  assert.equal(g.graceInstantState(p58, '499', false).ready, false);
+  assert.equal(g.graceInstantState(p58, '500', false).ready, true);
+  assert.equal(g.graceInstantState(p58, '500', false).label, 'Claim RM58');
+});
+
+test('a text with no stated deposit can never be claimed instantly', () => {
   const unknown = g.graceInstantState('Pass 58', '99999', false);
   assert.equal(unknown.known, false);
   assert.equal(unknown.ready, false);
-  assert.match(unknown.note, /isn't set up/);
+  assert.match(unknown.note, /doesn't state a required deposit/);
   assert.equal(g.graceInstantState('Pass', '1000', false).ready, false);
 });
 
 test('claim stays blocked until the entered deposit reaches the requirement', () => {
-  assert.equal(g.graceInstantState('Pass 108', '', false).ready, false);
-  assert.match(g.graceInstantState('Pass 108', '', false).note, /RM1000 needed/);
-  const short = g.graceInstantState('Pass 108', '999.99', false);
+  assert.equal(g.graceInstantState(P108, '', false).ready, false);
+  assert.match(g.graceInstantState(P108, '', false).note, /RM1000 needed/);
+  const short = g.graceInstantState(P108, '999.99', false);
   assert.equal(short.ready, false);
   assert.match(short.note, /RM999\.99 entered — RM1000 needed/);
-  assert.equal(g.graceInstantState('Pass 108', 'abc', false).ready, false);
-  assert.equal(g.graceInstantState('Pass 108', '0', false).ready, false);
+  assert.equal(g.graceInstantState(P108, 'abc', false).ready, false);
+  assert.equal(g.graceInstantState(P108, '0', false).ready, false);
 });
 
 test('"at least" reading: the exact amount and a bigger deposit both unlock the claim', () => {
-  assert.equal(g.graceInstantState('Pass 108', '1000', false).ready, true);
-  assert.equal(g.graceInstantState('Pass 108', '1,000', false).ready, true);
-  assert.equal(g.graceInstantState('Pass 108', '1200.5', false).ready, true);
-  assert.equal(g.graceInstantState('Pass 108', '1000', false).label, 'Claim RM108');
+  assert.equal(g.graceInstantState(P108, '1000', false).ready, true);
+  assert.equal(g.graceInstantState(P108, '1,000', false).ready, true);
+  assert.equal(g.graceInstantState(P108, '1200.5', false).ready, true);
+  assert.equal(g.graceInstantState(P108, '1000', false).label, 'Claim RM108');
 });
 
 test('the rule is one constant: "exact" only accepts the required amount', () => {
   const exact = load('exact');
-  assert.equal(exact.graceInstantState('Pass 108', '1000', false).ready, true);
-  assert.equal(exact.graceInstantState('Pass 108', '1200', false).ready, false);
-  assert.match(exact.graceInstantState('Pass 108', '1200', false).note, /exactly RM1000/);
+  assert.equal(exact.graceInstantState(P108, '1000', false).ready, true);
+  assert.equal(exact.graceInstantState(P108, '1200', false).ready, false);
+  assert.match(exact.graceInstantState(P108, '1200', false).note, /exactly RM1000/);
 });
 
 test('another bonus already claimed in the case keeps Grace Period blocked (1 bonus per case)', () => {
-  const blocked = g.graceInstantState('Pass 108', '1000', true);
+  const blocked = g.graceInstantState(P108, '1000', true);
   assert.equal(blocked.ready, false);
   assert.match(blocked.note, /Another bonus is already claimed/);
 });
 
 test('the card shows the deposit box and a disabled Claim until the deposit matches', () => {
-  const before = g.renderGraceInstant('C1', 'Pass 108', '500', false);
+  const before = g.renderGraceInstant('C1', P108, '500', false);
   assert.match(before, /class="grace-deposit-input"[^>]*value="500"/);
   assert.match(before, /grace-claim-btn" data-action="claim" data-program="gracePeriod" data-chat="C1" disabled/);
-  const after = g.renderGraceInstant('C1', 'Pass 108', '1000', false);
+  const after = g.renderGraceInstant('C1', P108, '1000', false);
   assert.doesNotMatch(after, /data-program="gracePeriod"[^>]*disabled/);
   assert.match(after, /grace-deposit-note ready/);
   assert.match(after, />Claim RM108</);
@@ -79,7 +87,7 @@ test('the card shows the deposit box and a disabled Claim until the deposit matc
 });
 
 test('the entered text is escaped in the card', () => {
-  assert.doesNotMatch(g.renderGraceInstant('C1', 'Pass 108', '"><img src=x>', false), /<img/);
+  assert.doesNotMatch(g.renderGraceInstant('C1', P108, '"><img src=x>', false), /<img/);
 });
 
 test('claim handler: Activate only before activation; after it the claim needs the matching deposit, then the normal claim runs', () => {
