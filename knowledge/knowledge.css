@@ -264,3 +264,16 @@ select.f-input{appearance:auto}
 .f-form .brand-segments{flex-wrap:wrap;margin-bottom:10px}
 .f-form .brand-segment{min-height:32px}
 .actionbar .copy:disabled{opacity:.6}
+
+/* Keywords as chips, reply sentences as separate boxes */
+.f-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.f-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:3px 4px 3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--raised);color:var(--text);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.f-chip-x{display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);font-size:15px;line-height:1}
+.f-chip-x:hover{background:var(--surface);color:var(--text)}
+.f-add-row{display:flex;gap:8px;align-items:stretch}
+.f-add-row .f-input{flex:1}
+.f-add-row .btn{flex-shrink:0}
+.f-sentence{display:grid;grid-template-columns:24px minmax(0,1fr) 32px;gap:8px;align-items:start;margin-bottom:8px}
+.f-sentence .f-num{margin-top:8px}
+.f-sentence .f-area{min-height:48px}
+.f-sentence .icon-btn{min-width:32px;min-height:32px;margin-top:4px;padding:4px;background:transparent}
