@@ -36,17 +36,17 @@ function widget() {
   return { state, context, requests, run: code => vm.runInContext(code, context) };
 }
 
-test('the installed widget: Retention keeps Retention, Blast and Tickets, Customer Service gets Tickets, an unknown department hides nothing, and Knowledge is switched off', () => {
+test('the installed widget: Retention keeps Retention, Blast and Tickets, Customer Service gets Tickets, an unknown department hides nothing, and Knowledge is on for everyone', () => {
   const tabs = (settings) => {
-    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: true, KNOWLEDGE_TAB_ENABLED: false, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
+    const context = vm.createContext({ previewMode: false, BLAST_LIVE: true, ESCALATION_TICKET_ENABLED: true, DEPARTMENT_TABS_LIVE: true, KNOWLEDGE_TAB_ENABLED: true, DEPARTMENT_SEPARATION_ENABLED: true, currentDepartment: 'cs', departmentKnown: false, ...settings });
     vm.runInContext(fn('mainTabAvailability'), context);
     return JSON.parse(JSON.stringify(vm.runInContext('mainTabAvailability()', context)));
   };
-  const all = { customer: true, tickets: true, blast: true, knowledge: false };
+  const all = { customer: true, tickets: true, blast: true, knowledge: true };
   assert.deepEqual(tabs({ currentDepartment: 'rtn', departmentKnown: true }), all);
-  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: false });
-  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true, KNOWLEDGE_TAB_ENABLED: true }), { customer: false, tickets: true, blast: false, knowledge: true }, 'the switch brings Knowledge back');
-  assert.match(app, /const KNOWLEDGE_TAB_ENABLED = false;/);
+  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true }), { customer: false, tickets: true, blast: false, knowledge: true });
+  assert.deepEqual(tabs({ currentDepartment: 'cs', departmentKnown: true, KNOWLEDGE_TAB_ENABLED: false }), { customer: false, tickets: true, blast: false, knowledge: false }, 'the switch still turns Knowledge off');
+  assert.match(app, /const KNOWLEDGE_TAB_ENABLED = true;/);
   assert.deepEqual(tabs({ departmentKnown: false }), all, 'until LiveChat says, nothing is hidden');
   assert.equal(tabs({ currentDepartment: 'rtn', departmentKnown: true, BLAST_LIVE: false }).blast, false, 'the Blast switch still wins');
   assert.deepEqual(tabs({ DEPARTMENT_TABS_LIVE: false }), { customer: true, tickets: false, blast: true, knowledge: false }, 'with the rollout switch off the installed widget is as before');
