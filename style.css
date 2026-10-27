@@ -1018,6 +1018,9 @@ body { font-size: 13px; }
 .ca-bonus-section .ticket-meta .pass-value,
 .ca-bonus-section .ticket-meta .eligible-value { color: var(--gold); font-size: 12.5px; font-weight: 800; line-height: 1.2; }
 .ca-bonus-section .ticket-expiry { font-size: 12.5px; font-weight: 700; }
+.ca-bonus-section .ticket-meta .grace-deposit { color: var(--text); font-weight: 700; white-space: nowrap; }
+.ca-bonus-section .ticket-meta .grace-meta { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; }
+.ca-bonus-section .ticket-meta .grace-bonus { white-space: nowrap; }
 .ca-bonus-section .risk-claim-preview strong { font-size: 16px; font-weight: 800; }
 .ca-bonus-section .risk-claim-preview small { font-size: 10px; }
 .ca-bonus-section .bonus-tone-amber { --bonus-accent: #e9bb59; }

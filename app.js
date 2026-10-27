@@ -3005,6 +3005,7 @@ function renderTickets(chatId) {
       def.done = isPass ? (!!s.gracePeriodActivated || graceClaimed) : graceClaimed;
       def.graceInstant = isPass && !!s.gracePeriodActivated && !graceClaimed;
       def.excludeFromLock = isPass;
+      if (isPass) def.metaHtml = graceMetaHtml(r.gracePeriod);
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
       def.reactivatable = typeof r.graceExpiryMs === "number" && r.graceExpiryMs >= startOfToday.getTime();
@@ -3050,7 +3051,7 @@ function renderTickets(chatId) {
         <div class="ticket-icon" aria-hidden="true">${cardMark}</div>
         <div class="ticket-body">
           <div class="ticket-name">${d.label}</div>
-          <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.isCode ? escapeHtml(d.display) : formatTicketMeta(d.display)}</div>
+          <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.isCode ? escapeHtml(d.display) : d.metaHtml || formatTicketMeta(d.display)}</div>
           ${renderExpiryLine(d.expiryMs)}
         </div>
       </div>
@@ -3101,6 +3102,14 @@ const ELIGIBLE_PATTERN = /\bEligible\b/gi;
 
 function highlightDates(text) {
   return escapeHtml(text).replace(DATE_PATTERN, (m) => `<span class="ticket-date">${m}</span>`);
+}
+
+// Grace Period before activation ("Pass Deposit 100 - Bonus 18"): only the deposit needed and the bonus, without "Pass".
+// A text that states no deposit keeps the usual formatting.
+function graceMetaHtml(display) {
+  const { bonus, required } = graceTerms(display);
+  if (!required || !bonus) return "";
+  return `<span class="grace-meta"><span class="grace-deposit">Deposit RM${escapeHtml(String(required))}</span> <span class="grace-bonus">🎁 <span class="amount">Bonus RM${escapeHtml(String(bonus))}</span></span></span>`;
 }
 
 function formatTicketMeta(text) {
