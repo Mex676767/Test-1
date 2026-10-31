@@ -3814,6 +3814,52 @@ async function applyDefaultMarketToNewTicket(chatId) {
   renderTicketSlot(chatId);
 }
 
+// The LiveChat login lasts 8 hours and is only asked for when the app starts. A claim that needs the ticket system with an
+// expired (or missing) login for this chat's account would fail with a confusing ticket error, so reconnect right here
+// and carry on. Returns false if the agent cancels or cannot reconnect (nothing is claimed then).
+async function ensureLiveChatLoginForClaim() {
+  if (previewMode) return true;
+  const tokens = liveChatAgentTokens();
+  if (!currentLiveChatAccount) {
+    const connected = Object.keys(tokens);
+    if (connected.length === 1) { setCurrentLiveChatAccount(connected[0]); return true; }
+  }
+  if (currentLiveChatAccount && tokens[currentLiveChatAccount]) return true;
+  let config = null;
+  try { config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json(); } catch (_) { }
+  let clients = Array.isArray(config?.clients) ? config.clients : [];
+  if (currentLiveChatAccount) clients = clients.filter((client) => client.key === currentLiveChatAccount);
+  if (!clients.length) return true;
+  const redirectUri = config.redirectUri || `${location.origin}/blast/oauth.html`;
+  const label = currentLiveChatAccount === "lc2" ? "LiveChat account 2" : currentLiveChatAccount === "lc1" ? "LiveChat account 1" : "LiveChat";
+  return new Promise((resolve) => {
+    const overlay = agentLoginPanel(`
+      <div class="settings-head">Your ${escapeHtml(label)} login expired</div>
+      <p class="settings-hint">The login lasts 8 hours. Reconnect to raise the ticket; your claim carries on afterwards.</p>
+      <div class="login-actions"><button type="button" class="submit-btn" id="claimReconnect">Reconnect LiveChat</button> <button type="button" class="settings-link" id="claimReconnectCancel">Cancel</button></div>
+      <div class="login-status error" id="claimReconnectStatus"></div>`);
+    const connect = overlay.querySelector("#claimReconnect");
+    const cancel = overlay.querySelector("#claimReconnectCancel");
+    const status = overlay.querySelector("#claimReconnectStatus");
+    const close = (result) => { overlay.remove(); resolve(result); };
+    cancel.addEventListener("click", () => close(false));
+    connect.addEventListener("click", async () => {
+      connect.disabled = true;
+      status.className = "login-status";
+      try {
+        const login = await connectLiveChatLogin(clients, redirectUri, (text) => { status.textContent = text; });
+        saveLiveChatLogin(login.accountKey, login.token, login.expiresAt);
+        setCurrentLiveChatAccount(login.accountKey);
+        close(true);
+      } catch (error) {
+        status.className = "login-status error";
+        status.textContent = error.message || "Could not reconnect. Try again.";
+        connect.disabled = false;
+      }
+    });
+  });
+}
+
 async function raiseClaimTicket(chatId, programKey, amount) {
   const s = state[chatId];
   const program = AUTO_TICKET_PROGRAMS[programKey];
@@ -3821,6 +3867,7 @@ async function raiseClaimTicket(chatId, programKey, amount) {
   s.claimTickets = s.claimTickets || {};
   if (s.claimTickets[programKey]) { setStatus(`Ticket ${s.claimTickets[programKey]} was already raised for this ${program.label} claim.`, "success"); return true; }
   if (claimTicketBusy.has(chatId) || ticketCreateInFlight.has(chatId)) return false;
+  if (!(await ensureLiveChatLoginForClaim())) { setStatus(`Reconnect LiveChat to raise the ${program.label} ticket. Nothing was claimed.`, "error"); return false; }
   claimTicketBusy.add(chatId);
   try {
     const account = await ticketAccountForClaim(chatId);
