@@ -72,6 +72,10 @@ async function reusableBlankCase(agent, username, brand, link, timeoutMs = CASE_
   return matches[0].recordId;
 }
 
+// Lark refuses new rows when the table has reached its record limit (code text RecordExceedLimit).
+export const isTableFull = (error) => /RecordExceedLimit|exceed.{0,20}limit|record.{0,15}limit/i.test(`${error?.larkMsg || ""} ${error?.message || ""}`);
+export const TABLE_FULL_MESSAGE = "The Customer Approaching table is full, so this chat cannot be recorded. Tell your admin to start a new table. (The lookup results below are still valid.)";
+
 function hidden(v) {
   const t = String(v || "").trim().toLowerCase();
   return /\b(claimed|expired|failed|not\s+eligible|ineligible)\b/.test(t);
@@ -449,8 +453,9 @@ async function lookupHandler(event, hardEnd) {
       }), caseWaitMs); }),
     ]).finally(() => clearTimeout(caseTimer));
     let caRecordId = caseRecordState.recordId;
+    const caseTableFull = !!caseRecordState.error && isTableFull(caseRecordState.error);
     const caseRowError = caseRecordState.error
-      ? "Case row not saved — press Look Up again (the results below are still valid)."
+      ? (caseTableFull ? TABLE_FULL_MESSAGE : "Case row not saved — press Look Up again (the results below are still valid).")
       : undefined;
 
     const dedupeRemainingMs = Math.min(startedAt + lookupBudgetMs, hardEnd - 1_000) - Date.now();
@@ -464,6 +469,7 @@ async function lookupHandler(event, hardEnd) {
     }
 
     if (caseRowError) noteCounter("caseRowError");
+    if (caseTableFull) noteCounter("caseTableFull");
     for (const source of new Set(lookupWarnings)) noteCounter(`lookupWarning:${source}`);
     return {
       statusCode: 200,
@@ -475,6 +481,7 @@ async function lookupHandler(event, hardEnd) {
         notVip,
         caRecordId,
         ...(caseRowError ? { caseRowError } : {}),
+        ...(caseTableFull ? { caseTableFull: true } : {}),
         row: {
           tier,
           customerName,

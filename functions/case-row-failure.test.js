@@ -208,3 +208,30 @@ test("a repeat lookup for a different player still deletes the old blank row (on
     assert.deepEqual(seen, ["GET", "DELETE"], "ownership read, then delete");
   });
 });
+
+test("a full Customer Approaching table says so plainly, is not retried, and keeps the lookup results", async () => {
+  await withLark({
+    caseSearch: noBlankRow,
+    create: () => json({ code: 1254103, msg: "RecordExceedLimit" }),
+  }, async (calls) => {
+    const result = await lookup();
+    const body = JSON.parse(result.body);
+    assert.equal(result.statusCode, 200);
+    assert.equal(calls.creates.length, 1, "a full table is not retried");
+    assert.equal(body.caRecordId, null);
+    assert.equal(body.caseTableFull, true);
+    assert.match(body.caseRowError, /Customer Approaching table is full.*cannot be recorded.*start a new table/);
+    assert.doesNotMatch(body.caseRowError, /Look Up again/, "pressing Look Up again cannot fix a full table");
+    assert.equal(body.row.vipBooster, "Eligible", "bonus results survive");
+  });
+});
+
+test("other create failures are not reported as a full table", async () => {
+  for (const reply of [json({ code: -1, msg: "internal error" }, 500), json({ code: 1254045, msg: "some other problem" })]) {
+    await withLark({ caseSearch: noBlankRow, create: () => reply.clone() }, async () => {
+      const body = JSON.parse((await lookup()).body);
+      assert.equal(body.caseTableFull, undefined);
+      assert.match(body.caseRowError, /Case row not saved/);
+    });
+  }
+});

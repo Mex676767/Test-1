@@ -201,3 +201,10 @@ test('admin preview sample card: a Day 1 top-up is simulated end to end, nothing
   assert.match(w.calls.status.at(-1).text, /^Preview: Halloween Day 1 top-up claim of RM102 on the sample card\..*new Day 1 totals and a Day 1 Top-ups line.*Nothing was saved\.$/);
   assert.match(w.context.halloweenPreviewUndoText(1, true), /back to its totals before the top-up \(the first Day 1 claim stays\)/);
 });
+
+test('a full Customer Approaching table is explained, not reported as "look up the username"', async () => {
+  const source = grab('submitRecordOnce');
+  assert.match(source, /if \(!s\.caRecordId && s\.caseTableFull\) \{/, 'the full-table case is checked before the generic missing-fields message');
+  assert.ok(source.indexOf('s.caseTableFull') < source.indexOf('missing.push("look up the username")'));
+  assert.match(source, /The Customer Approaching table is full, so this chat cannot be recorded\. Tell your admin to start a new table\./);
+});
