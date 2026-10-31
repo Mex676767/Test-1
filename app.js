@@ -1071,6 +1071,7 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
         lookupWarnings: data.lookupWarnings || [],
         caRecordId: data.caRecordId,
         caseRowError: data.caseRowError || "",
+        caseTableFull: !!data.caseTableFull,
         justCreated: data.justCreated,
         notVip: data.notVip,
       };
@@ -1369,11 +1370,12 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
   refreshBackgroundLookupPill();
   saveState();
   try {
-    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, notVip } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
+    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
     s.caLinkSaved = !!link;
     s.matchedRow = row;
     s.otherBrandMatches = otherBrands;
     s.caRecordId = caRecordId;
+    s.caseTableFull = !!caseTableFull;
     if (previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId);
     s.caOwner = selectedAgent;
     s.claimedPrograms = {};
@@ -1387,7 +1389,10 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     s.claimSecret = false;
     s.claimSecretManual = false;
     const sameForced = !!s.forcedVipFor && s.forcedVipFor.toLowerCase() === username.toLowerCase();
-    if (isFocusedChat(chatId)) showChatToast(`✓ Looked up "${username}" — ${brand}`, "info");
+    if (isFocusedChat(chatId)) {
+      if (caseTableFull) showChatToast("⚠ Looked up, but the Customer Approaching table is full: this chat cannot be recorded. Tell your admin.", "warn");
+      else showChatToast(`✓ Looked up "${username}" — ${brand}`, "info");
+    }
     if (notVip && !forcing && !sameForced) {
       s.notVipResult = true;
       s.forcedVipFor = "";
@@ -7224,6 +7229,18 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
 
   s.agentName = selectedAgent;
   s.liveChatAccount = currentLiveChatAccount;
+
+  if (!s.caRecordId && s.caseTableFull) {
+    // The lookup could not create this chat's row because the Lark table is full: say so, not "look up the username".
+    const full = "The Customer Approaching table is full, so this chat cannot be recorded. Tell your admin to start a new table.";
+    if (auto) {
+      s.autoRecordError = full;
+      renderChats(activeChats);
+    } else {
+      setStatus(full, "error");
+    }
+    return;
+  }
 
   const brand = s.brand || "";
   const status = s.status || "";
