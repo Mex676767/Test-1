@@ -687,7 +687,7 @@ test("the chat's story: RM100 claimed, RM300 topped up in another chat, Day 2 op
   assert.deepEqual([topped.ok, topped.topup, topped.amount, topped.total, topped.deposit, topped.track], [true, true, 80, 120, 300, "RM300+"]);
   const saved = lark.store.rows[0].fields;
   assert.deepEqual([saved[F.day1Deposit], saved[F.day1Bonus], saved[F.track], saved[F.choice], saved[F.agent], saved[F.chatLink]], [300, 120, "RM300+", "TRICK", "Aina", "https://chat/a"]);
-  assert.match(saved[F.day1Topups], /^\d\d\/10 \d\d:\d\d · RM100 → RM300 · bonus RM40 → RM120 \(\+RM80\) · Bala · https:\/\/chat\/b$/);
+  assert.match(saved[F.day1Topups], /^\d\d\/\d\d \d\d:\d\d · RM100 → RM300 · bonus RM40 → RM120 \(\+RM80\) · Bala · https:\/\/chat\/b$/);
   assert.equal((await call({ action: "claim", day: 1, deposit: 600, ...asC }, "2026-10-26")).amount, 80);
   assert.equal(lark.store.rows.length, 1);
 
