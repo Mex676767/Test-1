@@ -8,7 +8,7 @@ const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const fn = (name) => app.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 const line = (re) => app.match(re)[0];
 
-const NAMES = ['applyDefaultMarketToNewTicket', 'ticketAccountForClaim', 'autoTicketEnabled', 'ticketChoiceSlug', 'randomTransactionId', 'autoTicketQueryOption', 'buildClaimTicketFields', 'loadDefaultMarket', 'saveDefaultMarket', 'raiseClaimTicket'];
+const NAMES = ['ensureLiveChatLoginForClaim', 'applyDefaultMarketToNewTicket', 'ticketAccountForClaim', 'autoTicketEnabled', 'ticketChoiceSlug', 'randomTransactionId', 'autoTicketQueryOption', 'buildClaimTicketFields', 'loadDefaultMarket', 'saveDefaultMarket', 'raiseClaimTicket'];
 const SOURCE = [
   line(/const AUTO_TICKET_DEPARTMENT = "[^"]+";/), line(/const AUTO_TICKET_LEVEL = "[^"]+";/),
   line(/const AUTO_TICKET_PROGRAMS = \{[\s\S]*?\n\};/), line(/const DEFAULT_MARKET_LOCAL_KEY = "[^"]+";/), line(/const CLAIM_TICKET_USABLE_ACCOUNT = \[[^\]]+\];/),
@@ -70,6 +70,7 @@ function world({ preview = true, live = false, author, fields = FIELDS, ticketRe
     fetchTicketConfig: async () => {},
     noteTicketAccountUsed: () => {}, storeTicketEmail: () => {}, saveState: () => {},
     currentLiveChatAccount: 'lc1',
+    liveChatAgentTokens: () => ({ lc1: 'tok-1', lc2: 'tok-2' }), setCurrentLiveChatAccount: () => {},
     escapeHtml: (value) => String(value),
     setStatus: (text, kind) => calls.statuses.push({ text, kind }),
     state: { chat1: { username: 'zzplayer', escalation: { brand: 'VS96' }, claimTickets: {} } },
