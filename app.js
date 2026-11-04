@@ -3014,6 +3014,7 @@ function renderTickets(chatId) {
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
       def.reactivatable = typeof r.graceExpiryMs === "number" && r.graceExpiryMs >= startOfToday.getTime();
+      if (typeof r.graceExpiryMs === "number") def.expiryMs = r.graceExpiryMs;
     }
     if (p.key === "riskPlayer" && typeof r.riskExpiryMs === "number") {
       def.expiryMs = r.riskExpiryMs;

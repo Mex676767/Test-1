@@ -203,7 +203,7 @@ test("lookup returns eligible results for every configured bonus source", async 
     "pnl-table": { Tier: "Tier V", "Tittle name": "Test Player" },
     "top-pnl-table": { "SW Check": "Pass RM58", "Claimed Copy": false, "Time of Inspection": 100 },
     "ltv-table": { "SW Checker": "Pass RM18", "Time of Inspection": 110 },
-    "grace-table": { "SW Check": "Activated : 2026-10-17 14:35 - Pass - 58", Expried: 1_800_000_000_000, "Time of Inspection": 120 },
+    "grace-table": { "SW Check": "Activated : 2026-10-17 14:35 - Pass - 58", Expired: 1_800_000_000_000, "Time of Inspection": 120 },
     "risk-table": { Status: "7D 20% Reload", "Date Expired": 1_800_000_000_000, Date: 130 },
     "vip-table": { Status: "Eligible" }, "reload-table": { Status: "Eligible Angpao" },
     "telegram-table": { Status: "Eligible", "Bonus Amount": 18 }, "redeem-table": { Status: "Eligible" },
@@ -231,6 +231,7 @@ test("lookup returns eligible results for every configured bonus source", async 
     assert.equal(row.topPnl, "Pass RM58");
     assert.equal(row.ltvTest, "Pass RM18");
     assert.match(row.gracePeriod, /^Activated : .* - Pass - 58$/);
+    assert.equal(row.graceExpiryMs, 1_800_000_000_000, "the Expired column is read");
     assert.equal(row.riskPlayer, "7D 20% Reload");
     assert.equal(row.vipBooster, "Eligible");
     assert.equal(row.specialReload.status, "Eligible Angpao");
