@@ -29,7 +29,8 @@ const F = {
   swChecker: "SW Checker",
   claimedCopy: "Claimed Copy",
   bonusAmount: "Bonus Amount",
-  graceExpiry: "Expried",
+  graceExpiry: "Expired",
+  graceExpiryOld: "Expried",
   riskExpiry: "Date Expired",
   uid: "UID",
 };
@@ -488,7 +489,7 @@ async function lookupHandler(event, hardEnd) {
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
           ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",
-          graceExpiryMs: graceRow ? toEpochMs(graceRow.fields[F.graceExpiry]) : null,
+          graceExpiryMs: graceRow ? (toEpochMs(graceRow.fields[F.graceExpiry]) ?? toEpochMs(graceRow.fields[F.graceExpiryOld])) : null,
           riskPlayer: riskRow ? toDisplay(riskRow.fields[F.status]) : "",
           riskExpiryMs: riskRow ? toEpochMs(riskRow.fields[F.riskExpiry]) : null,
           vipBooster: vipRow ? "Eligible" : "",
