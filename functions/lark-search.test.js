@@ -200,7 +200,7 @@ test("lookup returns eligible results for every configured bonus source", async 
     LARK_TABLE_MOONCAKE: "mooncake-table", LARK_TABLE_VS96_FEEDBACK: "vs96-table",
   });
   const fixtures = {
-    "pnl-table": { Tier: "Tier V", "Tittle name": "Test Player" },
+    "pnl-table": { Tier: "Tier V", "Title name": "Test Player" },
     "top-pnl-table": { "SW Check": "Pass RM58", "Claimed Copy": false, "Time of Inspection": 100 },
     "ltv-table": { "SW Checker": "Pass RM18", "Time of Inspection": 110 },
     "grace-table": { "SW Check": "Activated : 2026-10-17 14:35 - Pass - 58", Expired: 1_800_000_000_000, "Time of Inspection": 120 },

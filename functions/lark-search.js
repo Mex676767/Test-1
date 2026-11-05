@@ -23,7 +23,7 @@ const F = {
   brand: "Brand",
   agentName: "Agent Name",
   tier: "Tier",
-  titleName: "Tittle name",
+  titleName: "Title name",
   status: "Status",
   swCheck: "SW Check",
   swChecker: "SW Checker",

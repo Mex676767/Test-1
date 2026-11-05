@@ -37,6 +37,10 @@ export async function identifyAgent(env, accountKey, agentToken, { withEmail = f
   const response = await fetch("https://accounts.livechat.com/v2/info", { headers: { Authorization: `Bearer ${agentToken}` } });
   const info = await response.json().catch(() => ({}));
   if (!response.ok || info?.error || !info?.account_id) {
+    // A busy or failing LiveChat says nothing about the token: keep the agent's login and let them try again.
+    if (response.status === 408 || response.status === 429 || response.status >= 500) {
+      return { ok: false, temporary: true, error: "LiveChat could not check your login just now. Try again in a moment." };
+    }
     return { ok: false, loginExpired: true, error: "LiveChat login expired or invalid — connect LiveChat again." };
   }
   const expectedClient = clientIdFor(env, accountKey);
