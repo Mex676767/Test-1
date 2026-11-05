@@ -136,6 +136,27 @@ test("rejects a bad token, another account's token, an unknown name and a missin
   assert.equal(w.log.created.length, 0);
 });
 
+test("a busy or failing LiveChat is not an expired login, so the widget keeps the agent's token", async (t) => {
+  const w = world(alice);
+  t.after(w.restore);
+  const worldFetch = globalThis.fetch;
+  for (const status of [408, 429, 500, 503]) {
+    globalThis.fetch = async (url, options) => (String(url).endsWith("/v2/info")
+      ? { ok: false, status, json: async () => ({ error: "try later" }) }
+      : worldFetch(url, options));
+    const out = await call({ accountKey: "lc1", agentToken: "tok-alice" });
+    assert.equal(out.ok, false, `status ${status}`);
+    assert.equal(out.loginExpired, undefined, `status ${status}`);
+    assert.equal(out.temporary, true, `status ${status}`);
+  }
+  for (const status of [400, 401, 403]) {
+    globalThis.fetch = async (url, options) => (String(url).endsWith("/v2/info")
+      ? { ok: false, status, json: async () => ({ error: "invalid_token" }) }
+      : worldFetch(url, options));
+    assert.equal((await call({ accountKey: "lc1", agentToken: "tok-alice" })).loginExpired, true, `status ${status}`);
+  }
+});
+
 function emailWorld(t, { table = [], email = "Alice@X.com", fail = false, uuid = "uuid-email-0" } = {}) {
   const log = { updated: [], created: [], accountCalls: 0 };
   const original = globalThis.fetch;
