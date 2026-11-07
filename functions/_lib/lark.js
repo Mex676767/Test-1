@@ -513,7 +513,8 @@ export async function getTenantToken() {
 
 function isFieldNameProblem(error) {
   const message = String(error?.message || "");
-  return !error?.rateLimited && /field|column/i.test(message) && /not found|invalid|unknown|does not exist|unsupported|illegal/i.test(message);
+  return !error?.rateLimited && (/\bFieldNameNotFound\b/i.test(message)
+    || (/field|column/i.test(message) && /not found|invalid|unknown|does not exist|unsupported|illegal/i.test(message)));
 }
 export function searchRecords(tableId, conditions, baseToken, opts = {}) {
   if (!tableId) throw new Error("Missing table ID — check env vars.");
