@@ -50,6 +50,25 @@ test('the ticket is raised for the amount the server confirmed, after the rules 
   assert.equal(w.calls.submitted, 1);
 });
 
+test('shipped disabled ticket gate keeps the real Halloween claim and preview flow working', async () => {
+  for (const preview of [false, true]) {
+    const w = widget({ verdict: { ok: true, day: 2, amount: 18 }, preview });
+    vm.runInContext([
+      app.match(/const AUTO_TICKET_LIVE = (?:true|false);/)[0],
+      app.match(/const ESCALATION_TICKET_ENABLED = (?:true|false);/)[0],
+      app.match(/const AUTO_TICKET_PROGRAMS = \{[\s\S]*?\n\};/)[0],
+      grab('autoTicketEnabled'), grab('raiseClaimTicket'),
+    ].join('\n'), w.context);
+    await w.run();
+    assert.deepEqual(w.calls.tickets, []);
+    assert.equal(w.s.claimedPrograms.halloween, true);
+    assert.equal(w.s.releasedBonusAmount, '18');
+    assert.equal(w.calls.submitted, preview ? 0 : 1);
+    assert.deepEqual(w.calls.posts.map(p => p.preview), preview ? [true] : [true, false]);
+    if (preview) assert.doesNotMatch(w.calls.status.at(-1).text, /ticket/i);
+  }
+});
+
 test('if the server now says a different amount (tier or day changed), no ticket is raised and nothing is claimed', async () => {
   const w = widget({ verdict: { ok: true, day: 2, amount: 28 } });
   await w.run();
@@ -73,7 +92,7 @@ test('admin preview opens the ticket step like the other bonuses and only sends 
   assert.deepEqual(w.calls.tickets, [{ program: 'halloween', amount: 18 }], 'the proof popup is part of the flow in preview too (it creates nothing there)');
   assert.ok(w.calls.posts.every((post) => post.preview === true));
   assert.equal(w.calls.submitted, 0);
-  assert.match(w.calls.status.at(-1).text, /^Preview: Halloween Day 2 claim of RM18 checked against Lark\. In a live chat this would raise a VVIP Complain Players ticket \(Remarks: 3X Turnover Team\)/);
+  assert.match(w.calls.status.at(-1).text, /^Preview: Halloween Day 2 claim of RM18 checked against Lark\. In a live chat this would save the Halloween table row/);
   assert.match(w.calls.status.at(-1).text, /Nothing was saved\.$/);
   assert.doesNotMatch(w.calls.status.at(-1).text, /Action log note/, 'Day 2 adds no Action log note');
 });
@@ -82,8 +101,8 @@ test('the admin preview texts say what a live claim and undo would do, per day',
   const text = (code) => vm.runInContext(code, widget({ verdict: { ok: true, amount: 1 } }).context);
   assert.match(text('halloweenPreviewClaimText(1, 120)'), /claim of RM120.*Customer Approaching row \(Halloween Day 1, Given, RM120\), and add an Action log note\. Nothing was saved\.$/);
   assert.doesNotMatch(text('halloweenPreviewClaimText(3, 56)'), /Action log/);
-  assert.match(text('halloweenPreviewUndoText(1)'), /X\. VOID TICKET, and remove the Day 1 Action log note\. Nothing was changed\.$/);
-  assert.match(text('halloweenPreviewUndoText(2)'), /X\. VOID TICKET\. Nothing was changed\.$/);
+  assert.match(text('halloweenPreviewUndoText(1)'), /Customer Approaching row, and remove the Day 1 Action log note\. Nothing was changed\.$/);
+  assert.match(text('halloweenPreviewUndoText(2)'), /Customer Approaching row\. Nothing was changed\.$/);
 });
 
 function voidWidget({ reply, preview = false, ref = 'TK2610260001' } = {}) {
@@ -91,6 +110,7 @@ function voidWidget({ reply, preview = false, ref = 'TK2610260001' } = {}) {
   const s = { claimTickets: ref ? { halloween: ref, topPnl: 'TK2610260099' } : {} };
   const context = vm.createContext({
     state: { A: s }, previewMode: preview,
+    autoTicketEnabled: () => true, // Dormant legacy behavior, explicitly enabled only in this fixture.
     ticketFields: [{ key: 'status', label: 'Status', options: [{ value: 'OPEN', label: 'Open' }, { value: 'X_VOID_TICKET', label: 'X. VOID TICKET' }] }],
     fetchTicketConfig: async () => {}, TICKET_FIELD_SPECS: [{ stateKey: 'status', keys: ['status'], labels: ['Status'] }],
     ticketFieldFor: (spec) => (spec?.stateKey === 'status' ? context.ticketFields[0] : undefined),

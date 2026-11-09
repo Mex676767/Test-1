@@ -1,5 +1,15 @@
 # Customer Approaching widget — handover runbook
 
+## Bonus auto-ticket disablement — 10 November 2026 (Malaysia)
+
+User decision: disable only automatic bonus tickets while a replacement bonus ticket system is still under discussion. Do not re-enable or implement a replacement without explicit user requirements.
+
+- This release sets `AUTO_TICKET_LIVE = false` for both live use and admin preview. Top 10 P&L, LTV, Grace Period, Risk Player, Halloween and Telegram RM28 claims no longer open the proof/ticket popup or create tickets. Claim undo no longer automatically voids old tickets; historical ticket records/references are preserved.
+- Normal eligibility checks, bonus amounts, activation, claiming, Lark writes, Action log notes, and standalone/manual Tickets remain unchanged. Do not disable `ESCALATION_TICKET_ENABLED` or remove the shared ticket endpoints. Dormant auto-ticket code is retained to keep this change narrow.
+- Prepared in advance for a scheduled merge at **00:05 Asia/Kuala_Lumpur on 10 November 2026**. The change takes effect only after this branch is merged and Cloudflare Pages deploys it; the planned time is not proof of deployment. Do not merge early.
+- Client release/cache version: `20261110-1`. Already-open widgets must use the new-version refresh button (or reload) to pick up the disabled feature. No Durable Object deployment is needed.
+
+
 Not served to the public: the Pages middleware answers 404 for every root `*.md` file. Variable **names** only below; never put values in the repo.
 
 ## 1. What runs where
