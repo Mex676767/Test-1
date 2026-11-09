@@ -1,7 +1,8 @@
 const ESCALATION_TICKET_ENABLED = true;
 const IS_EMBEDDED_APP = window.self !== window.top;
 const DEPARTMENT_TABS_LIVE = true;
-const AUTO_TICKET_LIVE = true;
+// Bonus ticket migration: disabled for live AND preview. See CLAUDE.md; do not re-enable without approval.
+const AUTO_TICKET_LIVE = false;
 const BLAST_LIVE = true;
 const KNOWLEDGE_TAB_ENABLED = true;
 const DEPARTMENT_SEPARATION_ENABLED = true;
@@ -2739,7 +2740,7 @@ function renderHalloweenCard(chatId) {
       <div class="ticket-btns">
         <button class="claim-btn hw-claim" data-action="claim" data-program="halloween" data-chat="${chatId}" ${title2 ? `title="${escapeHtml(title2)}"` : ""} ${disabled ? "disabled" : ""}>${halloweenClaimLabel(h)}</button>
       </div>
-      <div class="hw-hint">${previewMode ? "Admin preview: the ticket form opens, but no ticket is created and nothing is saved." : "Claiming raises a VVIP Complain Players ticket."}</div>
+      <div class="hw-hint">${previewMode ? "Admin preview: nothing is saved." : "Automatic bonus tickets are disabled."}</div>
     </div>`;
 }
 
@@ -2825,7 +2826,7 @@ async function claimHalloween(chatId, btn, card) {
     data = sampleCard ? { ok: true, day: h.day, amount: input.amount, ...(h.state === "topup" ? { topup: true } : {}) } : await postClaim(previewMode);
     if (!data.ok) throw new Error(data.error || "Claim failed");
   } catch (err) {
-    setStatus(`Halloween claim failed: ${err.message}. If a ticket was already raised for it, check that ticket before claiming again.`, "error");
+    setStatus(`Halloween claim failed: ${err.message}.`, "error");
     btn.disabled = false;
     btn.textContent = halloweenClaimLabel(h);
     return;
@@ -2907,6 +2908,10 @@ async function removeHalloweenActionNote(chatId) {
 // An undo clears every claim on the case, so every ticket raised for it is voided. If that fails, the undo still stands and the
 // agent is told to void the ticket by hand. Halloween never has a ticket in admin preview (it only simulates one).
 async function voidClaimTickets(chatId, label = "Claim", extra = "") {
+  if (!autoTicketEnabled()) {
+    if (extra) setStatus(`${label} claim undone.${extra}`, extra.includes("could not") ? "error" : "success");
+    return;
+  }
   const s = state[chatId];
   const entries = Object.entries(s?.claimTickets || {});
   if (!entries.length) {
@@ -2941,16 +2946,16 @@ async function voidClaimTickets(chatId, label = "Claim", extra = "") {
 
 // Admin preview only: say what a real claim or undo would do. Nothing is sent or saved.
 function halloweenPreviewClaimText(day, amount, topup = false, sample = false) {
-  return `Preview: Halloween Day ${day}${topup ? " top-up" : ""} claim of RM${amount} ${sample ? "on the sample card" : "checked against Lark"}. In a live chat this would raise a VVIP Complain Players ticket (Remarks: 3X Turnover Team), `
+  return `Preview: Halloween Day ${day}${topup ? " top-up" : ""} claim of RM${amount} ${sample ? "on the sample card" : "checked against Lark"}. In a live chat this would `
     + `${topup ? "update the Halloween table row (new Day 1 totals and a Day 1 Top-ups line)" : "save the Halloween table row"} and a Customer Approaching row (Halloween Day ${day}, Given, RM${amount})${day === 1 ? ", and add an Action log note" : ""}. Nothing was saved.`;
 }
 
 function halloweenPreviewUndoText(day, topup = false) {
   if (topup) {
     return "Preview: in a live chat, undoing this Halloween Day 1 top-up would put the Halloween table row back to its totals before the top-up (the first Day 1 claim stays), "
-      + "clear the Customer Approaching row, set the ticket to X. VOID TICKET and remove the top-up's Action log note. Nothing was changed.";
+      + "clear the Customer Approaching row and remove the top-up's Action log note. Nothing was changed.";
   }
-  return `Preview: in a live chat, undoing Halloween Day ${day} would revert it in the Halloween table, clear the Customer Approaching row and set the ticket to X. VOID TICKET`
+  return `Preview: in a live chat, undoing Halloween Day ${day} would revert it in the Halloween table, clear the Customer Approaching row`
     + `${day === 1 ? ", and remove the Day 1 Action log note" : ""}. Nothing was changed.`;
 }
 
@@ -3572,7 +3577,7 @@ let agentDefaultMarket = { account: "", code: "" };
 const claimTicketBusy = new Set();
 
 function autoTicketEnabled() {
-  return ESCALATION_TICKET_ENABLED && (previewMode || AUTO_TICKET_LIVE);
+  return ESCALATION_TICKET_ENABLED && AUTO_TICKET_LIVE;
 }
 
 function randomTransactionId(length = 32) {
