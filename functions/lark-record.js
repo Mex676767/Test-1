@@ -17,6 +17,9 @@ function toEpochMs(dateStr) {
   return Number.isNaN(ms) ? null : ms;
 }
 
+// The agent's answer when they give a second free bonus on the same day (widget popup).
+const DOUBLE_BONUS_FIELD = "Agent Acknowledgment For Double Bonus";
+
 export function handler(event) { return runWithRequestStart(() => recordHandler(event)); }
 
 async function recordHandler(event) {
@@ -35,6 +38,7 @@ async function recordHandler(event) {
     var telegram = body.telegram;
     var vs96FeedbackQuery1 = String(body.vs96FeedbackQuery1 || "").trim();
     var vs96FeedbackQuery2 = String(body.vs96FeedbackQuery2 || "").trim();
+    var doubleBonusAck = String(body.doubleBonusAck || "").trim().slice(0, 100);
 
     if (!recordId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId is required" }) };
@@ -52,12 +56,14 @@ async function recordHandler(event) {
       if (!recordId) {
         return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId is required" }) };
       }
-      var cleared = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, {
+      var clearFields = {
         "Inquiry": [],
         "Status": null,
         "Released amount": null,
         "Claim Secret": false
-      });
+      };
+      if (body.clearDoubleBonusAck) clearFields[DOUBLE_BONUS_FIELD] = null;
+      var cleared = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, clearFields);
       return { statusCode: 200, body: JSON.stringify({ ok: true, record: cleared }) };
     }
 
@@ -93,6 +99,7 @@ async function recordHandler(event) {
       "Query 2 Feedback (VS96 Feedback)": vs96FeedbackQuery2 || null
     };
 
+    if (doubleBonusAck) fields[DOUBLE_BONUS_FIELD] = doubleBonusAck;
     var record = await updateRecord(TABLE_CUSTOMER_APPROACHING, recordId, fields);
     return { statusCode: 200, body: JSON.stringify({ ok: true, record: record }) };
   } catch (err) {

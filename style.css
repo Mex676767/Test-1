@@ -554,6 +554,27 @@ body {
 .grace-deposit-note.ready { color: var(--teal); }
 .grace-claim-btn { align-self: flex-start; }
 
+.ticket.ticket-reload-deposit {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+}
+.ticket-reload-deposit .reload-deposit-fields { grid-column: 1 / -1; width: 100%; }
+.reload-deposit-fields label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.reload-deposit-fields label > span {
+  color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+}
+.reload-deposit-input {
+  width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 9px; background: var(--surface); color: var(--text);
+  font: 12px "Cascadia Mono", Consolas, monospace;
+}
+.reload-deposit-input:focus { outline: none; border-color: var(--gold); }
+.reload-deposit-input:disabled { opacity: .7; }
+
+.ticket.free-given-today .claim-btn:not(.claimed) { opacity: .45; filter: grayscale(1); }
+.ticket.free-given-today .claim-btn:not(.claimed):hover { opacity: .7; }
+.free-given-note { color: var(--text-faint); font-size: 10.5px; margin-top: 3px; }
+.double-bonus-card { max-width: 420px; }
+
 .ticket.ticket-special {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--danger) 55%, transparent);

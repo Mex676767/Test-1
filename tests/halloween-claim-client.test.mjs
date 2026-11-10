@@ -9,7 +9,7 @@ const grab = (name) => {
   assert.ok(match, `found ${name} in app.js`);
   return match[0];
 };
-const source = ['halloweenActionable', 'halloweenInput', 'halloweenPreviewClaimText', 'halloweenPreviewUndoText', 'claimHalloween'].map(grab).join('\n');
+const source = ['reloadDepositValid', 'halloweenActionable', 'halloweenInput', 'halloweenPreviewClaimText', 'halloweenPreviewUndoText', 'claimHalloween'].map(grab).join('\n');
 
 // A Day 2 card for a Tier 3 player (RM18), ready to claim without sharing.
 function widget({ verdict, preview = false }) {
@@ -18,7 +18,7 @@ function widget({ verdict, preview = false }) {
   const card = { querySelector: (selector) => (selector === '.hw-claim' ? button : { innerHTML: '' }) };
   const s = {
     username: 'zzali', brand: 'EZ', chatUrl: 'https://chat/1', claimedPrograms: {}, escalation: {}, inquiry: [],
-    halloweenShared: false, halloweenMethod: '', halloweenPostLink: '',
+    halloweenShared: false, halloweenMethod: '', halloweenPostLink: '', reloadDeposits: { halloween: '300' },
     matchedRow: { halloween: { day: 2, state: 'day2', brand: 'EZ', fullBrand: 'EZ96', tier: 'Tier 3', redPacket: 18, shareExtra: 28 } },
   };
   const context = vm.createContext({
@@ -67,6 +67,15 @@ test('shipped disabled ticket gate keeps the real Halloween claim and preview fl
     assert.deepEqual(w.calls.posts.map(p => p.preview), preview ? [true] : [true, false]);
     if (preview) assert.doesNotMatch(w.calls.status.at(-1).text, /ticket/i);
   }
+});
+
+test('a reload bonus: Day 2 cannot be claimed until the deposit amount is entered', async () => {
+  const w = widget({ verdict: { ok: true, day: 2, amount: 18 } });
+  w.s.reloadDeposits = {};
+  await w.run();
+  assert.equal(w.calls.posts.length, 0, 'nothing sent');
+  assert.equal(w.s.claimedPrograms.halloween, undefined);
+  assert.match(w.calls.status.at(-1).text, /deposit amount/);
 });
 
 test('if the server now says a different amount (tier or day changed), no ticket is raised and nothing is claimed', async () => {

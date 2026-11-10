@@ -9,10 +9,10 @@ const grab = (name) => {
   assert.ok(match, `found ${name} in app.js`);
   return match[0];
 };
-const source = ['escapeHtml', 'halloweenActionable', 'halloweenInput', 'halloweenClaimLabel', 'halloweenChip', 'renderHalloweenCard'].map(grab).join('\n');
+const source = ['escapeHtml', 'reloadDepositValid', 'halloweenActionable', 'halloweenInput', 'halloweenClaimLabel', 'halloweenChip', 'renderHalloweenCard'].map(grab).join('\n');
 
 function widget(h, over = {}) {
-  const s = { claimedPrograms: {}, halloweenChoice: '', halloweenDeposit: '', halloweenShared: false, halloweenMethod: '', halloweenPostLink: '', ...over };
+  const s = { claimedPrograms: {}, halloweenChoice: '', halloweenDeposit: '', halloweenShared: false, halloweenMethod: '', halloweenPostLink: '', reloadDeposits: { halloween: '300' }, ...over };
   const context = vm.createContext({ state: { A: { ...s, matchedRow: { halloween: h } } }, previewMode: false, HALLOWEEN_METHODS: ['Social post', '5 friends'], HALLOWEEN_INQUIRY_PREFIX: 'Halloween Day ' });
   vm.runInContext(source, context);
   return context;

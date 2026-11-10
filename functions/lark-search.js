@@ -26,6 +26,7 @@ const F = {
   titleName: "Title name",
   titleNameOld: "Tittle name",
   status: "Status",
+  inquiry: "Inquiry",
   swCheck: "SW Check",
   swChecker: "SW Checker",
   claimedCopy: "Claimed Copy",
@@ -35,6 +36,20 @@ const F = {
   riskExpiry: "Date Expired",
   uid: "UID",
 };
+
+// Free-bonus daily limit: this player's Customer Approaching rows for this brand that were created today
+// (Malaysia time) and have Status "Given". The widget decides which of their inquiries are free bonuses.
+export function claimsTodayFrom(rows, brand, today) {
+  const wanted = String(brand || "").trim().toUpperCase();
+  return (rows || [])
+    .filter((r) => toDisplay(r.fields?.[F.brand]).trim().toUpperCase() === wanted)
+    .filter((r) => /^given$/i.test(toDisplay(r.fields?.[F.status]).trim()))
+    .filter((r) => Number(r.created_time) > 0 && malaysiaToday(Number(r.created_time)) === today)
+    .map((r) => ({
+      recordId: r.record_id,
+      inquiry: [].concat(r.fields?.[F.inquiry] ?? []).map((value) => toDisplay(value)).filter(Boolean),
+    }));
+}
 
 function isLinkFieldRejection(error) {
   if (error?.rateLimited) return false;
@@ -285,15 +300,19 @@ async function lookupHandler(event, hardEnd) {
       halloweenTask,
     ] = await Promise.all([
       optionalLookup("Other-brand check", async () => {
+        // The same search also lists today's claims for the free-bonus daily limit (no extra Lark call).
         const caUsernameOnly = await search(TABLE_CUSTOMER_APPROACHING, [
           { field_name: F.username, operator: "is", value: [uname] },
-        ], undefined, { fieldNames: [F.brand] });
-        return [...new Set(
-          caUsernameOnly
-            .map((r) => toDisplay(r.fields[F.brand]))
-            .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
-        )];
-      }, []),
+        ], undefined, { fieldNames: [F.brand, F.inquiry, F.status], automaticFields: true });
+        return {
+          otherBrands: [...new Set(
+            caUsernameOnly
+              .map((r) => toDisplay(r.fields[F.brand]))
+              .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
+          )],
+          claimsToday: claimsTodayFrom(caUsernameOnly, brandVal, malaysiaToday(Date.now())),
+        };
+      }, { otherBrands: [], claimsToday: null }),
 
       optionalLookup("P&L tier", async () => {
         if (!TABLE_PNL) return { tier: "", customerName: "", notVip: false };
@@ -402,7 +421,7 @@ async function lookupHandler(event, hardEnd) {
     ]);
     const { configs: configuredBonusConfigs, lookups: configuredBonusTasks } = await configuredBonusLookupsP;
     const [
-      otherBrands,
+      playerCases,
       pnlInfo,
       topPnlRow,
       ltvRow,
@@ -436,6 +455,8 @@ async function lookupHandler(event, hardEnd) {
       ]);
     })();
     const { tier, customerName, notVip } = pnlInfo;
+    const otherBrands = playerCases?.otherBrands || [];
+    const claimsToday = playerCases?.claimsToday ?? null;
     const halloween = halloweenRead?.failed
       ? { state: "closed", failed: true, message: "Halloween progress could not be read. Press Look Up again." }
       : halloweenRead
@@ -487,6 +508,8 @@ async function lookupHandler(event, hardEnd) {
         row: {
           tier,
           customerName,
+          claimsToday,
+          claimsDay: malaysiaToday(Date.now()),
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
           ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",
