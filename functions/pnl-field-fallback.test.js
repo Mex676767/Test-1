@@ -32,7 +32,7 @@ async function withLark(reply, run) {
   try { await run(calls); } finally { globalThis.fetch = original; }
 }
 
-test("P&L lookup recovers from a compact FieldNameNotFound projection error", async () => {
+test("P&L lookup asks for no column list, so a missing name column cannot fail it", async () => {
   await withLark((body) => body.field_names
     ? json({ code: 1254043, msg: "FieldNameNotFound" })
     : json({ code: 0, data: { items: [{ record_id: "pnl-row", fields: { Tier: "Tier V" } }], has_more: false } }), async (calls) => {
@@ -43,6 +43,18 @@ test("P&L lookup recovers from a compact FieldNameNotFound projection error", as
     assert.equal(body.row.customerName, "", "a missing optional name does not discard the tier");
     assert.equal(body.notVip, false);
     assert.deepEqual(body.lookupWarnings, []);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].field_names, undefined);
+    assert.deepEqual(calls[0].filter.conditions, conditions);
+  });
+});
+
+test("searches with a column list recover from a compact FieldNameNotFound projection error", async () => {
+  await withLark((body) => body.field_names
+    ? json({ code: 1254043, msg: "FieldNameNotFound" })
+    : json({ code: 0, data: { items: [{ record_id: "pnl-row", fields: { Tier: "Tier V" } }], has_more: false } }), async (calls) => {
+    const rows = await searchRecords("pnl-fallback-table", conditions, undefined, { fieldNames: ["Tier", "Title name"] });
+    assert.equal(rows.length, 1);
     assert.equal(calls.length, 2);
     assert.deepEqual(calls[0].field_names, ["Tier", "Title name"]);
     assert.equal(calls[1].field_names, undefined);
@@ -62,14 +74,14 @@ test("whole-table searches also recover from compact FieldNameNotFound", async (
   });
 });
 
-test("a missing filter column is still reported and the fallback stops after one retry", async () => {
+test("a missing filter column is still reported, with no endless retry", async () => {
   await withLark(() => json({ code: 1254043, msg: "FieldNameNotFound" }), async (calls) => {
     const result = await handler({ body: JSON.stringify({ username: "test-player", brand: "PP", preview: true }) });
     const body = JSON.parse(result.body);
     assert.deepEqual(body.lookupWarnings, ["P&L tier"]);
     assert.equal(body.row.tier, "");
     assert.equal(body.notVip, false, "an unavailable check does not mean the player is not VIP");
-    assert.equal(calls.length, 2);
+    assert.ok(calls.length <= 2, "at most one retry");
   });
 });
 
