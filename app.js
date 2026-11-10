@@ -7393,7 +7393,23 @@ async function refreshDropdownOptions({ fresh = false } = {}) {
       fetchStatusOptions({ fresh }), fetchConfiguredBonusPrograms({ fresh }),
     ]);
   }
+  scheduleBrandListRetry();
   if (!IS_EMBEDDED_APP || DEPARTMENT_TABS_LIVE || AUTO_TICKET_LIVE) await fetchTicketConfig({ fresh });
+}
+// An empty Brand list (failed first load, nothing cached) is retried on its own instead of waiting 10 minutes.
+const BRAND_LIST_RETRY_MS = [15_000, 30_000, 60_000];
+let brandListRetryTimer = null;
+let brandListRetryCount = 0;
+function scheduleBrandListRetry() {
+  if (brandOptions.length) { brandListRetryCount = 0; return; }
+  if (brandListRetryTimer) return;
+  const delay = BRAND_LIST_RETRY_MS[Math.min(brandListRetryCount, BRAND_LIST_RETRY_MS.length - 1)];
+  brandListRetryCount++;
+  brandListRetryTimer = setTimeout(async () => {
+    brandListRetryTimer = null;
+    if (!brandOptions.length && !(await fetchBootstrapOptions({ fresh: true }))) await fetchBrandOptions({ fresh: true });
+    scheduleBrandListRetry();
+  }, delay);
 }
 setInterval(() => {
   if (!document.hidden) refreshDropdownOptions();
