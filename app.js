@@ -317,6 +317,24 @@ const BONUS_PROGRAMS = [
   { key: "mooncake", label: "Mooncake Bonus" },
   { key: "vs96Feedback", label: "VS96 Feedback" },
 ];
+// Reload bonuses: Claim works only after the customer's deposit amount is entered. Every bonus is either a reload
+// bonus or a free bonus; when a new bonus is added, ask the user which one it is.
+// Reload bonuses: Risk Player, Halloween, Grace Period, 12h VIP Deposit Booster, Redeem Code, Special Reload.
+// Risk Player ("Customer reload"), Halloween Day 1 / top-up and the Grace Period claim after Activate have their own
+// deposit fields; the programs below use the shared field. The amount entered is not recorded anywhere.
+const RELOAD_DEPOSIT_PROGRAMS = new Set(["vipBooster", "redeemCode", "specialReload", "gracePeriod"]);
+function needsReloadDeposit(key, row) {
+  if (!RELOAD_DEPOSIT_PROGRAMS.has(key)) return false;
+  // Grace Period "Pass": Activate needs no deposit, and the claim right after it checks its own deposit field.
+  if (key === "gracePeriod" && /^\s*pass\b/i.test(String(row?.gracePeriod || ""))) return false;
+  return true;
+}
+function reloadDepositValid(value) {
+  const text = String(value || "").replace(/,/g, "").trim();
+  const amount = Number(text);
+  return text !== "" && Number.isFinite(amount) && amount > 0;
+}
+
 const BONUS_CARD_TONES = {
   riskPlayer: "amber",
   topPnl: "blue",
@@ -1382,7 +1400,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     s.claimedPrograms = {};
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = ""; resetHalloweenInput(s);
+    s.riskReloadAmount = ""; s.reloadDeposits = {}; resetHalloweenInput(s);
     s.gracePeriodActivated = false;
     s.graceDepositAmount = "";
     s.releasedBonusAmount = "";
@@ -2328,7 +2346,7 @@ async function copyPlainText(value) {
 const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
-  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount", "graceDepositAmount",
+  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount", "graceDepositAmount", "reloadDeposits",
   "halloweenChoice", "halloweenDeposit", "halloweenShared", "halloweenMethod", "halloweenPostLink", "halloweenClaim",
 ];
 const CASE_KEYS = [
@@ -2384,7 +2402,7 @@ function snapshotCase(s) {
 function loadCaseInto(s, snap) {
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
-  s.riskReloadAmount = ""; resetHalloweenInput(s);
+  s.riskReloadAmount = ""; s.reloadDeposits = {}; resetHalloweenInput(s);
   s.graceDepositAmount = "";
   s.claimTickets = {};
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
@@ -2478,7 +2496,7 @@ async function addCaseFlow(chatId) {
     s.graceDepositAmount = "";
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = ""; resetHalloweenInput(s);
+    s.riskReloadAmount = ""; s.reloadDeposits = {}; resetHalloweenInput(s);
     s.inquiry = [];
     s.status = "";
     s.releasedBonusAmount = "";
@@ -2567,6 +2585,7 @@ function renderHalloweenPreviewSwitch(chatId) {
 }
 
 function resetHalloweenInput(s) {
+  if (s.reloadDeposits) delete s.reloadDeposits.halloween;
   s.halloweenChoice = "";
   s.halloweenDeposit = "";
   s.halloweenShared = false;
@@ -2623,6 +2642,7 @@ function halloweenInput(s, h) {
       : "Still below RM300: no Day 2 or Day 3.";
     return result;
   }
+  if (!reloadDepositValid(s.reloadDeposits?.halloween)) { result.error = "Enter the customer's deposit amount first."; return result; }
   const sharing = h.state === "day2" ? !!s.halloweenShared : !!s.halloweenShared && !!h.canShare;
   const method = h.state === "day3" ? h.shareMethod : s.halloweenMethod;
   if (sharing && h.state === "day2") {
@@ -2719,6 +2739,12 @@ function renderHalloweenCard(chatId) {
       : `<div class="hw-hint">No share extra today: the player did not share on Day 2. Base red packet only.</div>`;
   }
 
+  if (h.state === "day2" || h.state === "day3") {
+    controls = `
+      <label class="hw-field"><span>Deposit amount (RM)</span>
+        <input type="text" inputmode="decimal" class="hw-deposit hw-reload" data-chat="${chatId}" placeholder="Enter deposit amount" value="${escapeHtml(s.reloadDeposits?.halloween || "")}" />
+      </label>` + controls;
+  }
   const disabled = otherClaimed || !input.valid;
   const title2 = otherClaimed ? "Another bonus is already claimed on this chat" : (input.valid ? "" : input.error);
   return `
@@ -3052,12 +3078,14 @@ function renderTickets(chatId) {
     );
     const riskCalculation = d.key === "riskPlayer" ? riskPlayerCalculation(d.display, s.riskReloadAmount) : null;
     const riskComplete = !riskCalculation || riskCalculation.valid;
-    const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete);
+    const needsDeposit = needsReloadDeposit(d.key, r);
+    const depositComplete = !needsDeposit || reloadDepositValid(s.reloadDeposits?.[d.key]);
+    const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete || !depositComplete);
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
     const cardMark = BONUS_CARD_MARKS[d.key] || escapeHtml(String(d.label || "•").trim().slice(0, 1).toUpperCase());
     return `
-    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
+    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${needsDeposit ? "ticket-reload-deposit" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
         <div class="ticket-icon" aria-hidden="true">${cardMark}</div>
         <div class="ticket-body">
@@ -3067,7 +3095,7 @@ function renderTickets(chatId) {
         </div>
       </div>
       <div class="ticket-btns">
-        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : (!riskComplete ? 'title="Enter the customer reload amount first"' : ""))} ${claimDisabled ? "disabled" : ""}>
+        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : (!riskComplete ? 'title="Enter the customer reload amount first"' : (!depositComplete ? 'title="Enter the customer deposit amount first"' : "")))} ${claimDisabled ? "disabled" : ""}>
           ${claimed ? doneLabel : claimLabel}
         </button>
         ${
@@ -3077,6 +3105,13 @@ function renderTickets(chatId) {
         }
       </div>
       ${d.graceInstant ? renderGraceInstant(chatId, d.display, s.graceDepositAmount, alreadyClaimedOne) : ""}
+      ${needsDeposit ? `
+        <div class="reload-deposit-fields">
+          <label>
+            <span>Deposit amount (RM)</span>
+            <input type="text" inputmode="decimal" class="reload-deposit-input" data-chat="${chatId}" data-program="${d.key}" placeholder="Enter deposit amount" value="${escapeHtml(s.reloadDeposits?.[d.key] || "")}" ${claimed ? "disabled" : ""} />
+          </label>
+        </div>` : ""}
       ${riskCalculation ? `
         <div class="risk-amount-fields">
           <label>
@@ -5511,7 +5546,7 @@ function ensureChatState(chat) {
   state[chat.chatId] = {
     username: "", matchedRow: undefined, otherBrandMatches: [], caRecordId: null, claimedPrograms: {},
     liveChatAccount: currentLiveChatAccount,
-    vs96FeedbackQuery1: "", vs96FeedbackQuery2: "", riskReloadAmount: "", graceDepositAmount: "",
+    vs96FeedbackQuery1: "", vs96FeedbackQuery2: "", riskReloadAmount: "", graceDepositAmount: "", reloadDeposits: {},
     logs: [], caseNo: 1, loggedSnapshot: "",
     notVipResult: false, forcedVipFor: "",
     gracePeriodActivated: false,
@@ -6152,6 +6187,11 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
 
+    if (needsReloadDeposit(programKey, r) && !reloadDepositValid(s.reloadDeposits?.[programKey])) {
+      setStatus("Enter the customer's deposit amount before claiming this reload bonus.", "error");
+      return;
+    }
+
     if (programKey === "gracePeriod") {
       const display = r.gracePeriod || "";
       const isPass = /^\s*pass\b/i.test(display);
@@ -6720,7 +6760,8 @@ chatListEl.addEventListener("input", (e) => {
       halloweenField.value = decimalAt < 0
         ? cleaned
         : cleaned.slice(0, decimalAt + 1) + cleaned.slice(decimalAt + 1).replaceAll(".", "");
-      s.halloweenDeposit = halloweenField.value;
+      if (halloweenField.classList.contains("hw-reload")) s.reloadDeposits = { ...(s.reloadDeposits || {}), halloween: halloweenField.value };
+      else s.halloweenDeposit = halloweenField.value;
     } else {
       s.halloweenPostLink = halloweenField.value;
     }
@@ -6751,6 +6792,29 @@ chatListEl.addEventListener("input", (e) => {
     if (claimBtn) {
       claimBtn.disabled = !g.ready;
       claimBtn.title = g.ready ? "" : "Enter a deposit that matches the requirement first";
+    }
+    saveState();
+    return;
+  }
+  const reloadDepositInput = e.target.closest(".reload-deposit-input");
+  if (reloadDepositInput) {
+    const chatId = reloadDepositInput.dataset.chat;
+    const programKey = reloadDepositInput.dataset.program;
+    const s = state[chatId];
+    if (!s || !programKey) return;
+    const cleaned = reloadDepositInput.value.replace(/[^0-9.]/g, "");
+    const decimalAt = cleaned.indexOf(".");
+    reloadDepositInput.value = decimalAt < 0
+      ? cleaned
+      : cleaned.slice(0, decimalAt + 1) + cleaned.slice(decimalAt + 1).replaceAll(".", "");
+    s.reloadDeposits = { ...(s.reloadDeposits || {}), [programKey]: reloadDepositInput.value };
+    const valid = reloadDepositValid(s.reloadDeposits[programKey]);
+    const claimBtn = reloadDepositInput.closest(".ticket")?.querySelector(`.claim-btn[data-program="${CSS.escape(programKey)}"]`);
+    if (claimBtn && claimBtn.dataset.action === "claim") {
+      const anotherClaimIsActive = Object.entries(s.claimedPrograms || {})
+        .some(([key, active]) => key !== programKey && active);
+      claimBtn.disabled = !valid || anotherClaimIsActive;
+      claimBtn.title = valid ? "" : "Enter the customer deposit amount first";
     }
     saveState();
     return;
@@ -7808,6 +7872,7 @@ function caseFromLarkRow(r) {
     claimedPrograms: claimedProgramsFromSavedCase(r),
     gracePeriodActivated: false,
     graceDepositAmount: "",
+    reloadDeposits: {},
     logged: !!((r.inquiry || []).length && r.status),
     autoRecordError: "",
     loggedSnapshot: "",
