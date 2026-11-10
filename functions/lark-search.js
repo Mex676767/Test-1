@@ -24,6 +24,7 @@ const F = {
   agentName: "Agent Name",
   tier: "Tier",
   titleName: "Title name",
+  titleNameOld: "Tittle name",
   status: "Status",
   swCheck: "SW Check",
   swChecker: "SW Checker",
@@ -299,12 +300,12 @@ async function lookupHandler(event, hardEnd) {
         const pnlMatches = await search(TABLE_PNL, [
           { field_name: F.username, operator: "is", value: [uname] },
           { field_name: F.brand, operator: "is", value: [brandVal] },
-        ], undefined, { fieldNames: [F.tier, F.titleName] });
+        ]);
         if (!pnlMatches.length) return { tier: "", customerName: "", notVip: true };
         const tierMap = await getFieldOptionMap(TABLE_PNL, F.tier);
         return {
           tier: toDisplay(pnlMatches[0].fields[F.tier], tierMap),
-          customerName: toDisplay(pnlMatches[0].fields[F.titleName]),
+          customerName: toDisplay(pnlMatches[0].fields[F.titleName]) || toDisplay(pnlMatches[0].fields[F.titleNameOld]),
           notVip: false,
         };
       }, { tier: "", customerName: "", notVip: false }),

@@ -244,6 +244,37 @@ test("lookup returns eligible results for every configured bonus source", async 
   }
 });
 
+test("lookup shows the player's name whether the P&L column is spelled Title name or Tittle name", async () => {
+  for (const column of ["Title name", "Tittle name"]) {
+    initEnv({
+      LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
+      LARK_TABLE_CUSTOMER_APPROACHING: "customer-table", LARK_TABLE_PNL: "pnl-table",
+    });
+    const originalFetch = globalThis.fetch;
+    const response = (data) => ({ status: 200, headers: { get: () => null }, json: async () => data });
+    let pnlSearchBody = null;
+    globalThis.fetch = async (url, options = {}) => {
+      const urlText = String(url);
+      if (urlText.includes("tenant_access_token")) return response({ code: 0, tenant_access_token: "token", expire: 3600 });
+      if (urlText.includes("/fields?")) return response({ code: 0, data: { items: [{ field_name: "Tier", property: { options: [] } }] } });
+      const tableId = urlText.match(/\/tables\/([^/]+)\/records\/search/)?.[1];
+      if (tableId !== "pnl-table") return response({ code: 0, data: { items: [] } });
+      pnlSearchBody = JSON.parse(options.body);
+      return response({ code: 0, data: { items: [{ record_id: "pnl-row", created_time: 10, fields: { Tier: "Tier 3", [column]: "Abang Amran" } }] } });
+    };
+    try {
+      const result = await handler({ body: JSON.stringify({ username: "48527", brand: "FUN", preview: true }) });
+      assert.equal(result.statusCode, 200, result.body);
+      const row = JSON.parse(result.body).row;
+      assert.equal(row.tier, "Tier 3");
+      assert.equal(row.customerName, "Abang Amran", `name read from the "${column}" column`);
+      assert.equal(pnlSearchBody.field_names, undefined, "a renamed name column cannot be dropped by a column list");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+});
+
 test("bonus lookup retries Lark throttling once instead of asking the agent to retry", async () => {
   initEnv({ LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token" });
   const originalFetch = globalThis.fetch;
