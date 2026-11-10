@@ -570,6 +570,11 @@ body {
 .reload-deposit-input:focus { outline: none; border-color: var(--gold); }
 .reload-deposit-input:disabled { opacity: .7; }
 
+.ticket.free-given-today .claim-btn:not(.claimed) { opacity: .45; filter: grayscale(1); }
+.ticket.free-given-today .claim-btn:not(.claimed):hover { opacity: .7; }
+.free-given-note { color: var(--text-faint); font-size: 10.5px; margin-top: 3px; }
+.double-bonus-card { max-width: 420px; }
+
 .ticket.ticket-special {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--danger) 55%, transparent);

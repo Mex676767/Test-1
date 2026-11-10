@@ -335,6 +335,53 @@ function reloadDepositValid(value) {
   return text !== "" && Number.isFinite(amount) && amount > 0;
 }
 
+// Free bonuses: one per player per day (Malaysia time). Another free bonus the same day is greyed out; the agent can
+// still give it after confirming in a popup, and "Yes" is saved in "Agent Acknowledgment For Double Bonus".
+// Today's claims come with the lookup (row.claimsToday) and count only on the day they were read (row.claimsDay).
+const FREE_BONUS_PROGRAMS = new Set(["topPnl", "ltvTest", "mooncake", "vs96Feedback", "telegram28"]);
+function malaysiaDay(ms) {
+  return new Date((ms ?? Date.now()) + 8 * 3600_000).toISOString().slice(0, 10);
+}
+function freeBonusGivenToday(s) {
+  const r = s?.matchedRow;
+  if (!r || !Array.isArray(r.claimsToday) || r.claimsDay !== malaysiaDay()) return "";
+  const freeInquiries = new Set([...FREE_BONUS_PROGRAMS].map((key) => BONUS_INQUIRY_MAP[key]).filter(Boolean));
+  for (const claim of r.claimsToday) {
+    if (!claim || claim.recordId === s.caRecordId) continue;
+    const hit = (claim.inquiry || []).find((inquiry) => freeInquiries.has(inquiry));
+    if (hit) return hit;
+  }
+  return "";
+}
+function confirmDoubleFreeBonus(given) {
+  return new Promise((resolve) => {
+    document.getElementById("doubleBonusOverlay")?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "doubleBonusOverlay";
+    overlay.className = "claim-ticket-backdrop";
+    overlay.innerHTML = `<div class="claim-ticket-card double-bonus-card" role="dialog" aria-modal="true" aria-labelledby="doubleBonusTitle">
+      <div class="claim-ticket-head"><span class="claim-ticket-mark" aria-hidden="true">⚠</span><div><h3 id="doubleBonusTitle">Free bonus already given today</h3>
+      <p class="claim-ticket-intro">This player already got a free bonus today (${escapeHtml(given)}). Normally only one free bonus is allowed per day.</p>
+      <p class="claim-ticket-intro">Do you agree to give this player another free bonus? Your answer is saved in Lark.</p></div></div>
+      <div class="claim-ticket-actions"><button type="button" class="secondary-btn" data-double-bonus="no">No, cancel</button><button type="button" class="submit-btn" data-double-bonus="yes">Yes, give another bonus</button></div>
+    </div>`;
+    const onKey = (event) => { if (event.key === "Escape") close(false); };
+    const close = (answer) => {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve(answer);
+    };
+    overlay.addEventListener("click", (event) => {
+      const choice = event.target.closest("[data-double-bonus]")?.dataset.doubleBonus;
+      if (choice) close(choice === "yes");
+      else if (event.target === overlay) close(false);
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-double-bonus="no"]')?.focus();
+  });
+}
+
 const BONUS_CARD_TONES = {
   riskPlayer: "amber",
   topPnl: "blue",
@@ -1400,7 +1447,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     s.claimedPrograms = {};
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = ""; s.reloadDeposits = {}; resetHalloweenInput(s);
+    s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; resetHalloweenInput(s);
     s.gracePeriodActivated = false;
     s.graceDepositAmount = "";
     s.releasedBonusAmount = "";
@@ -2346,7 +2393,7 @@ async function copyPlainText(value) {
 const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
-  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount", "graceDepositAmount", "reloadDeposits",
+  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount", "graceDepositAmount", "reloadDeposits", "doubleBonusAck",
   "halloweenChoice", "halloweenDeposit", "halloweenShared", "halloweenMethod", "halloweenPostLink", "halloweenClaim",
 ];
 const CASE_KEYS = [
@@ -2402,7 +2449,7 @@ function snapshotCase(s) {
 function loadCaseInto(s, snap) {
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
-  s.riskReloadAmount = ""; s.reloadDeposits = {}; resetHalloweenInput(s);
+  s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; resetHalloweenInput(s);
   s.graceDepositAmount = "";
   s.claimTickets = {};
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
@@ -2496,7 +2543,7 @@ async function addCaseFlow(chatId) {
     s.graceDepositAmount = "";
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = ""; s.reloadDeposits = {}; resetHalloweenInput(s);
+    s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; resetHalloweenInput(s);
     s.inquiry = [];
     s.status = "";
     s.releasedBonusAmount = "";
@@ -3080,22 +3127,24 @@ function renderTickets(chatId) {
     const riskComplete = !riskCalculation || riskCalculation.valid;
     const needsDeposit = needsReloadDeposit(d.key, r);
     const depositComplete = !needsDeposit || reloadDepositValid(s.reloadDeposits?.[d.key]);
+    const freeGivenToday = !claimed && FREE_BONUS_PROGRAMS.has(d.key) ? freeBonusGivenToday(s) : "";
     const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete || !depositComplete);
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
     const cardMark = BONUS_CARD_MARKS[d.key] || escapeHtml(String(d.label || "•").trim().slice(0, 1).toUpperCase());
     return `
-    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${needsDeposit ? "ticket-reload-deposit" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
+    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${needsDeposit ? "ticket-reload-deposit" : ""} ${freeGivenToday ? "free-given-today" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
         <div class="ticket-icon" aria-hidden="true">${cardMark}</div>
         <div class="ticket-body">
           <div class="ticket-name">${d.label}</div>
           <div class="ticket-meta ${d.isCode ? "mono code" : ""}">${d.isCode ? escapeHtml(d.display) : d.metaHtml || formatTicketMeta(d.display)}</div>
           ${renderExpiryLine(d.expiryMs)}
+          ${freeGivenToday ? `<div class="free-given-note">Free bonus already given today (${escapeHtml(freeGivenToday)})</div>` : ""}
         </div>
       </div>
       <div class="ticket-btns">
-        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : (!riskComplete ? 'title="Enter the customer reload amount first"' : (!depositComplete ? 'title="Enter the customer deposit amount first"' : "")))} ${claimDisabled ? "disabled" : ""}>
+        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : (!riskComplete ? 'title="Enter the customer reload amount first"' : (!depositComplete ? 'title="Enter the customer deposit amount first"' : (freeGivenToday ? 'title="This player already got a free bonus today. Click to give another (you will be asked to confirm)."' : ""))))} ${claimDisabled ? "disabled" : ""}>
           ${claimed ? doneLabel : claimLabel}
         </button>
         ${
@@ -6192,6 +6241,15 @@ chatListEl.addEventListener("click", async (e) => {
       return;
     }
 
+    if (FREE_BONUS_PROGRAMS.has(programKey)) {
+      const givenToday = freeBonusGivenToday(s);
+      if (givenToday && !(await confirmDoubleFreeBonus(givenToday))) {
+        setStatus("Not claimed: the player already got a free bonus today.", "info");
+        return;
+      }
+      s.doubleBonusAck = givenToday ? "Yes" : "";
+    }
+
     if (programKey === "gracePeriod") {
       const display = r.gracePeriod || "";
       const isPass = /^\s*pass\b/i.test(display);
@@ -6322,7 +6380,7 @@ chatListEl.addEventListener("click", async (e) => {
         const res = await fetch("/lark-record", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recordId: s.caRecordId, unclaim: true, agentName: selectedAgent, username: s.username }),
+          body: JSON.stringify({ recordId: s.caRecordId, unclaim: true, agentName: selectedAgent, username: s.username, clearDoubleBonusAck: !!s.doubleBonusAck }),
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "Unclaim failed");
@@ -6336,6 +6394,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.unclaimInFlight = false;
     reportClaim(chatId, null);
 
+    s.doubleBonusAck = "";
     const prevFirstAmount = String(s.releasedBonusAmount || "").split(" | ")[0];
     if (wasGraceActivationOnly) {
       s.gracePeriodActivated = false;
@@ -7270,6 +7329,7 @@ async function resyncLoggedRecord(chatId) {
         telegram: !!s.telegram,
         vs96FeedbackQuery1: s.vs96FeedbackQuery1 || "",
         vs96FeedbackQuery2: s.vs96FeedbackQuery2 || "",
+        doubleBonusAck: s.doubleBonusAck || "",
       });
     markCaseRecorded(s);
     setStatus("Changes saved to Lark Base.", "success");
@@ -7404,6 +7464,7 @@ async function submitRecordOnce(chatId, { auto, reason } = {}) {
         telegram: !!s.telegram,
         vs96FeedbackQuery1: s.vs96FeedbackQuery1 || "",
         vs96FeedbackQuery2: s.vs96FeedbackQuery2 || "",
+        doubleBonusAck: s.doubleBonusAck || "",
       });
     s.logged = true;
     clearRecordRetry(chatId);
