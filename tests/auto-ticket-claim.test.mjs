@@ -47,7 +47,7 @@ const SPECS = [
   { stateKey: 'vipLevel', keys: ['member_level', 'level'], labels: ['Level'] },
 ];
 
-function world({ preview = true, live = false, author, fields = FIELDS, ticketReply, marketReply, modal, account = { status: 'found', at: Date.now(), checking: false }, checkResult } = {}) {
+function world({ preview = true, live = true, author, fields = FIELDS, ticketReply, marketReply, modal, account = { status: 'found', at: Date.now(), checking: false }, checkResult } = {}) {
   const calls = { fetches: [], statuses: [], modals: 0, saves: 0 };
   const store = new Map();
   const context = vm.createContext({
@@ -93,6 +93,40 @@ function world({ preview = true, live = false, author, fields = FIELDS, ticketRe
   return { calls, store, context, run: (code) => vm.runInContext(code, context) };
 }
 const plain = (value) => JSON.parse(JSON.stringify(value));
+
+test('shipped flags let every bonus claim continue without ticket UI, login, account checks or requests, including preview', async () => {
+  for (const preview of [false, true]) {
+    const w = world({ preview, account: { status: 'error', at: 0, checking: false } });
+    w.run(line(/const AUTO_TICKET_LIVE = (?:true|false);/));
+    w.run(line(/const ESCALATION_TICKET_ENABLED = (?:true|false);/));
+    assert.equal(w.run('autoTicketEnabled()'), false);
+    assert.equal(w.run('ESCALATION_TICKET_ENABLED'), true, 'manual Tickets stay enabled');
+    w.context.ensureLiveChatLoginForClaim = () => { throw new Error('claims must not ask for ticket login'); };
+    const keys = plain(w.run('Object.keys(AUTO_TICKET_PROGRAMS)'));
+    assert.equal(keys.length, 6);
+    for (const key of keys) {
+      // A saved legacy reference must not gate the claim or be deleted.
+      w.context.state.chat1.claimTickets[key] = 'OLD-TICKET';
+      assert.equal(await w.run(`raiseClaimTicket("chat1", ${JSON.stringify(key)}, "58")`), true);
+      assert.equal(w.context.state.chat1.claimTickets[key], 'OLD-TICKET');
+    }
+    assert.equal(w.calls.modals, 0);
+    assert.deepEqual(w.calls.fetches, []);
+    assert.equal(w.calls.checks, undefined);
+    assert.deepEqual(w.calls.statuses, []);
+  }
+});
+
+test('disabled bonus automation leaves legacy tickets untouched on undo and preserves note feedback', async () => {
+  const w = world();
+  w.run(line(/const AUTO_TICKET_LIVE = (?:true|false);/));
+  w.run(fn('voidClaimTickets'));
+  w.context.state.chat1.claimTickets = { halloween: 'OLD-HW', topPnl: 'OLD-PNL' };
+  await w.run('voidClaimTickets("chat1", "Halloween", " The Action log note was removed.")');
+  assert.deepEqual(w.calls.fetches, []);
+  assert.deepEqual(plain(w.context.state.chat1.claimTickets), { halloween: 'OLD-HW', topPnl: 'OLD-PNL' });
+  assert.match(w.calls.statuses.at(-1).text, /claim undone.*Action log note was removed/);
+});
 
 test('transaction id: 32 capital letters and digits, different every time', () => {
   const w = world();
@@ -324,9 +358,9 @@ test('default market: an expired LiveChat login still stops the claim with its r
   assert.equal(w.calls.fetches.some((call) => call.url === '/ticket-create'), false, 'no ticket is raised');
 });
 
-test('the rollout: Tickets, notifications and the auto-ticket are switched on for the installed widget, and the release id was bumped so agents get the update notice', () => {
+test('manual Tickets and notifications stay on while bonus auto-tickets are disabled', () => {
   assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
-  assert.match(app, /const AUTO_TICKET_LIVE = true;/);
+  assert.match(app, /const AUTO_TICKET_LIVE = false;/);
   assert.ok(JSON.parse(readFileSync(new URL('../widget-release.json', import.meta.url), 'utf8')).release > '20261019-1', 'the release id was bumped at the rollout and has only gone up since');
 });
 

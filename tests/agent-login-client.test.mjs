@@ -22,7 +22,7 @@ test('the LiveChat login is ON for everyone; adding agentLogin=0 to the address 
 
 test('the department views are on in the installed widget (the 2026-10-19 rollout) as well as the admin preview; the old manual choice stays off', () => {
   assert.match(app, /const DEPARTMENT_TABS_LIVE = true;/);
-  assert.match(app, /const AUTO_TICKET_LIVE = true;/);
+  assert.match(app, /const AUTO_TICKET_LIVE = false;/);
   assert.match(app, /const DEPARTMENT_SEPARATION_ENABLED = true;/);
   assert.match(app, /const AUTOMATIC_DEPARTMENT_DETECTION = false;/);
 });
