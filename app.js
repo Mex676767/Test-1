@@ -2625,6 +2625,18 @@ function halloweenPreviewSample(key = halloweenPreviewKey) {
   return { ...base, ...history, day: 2, state: "day2" };
 }
 
+// Admin preview only: show the free-bonus cards as if no free bonus, or one, was already given to the player today.
+const FREE_BONUS_PREVIEW_STATES = [["none", "No free bonus today"], ["given", "Free bonus already given today (TOP P&L)"]];
+let freeBonusPreviewKey = "none";
+function freeBonusPreviewClaims(key = freeBonusPreviewKey) {
+  return key === "given" ? [{ recordId: "preview-earlier-case", inquiry: [BONUS_INQUIRY_MAP.topPnl] }] : [];
+}
+function renderFreeBonusPreviewSwitch(chatId) {
+  if (!previewMode || !BONUS_SHOWCASE_PREVIEW) return "";
+  return `<div class="hw-preview-switch"><span>Admin preview · free bonuses for this player today:</span>${FREE_BONUS_PREVIEW_STATES.map(([key, label]) =>
+    `<button type="button" class="hw-chip ${freeBonusPreviewKey === key ? "on" : ""}" data-action="freeBonusPreviewState" data-chat="${chatId}" data-value="${key}">${escapeHtml(label)}</button>`).join("")}</div>`;
+}
+
 function renderHalloweenPreviewSwitch(chatId) {
   if (!previewMode || !BONUS_SHOWCASE_PREVIEW) return "";
   return `<div class="hw-preview-switch"><span>Admin preview · show the Halloween card as:</span>${HALLOWEEN_PREVIEW_STATES.map(([key, label]) =>
@@ -3117,7 +3129,7 @@ function renderTickets(chatId) {
   }
 
   const alreadyClaimedOne = Object.values(s.claimedPrograms).some(Boolean);
-  return `<div class="ticket-stack">` + (r.halloween ? renderHalloweenPreviewSwitch(chatId) : "") + renderHalloweenCard(chatId) + defs.map((d) => {
+  return `<div class="ticket-stack">` + renderFreeBonusPreviewSwitch(chatId) + (r.halloween ? renderHalloweenPreviewSwitch(chatId) : "") + renderHalloweenCard(chatId) + defs.map((d) => {
     const claimed = d.key === "gracePeriod" ? !!d.done : !!s.claimedPrograms[d.key];
     const locked = d.excludeFromLock ? false : (alreadyClaimedOne && !claimed);
     const feedbackComplete = !d.requiresFeedback || !!(
@@ -5545,6 +5557,8 @@ function applyPreviewSampleState(chat) {
       redeemCode: { status: "SUNNY-88" },
       specialReload: { status: "Eligible Angpao" },
       halloween: halloweenPreviewSample(),
+      claimsToday: freeBonusPreviewClaims(),
+      claimsDay: malaysiaDay(),
     });
     configuredBonusPrograms.forEach((program, index) => {
       if (sample.matchedRow[program.key] === undefined) {
@@ -6179,6 +6193,23 @@ chatListEl.addEventListener("click", async (e) => {
     await runLookup(chatId, { username, brand, telegramNow, link: s.chatUrl || chatDef?.link || "", previousRecordId, forcing, btn });
   }
 
+  if (btn.dataset.action === "freeBonusPreviewState") {
+    if (!s || !previewMode || !FREE_BONUS_PREVIEW_STATES.some(([key]) => key === btn.dataset.value)) return;
+    freeBonusPreviewKey = btn.dataset.value;
+    if (s.matchedRow) Object.assign(s.matchedRow, { claimsToday: freeBonusPreviewClaims(), claimsDay: malaysiaDay() });
+    if (Object.entries(s.claimedPrograms || {}).some(([key, on]) => on && FREE_BONUS_PROGRAMS.has(key))) {
+      s.claimedPrograms = {};
+      s.inquiry = [];
+      s.status = "";
+      s.releasedBonusAmount = "";
+      s.releasedAmountRaw = "";
+    }
+    s.doubleBonusAck = "";
+    saveState();
+    renderChats(activeChats);
+    return;
+  }
+
   if (btn.dataset.action === "halloweenPreviewState") {
     if (!s || !previewMode || !HALLOWEEN_PREVIEW_STATES.some(([key]) => key === btn.dataset.value)) return;
     halloweenPreviewKey = btn.dataset.value;
@@ -6364,7 +6395,7 @@ chatListEl.addEventListener("click", async (e) => {
     if (!previewMode) {
       await submitRecord(chatId, { auto: true, reason: `${allSources.find((src) => src.key === programKey)?.label || "Bonus"} claimed` });
     } else {
-      setStatus("Preview claim simulated. No Lark record was created or updated.", "success");
+      setStatus(`Preview claim simulated. No Lark record was created or updated.${s.doubleBonusAck ? ` In a live chat, "${s.doubleBonusAck}" would be saved in Agent Acknowledgment For Double Bonus.` : ""}`, "success");
     }
   }
 
