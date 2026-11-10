@@ -30,7 +30,7 @@ export async function readPlayerTier(username, brand, opts = {}) {
   const matches = await searchRecords(TABLE_PNL, [
     { field_name: "Username", operator: "is", value: [username] },
     { field_name: "Brand", operator: "is", value: [brand] },
-  ], undefined, { fieldNames: ["Tier", "Title name"], ...opts });
+  ], undefined, { fieldNames: ["Tier"], ...opts });
   if (!matches.length) return "";
   const tierMap = await getFieldOptionMap(TABLE_PNL, "Tier");
   return toDisplay(matches[0].fields.Tier, tierMap);
