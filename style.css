@@ -582,6 +582,7 @@ body {
 .ticket-birthday .birthday-fields:focus-visible { box-shadow: 0 0 0 1px var(--border); border-radius: 7px; }
 .birthday-meta, .birthday-file-name { color: var(--text-faint); font-size: 10.5px; }
 .birthday-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.birthday-remove-btn { border: 0; background: none; padding: 0 0 0 6px; color: var(--danger); font-size: 10.5px; cursor: pointer; text-decoration: underline; }
 .birthday-amount { color: var(--text-muted); font-size: 11px; line-height: 1.35; }
 .birthday-amount.ready { color: var(--gold); font-weight: 600; }
 .birthday-amount.error, .birthday-note { color: var(--danger); font-size: 11px; }

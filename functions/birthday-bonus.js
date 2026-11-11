@@ -44,16 +44,17 @@ export async function handler(event) {
     if (!event.formData) {
       let body;
       try { body = JSON.parse(event.body || "{}"); } catch (_) { return reply(400, { ok: false, error: "The request was not valid JSON." }); }
-      if (body?.action !== "approve") return reply(400, { ok: false, error: "Unknown action." });
+      if (body?.action !== "approve" && body?.action !== "removePicture") return reply(400, { ok: false, error: "Unknown action." });
       const recordId = clean(body.recordId, 60);
       const atl = clean(body.atl, 80);
       if (!RECORD_ID.test(recordId)) return reply(400, { ok: false, error: "That Birthday Bonus row id is not valid." });
-      if (!atl) return reply(400, { ok: false, error: "Enter the ATL's name." });
+      if (body.action === "approve" && !atl) return reply(400, { ok: false, error: "Enter the ATL's name." });
       const record = await getRecord(TABLE_BIRTHDAY, recordId);
       if (toDisplay(record?.fields?.[BF.username]).trim().toLowerCase() !== clean(body.username).toLowerCase()) {
         return reply(409, { ok: false, error: "That Birthday Bonus row belongs to another player." });
       }
-      await updateRecord(TABLE_BIRTHDAY, recordId, { [BF.remark]: `Approved by ${atl}` });
+      // removePicture: the agent took the ID picture back off (wrong photo); the row's Screenshot is emptied.
+      await updateRecord(TABLE_BIRTHDAY, recordId, body.action === "approve" ? { [BF.remark]: `Approved by ${atl}` } : { [BF.screenshot]: [] });
       return reply(200, { ok: true });
     }
 
