@@ -389,6 +389,7 @@ const BIRTHDAY_ATL_LIMIT = 300;
 const birthdayPictures = new Map(); // chatId -> the ID picture File (kept in memory only, never in saved state)
 const BIRTHDAY_PREVIEW_STATES = [["low", "Amount RM120"], ["high", "Amount RM350 (ATL check)"], ["given", "Already given this year"]];
 let birthdayPreviewKey = "low";
+let birthdayPreviewDobSet = false;
 function birthdayIsToday(s) {
   const dob = String(s?.dob || "");
   return /^\d{4}-\d{2}-\d{2}$/.test(dob) && dob.slice(5) === malaysiaDay().slice(5);
@@ -5705,7 +5706,11 @@ function applyPreviewSampleState(chat) {
       }
     });
   }
-  if (BONUS_SHOWCASE_PREVIEW && !sample.dob) sample.dob = `1990-${malaysiaDay().slice(5)}`;
+  // Once per page load, so a date of birth saved from earlier testing does not hide the Birthday Bonus card.
+  if (BONUS_SHOWCASE_PREVIEW && !birthdayPreviewDobSet) {
+    birthdayPreviewDobSet = true;
+    if (!birthdayIsToday(sample)) sample.dob = `1990-${malaysiaDay().slice(5)}`;
+  }
   if (!sample.riskReloadAmount) sample.riskReloadAmount = "600";
   if (!sample.ticketRecord) {
     sample.ticketLookupRef = "TK2609290238";
