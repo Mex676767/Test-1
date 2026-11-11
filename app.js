@@ -401,7 +401,7 @@ function birthdayGivenThisYear(s) {
 const birthdayChecksRunning = new Set();
 const BIRTHDAY_CHECK_TIMEOUT_MS = 40_000;
 function birthdayReady(s) {
-  return !birthdayGivenThisYear(s) && Number(s?.birthdayCheck?.amount) > 0;
+  return !birthdayGivenThisYear(s) && !!s?.birthdayCheck?.picture && Number(s?.birthdayCheck?.amount) > 0;
 }
 function refreshTicketSlot(chatId) {
   const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .ticket-slot`);
@@ -410,6 +410,8 @@ function refreshTicketSlot(chatId) {
 function renderBirthdayPanel(chatId, claimed) {
   const s = state[chatId];
   const check = { ...(s.birthdayCheck || {}), busy: birthdayChecksRunning.has(chatId) };
+  // Only a check made with an ID picture counts (an older result saved without one is ignored).
+  if (!check.picture) { delete check.recordId; check.amount = 0; check.bonusType = ""; }
   const file = birthdayPictures.get(chatId);
   const [y, m, d] = String(s.dob || "").split("-");
   const previewSwitch = previewMode && BONUS_SHOWCASE_PREVIEW
@@ -452,7 +454,7 @@ async function checkBirthdayAmount(chatId) {
   if (!s || birthdayChecksRunning.has(chatId)) return;
   const file = birthdayPictures.get(chatId);
   const { busy: _staleBusy, ...previous } = s.birthdayCheck || {};
-  if (!file && !previous.recordId) {
+  if (!file && !(previous.recordId && previous.picture)) {
     s.birthdayCheck = { ...previous, error: "Attach the customer's ID picture first (Choose ID picture, or paste it with Ctrl+V)." };
     saveState();
     refreshTicketSlot(chatId);
@@ -478,7 +480,7 @@ async function checkBirthdayAmount(chatId) {
       try { data = await res.json(); } catch (_) { data = null; }
       if (!data?.ok) throw new Error(data?.error || `The birthday bonus check failed (HTTP ${res.status}).`);
     }
-    s.birthdayCheck = { recordId: data.recordId, amount: Number(data.amount) || 0, bonusType: data.bonusType || "", error: "" };
+    s.birthdayCheck = { recordId: data.recordId, amount: Number(data.amount) || 0, bonusType: data.bonusType || "", picture: true, error: "" };
     if (file) birthdayPictures.delete(chatId);
   } catch (err) {
     const message = err?.name === "AbortError" ? "The check took too long. Press Check amount again." : err.message;
@@ -3273,7 +3275,7 @@ function renderTickets(chatId) {
 
   if (r.birthdayEnabled && birthdayIsToday(s) && !usedElsewhere.has("birthday")) {
     const check = s.birthdayCheck || {};
-    defs.push({ key: "birthday", kind: "special", label: "Birthday Bonus", display: birthdayGivenThisYear(s) ? "Already given this year" : check.amount > 0 ? `Birthday today · RM${check.amount}` : "Birthday today" });
+    defs.push({ key: "birthday", kind: "special", label: "Birthday Bonus", display: birthdayGivenThisYear(s) ? "Already given this year" : check.picture && check.amount > 0 ? `Birthday today · RM${check.amount}` : "Birthday today" });
   }
 
   if (!defs.length && !r.halloween) {
