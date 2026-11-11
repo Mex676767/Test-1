@@ -425,16 +425,21 @@ function renderBirthdayPanel(chatId, claimed) {
         : "Attach the customer's ID picture, then press Check amount.";
   const fileLine = file
     ? `📎 ${escapeHtml(file.name || "ID picture")}`
-    : check.recordId ? "✓ ID picture saved in the Birthday Bonus table" : "Or click this box and paste the picture (Ctrl+V)";
+    : check.recordId ? (birthdayPictureOptional() ? "Admin preview: nothing is saved to the Birthday Bonus table" : "✓ ID picture saved in the Birthday Bonus table")
+      : `Or click this box and paste the picture (Ctrl+V)${birthdayPictureOptional() ? " · admin preview: the picture is optional" : ""}`;
   return `<div class="birthday-fields" tabindex="0" data-chat="${chatId}">${previewSwitch}
       <div class="birthday-meta">Date of birth ${escapeHtml(d && m && y ? `${d}/${m}/${y}` : "")}</div>
       <div class="birthday-row">
         <label class="ticket-file-button birthday-file"><input type="file" class="birthday-picture" data-chat="${chatId}" accept="image/png,image/jpeg,image/webp" ${claimed || check.busy ? "disabled" : ""} /><span>${file || check.recordId ? "Change ID picture" : "Choose ID picture"}</span></label>
-        <button type="button" class="secondary-btn birthday-check-btn" data-action="birthdayCheck" data-chat="${chatId}" ${claimed || check.busy || (!file && !check.recordId) ? "disabled" : ""}>${check.busy ? "Checking…" : check.recordId ? "Check again" : "Check amount"}</button>
+        <button type="button" class="secondary-btn birthday-check-btn" data-action="birthdayCheck" data-chat="${chatId}" ${claimed || check.busy || (!file && !check.recordId && !birthdayPictureOptional()) ? "disabled" : ""}>${check.busy ? "Checking…" : check.recordId ? "Check again" : "Check amount"}</button>
       </div>
       <div class="birthday-file-name">${fileLine}</div>
       <div class="birthday-amount ${check.amount > 0 && !check.error && !check.busy ? "ready" : ""} ${check.error ? "error" : ""}">${escapeHtml(amountLine)}</div>
     </div>`;
+}
+// The admin preview saves nothing, so Check amount works there without an ID picture.
+function birthdayPictureOptional() {
+  return previewMode && BONUS_SHOWCASE_PREVIEW;
 }
 function setBirthdayPicture(chatId, file) {
   if (!state[chatId] || !file) return;
@@ -448,7 +453,7 @@ async function checkBirthdayAmount(chatId) {
   if (!s || s.birthdayCheck?.busy) return;
   const file = birthdayPictures.get(chatId);
   const previous = s.birthdayCheck || {};
-  if (!file && !previous.recordId) { setStatus("Attach the customer's ID picture first.", "error"); return; }
+  if (!file && !previous.recordId && !birthdayPictureOptional()) { setStatus("Attach the customer's ID picture first.", "error"); return; }
   s.birthdayCheck = { ...previous, busy: true, error: "" };
   refreshTicketSlot(chatId);
   try {
