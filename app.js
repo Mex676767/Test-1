@@ -399,6 +399,38 @@ function birthdayGivenThisYear(s) {
 }
 // Checks running right now. Kept in memory only: a "checking" flag saved with the chat could never clear after a reload.
 const birthdayChecksRunning = new Set();
+const birthdayPictureRemoving = new Set();
+// Takes the ID picture off: before Check amount it is only dropped here; after it, the row's Screenshot is emptied
+// and the amount must be checked again with a new picture.
+async function removeBirthdayPicture(chatId) {
+  const s = state[chatId];
+  if (!s || s.claimedPrograms?.birthday || birthdayChecksRunning.has(chatId) || birthdayPictureRemoving.has(chatId)) return;
+  birthdayPictures.delete(chatId);
+  const check = s.birthdayCheck || {};
+  if (check.picture && check.recordId && !previewMode) {
+    birthdayPictureRemoving.add(chatId);
+    refreshTicketSlot(chatId);
+    let data = null;
+    try {
+      const res = await fetch("/birthday-bonus", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "removePicture", recordId: check.recordId, username: s.username }),
+      });
+      data = await res.json();
+    } catch (_) { data = null; }
+    birthdayPictureRemoving.delete(chatId);
+    if (!data?.ok) {
+      s.birthdayCheck = { ...check, error: `The ID picture could not be removed: ${data?.error || "please try again"}.` };
+      saveState();
+      refreshTicketSlot(chatId);
+      return;
+    }
+  }
+  s.birthdayCheck = null;
+  saveState();
+  refreshTicketSlot(chatId);
+}
 const BIRTHDAY_CHECK_TIMEOUT_MS = 40_000;
 function birthdayReady(s) {
   return !birthdayGivenThisYear(s) && !!s?.birthdayCheck?.picture && Number(s?.birthdayCheck?.amount) > 0;
@@ -421,7 +453,10 @@ function renderBirthdayPanel(chatId, claimed) {
   if (birthdayGivenThisYear(s) && !claimed) {
     return `<div class="birthday-fields">${previewSwitch}<div class="birthday-note">Birthday bonus already given to this player this year.</div></div>`;
   }
-  const amountLine = check.busy ? "Checking the amount in Lark…"
+  const removing = birthdayPictureRemoving.has(chatId);
+  if (removing) check.busy = true;
+  const amountLine = removing ? "Removing the ID picture…"
+    : check.busy ? "Checking the amount in Lark…"
     : check.error ? check.error
       : check.recordId
         ? (check.amount > 0
@@ -438,7 +473,7 @@ function renderBirthdayPanel(chatId, claimed) {
         <label class="ticket-file-button birthday-file"><input type="file" class="birthday-picture" data-chat="${chatId}" accept="image/png,image/jpeg,image/webp" ${claimed || check.busy ? "disabled" : ""} /><span>${file || check.recordId ? "Change ID picture" : "Choose ID picture"}</span></label>
         <button type="button" class="secondary-btn birthday-check-btn" data-action="birthdayCheck" data-chat="${chatId}" ${claimed || check.busy ? "disabled" : ""}>${check.busy ? "Checking…" : check.recordId ? "Check again" : "Check amount"}</button>
       </div>
-      <div class="birthday-file-name">${fileLine}</div>
+      <div class="birthday-file-name">${fileLine}${(file || check.recordId) && !claimed && !check.busy ? ` <button type="button" class="birthday-remove-btn" data-action="birthdayRemovePicture" data-chat="${chatId}">Remove</button>` : ""}</div>
       <div class="birthday-amount ${check.amount > 0 && !check.error && !check.busy ? "ready" : ""} ${check.error ? "error" : ""}">${escapeHtml(amountLine)}</div>
     </div>`;
 }
@@ -451,7 +486,7 @@ function setBirthdayPicture(chatId, file) {
 }
 async function checkBirthdayAmount(chatId) {
   const s = state[chatId];
-  if (!s || birthdayChecksRunning.has(chatId)) return;
+  if (!s || birthdayChecksRunning.has(chatId) || birthdayPictureRemoving.has(chatId)) return;
   const file = birthdayPictures.get(chatId);
   const { busy: _staleBusy, ...previous } = s.birthdayCheck || {};
   if (!file && !(previous.recordId && previous.picture)) {
@@ -6405,6 +6440,11 @@ chatListEl.addEventListener("click", async (e) => {
     return;
   }
 
+  if (btn.dataset.action === "birthdayRemovePicture") {
+    await removeBirthdayPicture(chatId);
+    return;
+  }
+
   if (btn.dataset.action === "birthdayCheck") {
     await checkBirthdayAmount(chatId);
     return;
@@ -6468,7 +6508,7 @@ chatListEl.addEventListener("click", async (e) => {
     }
 
     if (programKey === "birthday") {
-      if (!birthdayReady(s) || birthdayChecksRunning.has(chatId)) {
+      if (!birthdayReady(s) || birthdayChecksRunning.has(chatId) || birthdayPictureRemoving.has(chatId)) {
         s.doubleBonusAck = "";
         setStatus(birthdayGivenThisYear(s) ? "Birthday bonus already given to this player this year." : "Attach the ID picture and press Check amount first.", "error");
         return;
