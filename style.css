@@ -575,6 +575,19 @@ body {
 .free-given-note { color: var(--text-faint); font-size: 10.5px; margin-top: 3px; }
 .double-bonus-card { max-width: 420px; }
 
+.ticket.ticket-birthday {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+}
+.ticket-birthday .birthday-fields { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; width: 100%; outline: none; }
+.ticket-birthday .birthday-fields:focus-visible { box-shadow: 0 0 0 1px var(--border); border-radius: 7px; }
+.birthday-meta, .birthday-file-name { color: var(--text-faint); font-size: 10.5px; }
+.birthday-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.birthday-amount { color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+.birthday-amount.ready { color: var(--gold); font-weight: 600; }
+.birthday-amount.error, .birthday-note { color: var(--danger); font-size: 11px; }
+.birthday-atl-field { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+.birthday-atl-field > span { color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+
 .ticket.ticket-special {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--danger) 55%, transparent);
