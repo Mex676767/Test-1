@@ -51,6 +51,27 @@ export function claimsTodayFrom(rows, brand, today) {
     }));
 }
 
+// /queue-stats timing: the Customer Approaching player search (other brands + today's free-bonus claims) against
+// the other lookup searches, first pass only. Average = lookupMs:<name> / lookupN:<name>. lookupSlowest:caSearch
+// counts lookups where that search was the slowest of all (out of lookupN:all).
+export function noteLookupTimings(tasks, note = noteCounter) {
+  const timed = (tasks || []).filter((task) => Number.isFinite(task?.ms));
+  if (!timed.length) return;
+  const ca = timed.find((task) => task.label === "Other-brand check");
+  note("lookupN:all");
+  if (ca) {
+    note("lookupMs:caSearch", Math.max(1, Math.round(ca.ms)));
+    note("lookupN:caSearch");
+  }
+  for (const task of timed) {
+    if (task === ca) continue;
+    note("lookupMs:others", Math.max(1, Math.round(task.ms)));
+    note("lookupN:others");
+  }
+  const slowest = timed.reduce((a, b) => (b.ms > a.ms ? b : a));
+  if (ca && slowest === ca) note("lookupSlowest:caSearch");
+}
+
 function isLinkFieldRejection(error) {
   if (error?.rateLimited) return false;
   const message = String(error?.message || "");
@@ -163,12 +184,15 @@ async function lookupHandler(event, hardEnd) {
       });
       return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
     };
-    const optionalLookup = (label, read, fallback = null) => Promise.resolve()
-      .then(() => guard(read(), firstPassMs + 2_000, label))
-      .then(
-        (value) => ({ label, read, fallback, value, error: null }),
-        (error) => ({ label, read, fallback, value: fallback, error }),
-      );
+    const optionalLookup = (label, read, fallback = null) => {
+      const startedMs = Date.now();
+      return Promise.resolve()
+        .then(() => guard(read(), firstPassMs + 2_000, label))
+        .then(
+          (value) => ({ label, read, fallback, value, error: null, ms: Date.now() - startedMs }),
+          (error) => ({ label, read, fallback, value: fallback, error, ms: Date.now() - startedMs }),
+        );
+    };
     const resolveLookup = async (task) => {
       if (!task.error) return task.value;
       let error = task.error;
@@ -418,6 +442,10 @@ async function lookupHandler(event, hardEnd) {
         const row = await readHalloweenRow(uname, brandKey(brandVal), { timeoutMs: budget.searchMs });
         return { row, today, maps: row ? await readOptionMaps() : {} };
       }, { failed: true }),
+    ]);
+    noteLookupTimings([
+      otherBrandsTask, pnlTask, topPnlTask, ltvTask, graceTask, riskTask, vipTask,
+      specialReloadTask, telegram28Task, redeemTask, mooncakeTask, vs96Task, halloweenTask,
     ]);
     const { configs: configuredBonusConfigs, lookups: configuredBonusTasks } = await configuredBonusLookupsP;
     const [
