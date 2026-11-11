@@ -338,7 +338,7 @@ function reloadDepositValid(value) {
 // Free bonuses: one per player per day (Malaysia time). Another free bonus the same day is greyed out; the agent can
 // still give it after confirming in a popup, and "Yes" is saved in "Agent Acknowledgment For Double Bonus".
 // Today's claims come with the lookup (row.claimsToday) and count only on the day they were read (row.claimsDay).
-const FREE_BONUS_PROGRAMS = new Set(["topPnl", "ltvTest", "mooncake", "vs96Feedback", "telegram28"]);
+const FREE_BONUS_PROGRAMS = new Set(["topPnl", "ltvTest", "mooncake", "vs96Feedback", "telegram28", "birthday"]);
 function malaysiaDay(ms) {
   return new Date((ms ?? Date.now()) + 8 * 3600_000).toISOString().slice(0, 10);
 }
@@ -382,6 +382,130 @@ function confirmDoubleFreeBonus(given) {
   });
 }
 
+// Birthday Bonus (a free bonus): shows when the player's date of birth (P&L Birthday, or typed by the agent) is
+// today in Malaysia. The agent attaches the ID picture and presses Check amount: /birthday-bonus creates the row in
+// the Birthday Bonus table (or reuses this year's) and reads SW - Bonus Amount. Over RM300 needs an ATL's name.
+const BIRTHDAY_ATL_LIMIT = 300;
+const birthdayPictures = new Map(); // chatId -> the ID picture File (kept in memory only, never in saved state)
+const BIRTHDAY_PREVIEW_STATES = [["low", "Amount RM120"], ["high", "Amount RM350 (ATL check)"], ["given", "Already given this year"]];
+let birthdayPreviewKey = "low";
+function birthdayIsToday(s) {
+  const dob = String(s?.dob || "");
+  return /^\d{4}-\d{2}-\d{2}$/.test(dob) && dob.slice(5) === malaysiaDay().slice(5);
+}
+function birthdayGivenThisYear(s) {
+  return !!s?.matchedRow?.birthdayGivenThisYear;
+}
+function birthdayReady(s) {
+  return !birthdayGivenThisYear(s) && !s?.birthdayCheck?.busy && Number(s?.birthdayCheck?.amount) > 0;
+}
+function refreshTicketSlot(chatId) {
+  const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .ticket-slot`);
+  if (slot) slot.innerHTML = renderTickets(chatId);
+}
+function renderBirthdayPanel(chatId, claimed) {
+  const s = state[chatId];
+  const check = s.birthdayCheck || {};
+  const file = birthdayPictures.get(chatId);
+  const [y, m, d] = String(s.dob || "").split("-");
+  const previewSwitch = previewMode && BONUS_SHOWCASE_PREVIEW
+    ? `<div class="hw-preview-switch"><span>Admin preview · birthday bonus:</span>${BIRTHDAY_PREVIEW_STATES.map(([key, label]) =>
+      `<button type="button" class="hw-chip ${birthdayPreviewKey === key ? "on" : ""}" data-action="birthdayPreviewState" data-chat="${chatId}" data-value="${key}">${escapeHtml(label)}</button>`).join("")}</div>`
+    : "";
+  if (birthdayGivenThisYear(s) && !claimed) {
+    return `<div class="birthday-fields">${previewSwitch}<div class="birthday-note">Birthday bonus already given to this player this year.</div></div>`;
+  }
+  const amountLine = check.busy ? "Checking the amount in Lark…"
+    : check.error ? check.error
+      : check.recordId
+        ? (check.amount > 0
+          ? `Bonus amount RM${check.amount}${check.bonusType ? ` · ${check.bonusType}` : ""}${check.amount > BIRTHDAY_ATL_LIMIT ? " · over RM300: check with an ATL before claiming" : ""}`
+          : "SW - Bonus Amount is empty or 0 for this player. Press Check amount again in a moment, or check the Birthday Bonus table.")
+        : "Attach the customer's ID picture, then press Check amount.";
+  const fileLine = file
+    ? `📎 ${escapeHtml(file.name || "ID picture")}`
+    : check.recordId ? "✓ ID picture saved in the Birthday Bonus table" : "Or click this box and paste the picture (Ctrl+V)";
+  return `<div class="birthday-fields" tabindex="0" data-chat="${chatId}">${previewSwitch}
+      <div class="birthday-meta">Date of birth ${escapeHtml(d && m && y ? `${d}/${m}/${y}` : "")}</div>
+      <div class="birthday-row">
+        <label class="ticket-file-button birthday-file"><input type="file" class="birthday-picture" data-chat="${chatId}" accept="image/png,image/jpeg,image/webp" ${claimed || check.busy ? "disabled" : ""} /><span>${file || check.recordId ? "Change ID picture" : "Choose ID picture"}</span></label>
+        <button type="button" class="secondary-btn birthday-check-btn" data-action="birthdayCheck" data-chat="${chatId}" ${claimed || check.busy || (!file && !check.recordId) ? "disabled" : ""}>${check.busy ? "Checking…" : check.recordId ? "Check again" : "Check amount"}</button>
+      </div>
+      <div class="birthday-file-name">${fileLine}</div>
+      <div class="birthday-amount ${check.amount > 0 && !check.error && !check.busy ? "ready" : ""} ${check.error ? "error" : ""}">${escapeHtml(amountLine)}</div>
+    </div>`;
+}
+function setBirthdayPicture(chatId, file) {
+  if (!state[chatId] || !file) return;
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) { setStatus("The ID picture must be a PNG, JPEG or WebP image.", "error"); return; }
+  if (file.size > 5 * 1024 * 1024) { setStatus("The ID picture is too large (max 5 MB).", "error"); return; }
+  birthdayPictures.set(chatId, file);
+  refreshTicketSlot(chatId);
+}
+async function checkBirthdayAmount(chatId) {
+  const s = state[chatId];
+  if (!s || s.birthdayCheck?.busy) return;
+  const file = birthdayPictures.get(chatId);
+  const previous = s.birthdayCheck || {};
+  if (!file && !previous.recordId) { setStatus("Attach the customer's ID picture first.", "error"); return; }
+  s.birthdayCheck = { ...previous, busy: true, error: "" };
+  refreshTicketSlot(chatId);
+  try {
+    let data;
+    if (previewMode) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      data = { ok: true, recordId: "recPreviewBirthday", amount: birthdayPreviewKey === "high" ? 350 : 120, bonusType: "Secret wallet TOx1" };
+    } else {
+      const form = new FormData();
+      form.append("username", s.username || "");
+      form.append("brand", s.brand || "");
+      form.append("dob", s.dob || "");
+      if (file) form.append("picture", file, file.name || "id-picture.png");
+      const res = await fetch("/birthday-bonus", { method: "POST", body: form });
+      try { data = await res.json(); } catch (_) { data = null; }
+      if (!data?.ok) throw new Error(data?.error || `The birthday bonus check failed (HTTP ${res.status}).`);
+    }
+    s.birthdayCheck = { recordId: data.recordId, amount: Number(data.amount) || 0, bonusType: data.bonusType || "", busy: false, error: "" };
+    if (file) birthdayPictures.delete(chatId);
+  } catch (err) {
+    s.birthdayCheck = { ...previous, busy: false, error: err.message };
+  }
+  saveState();
+  refreshTicketSlot(chatId);
+}
+function askAtlName(amount) {
+  return new Promise((resolve) => {
+    document.getElementById("birthdayAtlOverlay")?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "birthdayAtlOverlay";
+    overlay.className = "claim-ticket-backdrop";
+    overlay.innerHTML = `<div class="claim-ticket-card double-bonus-card" role="dialog" aria-modal="true" aria-labelledby="birthdayAtlTitle">
+      <div class="claim-ticket-head"><span class="claim-ticket-mark" aria-hidden="true">🎂</span><div><h3 id="birthdayAtlTitle">Check with an ATL first</h3>
+      <p class="claim-ticket-intro">This birthday bonus is RM${escapeHtml(String(amount))}, over RM${BIRTHDAY_ATL_LIMIT}. Confirm it with an ATL before giving it.</p></div></div>
+      <label class="birthday-atl-field"><span>ATL who approved it</span><input type="text" class="input birthday-atl-input" maxlength="80" placeholder="ATL name" /></label>
+      <div class="claim-ticket-actions"><button type="button" class="secondary-btn" data-birthday-atl="no">Cancel</button><button type="button" class="submit-btn" data-birthday-atl="yes" disabled>ATL approved, claim</button></div>
+    </div>`;
+    const input = overlay.querySelector(".birthday-atl-input");
+    const yes = overlay.querySelector('[data-birthday-atl="yes"]');
+    const onKey = (event) => { if (event.key === "Escape") close(null); };
+    const close = (answer) => {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve(answer);
+    };
+    input.addEventListener("input", () => { yes.disabled = !input.value.trim(); });
+    input.addEventListener("keydown", (event) => { if (event.key === "Enter" && input.value.trim()) close(input.value.trim()); });
+    overlay.addEventListener("click", (event) => {
+      const choice = event.target.closest("[data-birthday-atl]")?.dataset.birthdayAtl;
+      if (choice === "yes" && input.value.trim()) close(input.value.trim());
+      else if (choice === "no" || event.target === overlay) close(null);
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(overlay);
+    input.focus();
+  });
+}
+
 const BONUS_CARD_TONES = {
   riskPlayer: "amber",
   topPnl: "blue",
@@ -393,6 +517,7 @@ const BONUS_CARD_TONES = {
   telegram28: "green",
   redeemCode: "indigo",
   specialReload: "orange",
+  birthday: "pink",
 };
 const BONUS_CARD_MARKS = {
   riskPlayer: "!",
@@ -405,6 +530,7 @@ const BONUS_CARD_MARKS = {
   telegram28: "T",
   redeemCode: "#",
   specialReload: "✦",
+  birthday: "🎂",
 };
 const BONUS_CARD_TONE_NAMES = ["amber", "blue", "teal", "violet", "cyan", "pink", "rose", "green", "indigo", "orange"];
 function bonusCardTone(key) {
@@ -964,7 +1090,7 @@ async function fetchBootstrapOptions({ fresh = false } = {}) {
 }
 const NO_BONUS_PATTERN = /^\s*\d+D\s*No Bonus\s*$/i;
 
-const AMOUNT_ELIGIBLE_PROGRAMS = new Set(["topPnl", "ltvTest", "gracePeriod", "telegram28"]);
+const AMOUNT_ELIGIBLE_PROGRAMS = new Set(["topPnl", "ltvTest", "gracePeriod", "telegram28", "birthday"]);
 
 function extractAmountNumber(str) {
   const s = String(str || "");
@@ -1065,6 +1191,7 @@ function hasAnyBonus(chatId) {
   if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) return true;
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
   if (r.specialReload) return true;
+  if (r.birthdayEnabled && birthdayIsToday(state[chatId])) return true;
   if (halloweenActionable(r.halloween)) return true;
   return false;
 }
@@ -1439,6 +1566,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
     s.caLinkSaved = !!link;
     s.matchedRow = row;
+    if (row?.pnlBirthday && !s.dob) s.dob = row.pnlBirthday;
     s.otherBrandMatches = otherBrands;
     s.caRecordId = caRecordId;
     s.caseTableFull = !!caseTableFull;
@@ -1447,7 +1575,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     s.claimedPrograms = {};
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; resetHalloweenInput(s);
+    s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; s.birthdayCheck = null; resetHalloweenInput(s);
     s.gracePeriodActivated = false;
     s.graceDepositAmount = "";
     s.releasedBonusAmount = "";
@@ -1988,6 +2116,7 @@ const BONUS_INQUIRY_MAP = {
   specialReload: "Reload - Ang Pao",
   mooncake: "Moon Bonus",
   vs96Feedback: "VS96 Feedback bonus",
+  birthday: "Birthday",
 };
 
 function resolveInquiryForProgram(key, display) {
@@ -2393,7 +2522,7 @@ async function copyPlainText(value) {
 const CASE_CONTENT_KEYS = [
   "inquiry", "status", "releasedBonusAmount", "releasedAmountRaw", "claimSecret",
   "dob", "telegram", "claimedPrograms", "gracePeriodActivated",
-  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount", "graceDepositAmount", "reloadDeposits", "doubleBonusAck",
+  "vs96FeedbackQuery1", "vs96FeedbackQuery2", "riskReloadAmount", "graceDepositAmount", "reloadDeposits", "doubleBonusAck", "birthdayCheck",
   "halloweenChoice", "halloweenDeposit", "halloweenShared", "halloweenMethod", "halloweenPostLink", "halloweenClaim",
 ];
 const CASE_KEYS = [
@@ -2449,7 +2578,7 @@ function snapshotCase(s) {
 function loadCaseInto(s, snap) {
   s.vs96FeedbackQuery1 = "";
   s.vs96FeedbackQuery2 = "";
-  s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; resetHalloweenInput(s);
+  s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; s.birthdayCheck = null; resetHalloweenInput(s);
   s.graceDepositAmount = "";
   s.claimTickets = {};
   for (const k of CASE_KEYS) if (snap[k] !== undefined) s[k] = JSON.parse(JSON.stringify(snap[k]));
@@ -2536,6 +2665,7 @@ async function addCaseFlow(chatId) {
     s.caOwner = selectedAgent;
     s.caLinkSaved = !!(s.chatUrl || (chatDef && chatDef.link));
     s.matchedRow = row;
+    if (row?.pnlBirthday && !s.dob) s.dob = row.pnlBirthday;
     s.otherBrandMatches = otherBrands;
     s.claimedPrograms = {};
     s.claimTickets = {};
@@ -2543,7 +2673,7 @@ async function addCaseFlow(chatId) {
     s.graceDepositAmount = "";
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
-    s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; resetHalloweenInput(s);
+    s.riskReloadAmount = ""; s.reloadDeposits = {}; s.doubleBonusAck = ""; s.birthdayCheck = null; resetHalloweenInput(s);
     s.inquiry = [];
     s.status = "";
     s.releasedBonusAmount = "";
@@ -3124,6 +3254,11 @@ function renderTickets(chatId) {
     defs.push({ key: "specialReload", kind: "special", label: "Special Reload (Ang Pao)", display: r.specialReload.status });
   }
 
+  if (r.birthdayEnabled && birthdayIsToday(s) && !usedElsewhere.has("birthday")) {
+    const check = s.birthdayCheck || {};
+    defs.push({ key: "birthday", kind: "special", label: "Birthday Bonus", display: birthdayGivenThisYear(s) ? "Already given this year" : check.amount > 0 ? `Birthday today · RM${check.amount}` : "Birthday today" });
+  }
+
   if (!defs.length && !r.halloween) {
     return `<div class="ticket empty">No active bonuses for this player right now</div>`;
   }
@@ -3140,12 +3275,13 @@ function renderTickets(chatId) {
     const needsDeposit = needsReloadDeposit(d.key, r);
     const depositComplete = !needsDeposit || reloadDepositValid(s.reloadDeposits?.[d.key]);
     const freeGivenToday = !claimed && FREE_BONUS_PROGRAMS.has(d.key) ? freeBonusGivenToday(s) : "";
-    const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete || !depositComplete);
+    const birthdayBlocked = d.key === "birthday" && !birthdayReady(s);
+    const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete || !depositComplete || birthdayBlocked);
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
     const cardMark = BONUS_CARD_MARKS[d.key] || escapeHtml(String(d.label || "•").trim().slice(0, 1).toUpperCase());
     return `
-    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${needsDeposit ? "ticket-reload-deposit" : ""} ${freeGivenToday ? "free-given-today" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
+    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${needsDeposit ? "ticket-reload-deposit" : ""} ${freeGivenToday ? "free-given-today" : ""} ${d.key === "birthday" ? "ticket-birthday" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
         <div class="ticket-icon" aria-hidden="true">${cardMark}</div>
         <div class="ticket-body">
@@ -3156,7 +3292,7 @@ function renderTickets(chatId) {
         </div>
       </div>
       <div class="ticket-btns">
-        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : (!riskComplete ? 'title="Enter the customer reload amount first"' : (!depositComplete ? 'title="Enter the customer deposit amount first"' : (freeGivenToday ? 'title="This player already got a free bonus today. Click to give another (you will be asked to confirm)."' : ""))))} ${claimDisabled ? "disabled" : ""}>
+        <button class="claim-btn ${d.kind === "special" ? "special" : ""} ${claimed ? "claimed" : ""}" data-action="${claimed ? "unclaim" : "claim"}" data-program="${d.key}" data-chat="${chatId}" ${claimed ? 'title="Click again to unclaim"' : (!feedbackComplete ? 'title="Fill in both player feedback answers first"' : (!riskComplete ? 'title="Enter the customer reload amount first"' : (!depositComplete ? 'title="Enter the customer deposit amount first"' : (birthdayBlocked ? (birthdayGivenThisYear(s) ? 'title="Birthday bonus already given this year"' : 'title="Attach the ID picture and check the amount first"') : (freeGivenToday ? 'title="This player already got a free bonus today. Click to give another (you will be asked to confirm)."' : "")))))} ${claimDisabled ? "disabled" : ""}>
           ${claimed ? doneLabel : claimLabel}
         </button>
         ${
@@ -3166,6 +3302,7 @@ function renderTickets(chatId) {
         }
       </div>
       ${d.graceInstant ? renderGraceInstant(chatId, d.display, s.graceDepositAmount, alreadyClaimedOne) : ""}
+      ${d.key === "birthday" ? renderBirthdayPanel(chatId, claimed) : ""}
       ${needsDeposit ? `
         <div class="reload-deposit-fields">
           <label>
@@ -3286,7 +3423,7 @@ function renderAutoFields(chatId) {
         </div>
       </div>
       <div class="auto-field">
-        <span class="field-label" style="margin:0">D.O.B</span>
+        <span class="field-label" style="margin:0">Date of Birth</span>
         <div class="dob-picker">
           <button type="button" class="input status-display dob-display" data-action="toggleDobCalendar" data-chat="${chatId}">
             ${renderDobDisplay(chatId)}
@@ -5559,6 +5696,8 @@ function applyPreviewSampleState(chat) {
       halloween: halloweenPreviewSample(),
       claimsToday: freeBonusPreviewClaims(),
       claimsDay: malaysiaDay(),
+      birthdayEnabled: true,
+      birthdayGivenThisYear: birthdayPreviewKey === "given",
     });
     configuredBonusPrograms.forEach((program, index) => {
       if (sample.matchedRow[program.key] === undefined) {
@@ -5566,6 +5705,7 @@ function applyPreviewSampleState(chat) {
       }
     });
   }
+  if (BONUS_SHOWCASE_PREVIEW && !sample.dob) sample.dob = `1990-${malaysiaDay().slice(5)}`;
   if (!sample.riskReloadAmount) sample.riskReloadAmount = "600";
   if (!sample.ticketRecord) {
     sample.ticketLookupRef = "TK2609290238";
@@ -6242,6 +6382,29 @@ chatListEl.addEventListener("click", async (e) => {
     return;
   }
 
+  if (btn.dataset.action === "birthdayCheck") {
+    await checkBirthdayAmount(chatId);
+    return;
+  }
+
+  if (btn.dataset.action === "birthdayPreviewState") {
+    if (!s || !previewMode || !BIRTHDAY_PREVIEW_STATES.some(([key]) => key === btn.dataset.value)) return;
+    birthdayPreviewKey = btn.dataset.value;
+    if (s.matchedRow) s.matchedRow.birthdayGivenThisYear = birthdayPreviewKey === "given";
+    if (s.claimedPrograms?.birthday) {
+      s.claimedPrograms = {};
+      s.inquiry = [];
+      s.status = "";
+      s.releasedBonusAmount = "";
+      s.releasedAmountRaw = "";
+    }
+    s.birthdayCheck = null;
+    s.doubleBonusAck = "";
+    saveState();
+    renderChats(activeChats);
+    return;
+  }
+
   if (btn.dataset.action === "claim") {
     const programKey = btn.dataset.program;
     const r = s.matchedRow;
@@ -6279,6 +6442,40 @@ chatListEl.addEventListener("click", async (e) => {
         return;
       }
       s.doubleBonusAck = givenToday ? "Yes" : "";
+    }
+
+    if (programKey === "birthday") {
+      if (!birthdayReady(s)) {
+        s.doubleBonusAck = "";
+        setStatus(birthdayGivenThisYear(s) ? "Birthday bonus already given to this player this year." : "Attach the ID picture and press Check amount first.", "error");
+        return;
+      }
+      const check = s.birthdayCheck;
+      if (check.amount > BIRTHDAY_ATL_LIMIT) {
+        const atl = await askAtlName(check.amount);
+        if (!atl) {
+          s.doubleBonusAck = "";
+          setStatus("Not claimed: confirm the amount with an ATL first.", "info");
+          return;
+        }
+        if (!previewMode) {
+          let data = null;
+          try {
+            const res = await fetch("/birthday-bonus", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "approve", recordId: check.recordId, username: s.username, atl }),
+            });
+            data = await res.json();
+          } catch (_) { data = null; }
+          if (!data?.ok) {
+            s.doubleBonusAck = "";
+            setStatus(`Not claimed: ${data?.error || "the ATL approval could not be saved"}`, "error");
+            return;
+          }
+        }
+        s.birthdayCheck = { ...check, atl };
+      }
     }
 
     if (programKey === "gracePeriod") {
@@ -6361,6 +6558,7 @@ chatListEl.addEventListener("click", async (e) => {
       { key: "telegram28", label: "Telegram RM28", display: r.telegram28?.status },
       { key: "redeemCode", label: "Redeem Code", display: r.redeemCode?.status },
       { key: "specialReload", label: "Special Reload (Ang Pao)", display: r.specialReload?.status },
+      { key: "birthday", label: "Birthday Bonus", display: s.birthdayCheck?.amount ? `RM${s.birthdayCheck.amount}` : "" },
     ];
     const claimedSources = allSources.filter((src) => s.claimedPrograms[src.key] && programHasAmount(src.key));
     const claimedAmount = riskClaim?.valid
@@ -6772,6 +6970,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.dobCalendarOpen = false;
     card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
     card.querySelector(".dob-calendar").classList.add("hidden");
+    refreshTicketSlot(chatId);
   }
 
   if (btn.dataset.action === "dobClear") {
@@ -6779,6 +6978,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.dobCalendarOpen = false;
     card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
     card.querySelector(".dob-calendar").classList.add("hidden");
+    refreshTicketSlot(chatId);
   }
 
   if (btn.dataset.action === "dobToday") {
@@ -6788,6 +6988,7 @@ chatListEl.addEventListener("click", async (e) => {
     s.dobCalendarOpen = false;
     card.querySelector(".dob-display").innerHTML = renderDobDisplay(chatId);
     card.querySelector(".dob-calendar").classList.add("hidden");
+    refreshTicketSlot(chatId);
   }
 
   } catch (err) {
@@ -8339,3 +8540,17 @@ window.canRefreshForDeployment = () => {
   const element = document.activeElement;
   return !element || !['INPUT', 'TEXTAREA', 'SELECT', 'IFRAME'].includes(element.tagName);
 };
+
+chatListEl.addEventListener("change", (event) => {
+  const input = event.target.closest?.(".birthday-picture");
+  if (!input) return;
+  setBirthdayPicture(input.dataset.chat, input.files?.[0]);
+});
+chatListEl.addEventListener("paste", (event) => {
+  const zone = event.target.closest?.(".birthday-fields");
+  if (!zone) return;
+  const file = Array.from(event.clipboardData?.items || []).find((item) => item.kind === "file")?.getAsFile();
+  if (!file) return;
+  event.preventDefault();
+  setBirthdayPicture(zone.dataset.chat, file);
+});

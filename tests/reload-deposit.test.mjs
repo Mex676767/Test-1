@@ -46,3 +46,12 @@ test('free bonus daily limit: a free bonus already given today (Malaysia time) g
   assert.equal(ctx.freeBonusGivenToday(s(null)), '', 'lookup could not read today\'s claims');
   assert.equal(ctx.malaysiaDay(Date.UTC(2026, 10, 9, 16, 0)), '2026-11-10', 'midnight in Malaysia starts the new day');
 });
+
+test('birthday bonus shows only on the birthday (day and month, Malaysia date)', () => {
+  const ctx = vm.createContext({});
+  vm.runInContext([grab('malaysiaDay'), grab('birthdayIsToday')].join('\n'), ctx);
+  const today = ctx.malaysiaDay();
+  assert.equal(ctx.birthdayIsToday({ dob: `1990-${today.slice(5)}` }), true);
+  assert.equal(ctx.birthdayIsToday({ dob: '1990-01-01' }), today.slice(5) === '01-01');
+  assert.equal(ctx.birthdayIsToday({ dob: '' }), false);
+});

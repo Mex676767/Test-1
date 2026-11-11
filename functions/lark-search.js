@@ -4,12 +4,13 @@ import {
   TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
-  TABLE_TELEGRAM28, TABLE_MOONCAKE, TABLE_VS96_FEEDBACK, TABLE_HALLOWEEN,
+  TABLE_TELEGRAM28, TABLE_MOONCAKE, TABLE_VS96_FEEDBACK, TABLE_HALLOWEEN, TABLE_BIRTHDAY,
 } from "./_lib/lark.js";
 import { readOwnership, ownedBy, summarizeRow, parseChatLink } from "./_lib/ca-row.js";
 import { isConfiguredBonusEligible, listBonusConfigs } from "./_lib/bonus-config.js";
 import { halloweenStatus, malaysiaToday, dayNumber, brandKey, testDateFor } from "./_lib/halloween.js";
 import { readHalloweenRow, readOptionMaps } from "./_lib/halloween-io.js";
+import { birthdayGivenThisYearFrom, epochOf, malaysiaDateOf } from "./_lib/birthday.js";
 
 const FIRST_PASS_TIMEOUT_MS = 22_000;
 const RETRY_MIN_MS = 3_000;
@@ -27,6 +28,7 @@ const F = {
   titleNameOld: "Tittle name",
   status: "Status",
   inquiry: "Inquiry",
+  birthday: "Birthday",
   swCheck: "SW Check",
   swChecker: "SW Checker",
   claimedCopy: "Claimed Copy",
@@ -335,8 +337,9 @@ async function lookupHandler(event, hardEnd) {
               .filter((b) => b && b.toUpperCase() !== brandVal.toUpperCase())
           )],
           claimsToday: claimsTodayFrom(caUsernameOnly, brandVal, malaysiaToday(Date.now())),
+          birthdayGivenThisYear: birthdayGivenThisYearFrom(caUsernameOnly, brandVal, malaysiaToday(Date.now()).slice(0, 4)),
         };
-      }, { otherBrands: [], claimsToday: null }),
+      }, { otherBrands: [], claimsToday: null, birthdayGivenThisYear: false }),
 
       optionalLookup("P&L tier", async () => {
         if (!TABLE_PNL) return { tier: "", customerName: "", notVip: false };
@@ -349,6 +352,7 @@ async function lookupHandler(event, hardEnd) {
         return {
           tier: toDisplay(pnlMatches[0].fields[F.tier], tierMap),
           customerName: toDisplay(pnlMatches[0].fields[F.titleName]) || toDisplay(pnlMatches[0].fields[F.titleNameOld]),
+          birthday: malaysiaDateOf(epochOf(pnlMatches[0].fields[F.birthday])),
           notVip: false,
         };
       }, { tier: "", customerName: "", notVip: false }),
@@ -482,9 +486,10 @@ async function lookupHandler(event, hardEnd) {
       ...configuredBonusTasks,
       ]);
     })();
-    const { tier, customerName, notVip } = pnlInfo;
+    const { tier, customerName, notVip, birthday: pnlBirthday = "" } = pnlInfo;
     const otherBrands = playerCases?.otherBrands || [];
     const claimsToday = playerCases?.claimsToday ?? null;
+    const birthdayGivenThisYear = !!playerCases?.birthdayGivenThisYear;
     const halloween = halloweenRead?.failed
       ? { state: "closed", failed: true, message: "Halloween progress could not be read. Press Look Up again." }
       : halloweenRead
@@ -538,6 +543,9 @@ async function lookupHandler(event, hardEnd) {
           customerName,
           claimsToday,
           claimsDay: malaysiaToday(Date.now()),
+          pnlBirthday,
+          birthdayEnabled: !!TABLE_BIRTHDAY,
+          birthdayGivenThisYear,
           topPnl: topPnlRow ? toDisplay(topPnlRow.fields[F.swCheck]) : "",
           ltvTest: ltvRow ? toDisplay(ltvRow.fields[F.swChecker]) : "",
           gracePeriod: graceRow ? toDisplay(graceRow.fields[F.swCheck]) : "",
