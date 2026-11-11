@@ -397,8 +397,11 @@ function birthdayIsToday(s) {
 function birthdayGivenThisYear(s) {
   return !!s?.matchedRow?.birthdayGivenThisYear;
 }
+// Checks running right now. Kept in memory only: a "checking" flag saved with the chat could never clear after a reload.
+const birthdayChecksRunning = new Set();
+const BIRTHDAY_CHECK_TIMEOUT_MS = 40_000;
 function birthdayReady(s) {
-  return !birthdayGivenThisYear(s) && !s?.birthdayCheck?.busy && Number(s?.birthdayCheck?.amount) > 0;
+  return !birthdayGivenThisYear(s) && Number(s?.birthdayCheck?.amount) > 0;
 }
 function refreshTicketSlot(chatId) {
   const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .ticket-slot`);
@@ -406,7 +409,7 @@ function refreshTicketSlot(chatId) {
 }
 function renderBirthdayPanel(chatId, claimed) {
   const s = state[chatId];
-  const check = s.birthdayCheck || {};
+  const check = { ...(s.birthdayCheck || {}), busy: birthdayChecksRunning.has(chatId) };
   const file = birthdayPictures.get(chatId);
   const [y, m, d] = String(s.dob || "").split("-");
   const previewSwitch = previewMode && BONUS_SHOWCASE_PREVIEW
@@ -425,12 +428,13 @@ function renderBirthdayPanel(chatId, claimed) {
         : "Attach the customer's ID picture, then press Check amount.";
   const fileLine = file
     ? `📎 ${escapeHtml(file.name || "ID picture")}`
-    : check.recordId ? "✓ ID picture saved in the Birthday Bonus table" : "Or click this box and paste the picture (Ctrl+V)";
+    : check.recordId ? (previewMode ? "Admin preview: nothing is saved to the Birthday Bonus table" : "✓ ID picture saved in the Birthday Bonus table")
+      : "Or click this box and paste the picture (Ctrl+V)";
   return `<div class="birthday-fields" tabindex="0" data-chat="${chatId}">${previewSwitch}
       <div class="birthday-meta">Date of birth ${escapeHtml(d && m && y ? `${d}/${m}/${y}` : "")}</div>
       <div class="birthday-row">
         <label class="ticket-file-button birthday-file"><input type="file" class="birthday-picture" data-chat="${chatId}" accept="image/png,image/jpeg,image/webp" ${claimed || check.busy ? "disabled" : ""} /><span>${file || check.recordId ? "Change ID picture" : "Choose ID picture"}</span></label>
-        <button type="button" class="secondary-btn birthday-check-btn" data-action="birthdayCheck" data-chat="${chatId}" ${claimed || check.busy || (!file && !check.recordId) ? "disabled" : ""}>${check.busy ? "Checking…" : check.recordId ? "Check again" : "Check amount"}</button>
+        <button type="button" class="secondary-btn birthday-check-btn" data-action="birthdayCheck" data-chat="${chatId}" ${claimed || check.busy ? "disabled" : ""}>${check.busy ? "Checking…" : check.recordId ? "Check again" : "Check amount"}</button>
       </div>
       <div class="birthday-file-name">${fileLine}</div>
       <div class="birthday-amount ${check.amount > 0 && !check.error && !check.busy ? "ready" : ""} ${check.error ? "error" : ""}">${escapeHtml(amountLine)}</div>
@@ -445,12 +449,20 @@ function setBirthdayPicture(chatId, file) {
 }
 async function checkBirthdayAmount(chatId) {
   const s = state[chatId];
-  if (!s || s.birthdayCheck?.busy) return;
+  if (!s || birthdayChecksRunning.has(chatId)) return;
   const file = birthdayPictures.get(chatId);
-  const previous = s.birthdayCheck || {};
-  if (!file && !previous.recordId) { setStatus("Attach the customer's ID picture first.", "error"); return; }
-  s.birthdayCheck = { ...previous, busy: true, error: "" };
+  const { busy: _staleBusy, ...previous } = s.birthdayCheck || {};
+  if (!file && !previous.recordId) {
+    s.birthdayCheck = { ...previous, error: "Attach the customer's ID picture first (Choose ID picture, or paste it with Ctrl+V)." };
+    saveState();
+    refreshTicketSlot(chatId);
+    return;
+  }
+  birthdayChecksRunning.add(chatId);
+  s.birthdayCheck = { ...previous, error: "" };
   refreshTicketSlot(chatId);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BIRTHDAY_CHECK_TIMEOUT_MS);
   try {
     let data;
     if (previewMode) {
@@ -462,14 +474,18 @@ async function checkBirthdayAmount(chatId) {
       form.append("brand", s.brand || "");
       form.append("dob", s.dob || "");
       if (file) form.append("picture", file, file.name || "id-picture.png");
-      const res = await fetch("/birthday-bonus", { method: "POST", body: form });
+      const res = await fetch("/birthday-bonus", { method: "POST", body: form, signal: controller.signal });
       try { data = await res.json(); } catch (_) { data = null; }
       if (!data?.ok) throw new Error(data?.error || `The birthday bonus check failed (HTTP ${res.status}).`);
     }
-    s.birthdayCheck = { recordId: data.recordId, amount: Number(data.amount) || 0, bonusType: data.bonusType || "", busy: false, error: "" };
+    s.birthdayCheck = { recordId: data.recordId, amount: Number(data.amount) || 0, bonusType: data.bonusType || "", error: "" };
     if (file) birthdayPictures.delete(chatId);
   } catch (err) {
-    s.birthdayCheck = { ...previous, busy: false, error: err.message };
+    const message = err?.name === "AbortError" ? "The check took too long. Press Check amount again." : err.message;
+    s.birthdayCheck = { ...previous, error: message || "The birthday bonus check failed. Press Check amount again." };
+  } finally {
+    clearTimeout(timer);
+    birthdayChecksRunning.delete(chatId);
   }
   saveState();
   refreshTicketSlot(chatId);
@@ -6450,7 +6466,7 @@ chatListEl.addEventListener("click", async (e) => {
     }
 
     if (programKey === "birthday") {
-      if (!birthdayReady(s)) {
+      if (!birthdayReady(s) || birthdayChecksRunning.has(chatId)) {
         s.doubleBonusAck = "";
         setStatus(birthdayGivenThisYear(s) ? "Birthday bonus already given to this player this year." : "Attach the ID picture and press Check amount first.", "error");
         return;
