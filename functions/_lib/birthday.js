@@ -62,13 +62,15 @@ export function rowYear(row) {
 }
 
 // Was a birthday bonus already given this year? Read from the player's Customer Approaching rows
-// (same brand, Status "Given", Inquiry "Birthday", created this Malaysia year).
-export function birthdayGivenThisYearFrom(rows, brand, year) {
+// (same brand, Status "Given", Inquiry "Birthday", created this Malaysia year, or in the last 3 days so a 31 Dec
+// birthday claimed on 31 Dec cannot be claimed again on 1 Jan inside the same 3-day window).
+export const BIRTHDAY_WINDOW_MS = 3 * 86_400_000;
+export function birthdayGivenThisYearFrom(rows, brand, year, nowMs = Date.now()) {
   const wanted = String(brand || "").trim().toUpperCase();
   return (rows || []).some((r) => toDisplay(r.fields?.[BF.brand]).trim().toUpperCase() === wanted
     && /^given$/i.test(toDisplay(r.fields?.Status).trim())
     && [].concat(r.fields?.Inquiry ?? []).map((v) => toDisplay(v)).includes(BIRTHDAY_INQUIRY)
-    && malaysiaDateOf(r.created_time).slice(0, 4) === String(year));
+    && (malaysiaDateOf(r.created_time).slice(0, 4) === String(year) || nowMs - Number(r.created_time) < BIRTHDAY_WINDOW_MS));
 }
 
 // The fields for a new Birthday Bonus row; only fields the table has and can take are written.

@@ -47,11 +47,16 @@ test('free bonus daily limit: a free bonus already given today (Malaysia time) g
   assert.equal(ctx.malaysiaDay(Date.UTC(2026, 10, 9, 16, 0)), '2026-11-10', 'midnight in Malaysia starts the new day');
 });
 
-test('birthday bonus shows only on the birthday (day and month, Malaysia date)', () => {
+test('birthday bonus shows from the day before to the day after the birthday (Malaysia dates, across New Year)', () => {
   const ctx = vm.createContext({});
-  vm.runInContext([grab('malaysiaDay'), grab('birthdayIsToday')].join('\n'), ctx);
-  const today = ctx.malaysiaDay();
-  assert.equal(ctx.birthdayIsToday({ dob: `1990-${today.slice(5)}` }), true);
-  assert.equal(ctx.birthdayIsToday({ dob: '1990-01-01' }), today.slice(5) === '01-01');
-  assert.equal(ctx.birthdayIsToday({ dob: '' }), false);
+  vm.runInContext([grab('malaysiaDay'), grab('birthdayDayOffset')].join('\n'), ctx);
+  const at = (dob, today) => ctx.birthdayDayOffset({ dob }, today);
+  assert.equal(at('1990-11-12', '2026-11-11'), -1, 'day before');
+  assert.equal(at('1990-11-12', '2026-11-12'), 0, 'birthday');
+  assert.equal(at('1990-11-12', '2026-11-13'), 1, 'day after');
+  assert.equal(at('1990-11-12', '2026-11-10'), null, 'two days before');
+  assert.equal(at('1990-11-12', '2026-11-14'), null, 'two days after');
+  assert.equal(at('1990-12-31', '2027-01-01'), 1, '31 Dec birthday, 1 Jan');
+  assert.equal(at('1990-01-01', '2026-12-31'), -1, '1 Jan birthday, 31 Dec');
+  assert.equal(at('', '2026-11-12'), null);
 });
