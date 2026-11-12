@@ -382,17 +382,33 @@ function confirmDoubleFreeBonus(given) {
   });
 }
 
-// Birthday Bonus (a free bonus): shows when the player's date of birth (P&L Birthday, or typed by the agent) is
-// today in Malaysia. The agent attaches the ID picture and presses Check amount: /birthday-bonus creates the row in
+// Birthday Bonus (a free bonus): shows from the day before to the day after the player's birthday (Malaysia dates;
+// date of birth from P&L Birthday, or typed by the agent). The agent attaches the ID picture and presses Check amount: /birthday-bonus creates the row in
 // the Birthday Bonus table (or reuses this year's) and reads SW - Bonus Amount. Over RM300 needs an ATL's name.
 const BIRTHDAY_ATL_LIMIT = 300;
 const birthdayPictures = new Map(); // chatId -> the ID picture File (kept in memory only, never in saved state)
 const BIRTHDAY_PREVIEW_STATES = [["low", "Amount RM120"], ["high", "Amount RM350 (ATL check)"], ["given", "Already given this year"]];
 let birthdayPreviewKey = "low";
 let birthdayPreviewDobSet = false;
-function birthdayIsToday(s) {
+// Days from this year's birthday to today: -1 (birthday is tomorrow), 0 (today), 1 (was yesterday), or null when
+// today is outside that 3-day window. Works across New Year (31 Dec / 1 Jan birthdays).
+function birthdayDayOffset(s, todayDate) {
+  const today = todayDate || malaysiaDay();
   const dob = String(s?.dob || "");
-  return /^\d{4}-\d{2}-\d{2}$/.test(dob) && dob.slice(5) === malaysiaDay().slice(5);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return null;
+  const todayMs = Date.parse(`${today}T00:00:00Z`);
+  const year = Number(today.slice(0, 4));
+  for (const y of [year - 1, year, year + 1]) {
+    const days = Math.round((todayMs - Date.parse(`${y}-${dob.slice(5)}T00:00:00Z`)) / 86_400_000);
+    if (days >= -1 && days <= 1) return days;
+  }
+  return null;
+}
+function birthdayInWindow(s) {
+  return birthdayDayOffset(s) !== null;
+}
+function birthdayLabel(s) {
+  return ["Birthday tomorrow", "Birthday today", "Birthday was yesterday"][birthdayDayOffset(s) + 1] || "Birthday";
 }
 function birthdayGivenThisYear(s) {
   return !!s?.matchedRow?.birthdayGivenThisYear;
@@ -1245,7 +1261,7 @@ function hasAnyBonus(chatId) {
   if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) return true;
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
   if (r.specialReload) return true;
-  if (r.birthdayEnabled && birthdayIsToday(state[chatId])) return true;
+  if (r.birthdayEnabled && birthdayInWindow(state[chatId])) return true;
   if (halloweenActionable(r.halloween)) return true;
   return false;
 }
@@ -3308,9 +3324,9 @@ function renderTickets(chatId) {
     defs.push({ key: "specialReload", kind: "special", label: "Special Reload (Ang Pao)", display: r.specialReload.status });
   }
 
-  if (r.birthdayEnabled && birthdayIsToday(s) && !usedElsewhere.has("birthday")) {
+  if (r.birthdayEnabled && birthdayInWindow(s) && !usedElsewhere.has("birthday")) {
     const check = s.birthdayCheck || {};
-    defs.push({ key: "birthday", kind: "special", label: "Birthday Bonus", display: birthdayGivenThisYear(s) ? "Already given this year" : check.picture && check.amount > 0 ? `Birthday today · RM${check.amount}` : "Birthday today" });
+    defs.push({ key: "birthday", kind: "special", label: "Birthday Bonus", display: birthdayGivenThisYear(s) ? "Already given this year" : check.picture && check.amount > 0 ? `${birthdayLabel(s)} · RM${check.amount}` : birthdayLabel(s) });
   }
 
   if (!defs.length && !r.halloween) {
@@ -5762,7 +5778,7 @@ function applyPreviewSampleState(chat) {
   // Once per page load, so a date of birth saved from earlier testing does not hide the Birthday Bonus card.
   if (BONUS_SHOWCASE_PREVIEW && !birthdayPreviewDobSet) {
     birthdayPreviewDobSet = true;
-    if (!birthdayIsToday(sample)) sample.dob = `1990-${malaysiaDay().slice(5)}`;
+    if (!birthdayInWindow(sample)) sample.dob = `1990-${malaysiaDay().slice(5)}`;
   }
   if (!sample.riskReloadAmount) sample.riskReloadAmount = "600";
   if (!sample.ticketRecord) {

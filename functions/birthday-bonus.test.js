@@ -50,3 +50,9 @@ test("a new row writes username, brand and picture, plus DOB and Time of Inspect
   });
   assert.throws(() => newRowFields({ username: "a", brand: "b" }, []), /no field called "Username\/UID"/);
 });
+
+test("a birthday bonus claimed on 31 Dec still blocks 1 Jan (same 3-day window)", () => {
+  const row = { created_time: Date.parse("2026-12-31T20:00:00+08:00"), fields: { Brand: "LPK", Status: "Given", Inquiry: ["Birthday"] } };
+  assert.equal(birthdayGivenThisYearFrom([row], "LPK", "2027", Date.parse("2027-01-01T10:00:00+08:00")), true);
+  assert.equal(birthdayGivenThisYearFrom([row], "LPK", "2027", Date.parse("2027-01-05T10:00:00+08:00")), false, "after the window, a new year counts again");
+});
