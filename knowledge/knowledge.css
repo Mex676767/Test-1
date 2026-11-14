@@ -218,6 +218,9 @@
 .zoom-controls .btn{min-height:30px;padding:5px 9px;font-size:11px}
 .zoom-controls .btn:disabled{opacity:.4}
 .picture-modal:focus{outline:none}
+.picture-modal.is-full{width:100vw;height:100vh;max-height:none;border:0;border-radius:0;margin:0}
+.picture-modal.is-full .image-window{flex:1;height:auto}
+.picture-modal.is-full::backdrop{background:#000}
 @media(min-width:700px){.guide-open .scroller{padding:22px 24px}.guide-document{gap:16px}.doc-card{padding:17px}.document-heading h1{font-size:24px}.rtn-step .step-text{font-size:13px}.doc-table{font-size:13px}}
 @media(max-width:500px){body{padding:0}.widget.app-frame,.widget.app-frame.guide-open{height:100dvh;max-height:none;min-height:0;width:100%;border-radius:0;border-left:0;border-right:0}.guide-navigation{padding-left:16px;padding-right:16px}.scroller{padding:16px}.doc-card{padding:12px}.rtn-step{padding:8px 0;gap:8px}.document-heading h1{font-size:20px}.actionbar{padding-left:16px;padding-right:16px}.picture-modal{max-height:78dvh}}
 @media(pointer:coarse){.brand-segment{min-height:38px}.query-wrap input{font-size:16px}.reply-languages button{min-height:36px}.zoom-controls .btn{min-height:38px}.picture-modal .icon-btn{min-height:38px;min-width:38px}}
