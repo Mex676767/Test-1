@@ -387,7 +387,7 @@ function confirmDoubleFreeBonus(given) {
 // the Birthday Bonus table (or reuses this year's) and reads SW - Bonus Amount. Over RM300 needs an ATL's name.
 const BIRTHDAY_ATL_LIMIT = 300;
 const birthdayPictures = new Map(); // chatId -> the ID picture File (kept in memory only, never in saved state)
-const BIRTHDAY_PREVIEW_STATES = [["low", "Amount RM120"], ["high", "Amount RM350 (ATL check)"], ["given", "Already given this year"]];
+const BIRTHDAY_PREVIEW_STATES = [["low", "Amount RM120 · 1X"], ["deposit", "Amount RM38 · 3X"], ["high", "Amount RM350 (ATL check)"], ["given", "Already given this year"]];
 let birthdayPreviewKey = "low";
 let birthdayPreviewDobSet = false;
 // Days from this year's birthday to today: -1 (birthday is tomorrow), 0 (today), 1 (was yesterday), or null when
@@ -412,6 +412,13 @@ function birthdayLabel(s) {
 }
 function birthdayGivenThisYear(s) {
   return !!s?.matchedRow?.birthdayGivenThisYear;
+}
+function birthdayBonusTypeLabel(bonusType) {
+  const value = String(bonusType || "").trim();
+  const normalized = value.replace(/\s+/g, " ").toLowerCase();
+  if (normalized === "last month deposit tox3") return "Last Month Deposit · 3X turnover";
+  if (normalized === "secret wallet tox1") return "Secret wallet · 1X turnover";
+  return value;
 }
 // Checks running right now. Kept in memory only: a "checking" flag saved with the chat could never clear after a reload.
 const birthdayChecksRunning = new Set();
@@ -476,7 +483,7 @@ function renderBirthdayPanel(chatId, claimed) {
     : check.error ? check.error
       : check.recordId
         ? (check.amount > 0
-          ? `Bonus amount RM${check.amount}${check.bonusType ? ` · ${check.bonusType}` : ""}${check.amount > BIRTHDAY_ATL_LIMIT ? " · over RM300: check with an ATL before claiming" : ""}`
+          ? `Bonus amount RM${check.amount}${check.bonusType ? ` · ${birthdayBonusTypeLabel(check.bonusType)}` : ""}${check.amount > BIRTHDAY_ATL_LIMIT ? " · over RM300: check with an ATL before claiming" : ""}`
           : "SW - Bonus Amount is empty or 0 for this player. Press Check amount again in a moment, or check the Birthday Bonus table.")
         : "Attach the customer's ID picture, then press Check amount.";
   const fileLine = file
@@ -520,7 +527,7 @@ async function checkBirthdayAmount(chatId) {
     let data;
     if (previewMode) {
       await new Promise((resolve) => setTimeout(resolve, 300));
-      data = { ok: true, recordId: "recPreviewBirthday", amount: birthdayPreviewKey === "high" ? 350 : 120, bonusType: "Secret wallet TOx1" };
+      data = { ok: true, recordId: "recPreviewBirthday", amount: birthdayPreviewKey === "high" ? 350 : birthdayPreviewKey === "deposit" ? 38 : 120, bonusType: birthdayPreviewKey === "deposit" ? "Last Month Deposit TOx3" : "Secret wallet TOx1" };
     } else {
       const form = new FormData();
       form.append("username", s.username || "");
