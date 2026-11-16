@@ -352,6 +352,7 @@ async function lookupHandler(event, hardEnd) {
         return {
           tier: toDisplay(pnlMatches[0].fields[F.tier], tierMap),
           customerName: toDisplay(pnlMatches[0].fields[F.titleName]) || toDisplay(pnlMatches[0].fields[F.titleNameOld]),
+          pnlRecordId: pnlMatches[0].record_id,
           birthday: malaysiaDateOf(epochOf(pnlMatches[0].fields[F.birthday])),
           notVip: false,
         };
@@ -541,6 +542,7 @@ async function lookupHandler(event, hardEnd) {
         row: {
           tier,
           customerName,
+          pnlRecordId: pnlInfo.pnlRecordId || "",
           claimsToday,
           claimsDay: malaysiaToday(Date.now()),
           pnlBirthday,
