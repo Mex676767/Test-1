@@ -1110,6 +1110,7 @@ async function requireAgentLogin() {
 const AGENT_WROTE_VERSION = 3;
 function agentWroteVerdict(s) {
   if (!s) return undefined;
+  if (s.agentWrote === "unsure") return undefined;
   if ((s.agentWrote === false || s.agentWrote === true) && s.agentWroteV !== AGENT_WROTE_VERSION) return undefined;
   return s.agentWrote;
 }
@@ -1134,12 +1135,12 @@ async function agentWroteInChat(chatId) {
       data = await response.json();
     } catch (_) { data = null; }
   }
-  if (!data || !data.ok || data.wrote === null) {
+  if (!data || !data.ok || typeof data.wrote !== "boolean") {
     if (s.agentWrote !== "unsure") {
-      logDiagnostic(`Couldn't check whether you wrote in this chat (${data?.error || (token ? "no chat link yet" : "LiveChat is not connected")}) — keeping it on your list.`, "warn");
+      logDiagnostic(`Couldn't check whether you wrote in this chat (${data?.error || (token ? "verification unavailable" : "LiveChat is not connected")}) — will retry before adding it to your list.`, "warn");
     }
     s.agentWrote = "unsure";
-    return true;
+    return false;
   }
   const theirs = !!data.wrote && data.customerWrote !== false;
   s.agentWrote = theirs;
@@ -2697,10 +2698,10 @@ function agentActed(s) {
 }
 function agentTouchedChat(s) {
   if (s?.lookupReadOnly) return false;
-  return agentActed(s) || (!!s && (s.agentWrote === true || s.agentWrote === "unsure"));
+  return agentActed(s) || (!!s && s.agentWrote === true);
 }
 function caseNeverLookedUp(s) {
-  return !!s && !s.username && !s.caRecordId;
+  return !!s && !s.matchedRow && !s.caRecordId;
 }
 const caseOriginLogged = new Set();
 function logCaseOrigin(chatId, how) {
@@ -8250,6 +8251,7 @@ function getIncompleteChats() {
   return Object.entries(persisted)
     .filter(([, s]) => s && !s.lookupReadOnly && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError
       && agentTouchedChat(s)
+      && (!AGENT_LOGIN_LIVE || !caseNeverLookedUp(s) || agentWroteVerdict(s) === true)
       && s.agentName === selectedAgent
       && (!currentLiveChatAccount || s.liveChatAccount === currentLiveChatAccount))
     .map(([chatId, s]) => ({

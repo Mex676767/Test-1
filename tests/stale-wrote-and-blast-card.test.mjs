@@ -28,13 +28,13 @@ test('a "did not write" saved without the current version is asked again, and th
   assert.equal(h.st.c1.agentWroteV, 3);
 });
 
-test('a current "did not write" is still remembered, and a saved "wrote" or "unsure" is never discarded', async () => {
+test('current answers are remembered, while old answers and uncertainty need verification', async () => {
   const current = wroteHarness({ agentWrote: false, agentWroteV: 3 }, { ok: true, wrote: true });
   assert.equal(await current.ask(), false);
   assert.equal(current.fetched.length, 0);
   assert.equal(wroteHarness({ agentWrote: true, agentWroteV: 3 }, {}).verdict(), true);
   assert.equal(wroteHarness({ agentWrote: true }, {}).verdict(), undefined, 'a "wrote" from before the customer rule is asked again');
-  assert.equal(wroteHarness({ agentWrote: 'unsure' }, {}).verdict(), 'unsure');
+  assert.equal(wroteHarness({ agentWrote: 'unsure' }, {}).verdict(), undefined);
   assert.equal(wroteHarness({}, {}).verdict(), undefined);
 });
 

@@ -50,28 +50,28 @@ test('"did not write" is remembered too, and the log shows both sides of the com
   assert.match(h.calls.logs[0][1], /bob@x/);
 });
 
-test('when LiveChat cannot be asked the chat stays theirs ("unsure"), the question is repeated, and the log is not spammed', async () => {
+test('when LiveChat cannot be asked the chat stays unassigned, the question is repeated, and the log is not spammed', async () => {
   const h = harness({ replies: [new Error('offline'), { ok: false, error: 'Chat not found' }, { ok: true, wrote: false, authors: [], me: ['a@x'] }] });
-  assert.equal(await h.ask(), true);
+  assert.equal(await h.ask(), false);
   assert.equal(h.st.c1.agentWrote, 'unsure');
-  assert.equal(await h.ask(), true, 'still theirs, asked again');
+  assert.equal(await h.ask(), false, 'still unverified, asked again');
   assert.equal(h.calls.logs.filter(([kind]) => kind === 'warn').length, 1, 'one warning, not one per attempt');
   assert.equal(await h.ask(), false, 'the later answer replaces "unsure"');
   assert.equal(h.st.c1.agentWrote, false);
   assert.equal(h.calls.fetched.length, 3);
 });
 
-test('"unknown" from the server (LiveChat email unreadable) keeps the chat on the list as "unsure" and says why', async () => {
+test('"unknown" from the server waits for verification and says why', async () => {
   const h = harness({ replies: [{ ok: true, wrote: null, authors: ['a@x'], me: ['uuid'], error: 'Could not read your LiveChat email (own token: missing scope).' }] });
-  assert.equal(await h.ask(), true);
+  assert.equal(await h.ask(), false);
   assert.equal(h.st.c1.agentWrote, 'unsure');
   assert.match(h.calls.logs[0][1], /Could not read your LiveChat email/);
-  assert.match(h.calls.logs[0][1], /keeping it on your list/);
+  assert.match(h.calls.logs[0][1], /will retry before adding it to your list/);
 });
 
 test('no stored LiveChat login is "unsure"; no chat link yet is simply not theirs (and not remembered); neither calls the server', async () => {
   const noLogin = harness({ tokens: {} });
-  assert.equal(await noLogin.ask(), true);
+  assert.equal(await noLogin.ask(), false);
   assert.equal(noLogin.st.c1.agentWrote, 'unsure');
   const noLink = harness({ chat: { chatUrl: '' } });
   assert.equal(await noLink.ask(), false, 'a chat that closed before its first status check: nothing happened that needs recording');
@@ -79,12 +79,12 @@ test('no stored LiveChat login is "unsure"; no chat link yet is simply not their
   assert.equal(noLogin.calls.fetched.length + noLink.calls.fetched.length, 0);
 });
 
-test('a chat counts as theirs once they acted, wrote, or LiveChat could not tell', () => {
+test('a chat counts as touched once they acted or wrote; uncertainty alone is not participation', () => {
   const c = vm.createContext({});
   vm.runInContext(fn('agentActed') + '\n' + fn('agentTouchedChat'), c);
   const touched = (s) => vm.runInContext(`agentTouchedChat(${JSON.stringify(s)})`, c);
   assert.equal(touched({ agentWrote: true }), true);
-  assert.equal(touched({ agentWrote: 'unsure' }), true);
+  assert.equal(touched({ agentWrote: 'unsure' }), false);
   assert.equal(touched({ agentWrote: false }), false);
   assert.equal(touched({}), false);
   assert.equal(touched({ agentWrote: false, status: 'Solved' }), true, 'an action still wins');
