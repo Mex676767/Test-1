@@ -1,6 +1,8 @@
 import { adapt } from "./_lib/adapt.js";
 import { LIVECHAT_ACCOUNTS } from "./_lib/livechat.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
+import { customerWroteIn } from "./_lib/chat-events.js";
+export { customerWroteIn } from "./_lib/chat-events.js";
 
 const CONVERSATION_EVENTS = new Set(["message", "file", "rich_message"]);
 const lower = (value) => String(value ?? "").trim().toLowerCase();
@@ -18,11 +20,6 @@ export function agentWroteIn(chat, identities) {
     if (me.has(author)) wrote = true;
   }
   return { wrote, authors: [...authors] };
-}
-
-export function customerWroteIn(chat) {
-  const customers = new Set((chat?.users || []).filter((user) => user.type === "customer").map((user) => lower(user.id)));
-  return (chat?.thread?.events || []).some((event) => CONVERSATION_EVENTS.has(event.type) && event.visibility !== "agents" && customers.has(lower(event.author_id)));
 }
 
 export async function handler(event) {

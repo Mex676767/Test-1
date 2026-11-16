@@ -3649,7 +3649,7 @@ function noteUi(chatId) {
 }
 
 function consoleNoteBlocker(s, writing = true) {
-  if (s.lookupReadOnly && writing) return "Read-only lookup: notes cannot be changed while supervising.";
+  if (s.lookupReadOnly && writing) return "Read-only lookup: notes cannot be changed.";
   if (s.isUnknown) return "Unknown player: notes need a real player in the console.";
   if (!String(s.username || "").trim() || !String(s.brand || "").trim()) return "Notes need the player's username and brand. Look the player up first.";
   return "";
@@ -6247,7 +6247,7 @@ chatListEl.addEventListener("click", async (e) => {
   try {
 
   if (s?.lookupReadOnly && ["claim", "unclaim", "submit", "saveCase", "addCase", "editCase", "saveNote", "editPlayerName", "savePlayerName", "birthdayCheck", "birthdayRemovePicture", "reactivateGracePeriod"].includes(btn.dataset.action)) {
-    setStatus("This chat is read-only while supervising. Look up again after taking over the chat to make changes.", "info");
+    setStatus("This chat is read-only. Look up again after the customer replies and you're handling the chat to make changes.", "info");
     return;
   }
 

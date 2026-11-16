@@ -1,12 +1,14 @@
 import { LIVECHAT_ACCOUNTS } from "./livechat.js";
 import { identifyAgent } from "./livechat-identity.js";
 import { parseChatLink } from "./ca-row.js";
+import { customerWroteIn } from "./chat-events.js";
 
 export function chatAccessFor(chat, identities) {
   const me = new Set(identities.map((id) => String(id).trim().toLowerCase()));
   const agent = (chat?.users || []).find((user) => user.type === "agent" && me.has(String(user.id || "").trim().toLowerCase()));
   // LiveChat agents visible only to other agents are supervising, not handling the customer.
   if (agent?.visibility === "agents") return { readOnly: true, reason: "Supervising this chat — lookup only. Nothing will be recorded." };
+  if (!customerWroteIn(chat)) return { readOnly: true, reason: "The customer has not replied in this chat — lookup only. Nothing will be recorded. Look up again after they reply." };
   if (agent?.visibility === "all" && (agent.present === true || chat?.thread?.active === false)) return { readOnly: false, reason: "" };
   return { readOnly: true, reason: "Viewing this chat — lookup only. Nothing will be recorded." };
 }
