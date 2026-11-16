@@ -79,6 +79,14 @@ test('a closed-but-unrecorded chat backs off instead of writing to Lark every 8 
   assert.ok(gaps.at(-1) <= 300000 + 8000, 'capped near 5 minutes');
 });
 
+test('a supervised chat is never submitted by the background sweep after it closes', async () => {
+  const h = sweepHarness();
+  h.st.c1 = { lookupReadOnly: true, chatOpen: false, username: 'player', caRecordId: 'recPrevious' };
+  for (let tick = 0; tick < 10; tick++) { await h.sweep(); h.clock.now += 8000; }
+  assert.equal(h.submits.length, 0);
+  assert.equal(h.st.c1.caRecordId, 'recPrevious');
+});
+
 test('editing the card (new signature) retries immediately instead of waiting out the backoff', async () => {
   const h = sweepHarness();
   await h.sweep(); h.clock.now += 8000;
@@ -139,7 +147,7 @@ test('fetchBonusRow passes caseRowError through, so the widget shows results plu
   const body = { ok: true, row: { vipBooster: 'Eligible' }, otherBrands: [], lookupWarnings: [], caRecordId: null, justCreated: false,
     caseRowError: 'Case row not saved — press Look Up again (the results below are still valid).' };
   const context = vm.createContext({
-    previewMode: false, JSON, Promise, waitBeforeLookupRetry: async () => {},
+    previewMode: false, JSON, Promise, waitBeforeLookupRetry: async () => {}, currentLiveChatAccount: 'lc1', liveChatAgentTokens: () => ({ lc1: 'test-token' }),
     fetch: async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) }),
   });
   vm.runInContext(fn('fetchBonusRow'), context);

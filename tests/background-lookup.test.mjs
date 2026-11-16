@@ -45,6 +45,24 @@ const chat = (extra = {}) => ({ username: '', usernameDraft: '', brand: 'PP', lo
 const LOOKUP = (over = {}) => ({ username: 'alice', brand: 'PP', telegramNow: false, link: 'https://my.livechatinc.com/chats/A/T1', previousRecordId: null, forcing: false, ...over });
 const start = (w, chatId, over) => { const p = w.context.runLookup(chatId, LOOKUP(over)); return p; };
 
+test('supervision results stay read-only across saved state and never discard an existing case record', async () => {
+  const w = widget({ persisted: { A: chat({ caRecordId: 'recExisting', caOwner: 'Agent B' }) }, focus: 'A', storage: makeStorage(), clock: { now: 1 },
+    fetchBonusRow: () => Promise.resolve(okResult({ readOnly: true, readOnlyReason: 'Supervising — read-only', caRecordId: null })) });
+  await start(w, 'A', { previousRecordId: 'recExisting' });
+  assert.equal(w.state.A.lookupReadOnly, true);
+  assert.equal(w.state.A.caRecordId, 'recExisting');
+  assert.equal(w.state.A.caOwner, 'Agent B');
+  assert.equal(widgetSaved.get('copy').A.lookupReadOnly, true);
+  assert.match(w.state.A.lookupMessage.text, /read-only/);
+});
+
+test('a fresh lookup after takeover restores normal recording', async () => {
+  const w = widget({ persisted: { A: chat({ lookupReadOnly: true }) }, focus: 'A', storage: makeStorage(), clock: { now: 1 } });
+  await start(w, 'A');
+  assert.equal(w.state.A.lookupReadOnly, false);
+  assert.equal(w.state.A.caRecordId, 'rec1');
+});
+
 test('look up in chat A, switch to B before it finishes: the result is saved in A, B is left alone, one neutral toast says it finished elsewhere', async () => {
   const clock = { now: 1_000_000 }, d = deferred();
   const w = widget({ persisted: { A: chat(), B: chat() }, focus: 'A', storage: makeStorage(), clock, fetchBonusRow: () => d.promise });
