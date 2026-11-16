@@ -418,7 +418,14 @@ body {
   text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;
   color: var(--text-faint); margin-right: 3px;
 }
-.player-name-line { display: inline-flex; align-items: center; gap: 4px; }
+.player-name-line { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.player-name-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; }
+.player-name-editor .player-name-input { flex: 1 1 160px; width: auto; min-width: 0; max-width: 320px; }
+.player-name-action { min-height: 32px; padding: 4px 8px; font-size: 12px; }
+.player-name-help, .player-name-error { flex-basis: 100%; }
+.player-name-error { color: var(--danger); }
+@media (pointer: coarse) { .player-name-action { min-height: 48px; } }
+@media (max-width: 640px) { .player-name-editor .player-name-input { font-size: 16px; } }
 .player-name-copy {
   display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
   padding: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2);

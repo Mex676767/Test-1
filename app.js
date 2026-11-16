@@ -2551,6 +2551,56 @@ function renderDobCalendar(chatId) {
 
 const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg>`;
 
+const playerNameEdits = new Map();
+function playerNameEditor(chatId) {
+  const edit = playerNameEdits.get(chatId);
+  const s = state[chatId];
+  return edit && s?.matchedRow === edit.row && s.username === edit.username && s.brand === edit.brand ? edit : null;
+}
+function refreshPlayerName(chatId) {
+  const slot = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"] .player-info-slot`);
+  if (slot) slot.innerHTML = renderPlayerInfo(chatId);
+}
+async function savePlayerName(chatId) {
+  const edit = playerNameEditor(chatId);
+  if (!edit || edit.busy) return;
+  const name = edit.draft.trim();
+  if (!name || name.length > 200) {
+    edit.error = "Enter a name between 1 and 200 characters.";
+    refreshPlayerName(chatId);
+    return;
+  }
+  edit.busy = true;
+  edit.error = "";
+  refreshPlayerName(chatId);
+  try {
+    let savedName = name;
+    if (!previewMode) {
+      const response = await fetch("/player-name", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId: edit.row.pnlRecordId, username: edit.username, brand: edit.brand, expectedName: edit.original, name }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "The name could not be saved. Please try again.");
+      savedName = data.customerName;
+    }
+    for (const [id, other] of Object.entries(state)) {
+      if (other.matchedRow === edit.row || (!previewMode && edit.row.pnlRecordId && other.matchedRow?.pnlRecordId === edit.row.pnlRecordId)) {
+        other.matchedRow.customerName = savedName;
+        if (playerNameEdits.get(id) === edit) playerNameEdits.delete(id);
+        refreshPlayerName(id);
+      }
+    }
+    saveState();
+    setStatus(previewMode ? "Preview name updated. The P&L file was not changed." : "Name saved to the P&L file.", "success");
+  } catch (error) {
+    edit.error = error.message || "The name could not be saved. Please try again.";
+  } finally {
+    edit.busy = false;
+    refreshPlayerName(chatId);
+  }
+}
+
 function renderPlayerInfo(chatId) {
   const s = state[chatId];
   const parts = [];
@@ -2562,8 +2612,19 @@ function renderPlayerInfo(chatId) {
       : `<span><span class="pi-label">Last username recorded</span> : N/A</span>`);
   }
   if (s.matchedRow) {
-    if (s.matchedRow.customerName) {
-      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName)}</span><button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button></span>`);
+    const edit = playerNameEditor(chatId);
+    const canEditName = previewMode || !!s.matchedRow.pnlRecordId;
+    if (edit) {
+      parts.push(`<div class="player-name-editor">
+        <label class="pi-label" for="player-name-${escapeHtml(chatId)}">Name</label>
+        <input id="player-name-${escapeHtml(chatId)}" name="customerName" class="input player-name-input" value="${escapeHtml(edit.draft)}" maxlength="200" ${edit.busy ? "disabled" : ""} />
+        <button type="button" class="secondary-btn player-name-action" data-action="savePlayerName" data-chat="${escapeHtml(chatId)}" ${edit.busy ? "disabled" : ""}>${edit.busy ? "Saving…" : "Save"}</button>
+        <button type="button" class="secondary-btn player-name-action" data-action="cancelPlayerName" data-chat="${escapeHtml(chatId)}" ${edit.busy ? "disabled" : ""}>Cancel</button>
+        <span class="player-name-help">${previewMode ? "Preview only — the P&L file will not change." : "Saves to Title name in the P&L file."}</span>
+        ${edit.error ? `<span class="player-name-error" role="alert">${escapeHtml(edit.error)}</span>` : ""}
+      </div>`);
+    } else if (s.matchedRow.customerName || canEditName) {
+      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName || "—")}</span>${s.matchedRow.customerName ? `<button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button>` : ""}${canEditName ? `<button type="button" class="secondary-btn player-name-action" data-action="editPlayerName" data-chat="${escapeHtml(chatId)}">Edit</button>` : ""}</span>`);
     }
     const tier = String(s.matchedRow.tier || "—").trim();
     const tierDisplay = tier === "—" || /^tier\b/i.test(tier) ? tier : `Tier ${tier}`;
@@ -6027,6 +6088,11 @@ chatListEl.addEventListener("toggle", (event) => {
 }, true);
 
 chatListEl.addEventListener("input", (e) => {
+  if (e.target.matches?.(".player-name-input")) {
+    const edit = playerNameEditor(e.target.closest(".chat-card")?.dataset.chatId);
+    if (edit && !edit.busy) edit.draft = e.target.value;
+    return;
+  }
   const noteBox = e.target.closest(".note-input");
   if (noteBox) {
     const id = noteBox.closest(".chat-card")?.dataset.chatId;
@@ -6049,6 +6115,12 @@ chatListEl.addEventListener("keydown", (event) => {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
   const target = event.target;
   const card = target.closest?.(".chat-card");
+
+  if (target.matches?.(".player-name-input") && (event.key === "Enter" || event.key === "Escape")) {
+    event.preventDefault();
+    card?.querySelector(`[data-action="${event.key === "Enter" ? "savePlayerName" : "cancelPlayerName"}"]`)?.click();
+    return;
+  }
 
   if (event.key === "Enter" && !event.shiftKey && target.matches?.(".ticket-comment-input")) {
     event.preventDefault();
@@ -6194,6 +6266,24 @@ chatListEl.addEventListener("click", async (e) => {
     return;
   }
 
+  if (btn.dataset.action === "editPlayerName") {
+    if (!s?.matchedRow || (!previewMode && !s.matchedRow.pnlRecordId)) return;
+    playerNameEdits.set(chatId, { row: s.matchedRow, username: s.username, brand: s.brand, original: s.matchedRow.customerName || "", draft: s.matchedRow.customerName || "", busy: false, error: "" });
+    refreshPlayerName(chatId);
+    card.querySelector(".player-name-input")?.focus();
+    return;
+  }
+  if (btn.dataset.action === "cancelPlayerName") {
+    if (playerNameEditor(chatId)?.busy) return;
+    playerNameEdits.delete(chatId);
+    refreshPlayerName(chatId);
+    card.querySelector('[data-action="editPlayerName"]')?.focus();
+    return;
+  }
+  if (btn.dataset.action === "savePlayerName") {
+    await savePlayerName(chatId);
+    return;
+  }
   if (btn.dataset.action === "copyPlayerName") {
     const fullName = s.matchedRow?.customerName;
     await copyPlainText(fullName);
