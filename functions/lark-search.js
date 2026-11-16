@@ -11,6 +11,7 @@ import { isConfiguredBonusEligible, listBonusConfigs } from "./_lib/bonus-config
 import { halloweenStatus, malaysiaToday, dayNumber, brandKey, testDateFor } from "./_lib/halloween.js";
 import { readHalloweenRow, readOptionMaps } from "./_lib/halloween-io.js";
 import { birthdayGivenThisYearFrom, epochOf, malaysiaDateOf } from "./_lib/birthday.js";
+import { lookupChatAccess } from "./_lib/chat-access.js";
 
 const FIRST_PASS_TIMEOUT_MS = 22_000;
 const RETRY_MIN_MS = 3_000;
@@ -159,7 +160,7 @@ async function lookupWithDeadline(event) {
 
 async function lookupHandler(event, hardEnd) {
   try {
-    const { username, brand, picName, previousRecordId, link, preview } = JSON.parse(event.body || "{}");
+    const { username, brand, picName, previousRecordId, link, preview, chatAccess } = JSON.parse(event.body || "{}");
     if (!username || !brand) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "username and brand are required" }) };
     }
@@ -256,10 +257,16 @@ async function lookupHandler(event, hardEnd) {
     });
 
     const chatLink = String(link || "").trim();
+    // Older clients keep their existing behavior; current live clients always send chatAccess.
+    const accessP = !preview && chatAccess !== undefined
+      ? lookupChatAccess(event.env, chatAccess, chatLink)
+      : Promise.resolve({ readOnly: !!preview, reason: "" });
     const caseMinMs = Number(event.env?.LOOKUP_CASE_MIN_MS) || 2_000;
     const caseGraceMs = Number(event.env?.LOOKUP_CASE_GRACE_MS) || 6_000;
     const caseBudgetMs = () => Math.max(caseMinMs, Math.min(CASE_SEARCH_TIMEOUT_MS, startedAt + lookupBudgetMs - Date.now()));
     const caseRecordP = (async () => {
+      const access = await accessP;
+      if (access.readOnly) return { recordId: null, created: false };
       let recordId = null;
       if (!preview && chatLink) {
         for (let attempt = 0; ; attempt++) {
@@ -528,13 +535,16 @@ async function lookupHandler(event, hardEnd) {
     if (caseRowError) noteCounter("caseRowError");
     if (caseTableFull) noteCounter("caseTableFull");
     for (const source of new Set(lookupWarnings)) noteCounter(`lookupWarning:${source}`);
+    const access = await accessP;
     return {
       statusCode: 200,
       body: JSON.stringify({
         ok: true,
         otherBrands,
         lookupWarnings: [...new Set(lookupWarnings)],
-        justCreated: !preview && !caseRowError,
+        justCreated: !access.readOnly && !caseRowError,
+        readOnly: !preview && access.readOnly,
+        readOnlyReason: access.reason,
         notVip,
         caRecordId,
         ...(caseRowError ? { caseRowError } : {}),

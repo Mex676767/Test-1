@@ -17,7 +17,7 @@ export async function handler(event) {
   try {
     const record = await getRecord(TABLE_PNL, body.recordId);
     if (!record) return reply(404, { ok: false, error: "Player not found in the P&L file." });
-    if (normalized(toDisplay(record.fields?.["Username/UID"])) !== normalized(body.username)
+    if (normalized(toDisplay(record.fields?.Username) || toDisplay(record.fields?.["Username/UID"])) !== normalized(body.username)
       || normalized(toDisplay(record.fields?.Brand)) !== normalized(body.brand)) {
       return reply(409, { ok: false, error: "The player has changed. Look up the player again before saving." });
     }

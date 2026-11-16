@@ -4,7 +4,7 @@ import { handler } from "./player-name.js";
 import { initEnv } from "./_lib/lark.js";
 
 let sequence = 0;
-function world(t, { column = "Title name", type = 1, name = "Mr. Wong", fail = false } = {}) {
+function world(t, { column = "Title name", usernameColumn = "Username", type = 1, name = "Mr. Wong", fail = false } = {}) {
   const table = `name-table-${++sequence}`;
   initEnv({ LARK_APP_ID: "app", LARK_APP_SECRET: "test-secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_PNL: table });
   const updates = [];
@@ -19,7 +19,7 @@ function world(t, { column = "Title name", type = 1, name = "Mr. Wong", fail = f
       updates.push(JSON.parse(options.body).fields);
       return response(fail ? { code: 1254045, msg: "Write refused" } : { code: 0, data: { record: {} } });
     }
-    return response({ code: 0, data: { record: { fields: { "Username/UID": "115257", Brand: "JOM", [column]: name, Tier: "Tier 3" } } } });
+    return response({ code: 0, data: { record: { fields: { [usernameColumn]: "115257", Brand: "JOM", [column]: name, Tier: "Tier 3" } } } });
   };
   return updates;
 }
@@ -39,6 +39,11 @@ test("rejects another username or brand without writing", async (t) => {
   const updates = world(t);
   for (const change of [{ username: "other" }, { brand: "LPK" }]) assert.equal((await call(change)).statusCode, 409);
   assert.equal(updates.length, 0);
+});
+test("also supports P&L files using Username/UID", async (t) => {
+  const updates = world(t, { usernameColumn: "Username/UID" });
+  assert.equal((await call()).statusCode, 200);
+  assert.deepEqual(updates, [{ "Title name": "Mr. Tan" }]);
 });
 test("rejects a stale name and read-only formula column", async (t) => {
   const updates = world(t, { type: 20 });

@@ -427,6 +427,7 @@ const birthdayPictureRemoving = new Set();
 // and the amount must be checked again with a new picture.
 async function removeBirthdayPicture(chatId) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (!s || s.claimedPrograms?.birthday || birthdayChecksRunning.has(chatId) || birthdayPictureRemoving.has(chatId)) return;
   birthdayPictures.delete(chatId);
   const check = s.birthdayCheck || {};
@@ -509,6 +510,7 @@ function setBirthdayPicture(chatId, file) {
 }
 async function checkBirthdayAmount(chatId) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (!s || birthdayChecksRunning.has(chatId) || birthdayPictureRemoving.has(chatId)) return;
   const file = birthdayPictures.get(chatId);
   const { busy: _staleBusy, ...previous } = s.birthdayCheck || {};
@@ -1313,7 +1315,8 @@ function waitBeforeLookupRetry(signal) {
 }
 
 async function fetchBonusRow(username, brand, link, telegram, picName, previousRecordId, signal) {
-  const body = JSON.stringify({ username, brand, link, telegram, picName, previousRecordId, preview: previewMode });
+  const chatAccess = previewMode ? undefined : { accountKey: currentLiveChatAccount, agentToken: liveChatAgentTokens()[currentLiveChatAccount] || "" };
+  const body = JSON.stringify({ username, brand, link, telegram, picName, previousRecordId, preview: previewMode, chatAccess });
   const canSafelyRetry = previewMode || !!String(link || "").trim();
   for (let attempt = 0; attempt < 2; attempt++) {
     let res;
@@ -1344,6 +1347,8 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
         caseTableFull: !!data.caseTableFull,
         justCreated: data.justCreated,
         notVip: data.notVip,
+        readOnly: !!data.readOnly,
+        readOnlyReason: data.readOnlyReason || "",
       };
     }
 
@@ -1480,7 +1485,7 @@ function chatFromProfile(profile) {
   return {
     chatId: profile.chat.id,
     customerName: profile.name || "Unknown customer",
-    link: "",
+    link: profile.chat.chat_id ? `https://my.livechatinc.com/chats/${profile.chat.chat_id}/${profile.chat.id}` : "",
     isTelegram: false,
     groupName: "",
   };
@@ -1624,6 +1629,8 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
   }, 45000);
   lookupControllers.set(chatId, controller);
   s.lookupInFlight = true;
+  s.lookupReadOnly = true;
+  s.lookupReadOnlyReason = "Checking your role in this chat…";
   s.lookupMessage = null;
   s.pendingLookup = { username, brand, link, telegram: !!telegramNow, previousRecordId, forcing: !!forcing, agent: selectedAgent, startedAt: Date.now(), resumed: !!resumed };
   takeLookupLock(chatId);
@@ -1640,15 +1647,19 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
   refreshBackgroundLookupPill();
   saveState();
   try {
-    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
-    s.caLinkSaved = !!link;
+    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip, readOnly, readOnlyReason } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
+    s.lookupReadOnly = !!readOnly;
+    s.lookupReadOnlyReason = readOnlyReason || "";
+    s.autoRecordError = "";
+    needFullRender = true;
+    s.caLinkSaved = !readOnly && !!link;
     s.matchedRow = row;
     if (row?.pnlBirthday && !s.dob) s.dob = row.pnlBirthday;
     s.otherBrandMatches = otherBrands;
-    s.caRecordId = caRecordId;
+    if (!readOnly) s.caRecordId = caRecordId;
     s.caseTableFull = !!caseTableFull;
-    if (previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId);
-    s.caOwner = selectedAgent;
+    if (!readOnly && previousRecordId && caRecordId !== previousRecordId) rememberDeletedRecord(previousRecordId);
+    if (!readOnly) s.caOwner = selectedAgent;
     s.claimedPrograms = {};
     s.vs96FeedbackQuery1 = "";
     s.vs96FeedbackQuery2 = "";
@@ -1685,7 +1696,10 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     if (caseRowError) {
       lookupSay(chatId, lookupWarnings.length ? `${caseRowError} Also unavailable: ${lookupWarnings.join(", ")}.` : caseRowError, "error", true);
     }
+    if (readOnly) lookupSay(chatId, readOnlyReason || "Read-only lookup — nothing will be recorded.");
   } catch (err) {
+    s.lookupReadOnlyReason = "Lookup did not finish. Look up again before making changes.";
+    needFullRender = true;
     if (forcing) { s.isUnknown = true; reportUnknownTick(chatId, true, true); }
     if (controller.signal.aborted) {
       lookupSay(chatId, timedOut ? "Lookup timed out after 45 seconds. Try again." : "Lookup canceled.", timedOut ? "error" : "info", timedOut);
@@ -1820,6 +1834,7 @@ function applyProfile(profile) {
   if (bgLookupDone && bgLookupDone.chatId === chat.chatId) bgLookupDone = null;
   refreshBackgroundLookupPill();
   ensureChatState(chat);
+  if (chat.link) state[chat.chatId].chatUrl = chat.link;
   state[chat.chatId].expanded = true;
   renderChats(activeChats);
   resolveBrandFromGroupId(chat.chatId, profile.chat.groupID);
@@ -2562,6 +2577,7 @@ function refreshPlayerName(chatId) {
   if (slot) slot.innerHTML = renderPlayerInfo(chatId);
 }
 async function savePlayerName(chatId) {
+  if (state[chatId]?.lookupReadOnly) return;
   const edit = playerNameEditor(chatId);
   if (!edit || edit.busy) return;
   const name = edit.draft.trim();
@@ -2613,7 +2629,7 @@ function renderPlayerInfo(chatId) {
   }
   if (s.matchedRow) {
     const edit = playerNameEditor(chatId);
-    const canEditName = previewMode || !!s.matchedRow.pnlRecordId;
+    const canEditName = !s.lookupReadOnly && (previewMode || !!s.matchedRow.pnlRecordId);
     if (edit) {
       parts.push(`<div class="player-name-editor">
         <label class="pi-label" for="player-name-${escapeHtml(chatId)}">Name</label>
@@ -2675,11 +2691,12 @@ function ownsCaseRecord(s) {
 }
 
 function agentActed(s) {
-  if (!s) return false;
+  if (!s || s.lookupReadOnly) return false;
   return !!(s.caRecordId || (s.inquiry && s.inquiry.length) || s.status || String(s.usernameDraft || "").trim()
     || (s.logs && s.logs.length) || Object.values(s.claimedPrograms || {}).some(Boolean));
 }
 function agentTouchedChat(s) {
+  if (s?.lookupReadOnly) return false;
   return agentActed(s) || (!!s && (s.agentWrote === true || s.agentWrote === "unsure"));
 }
 function caseNeverLookedUp(s) {
@@ -2745,6 +2762,7 @@ function caseSummaryText(c) {
 function renderCasesBar(chatId) {
   if (previewMode) return "";
   const s = state[chatId];
+  if (s?.lookupReadOnly) return "";
   if (!s || s.isUnknown) return "";
   const logs = (s.logs || []).slice().sort((a, b) => (a.caseNo || 0) - (b.caseNo || 0));
   if (!s.caRecordId && !logs.length) return "";
@@ -2781,6 +2799,7 @@ async function ensureActiveCaseSaved(chatId) {
 
 async function addCaseFlow(chatId) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (!s || addingCaseFor.has(chatId) || s.lookupInFlight) return;
   if (!s.username || !s.caRecordId || !s.brand || s.isUnknown) {
     setStatus("Look up the username first.", "error");
@@ -2792,9 +2811,14 @@ async function addCaseFlow(chatId) {
   try {
     if (!(await ensureActiveCaseSaved(chatId))) return;
     const chatDef = activeChats.find((c) => c.chatId === chatId);
-    const { row, otherBrands, caRecordId } = await fetchBonusRow(
+    const { row, otherBrands, caRecordId, readOnly, readOnlyReason } = await fetchBonusRow(
       s.username, s.brand, s.chatUrl || (chatDef && chatDef.link) || "", !!s.telegram, selectedAgent, null
     );
+    if (readOnly) {
+      s.lookupReadOnly = true;
+      s.lookupReadOnlyReason = readOnlyReason;
+      return;
+    }
     s.logs = s.logs || [];
     s.logs.push(snapshotCase(s));
     const nextNo = Math.max(s.caseNo || 1, ...s.logs.map((c) => c.caseNo || 0)) + 1;
@@ -3624,7 +3648,8 @@ function noteUi(chatId) {
   return noteUiByChat.get(chatId);
 }
 
-function consoleNoteBlocker(s) {
+function consoleNoteBlocker(s, writing = true) {
+  if (s.lookupReadOnly && writing) return "Read-only lookup: notes cannot be changed while supervising.";
   if (s.isUnknown) return "Unknown player: notes need a real player in the console.";
   if (!String(s.username || "").trim() || !String(s.brand || "").trim()) return "Notes need the player's username and brand. Look the player up first.";
   return "";
@@ -3635,6 +3660,7 @@ function renderNoteSection(chatId) {
   if (!s || !s.matchedRow) return "";
   const ui = noteUi(chatId);
   const blocker = consoleNoteBlocker(s);
+  const readBlocker = consoleNoteBlocker(s, false);
   const off = !!blocker || ui.busy;
   const typeDef = CONSOLE_NOTE_TYPES[ui.type] || CONSOLE_NOTE_TYPES.relationship;
   const notes = Array.isArray(ui.notes)
@@ -3649,10 +3675,10 @@ function renderNoteSection(chatId) {
       <textarea class="input note-input" data-chat="${escapeHtml(chatId)}" rows="3" maxlength="${CONSOLE_NOTE_MAX}" placeholder="${escapeHtml(typeDef.placeholder)}" ${off ? "disabled" : ""}>${escapeHtml(ui.draft)}</textarea>
       <div class="note-row">
         <span class="note-count">${ui.draft.length} / ${CONSOLE_NOTE_MAX}</span>
-        <button type="button" class="note-secondary-btn" data-action="loadNotes" data-chat="${escapeHtml(chatId)}" ${blocker || ui.notesBusy ? "disabled" : ""}>${ui.notesBusy ? "Loading…" : ui.notes ? "Refresh" : `Show ${escapeHtml(typeDef.where.toLowerCase())}`}</button>
+        <button type="button" class="note-secondary-btn" data-action="loadNotes" data-chat="${escapeHtml(chatId)}" ${readBlocker || ui.notesBusy ? "disabled" : ""}>${ui.notesBusy ? "Loading…" : ui.notes ? "Refresh" : `Show ${escapeHtml(typeDef.where.toLowerCase())}`}</button>
         <button type="button" class="note-save-btn" data-action="saveNote" data-chat="${escapeHtml(chatId)}" ${off ? "disabled" : ""}>${ui.busy ? "Saving…" : escapeHtml(typeDef.add)}</button>
       </div>
-      ${blocker ? `<div class="note-msg note-error">${escapeHtml(blocker)}</div>` : ui.msg ? `<div class="note-msg ${ui.kind === "ok" ? "note-ok" : ui.kind === "error" ? "note-error" : ""}">${escapeHtml(ui.msg)}</div>` : ""}
+      ${blocker ? `<div class="note-msg ${s.lookupReadOnly ? "" : "note-error"}">${escapeHtml(blocker)}</div>` : ui.msg ? `<div class="note-msg ${ui.kind === "ok" ? "note-ok" : ui.kind === "error" ? "note-error" : ""}">${escapeHtml(ui.msg)}</div>` : ""}
       ${previewMode ? `<div class="note-msg">Test mode: a note added here really is saved to the console.</div>` : ""}
       ${notes}
     </section>`;
@@ -3704,7 +3730,7 @@ async function saveConsoleNote(chatId) {
 async function loadConsoleNotes(chatId) {
   const s = state[chatId];
   const ui = noteUi(chatId);
-  if (!s || ui.notesBusy || consoleNoteBlocker(s)) return;
+  if (!s || ui.notesBusy || consoleNoteBlocker(s, false)) return;
   ui.notesBusy = true; ui.msg = ""; ui.kind = "";
   paintNoteSection(chatId);
   const answer = await postConsoleNote(s, { list: true, type: ui.type });
@@ -3730,6 +3756,7 @@ function renderExpandedCard(chat) {
 
     <section class="ca-section ca-customer-section">
       <div class="ca-section-head"><div><strong>Customer</strong></div></div>
+      ${s.lookupReadOnly ? `<div class="supervision-notice" role="status">${escapeHtml(s.lookupReadOnlyReason || "Read-only lookup — nothing will be recorded.")}</div>` : ""}
       <label class="field-label">Username or user ID</label>
       <div class="username-row">
         <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
@@ -3744,7 +3771,7 @@ function renderExpandedCard(chat) {
 
     <section class="ca-section ca-bonus-section">
       <div class="ca-section-head"><div><strong>Available bonuses</strong></div></div>
-      <div class="ticket-slot">${renderTickets(chat.chatId)}</div>
+      <fieldset class="supervision-fields ticket-slot" ${s.lookupReadOnly ? "disabled" : ""}>${renderTickets(chat.chatId)}</fieldset>
     </section>
 
     <section class="ca-section ca-case-section">
@@ -3766,7 +3793,7 @@ function renderExpandedCard(chat) {
     ${s.autoRecordError && !previewMode ? `<div class="record-error-banner">⚠︎ ${s.autoRecordError}</div>` : ""}
 
     ${
-      previewMode
+      s.lookupReadOnly ? `<div class="record-pending-hint">Read-only lookup — no record will be created when this chat closes.</div>` : previewMode
         ? `<div class="preview-readonly-note">${showPreviewClosedChat ? "Closed-chat example: the chat ended without Inquiry or Status, so it was not recorded." : BONUS_SHOWCASE_PREVIEW ? "Bonus showcase uses sample eligibility and amounts." : "Test mode reads live bonus data."} Claims and form changes stay on this preview card and never create or update a Lark record.</div>`
         : isLoggingPaused() && !s.logged
         ? `<div class="logged-badge unknown">Logging paused — not recorded</div>`
@@ -6219,6 +6246,11 @@ chatListEl.addEventListener("click", async (e) => {
 
   try {
 
+  if (s?.lookupReadOnly && ["claim", "unclaim", "submit", "saveCase", "addCase", "editCase", "saveNote", "editPlayerName", "savePlayerName", "birthdayCheck", "birthdayRemovePicture", "reactivateGracePeriod"].includes(btn.dataset.action)) {
+    setStatus("This chat is read-only while supervising. Look up again after taking over the chat to make changes.", "info");
+    return;
+  }
+
   if (btn.dataset.action === "openTicketImage") {
     const img = btn.querySelector("img");
     if (btn.dataset.fallbackUrl) window.open(btn.dataset.fallbackUrl, "_blank", "noopener");
@@ -7449,6 +7481,7 @@ chatListEl.addEventListener("change", (e) => {
 
 function reportUnknownTick(chatId, ticked, auto) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (previewMode || !s || !selectedAgent) return;
   const live = String(s.chatUrl || "").match(/\/chats\/([^/?#]+)\/([^/?#]+)/);
   const archived = String(s.chatUrl || "").match(/\/archives\/([^/?#]+)/);
@@ -7459,6 +7492,7 @@ function reportUnknownTick(chatId, ticked, auto) {
 
 function reportClaim(chatId, claim) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (previewMode || !s || !selectedAgent) return;
   const live = String(s.chatUrl || "").match(/\/chats\/([^/?#]+)\/([^/?#]+)/);
   const archived = String(s.chatUrl || "").match(/\/archives\/([^/?#]+)/);
@@ -7472,6 +7506,7 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   if (!s) return;
   s.isUnknown = value;
   reportUnknownTick(chatId, value, silent);
+  if (s.lookupReadOnly) return;
   if (value && unrecordedChats.some((chat) => chat.threadId === chatId)) resolveUnrecorded(chatId, "Ignored");
   if (value) removeStaleRecordsForChat(chatId, silent);
   if (!s.isUnknown || !s.caRecordId) return;
@@ -7523,6 +7558,7 @@ function setUnknown(chatId, value, { silent = false } = {}) {
 
 function removeStaleRecordsForChat(chatId, silent) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (previewMode || !selectedAgent || !s) return;
   if (Object.values(s.claimedPrograms || {}).some(Boolean)) return;
   const link = String(s.chatUrl || "").match(/\/(?:chats\/[^/?#]+\/|archives\/)([^/?#]+)/);
@@ -7715,6 +7751,7 @@ function shouldResumeInterruptedSave(s) {
 
 async function resyncLoggedRecord(chatId) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return false;
   if (previewMode) return true;
   if (!s || !s.logged || !s.caRecordId || s.isUnknown) return false;
   if (!s.inquiry.length || !s.status) {
@@ -7761,6 +7798,7 @@ async function submitRecord(chatId, options = {}) {
 
 async function submitRecordOnce(chatId, { auto, reason } = {}) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (previewMode) return;
   if (!s || s.logged) return;
   const card = chatListEl.querySelector(`.chat-card[data-chat-id="${chatId}"]`);
@@ -8168,7 +8206,7 @@ async function sweepPendingChats() {
   const currentChatId = activeChats[0]?.chatId;
   for (const [chatId, saved] of Object.entries(persisted)) {
     if (chatId === currentChatId && !document.hidden) continue;
-    if (!saved || saved.logged) continue;
+    if (!saved || saved.logged || saved.lookupReadOnly || state[chatId]?.lookupReadOnly) continue;
     if (currentLiveChatAccount && saved.liveChatAccount !== currentLiveChatAccount) continue;
     if (saved.caOwner && saved.caOwner !== selectedAgent) continue;
     if (!state[chatId]) {
@@ -8210,7 +8248,7 @@ function getIncompleteChats() {
     return [];
   }
   return Object.entries(persisted)
-    .filter(([, s]) => s && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError
+    .filter(([, s]) => s && !s.lookupReadOnly && s.chatOpen === false && !s.logged && !s.isUnknown && !s.attentionIgnored && s.autoRecordError
       && agentTouchedChat(s)
       && s.agentName === selectedAgent
       && (!currentLiveChatAccount || s.liveChatAccount === currentLiveChatAccount))
@@ -8226,6 +8264,7 @@ function getIncompleteChats() {
 const linkSaveInFlight = new Set();
 async function saveLinkToRecord(chatId) {
   const s = state[chatId];
+  if (s?.lookupReadOnly) return;
   if (!s || !s.caRecordId || !s.chatUrl || s.caLinkSaved || s.logged || linkSaveInFlight.has(chatId)) return;
   if (!ownsCaseRecord(s)) return;
   const recordId = s.caRecordId;
@@ -8492,6 +8531,7 @@ function getUnrecordedChats() {
   const local = (threadId) => state[threadId] || persisted[threadId];
   return unrecordedChats.filter((chat) => {
     const s = local(chat.threadId);
+    if (s?.lookupReadOnly) return false;
     if (s && s.logged && (s.inquiry || []).length && s.status) { resolveUnrecorded(chat.threadId, "Done"); return false; }
     if (s && s.isUnknown) { resolveUnrecorded(chat.threadId, "Ignored"); return false; }
     if (s && s.chatOpen === false && !s.logged && s.autoRecordError && s.agentName === selectedAgent) return false;
