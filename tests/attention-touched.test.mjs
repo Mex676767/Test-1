@@ -38,7 +38,7 @@ test('Needs Attention lists only touched chats, so a stale flag from an older ve
     watched:   { chatOpen: false, logged: false, autoRecordError: 'missing', agentName: 'Me', liveChatAccount: 'lc1', username: 'nizamawsb', inquiry: [], status: '' },
     otherAgent:{ chatOpen: false, logged: false, autoRecordError: 'missing', agentName: 'Else', liveChatAccount: 'lc1', caRecordId: 'rec2' },
   };
-  const c = vm.createContext({ IS_EMBEDDED_APP: true, currentLiveChatAccount: 'lc1', selectedAgent: 'Me', loadPersistedState: () => rows, archiveUrlFor: (id) => 'u/' + id });
+  const c = vm.createContext({ IS_EMBEDDED_APP: true, AGENT_LOGIN_LIVE: false, currentLiveChatAccount: 'lc1', selectedAgent: 'Me', loadPersistedState: () => rows, archiveUrlFor: (id) => 'u/' + id });
   vm.runInContext(fn('agentActed') + '\n' + fn('agentTouchedChat') + '\n' + fn('getIncompleteChats'), c);
   const ids = vm.runInContext('getIncompleteChats().map((x) => x.chatId).join(",")', c);
   assert.equal(ids, 'mine');
@@ -51,6 +51,52 @@ test('auto-record skips an untouched chat before it stamps the agent or sets an 
   assert.ok(gate < submit.indexOf('if (!selectedAgent)'), 'before any error is set');
   assert.ok(gate < submit.indexOf('s.agentName = selectedAgent'), 'before the chat is stamped with the agent');
   assert.ok(gate > submit.indexOf('if (isLoggingPaused())'), 'after the pause gate');
+});
+
+test('old uncertain flags disappear immediately, including a prefilled username copied into the draft', () => {
+  const base = { ...untouched, chatOpen: false, logged: false, autoRecordError: 'not fully filled in', agentName: 'Me', liveChatAccount: 'lc1' };
+  const rows = {
+    watched: { ...base, agentWrote: 'unsure' },
+    draft: { ...base, usernameDraft: 'nizamawsb', agentWrote: 'unsure' },
+    otherWriter: { ...base, usernameDraft: 'nizamawsb', agentWrote: false, agentWroteV: 3 },
+    mine: { ...base, agentWrote: true, agentWroteV: 3 },
+    lookedUp: { ...base, caRecordId: 'rec1' },
+  };
+  const c = vm.createContext({ IS_EMBEDDED_APP: true, AGENT_LOGIN_LIVE: true, currentLiveChatAccount: 'lc1', selectedAgent: 'Me', loadPersistedState: () => rows, archiveUrlFor: (id) => 'u/' + id });
+  vm.runInContext([app.match(/const AGENT_WROTE_VERSION = .*;/)[0], ...['agentWroteVerdict', 'agentActed', 'agentTouchedChat', 'caseNeverLookedUp', 'getIncompleteChats'].map(fn)].join('\n'), c);
+  assert.equal(vm.runInContext('getIncompleteChats().map((x) => x.chatId).join(",")', c), 'mine,lookedUp');
+});
+
+test('a viewed chat is not flagged on verification failure, retries, and only flags a confirmed writer', async () => {
+  for (const wrote of [false, true]) {
+    const s = { ...untouched, username: 'petai3862', usernameDraft: 'petai3862', chatUrl: 'https://my.livechatinc.com/chats/CHAT/THREAD', autoRecordError: 'old false flag' };
+    const replies = [new Error('offline'), { ok: true, wrote, customerWrote: true, authors: ['yoona@example.com'], me: ['me@example.com'] }];
+    let writes = 0;
+    let requests = 0;
+    const c = vm.createContext({
+      state: { c1: s }, previewMode: false, AGENT_LOGIN_LIVE: true, selectedAgent: 'Me', currentLiveChatAccount: 'lc1',
+      activeChats: [], isLoggingPaused: () => false, chatListEl: { querySelector: () => null }, liveChatAgentTokens: () => ({ lc1: 'test-token' }),
+      autoMissingLoggedFor: new Map(), logDiagnostic() {}, renderChats() {}, renderNeedsAttentionPanel() {}, setStatus() {},
+      writeLarkRecord: async () => { writes++; },
+      fetch: async () => { requests++; const reply = replies.shift(); if (reply instanceof Error) throw reply; return { json: async () => reply }; },
+    });
+    vm.runInContext([app.match(/const AGENT_WROTE_VERSION = .*;/)[0], ...['agentWroteVerdict', 'agentWroteInChat', 'agentActed', 'caseNeverLookedUp', 'ownsCaseRecord', 'submitRecordOnce'].map(fn)].join('\n'), c);
+    await c.submitRecordOnce('c1', { auto: true });
+    assert.equal(s.agentWrote, 'unsure');
+    assert.equal(s.autoRecordError, '');
+    assert.equal(s.agentName, undefined, 'viewing and a failed check cannot assign the chat');
+    await c.submitRecordOnce('c1', { auto: true });
+    assert.equal(requests, 2, 'verification is retried');
+    assert.equal(s.agentWrote, wrote);
+    assert.equal(writes, 0, 'no Lark row is created by viewing');
+    if (wrote) {
+      assert.equal(s.agentName, 'Me');
+      assert.match(s.autoRecordError, /look up the username/);
+    } else {
+      assert.equal(s.agentName, undefined);
+      assert.equal(s.autoRecordError, '');
+    }
+  }
 });
 
 test('the background sweep does not retry an untouched chat', () => {
@@ -77,6 +123,10 @@ test('a saved case that was never looked up (no player, no Lark record) is check
   assert.ok(dropped.logs.includes('asked'), 'the chat is checked even though inquiry, status and a claim are filled in');
   assert.equal(dropped.state.autoRecordError, '', 'the flag is cleared, so it leaves the list');
   assert.equal(dropped.state.agentName, undefined, 'nothing is stamped on it');
+  const autofilled = await run({ ...orphan, username: 'petai3862', lastUsernameFound: true, lastUsernameValue: 'petai3862' }, false);
+  assert.ok(autofilled.logs.includes('asked'), 'a remembered username is not evidence of a lookup');
+  assert.equal(autofilled.state.autoRecordError, '');
+  assert.equal(autofilled.state.agentName, undefined);
   const wrote = await run({ ...orphan }, true);
   assert.match(wrote.state.autoRecordError, /missing: username, look up the username/, 'if you did write there, it stays on the list');
   const looked = await run({ ...orphan, username: 'p1', caRecordId: 'rec1' }, false);
