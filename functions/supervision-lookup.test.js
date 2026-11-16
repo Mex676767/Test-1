@@ -6,7 +6,7 @@ import { initEnv } from "./_lib/lark.js";
 import { initEnv as initLiveChat } from "./_lib/livechat.js";
 
 test("supervisors and viewers are read-only; the assigned agent can look up before sending a message", () => {
-  const chat = (user, active = true) => ({ users: user ? [{ id: "agent@example.com", type: "agent", ...user }] : [], thread: { active, events: [] } });
+  const chat = (user, active = true) => ({ users: [{ id: "customer", type: "customer" }, ...(user ? [{ id: "agent@example.com", type: "agent", ...user }] : [])], thread: { active, events: [{ type: "message", author_id: "customer", visibility: "all" }] } });
   for (const user of [{ visibility: "agents", present: true }, { visibility: "all", present: false }, {}, null]) {
     assert.equal(chatAccessFor(chat(user), ["AGENT@EXAMPLE.COM"]).readOnly, true);
   }
@@ -14,7 +14,7 @@ test("supervisors and viewers are read-only; the assigned agent can look up befo
   assert.equal(chatAccessFor(chat({ visibility: "all", present: false }, false), ["agent@example.com"]).readOnly, false, "an archived chat handled by this agent remains recordable");
 });
 
-function world(t, { visibility = "agents", missing = false, unavailable = false, wrongThread = false } = {}) {
+function world(t, { visibility = "agents", missing = false, unavailable = false, wrongThread = false, events = [{ type: "message", author_id: "customer", visibility: "all" }] } = {}) {
   initEnv({ LARK_APP_ID: "app", LARK_APP_SECRET: "test-secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_CUSTOMER_APPROACHING: "cases", LARK_TABLE_PNL: "pnl", LARK_TABLE_REDEEM_CODE: "redeem" });
   initLiveChat({ LIVECHAT_PAT: "test-pat" });
   const original = globalThis.fetch;
@@ -27,7 +27,7 @@ function world(t, { visibility = "agents", missing = false, unavailable = false,
     if (url.endsWith("/get_chat")) {
       roleCalls.push(JSON.parse(options.body));
       if (unavailable) return response({ error: { message: "Unavailable" } }, 503);
-      return response({ users: missing ? [] : [{ id: "guide@example.com", type: "agent", visibility, present: true }], thread: { id: wrongThread ? "OTHER" : "THREAD", active: true, events: [] } });
+      return response({ users: [{ id: "customer", type: "customer" }, ...(missing ? [] : [{ id: "guide@example.com", type: "agent", visibility, present: true }])], thread: { id: wrongThread ? "OTHER" : "THREAD", active: true, events } });
     }
     if (url.includes("tenant_access_token")) return response({ code: 0, tenant_access_token: "test-token", expire: 3600 });
     if (url.includes("/fields?")) return response({ code: 0, data: { items: [] } });
@@ -73,4 +73,30 @@ test("missing login or chat link safely returns read-only results", async (t) =>
   for (const extra of [{ chatAccess: {} }, { link: "" }]) assert.equal((await lookup(extra)).readOnly, true);
   assert.deepEqual(w.writes, []);
   assert.deepEqual(w.roleCalls, []);
+});
+
+test("an unanswered blast is read-only with no row writes, then a fresh lookup after the customer's reply creates the case", async (t) => {
+  const events = [{ type: "message", author_id: "guide@example.com", visibility: "all", text: "Blast" }];
+  const w = world(t, { visibility: "all", events });
+  const first = await lookup({ previousRecordId: "recPrevious123" });
+  assert.equal(first.readOnly, true);
+  assert.match(first.readOnlyReason, /customer has not replied/);
+  assert.equal(first.justCreated, false);
+  assert.equal(first.caRecordId, null);
+  assert.equal(first.row.customerName, "Test Player");
+  assert.deepEqual(w.writes, [], "no create, update or previous-record deletion");
+  events.push({ type: "message", author_id: "customer", visibility: "all", text: "Hi" });
+  const second = await lookup();
+  assert.equal(second.readOnly, false);
+  assert.equal(second.caRecordId, "recCreated123");
+  assert.equal(w.writes.length, 1);
+});
+
+test("only a customer reply in the requested thread unlocks a handling agent's lookup", () => {
+  const users = [{ id: "agent", type: "agent", visibility: "all", present: true }, { id: "customer", type: "customer" }];
+  const access = (events) => chatAccessFor({ users, thread: { active: true, events }, threads: [{ events: [{ type: "message", author_id: "customer" }] }] }, ["agent"]);
+  for (const events of [[], undefined, [{ type: "message", author_id: "agent" }], [{ type: "system_message", author_id: "customer" }], [{ type: "filled_form", author_id: "customer" }], [{ type: "message", author_id: "customer", visibility: "agents" }]]) {
+    assert.equal(access(events).readOnly, true);
+  }
+  for (const type of ["message", "file", "rich_message"]) assert.equal(access([{ type, author_id: "customer", visibility: "all" }]).readOnly, false);
 });
