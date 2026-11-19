@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { handler } from "./lark-search.js";
-import { findOldestClaimableRow, initEnv, searchRecords } from "./_lib/lark.js";
+import { findOldestClaimableRow, initEnv, searchRecords, malaysiaMidnight, inspectedToday } from "./_lib/lark.js";
 
 test("preview lookup reads bonus tables without creating a Customer Approaching record", async () => {
   initEnv({
@@ -199,11 +199,12 @@ test("lookup returns eligible results for every configured bonus source", async 
     LARK_TABLE_VIP_BOOSTER: "vip-table", LARK_TABLE_TELEGRAM28: "telegram-table",
     LARK_TABLE_MOONCAKE: "mooncake-table", LARK_TABLE_VS96_FEEDBACK: "vs96-table",
   });
+  const now = Date.now();
   const fixtures = {
     "pnl-table": { Tier: "Tier V", "Title name": "Test Player" },
-    "top-pnl-table": { "SW Check": "Pass RM58", "Claimed Copy": false, "Time of Inspection": 100 },
-    "ltv-table": { "SW Checker": "Pass RM18", "Time of Inspection": 110 },
-    "grace-table": { "SW Check": "Activated : 2026-10-17 14:35 - Pass - 58", Expired: 1_800_000_000_000, "Time of Inspection": 120 },
+    "top-pnl-table": { "SW Check": "Pass RM58", "Claimed Copy": false, "Time of Inspection": now },
+    "ltv-table": { "SW Checker": "Pass RM18", "Time of Inspection": now },
+    "grace-table": { "SW Check": "Activated : 2026-10-17 14:35 - Pass - 58", Expired: 1_800_000_000_000, "Time of Inspection": now },
     "risk-table": { Status: "7D 20% Reload", "Date Expired": 1_800_000_000_000, Date: 130 },
     "vip-table": { Status: "Eligible" }, "reload-table": { Status: "Eligible Angpao" },
     "telegram-table": { Status: "Eligible", "Bonus Amount": 18 }, "redeem-table": { Status: "Eligible" },
@@ -358,4 +359,70 @@ test("lookup completes the first pass for every bonus table, then retries only f
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("promotions inspected before today's Malaysia midnight are hidden even with a Pass status; today's and later rows show", async () => {
+  initEnv({
+    LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
+    LARK_TABLE_CUSTOMER_APPROACHING: "customer-table", LARK_TABLE_REDEEM_CODE: "redeem-table",
+    LARK_TABLE_TOP_PNL_NIGHT: "top-pnl-table", LARK_TABLE_LTV_DAY: "ltv-table",
+    LARK_TABLE_GRACE_PERIOD: "grace-table", LARK_TABLE_RISK_PLAYER: "risk-table",
+    LARK_TABLE_VIP_BOOSTER: "vip-table", LARK_TABLE_TELEGRAM28: "telegram-table",
+    LARK_TABLE_MOONCAKE: "mooncake-table", LARK_TABLE_VS96_FEEDBACK: "vs96-table",
+  });
+  const midnight = malaysiaMidnight(Date.now());
+  const yesterday = midnight - 60_000;
+  const tomorrow = midnight + 86_400_000;
+  const fixtures = {
+    "top-pnl-table": [{ "SW Check": "Pass RM58", "Time of Inspection": yesterday }],
+    "ltv-table": [{ "SW Checker": "Pass RM18", "Time of Inspection": yesterday }, { "SW Checker": "Pass RM28", "Time of Inspection": midnight }],
+    "grace-table": [{ "SW Check": "Pass - 58", "Time of Inspection": yesterday, Expired: midnight - 1 }, { "SW Check": "Pass - 88", "Time of Inspection": yesterday, Expired: tomorrow }],
+    "risk-table": [{ Status: "7D 20% Reload", Date: yesterday }],
+    "vip-table": [{ Status: "Eligible", "Time of Inspection": tomorrow }],
+    "telegram-table": [{ Status: "Eligible", "Time of Inspection": yesterday }],
+    "redeem-table": [{ Status: "Pass", "Time of Inspection": yesterday }],
+    "mooncake-table": [{ Status: "Pass RM20", "Time of Inspection": [yesterday] }],
+    "vs96-table": [{ Status: "Feedback required" }],
+  };
+  const originalFetch = globalThis.fetch;
+  const response = (data) => ({ status: 200, headers: { get: () => null }, json: async () => data });
+  globalThis.fetch = async (url) => {
+    const urlText = String(url);
+    if (urlText.includes("tenant_access_token")) return response({ code: 0, tenant_access_token: "token", expire: 3600 });
+    const tableId = urlText.match(/\/tables\/([^/]+)\/records\/search/)?.[1];
+    const rows = fixtures[tableId] || [];
+    return response({ code: 0, data: { items: rows.map((fields, i) => ({ record_id: `${tableId}-${i}`, created_time: 10 + i, fields })) } });
+  };
+  try {
+    const result = await handler({ body: JSON.stringify({ username: "inspect-user", brand: "PP", preview: true }) });
+    const row = JSON.parse(result.body).row;
+    assert.equal(row.topPnl, "", "yesterday's Pass is hidden");
+    assert.equal(row.ltvTest, "Pass RM28", "a row inspected at today's 12AM shows");
+    assert.equal(row.gracePeriod, "Pass - 88", "an old inspection whose Expired date has not passed still shows");
+    assert.equal(row.riskPlayer, "7D 20% Reload", "Risk Player has no Time of Inspection; its own expiry applies");
+    assert.equal(row.vipBooster, "Eligible", "a later inspection date shows");
+    assert.equal(row.telegram28, null);
+    assert.equal(row.redeemCode, null);
+    assert.equal(row.mooncake, "");
+    assert.equal(row.vs96Feedback, "Feedback required", "a row with no inspection time is not hidden");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Malaysia midnight and inspection-day checks use GMT+8", () => {
+  const at = Date.parse("2026-11-19T00:30:00+08:00");
+  assert.equal(malaysiaMidnight(at), Date.parse("2026-11-19T00:00:00+08:00"));
+  assert.equal(malaysiaMidnight(Date.parse("2026-11-18T16:00:00Z")), Date.parse("2026-11-19T00:00:00+08:00"));
+  const notBefore = malaysiaMidnight(at);
+  assert.equal(inspectedToday({ "Time of Inspection": Date.parse("2026-11-19T00:00:00+08:00") }, notBefore), true);
+  assert.equal(inspectedToday({ "Time of Inspection": Date.parse("2026-11-18T23:59:00+08:00") }, notBefore), false);
+  assert.equal(inspectedToday({ "Time of Inspection": "2026-11-18 23:59" }, notBefore), false);
+  assert.equal(inspectedToday({ "Time of Inspection": { value: [Date.parse("2026-11-20T08:00:00+08:00")] } }, notBefore), true);
+  assert.equal(inspectedToday({}, notBefore), true);
+  const old = { "Time of Inspection": Date.parse("2026-11-10T00:00:00+08:00") };
+  assert.equal(inspectedToday({ ...old, Expired: Date.parse("2026-11-25T00:00:00+08:00") }, notBefore, undefined, at), true, "expiry not passed: still shown");
+  assert.equal(inspectedToday({ ...old, "Date Expired": Date.parse("2026-11-18T00:00:00+08:00") }, notBefore, undefined, at), false, "expiry passed: hidden");
+  assert.equal(inspectedToday({ ...old, Expried: [Date.parse("2026-11-19T12:00:00+08:00")] }, notBefore, undefined, at), true);
+  assert.equal(inspectedToday({ "Time of Inspection": 1 }, 0), true);
 });
