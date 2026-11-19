@@ -14,7 +14,7 @@ test("supervisors and viewers are read-only; the assigned agent can look up befo
   assert.equal(chatAccessFor(chat({ visibility: "all", present: false }, false), ["agent@example.com"]).readOnly, false, "an archived chat handled by this agent remains recordable");
 });
 
-function world(t, { visibility = "agents", missing = false, unavailable = false, wrongThread = false, events = [{ type: "message", author_id: "customer", visibility: "all" }] } = {}) {
+function world(t, { visibility = "agents", missing = false, unavailable = false, wrongThread = false, expired = false, events = [{ type: "message", author_id: "customer", visibility: "all" }] } = {}) {
   initEnv({ LARK_APP_ID: "app", LARK_APP_SECRET: "test-secret", LARK_BASE_APP_TOKEN: "base", LARK_TABLE_CUSTOMER_APPROACHING: "cases", LARK_TABLE_PNL: "pnl", LARK_TABLE_REDEEM_CODE: "redeem" });
   initLiveChat({ LIVECHAT_PAT: "test-pat" });
   const original = globalThis.fetch;
@@ -23,7 +23,7 @@ function world(t, { visibility = "agents", missing = false, unavailable = false,
   const response = (data, status = 200) => new Response(JSON.stringify(data), { status });
   globalThis.fetch = async (url, options = {}) => {
     url = String(url);
-    if (url.endsWith("/v2/info")) return response({ account_id: "guide@example.com", client_id: "client" });
+    if (url.endsWith("/v2/info")) return expired ? response({ error: "invalid_token" }, 401) : response({ account_id: "guide@example.com", client_id: "client" });
     if (url.endsWith("/get_chat")) {
       roleCalls.push(JSON.parse(options.body));
       if (unavailable) return response({ error: { message: "Unavailable" } }, 503);
@@ -73,6 +73,16 @@ test("missing login or chat link safely returns read-only results", async (t) =>
   for (const extra of [{ chatAccess: {} }, { link: "" }]) assert.equal((await lookup(extra)).readOnly, true);
   assert.deepEqual(w.writes, []);
   assert.deepEqual(w.roleCalls, []);
+});
+
+test("expired login on an active, assigned chat returns a reconnect action without writing any case row", async (t) => {
+  const w = world(t, { visibility: "all", expired: true });
+  const result = await lookup({ previousRecordId: "recPrevious123" });
+  assert.equal(result.readOnly, true);
+  assert.equal(result.loginRequired, true);
+  assert.equal(result.readOnlyCode, "login_required");
+  assert.match(result.readOnlyReason, /Reconnect LiveChat/);
+  assert.deepEqual(w.writes, []);
 });
 
 test("an unanswered blast is read-only with no row writes, then a fresh lookup after the customer's reply creates the case", async (t) => {

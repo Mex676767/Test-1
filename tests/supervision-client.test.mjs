@@ -21,12 +21,53 @@ test('a supervised card cannot write via automatic recording, link saves, Unknow
 test('the lookup sends the signed-in account token and preserves the read-only server result', async () => {
   let posted;
   const c = vm.createContext({ previewMode: false, currentLiveChatAccount: 'lc2', liveChatAgentTokens: () => ({ lc2: 'test-token' }),
-    fetch: async (url, options) => { posted = JSON.parse(options.body); return { text: async () => JSON.stringify({ ok: true, readOnly: true, readOnlyReason: 'Supervising', row: {} }) }; } });
+    fetch: async (url, options) => { posted = JSON.parse(options.body); return { text: async () => JSON.stringify({ ok: true, readOnly: true, readOnlyReason: 'Reconnect LiveChat', loginRequired: true, row: {} }) }; } });
   vm.runInContext(fn('fetchBonusRow'), c);
   const result = await c.fetchBonusRow('player', 'JOM', 'https://my.livechatinc.com/chats/C/T', false, 'Guide', null);
   assert.deepEqual(posted.chatAccess, { accountKey: 'lc2', agentToken: 'test-token' });
   assert.equal(result.readOnly, true);
-  assert.equal(result.readOnlyReason, 'Supervising');
+  assert.equal(result.readOnlyReason, 'Reconnect LiveChat');
+  assert.equal(result.loginRequired, true);
+});
+
+test('reconnection uses the same workspace, shares one login attempt, and requires another role check before enabling edits', async () => {
+  let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const forgotten = [], connected = [];
+  const s = { lookupReadOnly: true, lookupLoginRequired: true };
+  const c = vm.createContext({ state: { c1: s }, previewMode: false, currentLiveChatAccount: 'lc2', activeChats: [],
+    forgetLiveChatLogin: key => forgotten.push(key), requireAgentLogin: key => { connected.push(key); return pending; },
+    liveChatAgentTokens: () => ({ lc2: 'new-token' }), saveState() {}, renderChats() {} });
+  vm.runInContext('let lookupReconnectTask = null;\n' + fn('reconnectLookupLogin'), c);
+  const first = c.reconnectLookupLogin('c1');
+  const second = c.reconnectLookupLogin('c1');
+  assert.deepEqual(forgotten, ['lc2']);
+  assert.deepEqual(connected, ['lc2']);
+  finish(); await Promise.all([first, second]);
+  assert.equal(s.lookupReadOnly, true);
+  assert.equal(s.lookupLoginRequired, false);
+  assert.match(s.lookupReadOnlyReason, /Look up again/);
+});
+
+test('supervision, preview and a chat replaced during reconnect cannot be unlocked by reconnecting', async () => {
+  let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const s = { lookupReadOnly: true, lookupLoginRequired: true };
+  let logins = 0;
+  const c = vm.createContext({ state: { c1: s }, previewMode: true, currentLiveChatAccount: 'lc1',
+    forgetLiveChatLogin() {}, requireAgentLogin: () => { logins++; return pending; }, liveChatAgentTokens: () => ({ lc1: 'new' }),
+    saveState: () => { throw new Error('Unexpected state change'); } });
+  vm.runInContext('let lookupReconnectTask = null;\n' + fn('reconnectLookupLogin'), c);
+  await c.reconnectLookupLogin('c1');
+  assert.equal(logins, 0);
+  c.previewMode = false; s.lookupLoginRequired = false;
+  await c.reconnectLookupLogin('c1');
+  assert.equal(logins, 0);
+  s.lookupLoginRequired = true;
+  const task = c.reconnectLookupLogin('c1');
+  c.state.c1 = { lookupReadOnly: true };
+  finish(); await task;
+  assert.equal(c.state.c1.lookupReadOnly, true);
 });
 
 test('the SDK chat ID supplies a usable link immediately, before the first status poll', () => {

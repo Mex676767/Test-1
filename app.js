@@ -1045,13 +1045,14 @@ window.addEventListener("message", (event) => {
   if (event.origin === location.origin && event.data && event.data.source === "ca-qa-ready") postQaChat();
 });
 
-async function requireAgentLogin() {
+async function requireAgentLogin(accountKey = "") {
   agentSigningIn = true;
   updateAgentBadge();
   let config = null;
   try { config = await (await fetch("/livechat-oauth-config", { cache: "no-store" })).json(); } catch (_) { }
   let clients = Array.isArray(config?.clients) ? config.clients : [];
   if (CONFIGURED_LIVECHAT_ACCOUNT) clients = clients.filter((client) => client.key === CONFIGURED_LIVECHAT_ACCOUNT);
+  else if (accountKey) clients = clients.filter((client) => client.key === accountKey);
   if (!clients.length) {
     agentLoginPanel(`<div class="settings-head">LiveChat login unavailable</div><p class="settings-hint">LiveChat login has not been configured for this widget.</p>`);
     return new Promise(() => {});
@@ -1350,6 +1351,7 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
         notVip: data.notVip,
         readOnly: !!data.readOnly,
         readOnlyReason: data.readOnlyReason || "",
+        loginRequired: !!data.loginRequired,
       };
     }
 
@@ -1362,6 +1364,22 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
     throw new Error(data.error || `Lookup failed (HTTP ${res.status})`);
   }
   throw new Error("Lookup failed. Please try again.");
+}
+
+let lookupReconnectTask = null;
+async function reconnectLookupLogin(chatId) {
+  const s = state[chatId];
+  if (previewMode || !s?.lookupReadOnly || !s.lookupLoginRequired) return;
+  if (!lookupReconnectTask) {
+    forgetLiveChatLogin(currentLiveChatAccount);
+    lookupReconnectTask = requireAgentLogin(currentLiveChatAccount).finally(() => { lookupReconnectTask = null; });
+  }
+  await lookupReconnectTask;
+  if (state[chatId] !== s || !liveChatAgentTokens()[currentLiveChatAccount]) return;
+  s.lookupLoginRequired = false;
+  s.lookupReadOnlyReason = "LiveChat connected. Look up again to check this chat and enable changes if you're handling it.";
+  saveState();
+  renderChats(activeChats);
 }
 
 const SAMPLE_CHATS = [
@@ -1631,6 +1649,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
   lookupControllers.set(chatId, controller);
   s.lookupInFlight = true;
   s.lookupReadOnly = true;
+  s.lookupLoginRequired = false;
   s.lookupReadOnlyReason = "Checking your role in this chat…";
   s.lookupMessage = null;
   s.pendingLookup = { username, brand, link, telegram: !!telegramNow, previousRecordId, forcing: !!forcing, agent: selectedAgent, startedAt: Date.now(), resumed: !!resumed };
@@ -1648,8 +1667,9 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
   refreshBackgroundLookupPill();
   saveState();
   try {
-    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip, readOnly, readOnlyReason } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
+    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip, readOnly, readOnlyReason, loginRequired } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
     s.lookupReadOnly = !!readOnly;
+    s.lookupLoginRequired = !!loginRequired;
     s.lookupReadOnlyReason = readOnlyReason || "";
     s.autoRecordError = "";
     needFullRender = true;
@@ -2813,12 +2833,13 @@ async function addCaseFlow(chatId) {
   try {
     if (!(await ensureActiveCaseSaved(chatId))) return;
     const chatDef = activeChats.find((c) => c.chatId === chatId);
-    const { row, otherBrands, caRecordId, readOnly, readOnlyReason } = await fetchBonusRow(
+    const { row, otherBrands, caRecordId, readOnly, readOnlyReason, loginRequired } = await fetchBonusRow(
       s.username, s.brand, s.chatUrl || (chatDef && chatDef.link) || "", !!s.telegram, selectedAgent, null
     );
     if (readOnly) {
       s.lookupReadOnly = true;
       s.lookupReadOnlyReason = readOnlyReason;
+      s.lookupLoginRequired = !!loginRequired;
       return;
     }
     s.logs = s.logs || [];
@@ -3758,7 +3779,7 @@ function renderExpandedCard(chat) {
 
     <section class="ca-section ca-customer-section">
       <div class="ca-section-head"><div><strong>Customer</strong></div></div>
-      ${s.lookupReadOnly ? `<div class="supervision-notice" role="status">${escapeHtml(s.lookupReadOnlyReason || "Read-only lookup — nothing will be recorded.")}</div>` : ""}
+      ${s.lookupReadOnly ? `<div class="supervision-notice" role="status">${escapeHtml(s.lookupReadOnlyReason || "Read-only lookup — nothing will be recorded.")}${s.lookupLoginRequired ? ` <button type="button" class="secondary-btn" data-action="reconnectLookup" data-chat="${escapeHtml(chat.chatId)}">Reconnect LiveChat</button>` : ""}</div>` : ""}
       <label class="field-label">Username or user ID</label>
       <div class="username-row">
         <input type="text" class="input mono username-input" placeholder="${s.lastUsernameLoading ? "Checking for a previous record…" : "Player username / UID"}" value="${s.usernameDraft || s.username}" ${s.isUnknown && !s.notVipResult ? "disabled" : ""} />
@@ -6250,6 +6271,11 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (s?.lookupReadOnly && ["claim", "unclaim", "submit", "saveCase", "addCase", "editCase", "saveNote", "editPlayerName", "savePlayerName", "birthdayCheck", "birthdayRemovePicture", "reactivateGracePeriod"].includes(btn.dataset.action)) {
     setStatus("This chat is read-only. Look up again after the customer replies and you're handling the chat to make changes.", "info");
+    return;
+  }
+
+  if (btn.dataset.action === "reconnectLookup") {
+    await reconnectLookupLogin(chatId);
     return;
   }
 
