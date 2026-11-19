@@ -1,6 +1,7 @@
 import { adapt } from "./_lib/adapt.js";
 import {
   searchRecords, createRecord, deleteRecord, toDisplay, getFieldOptionMap, findOldestClaimableRow, runWithRequestStart, noteCounter,
+  inspectedToday, malaysiaMidnight,
   TABLE_CUSTOMER_APPROACHING, TABLE_REDEEM_CODE, TABLE_PNL,
   TABLE_GRACE_PERIOD, TABLE_TOP_PNL_NIGHT, TABLE_LTV_DAY, TABLE_RISK_PLAYER,
   TABLE_SPECIAL_RELOAD, TABLE_VIP_BOOSTER,
@@ -38,6 +39,7 @@ const F = {
   graceExpiryOld: "Expried",
   riskExpiry: "Date Expired",
   uid: "UID",
+  inspection: "Time of Inspection",
 };
 
 // Free-bonus daily limit: this player's Customer Approaching rows for this brand that were created today
@@ -183,8 +185,10 @@ async function lookupHandler(event, hardEnd) {
       if (typeof event.waitUntil === "function") event.waitUntil(safe);
     };
     const search = (table, conditions, base, opts = {}) => searchRecords(table, conditions, base, { ...opts, timeoutMs: budget.searchMs });
+    // Promotions only count from today's Malaysia midnight: a row inspected on an earlier day is not shown.
+    const notBefore = malaysiaMidnight(Date.now());
     const findRow = (table, name, brandName, isClaimable, base, opts = {}) =>
-      findOldestClaimableRow(table, name, brandName, isClaimable, base, { ...opts, timeoutMs: budget.searchMs });
+      findOldestClaimableRow(table, name, brandName, isClaimable, base, { notBefore, ...opts, timeoutMs: budget.searchMs });
     const guard = (promise, ms, label) => {
       let timer;
       const timeout = new Promise((_, reject) => {
@@ -399,35 +403,36 @@ async function lookupHandler(event, hardEnd) {
           return !!status && !/no bonus/i.test(status) && !hidden(status);
         },
         undefined,
-        { usernameField: "Username", dateField: "Date", fieldNames: [F.status, F.riskExpiry, "Date"] }
+        { usernameField: "Username", dateField: "Date", notBefore: 0, fieldNames: [F.status, F.riskExpiry, "Date"] }
       )),
 
       optionalLookup("12h VIP Booster", () => findRow(
         TABLE_VIP_BOOSTER, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
         undefined,
-        { fieldNames: [F.status] }
+        { fieldNames: [F.status, F.inspection] }
       )),
 
       optionalLookup("Special Reload", () => findRow(
         TABLE_SPECIAL_RELOAD, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible angpao",
         undefined,
-        { fieldNames: [F.status] }
+        { fieldNames: [F.status, F.inspection] }
       )),
 
       optionalLookup("Telegram RM28", () => findRow(
         TABLE_TELEGRAM28, uname, brandVal,
         (fields) => String(toDisplay(fields[F.status]) || "").trim().toLowerCase() === "eligible",
         undefined,
-        { fieldNames: [F.status, F.bonusAmount] }
+        { fieldNames: [F.status, F.bonusAmount, F.inspection] }
       )),
 
       optionalLookup("Redeem Code", async () => {
         const redeemMatches = (await search(TABLE_REDEEM_CODE, [
           { field_name: F.usernameUid, operator: "is", value: [uname] },
           { field_name: F.brand, operator: "is", value: [brandVal] },
-        ], undefined, { fieldNames: [F.status] })).filter((r) => !hidden(toDisplay(r.fields[F.status])));
+        ], undefined, { fieldNames: [F.status, F.inspection] }))
+          .filter((r) => !hidden(toDisplay(r.fields[F.status])) && inspectedToday(r.fields, notBefore));
         return redeemMatches[redeemMatches.length - 1] || null;
       }),
 

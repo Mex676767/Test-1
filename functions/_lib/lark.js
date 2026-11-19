@@ -900,7 +900,40 @@ function findTimeOfInspection(fields, dateFieldName) {
   return key ? fields[key] : 0;
 }
 
-export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest, fieldNames, timeoutMs } = {}) {
+// Epoch ms of a row's Time of Inspection (or its configured date field), or null when blank/unreadable.
+export function inspectionEpoch(fields, dateFieldName) {
+  const read = (value) => {
+    if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : null;
+    if (Array.isArray(value)) {
+      for (const item of value) { const n = read(item); if (n !== null) return n; }
+      return null;
+    }
+    if (value && typeof value === "object") return "value" in value ? read(value.value) : ("text" in value ? read(value.text) : null);
+    if (typeof value === "string" && value.trim()) {
+      const n = Number(value);
+      if (Number.isFinite(n)) return read(n);
+      const parsed = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(value.trim()) ? value.trim() : `${value.trim().replace(" ", "T")}+08:00`);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+  return read(findTimeOfInspection(fields || {}, dateFieldName));
+}
+
+// Start of today in Malaysia (GMT+8), as epoch ms.
+export function malaysiaMidnight(nowMs = Date.now()) {
+  return Date.parse(`${new Date(nowMs + 8 * 3600_000).toISOString().slice(0, 10)}T00:00:00+08:00`);
+}
+
+// A promotion row is shown only from its Time of Inspection's day onwards: rows inspected before today
+// (Malaysia time) are hidden even if their status still says Pass. Rows with no inspection time are kept.
+export function inspectedToday(fields, notBefore, dateFieldName) {
+  if (!notBefore) return true;
+  const at = inspectionEpoch(fields, dateFieldName);
+  return at === null || at >= notBefore;
+}
+
+export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest, fieldNames, timeoutMs, notBefore } = {}) {
   if (!tableId) return null;
   const defaultUsernameField = !usernameField;
   const usernameFields = usernameField ? [usernameField] : ["Username/UID", "Username"];
@@ -931,7 +964,7 @@ export async function findOldestClaimableRow(tableId, username, brand, isClaimab
     }
   }
   if (!matches) throw lastErr;
-  const claimable = matches.filter((r) => isClaimable(r.fields));
+  const claimable = matches.filter((r) => isClaimable(r.fields) && inspectedToday(r.fields, notBefore, dateField));
   if (!claimable.length) return null;
   claimable.sort((a, b) => {
     const byInspection = (findTimeOfInspection(a.fields, dateField) || 0) - (findTimeOfInspection(b.fields, dateField) || 0);
