@@ -376,7 +376,7 @@ test("promotions inspected before today's Malaysia midnight are hidden even with
   const fixtures = {
     "top-pnl-table": [{ "SW Check": "Pass RM58", "Time of Inspection": yesterday }],
     "ltv-table": [{ "SW Checker": "Pass RM18", "Time of Inspection": yesterday }, { "SW Checker": "Pass RM28", "Time of Inspection": midnight }],
-    "grace-table": [{ "SW Check": "Pass - 58", "Time of Inspection": yesterday }],
+    "grace-table": [{ "SW Check": "Pass - 58", "Time of Inspection": yesterday, Expired: midnight - 1 }, { "SW Check": "Pass - 88", "Time of Inspection": yesterday, Expired: tomorrow }],
     "risk-table": [{ Status: "7D 20% Reload", Date: yesterday }],
     "vip-table": [{ Status: "Eligible", "Time of Inspection": tomorrow }],
     "telegram-table": [{ Status: "Eligible", "Time of Inspection": yesterday }],
@@ -398,7 +398,7 @@ test("promotions inspected before today's Malaysia midnight are hidden even with
     const row = JSON.parse(result.body).row;
     assert.equal(row.topPnl, "", "yesterday's Pass is hidden");
     assert.equal(row.ltvTest, "Pass RM28", "a row inspected at today's 12AM shows");
-    assert.equal(row.gracePeriod, "");
+    assert.equal(row.gracePeriod, "Pass - 88", "an old inspection whose Expired date has not passed still shows");
     assert.equal(row.riskPlayer, "7D 20% Reload", "Risk Player has no Time of Inspection; its own expiry applies");
     assert.equal(row.vipBooster, "Eligible", "a later inspection date shows");
     assert.equal(row.telegram28, null);
@@ -420,5 +420,9 @@ test("Malaysia midnight and inspection-day checks use GMT+8", () => {
   assert.equal(inspectedToday({ "Time of Inspection": "2026-11-18 23:59" }, notBefore), false);
   assert.equal(inspectedToday({ "Time of Inspection": { value: [Date.parse("2026-11-20T08:00:00+08:00")] } }, notBefore), true);
   assert.equal(inspectedToday({}, notBefore), true);
+  const old = { "Time of Inspection": Date.parse("2026-11-10T00:00:00+08:00") };
+  assert.equal(inspectedToday({ ...old, Expired: Date.parse("2026-11-25T00:00:00+08:00") }, notBefore, undefined, at), true, "expiry not passed: still shown");
+  assert.equal(inspectedToday({ ...old, "Date Expired": Date.parse("2026-11-18T00:00:00+08:00") }, notBefore, undefined, at), false, "expiry passed: hidden");
+  assert.equal(inspectedToday({ ...old, Expried: [Date.parse("2026-11-19T12:00:00+08:00")] }, notBefore, undefined, at), true);
   assert.equal(inspectedToday({ "Time of Inspection": 1 }, 0), true);
 });

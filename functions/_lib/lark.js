@@ -900,24 +900,37 @@ function findTimeOfInspection(fields, dateFieldName) {
   return key ? fields[key] : 0;
 }
 
+// Epoch ms of a Lark date cell (number, array, {value}/{text}, or "YYYY-MM-DD HH:mm" Malaysia time), or null.
+function readEpoch(value) {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : null;
+  if (Array.isArray(value)) {
+    for (const item of value) { const n = readEpoch(item); if (n !== null) return n; }
+    return null;
+  }
+  if (value && typeof value === "object") return "value" in value ? readEpoch(value.value) : ("text" in value ? readEpoch(value.text) : null);
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return readEpoch(n);
+    const parsed = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(value.trim()) ? value.trim() : `${value.trim().replace(" ", "T")}+08:00`);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 // Epoch ms of a row's Time of Inspection (or its configured date field), or null when blank/unreadable.
 export function inspectionEpoch(fields, dateFieldName) {
-  const read = (value) => {
-    if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : null;
-    if (Array.isArray(value)) {
-      for (const item of value) { const n = read(item); if (n !== null) return n; }
-      return null;
-    }
-    if (value && typeof value === "object") return "value" in value ? read(value.value) : ("text" in value ? read(value.text) : null);
-    if (typeof value === "string" && value.trim()) {
-      const n = Number(value);
-      if (Number.isFinite(n)) return read(n);
-      const parsed = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(value.trim()) ? value.trim() : `${value.trim().replace(" ", "T")}+08:00`);
-      return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-  };
-  return read(findTimeOfInspection(fields || {}, dateFieldName));
+  return readEpoch(findTimeOfInspection(fields || {}, dateFieldName));
+}
+
+// Latest expiry date on the row from any expiry column (Expired, Expried, Date Expired, Expiry Date...), or null.
+export function expiryEpoch(fields) {
+  let latest = null;
+  for (const [key, value] of Object.entries(fields || {})) {
+    if (!/expir|expried/i.test(key)) continue;
+    const at = readEpoch(value);
+    if (at !== null && (latest === null || at > latest)) latest = at;
+  }
+  return latest;
 }
 
 // Start of today in Malaysia (GMT+8), as epoch ms.
@@ -926,11 +939,14 @@ export function malaysiaMidnight(nowMs = Date.now()) {
 }
 
 // A promotion row is shown only from its Time of Inspection's day onwards: rows inspected before today
-// (Malaysia time) are hidden even if their status still says Pass. Rows with no inspection time are kept.
-export function inspectedToday(fields, notBefore, dateFieldName) {
+// (Malaysia time) are hidden even if their status still says Pass, unless the row has an expiry date that
+// has not passed yet. Rows with no inspection time are kept.
+export function inspectedToday(fields, notBefore, dateFieldName, nowMs = Date.now()) {
   if (!notBefore) return true;
   const at = inspectionEpoch(fields, dateFieldName);
-  return at === null || at >= notBefore;
+  if (at === null || at >= notBefore) return true;
+  const expiry = expiryEpoch(fields);
+  return expiry !== null && expiry > nowMs;
 }
 
 export async function findOldestClaimableRow(tableId, username, brand, isClaimable, baseToken, { usernameField, brandField, dateField, newest, fieldNames, timeoutMs, notBefore } = {}) {
