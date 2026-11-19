@@ -63,6 +63,20 @@ test('a fresh lookup after takeover restores normal recording', async () => {
   assert.equal(w.state.A.caRecordId, 'rec1');
 });
 
+test('an expired login is saved with a recovery action and a successful retry clears it', async () => {
+  let expired = true;
+  const w = widget({ persisted: { A: chat() }, focus: 'A', storage: makeStorage(), clock: { now: 1 },
+    fetchBonusRow: () => Promise.resolve(expired ? okResult({ readOnly: true, loginRequired: true, caRecordId: null, readOnlyReason: 'Reconnect LiveChat' }) : okResult()) });
+  await start(w, 'A');
+  assert.equal(w.state.A.lookupReadOnly, true);
+  assert.equal(widgetSaved.get('copy').A.lookupLoginRequired, true);
+  expired = false;
+  await start(w, 'A');
+  assert.equal(w.state.A.lookupReadOnly, false);
+  assert.equal(w.state.A.lookupLoginRequired, false);
+  assert.equal(w.state.A.caRecordId, 'rec1');
+});
+
 test('look up in chat A, switch to B before it finishes: the result is saved in A, B is left alone, one neutral toast says it finished elsewhere', async () => {
   const clock = { now: 1_000_000 }, d = deferred();
   const w = widget({ persisted: { A: chat(), B: chat() }, focus: 'A', storage: makeStorage(), clock, fetchBonusRow: () => d.promise });

@@ -6,7 +6,7 @@ function clientIdFor(env, account) {
 
 const emailCache = new Map();
 const EMAIL_TTL_MS = 60 * 60_000;
-async function lookupEmail(login, agentToken, pat) {
+async function lookupEmail(login, agentToken, pat, signal) {
   const cached = emailCache.get(login);
   if (cached && cached.expires > Date.now()) return { email: cached.email, via: cached.via };
   const reasons = [];
@@ -16,7 +16,8 @@ async function lookupEmail(login, agentToken, pat) {
   ];
   for (const [via, url, authorization] of attempts) {
     try {
-      const response = await fetch(url, { headers: { Authorization: authorization } });
+      if (signal?.aborted) throw new Error("Identity check cancelled");
+      const response = await fetch(url, { headers: { Authorization: authorization }, ...(signal ? { signal } : {}) });
       const data = await response.json().catch(() => ({}));
       const email = clean(data?.email);
       if (response.ok && email) {
@@ -33,8 +34,8 @@ async function lookupEmail(login, agentToken, pat) {
 
 export { lookupEmail as findAgentEmail };
 
-export async function identifyAgent(env, accountKey, agentToken, { withEmail = false, pat = "" } = {}) {
-  const response = await fetch("https://accounts.livechat.com/v2/info", { headers: { Authorization: `Bearer ${agentToken}` } });
+export async function identifyAgent(env, accountKey, agentToken, { withEmail = false, pat = "", signal } = {}) {
+  const response = await fetch("https://accounts.livechat.com/v2/info", { headers: { Authorization: `Bearer ${agentToken}` }, ...(signal ? { signal } : {}) });
   const info = await response.json().catch(() => ({}));
   if (!response.ok || info?.error || !info?.account_id) {
     // A busy or failing LiveChat says nothing about the token: keep the agent's login and let them try again.
@@ -50,7 +51,7 @@ export async function identifyAgent(env, accountKey, agentToken, { withEmail = f
   const login = clean(info.account_id);
   let email = clean(info.email);
   let emailLookup = email ? "token info" : "";
-  if (!email && withEmail && !login.includes("@")) ({ email, via: emailLookup } = await lookupEmail(login, agentToken, pat));
+  if (!email && withEmail && !login.includes("@")) ({ email, via: emailLookup } = await lookupEmail(login, agentToken, pat, signal));
   const identities = [...new Set([login, email].filter(Boolean).map((id) => id.toLowerCase()))];
   return { ok: true, login, identities, emailLookup };
 }

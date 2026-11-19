@@ -101,6 +101,12 @@ test('a widget installed in one LiveChat account ignores a login stored for the 
   assert.deepEqual(h.calls.posted.map((p) => [p.accountKey, p.agentToken]), [['lc2', 'right']]);
 });
 
+test('reconnecting a lookup stays in its requested workspace even when another workspace has a stored login', async () => {
+  const h = harness({ stored: { 'ca-livechat-agent-token:lc1': 'other', 'ca-livechat-agent-token-expiry:lc1': future, 'ca-livechat-agent-token:lc2': 'right', 'ca-livechat-agent-token-expiry:lc2': future }, serverReplies: [{ ok: true, bound: true, name: 'A' }] });
+  await h.context.requireAgentLogin('lc2');
+  assert.deepEqual(h.calls.posted.map((p) => [p.accountKey, p.agentToken]), [['lc2', 'right']]);
+});
+
 test('an expired login is dropped, the agent is asked to connect again, and the new login is used', async () => {
   const h = harness({ stored: { 'ca-livechat-agent-token:lc1': 'old', 'ca-livechat-agent-token-expiry:lc1': future }, serverReplies: [{ ok: false, loginExpired: true, error: 'LiveChat login expired' }, { ok: true, bound: true, name: '96 Edwin' }] });
   const done = h.run();

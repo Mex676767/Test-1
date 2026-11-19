@@ -167,6 +167,11 @@ async function lookupHandler(event, hardEnd) {
     const uname = username.trim().toLowerCase();
     const brandVal = brand.trim();
     const agentVal = (picName || "").trim();
+    const chatLink = String(link || "").trim();
+    // Start role checks before the bonus reads contend for outgoing connections.
+    const accessP = !preview && chatAccess !== undefined
+      ? lookupChatAccess(event.env, chatAccess, chatLink)
+      : Promise.resolve({ readOnly: !!preview, reason: "" });
     const lookupWarnings = [];
     const startedAt = Date.now();
     const firstPassMs = Number(event.env?.LOOKUP_FIRST_PASS_MS) || FIRST_PASS_TIMEOUT_MS;
@@ -256,11 +261,6 @@ async function lookupHandler(event, hardEnd) {
       return { configs, lookups };
     });
 
-    const chatLink = String(link || "").trim();
-    // Older clients keep their existing behavior; current live clients always send chatAccess.
-    const accessP = !preview && chatAccess !== undefined
-      ? lookupChatAccess(event.env, chatAccess, chatLink)
-      : Promise.resolve({ readOnly: !!preview, reason: "" });
     const caseMinMs = Number(event.env?.LOOKUP_CASE_MIN_MS) || 2_000;
     const caseGraceMs = Number(event.env?.LOOKUP_CASE_GRACE_MS) || 6_000;
     const caseBudgetMs = () => Math.max(caseMinMs, Math.min(CASE_SEARCH_TIMEOUT_MS, startedAt + lookupBudgetMs - Date.now()));
@@ -545,6 +545,8 @@ async function lookupHandler(event, hardEnd) {
         justCreated: !access.readOnly && !caseRowError,
         readOnly: !preview && access.readOnly,
         readOnlyReason: access.reason,
+        readOnlyCode: access.code || "",
+        loginRequired: !!access.loginRequired,
         notVip,
         caRecordId,
         ...(caseRowError ? { caseRowError } : {}),
