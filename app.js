@@ -2631,6 +2631,7 @@ function renderPlayerInfo(chatId) {
   if (s.matchedRow) {
     const edit = playerNameEditor(chatId);
     const canEditName = !s.lookupReadOnly && (previewMode || !!s.matchedRow.pnlRecordId);
+    const hasName = !!String(s.matchedRow.customerName || "").trim();
     if (edit) {
       parts.push(`<div class="player-name-editor">
         <label class="pi-label" for="player-name-${escapeHtml(chatId)}">Name</label>
@@ -2640,8 +2641,8 @@ function renderPlayerInfo(chatId) {
         <span class="player-name-help">${previewMode ? "Preview only — the P&L file will not change." : "Saves to Title name in the P&L file."}</span>
         ${edit.error ? `<span class="player-name-error" role="alert">${escapeHtml(edit.error)}</span>` : ""}
       </div>`);
-    } else if (s.matchedRow.customerName || canEditName) {
-      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(s.matchedRow.customerName || "—")}</span>${s.matchedRow.customerName ? `<button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button>` : ""}${canEditName ? `<button type="button" class="secondary-btn player-name-action" data-action="editPlayerName" data-chat="${escapeHtml(chatId)}">Edit</button>` : ""}</span>`);
+    } else if (hasName || canEditName) {
+      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(hasName ? s.matchedRow.customerName : "—")}</span>${hasName ? `<button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button>` : ""}${canEditName ? `<button type="button" class="secondary-btn player-name-action" data-action="editPlayerName" data-chat="${escapeHtml(chatId)}">${hasName ? "Edit" : "Add name"}</button>` : ""}</span>`);
     }
     const tier = String(s.matchedRow.tier || "—").trim();
     const tierDisplay = tier === "—" || /^tier\b/i.test(tier) ? tier : `Tier ${tier}`;
