@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { isTrainingWrite } from "./_lib/training.js";
 import { createRecord, getRecord, listFields, searchRecords, toDisplay, updateRecord, TABLE_BIRTHDAY } from "./_lib/lark.js";
 import { fileMatchesType, isStoredImage } from "./_lib/ticket-images.js";
 import { uploadPicture } from "./_lib/knowledge.js";
@@ -45,6 +46,7 @@ export async function handler(event) {
       let body;
       try { body = JSON.parse(event.body || "{}"); } catch (_) { return reply(400, { ok: false, error: "The request was not valid JSON." }); }
       if (body?.action !== "approve" && body?.action !== "removePicture") return reply(400, { ok: false, error: "Unknown action." });
+      if (isTrainingWrite(body)) return reply(200, { ok: true, training: true });
       const recordId = clean(body.recordId, 60);
       const atl = clean(body.atl, 80);
       if (!RECORD_ID.test(recordId)) return reply(400, { ok: false, error: "That Birthday Bonus row id is not valid." });
@@ -60,6 +62,7 @@ export async function handler(event) {
 
     const form = event.formData;
     const username = clean(form.get("username"));
+    if (isTrainingWrite({ username })) return reply(200, { ok: true, training: true, recordId: "rectrainingbirthday", amount: 120, bonusType: "Secret wallet TOx1" });
     const brand = clean(form.get("brand"), 40).toUpperCase();
     const dob = clean(form.get("dob"), 10);
     if (!username || !brand) return reply(400, { ok: false, error: "Look up the player first." });

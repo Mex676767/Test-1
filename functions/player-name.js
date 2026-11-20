@@ -1,3 +1,4 @@
+import { isTrainingWrite } from "./_lib/training.js";
 import { adapt } from "./_lib/adapt.js";
 import { getRecord, listFields, updateRecord, toDisplay, TABLE_PNL } from "./_lib/lark.js";
 
@@ -9,6 +10,7 @@ export async function handler(event) {
   let body;
   try { body = JSON.parse(event.body || "{}"); } catch (_) { return reply(400, { ok: false, error: "Invalid request." }); }
   const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (isTrainingWrite(body) && name && name.length <= 200) return reply(200, { ok: true, training: true, customerName: name });
   if (!name || name.length > 200 || /[\r\n\x00-\x1f]/.test(name)) return reply(400, { ok: false, error: "Enter a name between 1 and 200 characters on one line." });
   if (!/^rec[A-Za-z0-9]{6,40}$/.test(body.recordId || "") || !normalized(body.username) || !normalized(body.brand) || typeof body.expectedName !== "string") {
     return reply(400, { ok: false, error: "Look up the player again before editing their name." });

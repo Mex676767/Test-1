@@ -10,6 +10,72 @@ const PREVIEW_LOGIN_GATE = false;
 const AUTOMATIC_DEPARTMENT_DETECTION = false;
 const MANUAL_DEPARTMENT_SESSION_KEY = "rc-manual-department";
 const AGENT_LOGIN_LIVE = new URLSearchParams(location.search).get("agentLogin") !== "0";
+
+// Training player (functions/_lib/training.js): username "edwintest" on brand LPK shows every bonus with sample
+// values and every action works, but writes never leave the widget. Any save that names the training username,
+// a training record id, or a chat whose last lookup was the training player is answered here with a simulated
+// success instead of being sent. The server refuses the same writes as a second line of defence.
+const TRAINING_USERNAME = "edwintest";
+const TRAINING_RECORD_PREFIX = "rectraining";
+const TRAINING_WRITE_PATHS = new Set([
+  "/lark-record", "/lark-claim", "/lark-delete-record", "/lark-stale-records", "/player-name", "/birthday-bonus",
+  "/console-note", "/halloween-claim", "/claim-log", "/unknown-tick", "/ticket-create", "/ticket-update", "/ticket-comment",
+]);
+const trainingNotes = { relationship: [], action: [] };
+const isTrainingRecordId = (value) => String(value ?? "").trim().toLowerCase().startsWith(TRAINING_RECORD_PREFIX);
+function trainingChatKeys() {
+  const keys = new Set();
+  for (const [chatId, s] of Object.entries(typeof state === "object" ? state : {})) {
+    if (!s?.training) continue;
+    keys.add(String(chatId));
+    for (const part of String(s.chatUrl || "").match(/\/(?:chats|archives)\/[^?#]+/)?.[0]?.split("/").slice(2) || []) if (part) keys.add(part);
+  }
+  return keys;
+}
+function isTrainingRequest(body) {
+  if (!body || typeof body !== "object") return false;
+  if (String(body.username ?? "").trim().toLowerCase() === TRAINING_USERNAME) return true;
+  if (isTrainingRecordId(body.recordId) || isTrainingRecordId(body.deleteRecordId)) return true;
+  const keys = trainingChatKeys();
+  return [body.chatId, body.threadId].some((id) => id && keys.has(String(id)));
+}
+function trainingReply(path, body, isForm) {
+  let answer = { ok: true };
+  if (path === "/console-note") {
+    const list = trainingNotes[body.type === "action" ? "action" : "relationship"];
+    if (body.list === true) answer = { ok: true, notes: list.slice() };
+    else if (body.remove === true) answer = { ok: true, removed: 0 };
+    else {
+      list.unshift({ note: String(body.note || ""), by: `${selectedAgent || "You"} (training)`, at: new Date().toLocaleString() });
+      answer = { ok: true, saved: true };
+    }
+  } else if (path === "/player-name") {
+    answer = { ok: true, customerName: String(body.name || "").trim() };
+  } else if (path === "/birthday-bonus" && isForm) {
+    answer = { ok: true, recordId: "rectrainingbirthday", amount: 120, bonusType: "Secret wallet TOx1" };
+  } else if (path === "/halloween-claim") {
+    answer = { ok: false, error: "Training player: Halloween is not part of training. Nothing was claimed." };
+  } else if (path === "/ticket-create" || path === "/ticket-update" || path === "/ticket-comment") {
+    answer = { ok: false, error: "Training player: no ticket is created or changed." };
+  }
+  return new Response(JSON.stringify({ ...answer, training: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+}
+const nativeFetch = window.fetch.bind(window);
+window.fetch = function trainingAwareFetch(input, init) {
+  try {
+    const method = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const url = new URL(typeof input === "string" || input instanceof URL ? String(input) : input.url, location.href);
+    if (method === "POST" && url.origin === location.origin && TRAINING_WRITE_PATHS.has(url.pathname)) {
+      const raw = init?.body;
+      const isForm = typeof FormData !== "undefined" && raw instanceof FormData;
+      let body = null;
+      if (typeof raw === "string") { try { body = JSON.parse(raw); } catch (_) { body = null; } }
+      else if (isForm) body = { username: raw.get("username") };
+      if (isTrainingRequest(body)) return Promise.resolve(trainingReply(url.pathname, body, isForm));
+    }
+  } catch (_) { }
+  return nativeFetch(input, init);
+};
 const QA_VIEW_LIVE = new URLSearchParams(location.search).get("qaView") !== "0";
 const QA_VIEW_ALSO_KNOWLEDGE = true;
 let qaView = !IS_EMBEDDED_APP && new URLSearchParams(location.search).get("department") === "qa";
@@ -1352,6 +1418,7 @@ async function fetchBonusRow(username, brand, link, telegram, picName, previousR
         readOnly: !!data.readOnly,
         readOnlyReason: data.readOnlyReason || "",
         loginRequired: !!data.loginRequired,
+        training: !!data.training,
       };
     }
 
@@ -1667,7 +1734,9 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
   refreshBackgroundLookupPill();
   saveState();
   try {
-    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip, readOnly, readOnlyReason, loginRequired } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
+    const { row, otherBrands, lookupWarnings, caRecordId, caseRowError, caseTableFull, notVip, readOnly, readOnlyReason, loginRequired, training } = await fetchBonusRow(username, brand, link, telegramNow, selectedAgent, previousRecordId, controller.signal);
+    s.training = !!training;
+    if (training) fillTrainingConfiguredBonuses(row);
     s.lookupReadOnly = !!readOnly;
     s.lookupLoginRequired = !!loginRequired;
     s.lookupReadOnlyReason = readOnlyReason || "";
@@ -1709,7 +1778,7 @@ async function runLookup(chatId, { username, brand, telegramNow = false, link = 
     } else {
       s.notVipResult = false;
       s.forcedVipFor = "";
-      lookupSay(chatId, row ? `Found ${username} under ${brand}.` : "No record found.");
+      lookupSay(chatId, training ? "Training player: every bonus is a sample. Nothing you do here is claimed or saved." : row ? `Found ${username} under ${brand}.` : "No record found.");
     }
     if (lookupWarnings.length) {
       lookupSay(chatId, `Lookup completed with some checks unavailable: ${lookupWarnings.join(", ")}. Click Look up to retry.`, "error", true);
@@ -2833,9 +2902,11 @@ async function addCaseFlow(chatId) {
   try {
     if (!(await ensureActiveCaseSaved(chatId))) return;
     const chatDef = activeChats.find((c) => c.chatId === chatId);
-    const { row, otherBrands, caRecordId, readOnly, readOnlyReason, loginRequired } = await fetchBonusRow(
+    const { row, otherBrands, caRecordId, readOnly, readOnlyReason, loginRequired, training } = await fetchBonusRow(
       s.username, s.brand, s.chatUrl || (chatDef && chatDef.link) || "", !!s.telegram, selectedAgent, null
     );
+    s.training = !!training;
+    if (training) fillTrainingConfiguredBonuses(row);
     if (readOnly) {
       s.lookupReadOnly = true;
       s.lookupReadOnlyReason = readOnlyReason;
@@ -3779,6 +3850,7 @@ function renderExpandedCard(chat) {
 
     <section class="ca-section ca-customer-section">
       <div class="ca-section-head"><div><strong>Customer</strong></div></div>
+      ${s.training && !s.lookupReadOnly ? `<div class="supervision-notice training-notice" role="status">Training player: every bonus is a sample. Claims, activations, case details and notes work here but nothing is claimed or saved to Lark, the console or the ticket system.</div>` : ""}
       ${s.lookupReadOnly ? `<div class="supervision-notice" role="status">${escapeHtml(s.lookupReadOnlyReason || "Read-only lookup — nothing will be recorded.")}${s.lookupLoginRequired ? ` <button type="button" class="secondary-btn" data-action="reconnectLookup" data-chat="${escapeHtml(chat.chatId)}">Reconnect LiveChat</button>` : ""}</div>` : ""}
       <label class="field-label">Username or user ID</label>
       <div class="username-row">
@@ -5852,6 +5924,14 @@ function renderEscalationSection(chatId) {
   `;
 }
 
+// The training player also sees every custom bonus from the admin page, with sample values.
+function fillTrainingConfiguredBonuses(row) {
+  if (!row) return;
+  configuredBonusPrograms.forEach((program, index) => {
+    if (row[program.key] === undefined) row[program.key] = program.amountEligible ? `Eligible · RM${32 + index}` : "Eligible";
+  });
+}
+
 function applyPreviewSampleState(chat) {
   if (!previewMode || chat.chatId !== "preview-test") return;
   const sample = state[chat.chatId];
@@ -6963,6 +7043,11 @@ chatListEl.addEventListener("click", async (e) => {
 
   if (btn.dataset.action === "submitEscalation") {
     if (ticketCreateInFlight.has(chatId)) return;
+    if (s.training) {
+      s.escalationError = "Training player: no ticket was created. In a real chat this button creates the ticket.";
+      card.querySelector(".escalation-slot").innerHTML = renderEscalationSection(chatId);
+      return;
+    }
     const e = s.escalation;
     if (!e.departmentId || !e.memberUserId || !e.brand || !e.queries) {
       s.escalationError = "Destination Department, Member/User ID, Brand, and Query type are required.";
@@ -7510,7 +7595,7 @@ chatListEl.addEventListener("change", (e) => {
 function reportUnknownTick(chatId, ticked, auto) {
   const s = state[chatId];
   if (s?.lookupReadOnly) return;
-  if (previewMode || !s || !selectedAgent) return;
+  if (previewMode || !s || !selectedAgent || s.training) return;
   const live = String(s.chatUrl || "").match(/\/chats\/([^/?#]+)\/([^/?#]+)/);
   const archived = String(s.chatUrl || "").match(/\/archives\/([^/?#]+)/);
   const threadId = live ? live[2] : archived ? archived[1] : "";
@@ -7521,7 +7606,7 @@ function reportUnknownTick(chatId, ticked, auto) {
 function reportClaim(chatId, claim) {
   const s = state[chatId];
   if (s?.lookupReadOnly) return;
-  if (previewMode || !s || !selectedAgent) return;
+  if (previewMode || !s || !selectedAgent || s.training) return;
   const live = String(s.chatUrl || "").match(/\/chats\/([^/?#]+)\/([^/?#]+)/);
   const archived = String(s.chatUrl || "").match(/\/archives\/([^/?#]+)/);
   const threadId = live ? live[2] : archived ? archived[1] : "";
@@ -7535,6 +7620,11 @@ function setUnknown(chatId, value, { silent = false } = {}) {
   s.isUnknown = value;
   reportUnknownTick(chatId, value, silent);
   if (s.lookupReadOnly) return;
+  // Training player: nothing was saved, so there is no row to remove and no real chat list to change.
+  if (s.training) {
+    if (value) { s.caRecordId = null; s.logged = false; s.loggedSnapshot = ""; s.autoRecordError = ""; }
+    return;
+  }
   if (value && unrecordedChats.some((chat) => chat.threadId === chatId)) resolveUnrecorded(chatId, "Ignored");
   if (value) removeStaleRecordsForChat(chatId, silent);
   if (!s.isUnknown || !s.caRecordId) return;
@@ -7587,7 +7677,7 @@ function setUnknown(chatId, value, { silent = false } = {}) {
 function removeStaleRecordsForChat(chatId, silent) {
   const s = state[chatId];
   if (s?.lookupReadOnly) return;
-  if (previewMode || !selectedAgent || !s) return;
+  if (previewMode || !selectedAgent || !s || s.training) return;
   if (Object.values(s.claimedPrograms || {}).some(Boolean)) return;
   const link = String(s.chatUrl || "").match(/\/(?:chats\/[^/?#]+\/|archives\/)([^/?#]+)/);
   const threads = new Set([String(chatId), link ? link[1] : ""].filter(Boolean));

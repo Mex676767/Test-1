@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { isTrainingWrite } from "./_lib/training.js";
 import { updateRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 import { readOwnershipMerged, ownedBy } from "./_lib/ca-row.js";
 import { runWithRequestStart } from "./_lib/lark.js";
@@ -25,6 +26,7 @@ export function handler(event) { return runWithRequestStart(() => recordHandler(
 async function recordHandler(event) {
   try {
     var body = JSON.parse(event.body || "{}");
+    if (isTrainingWrite(body)) return { statusCode: 200, body: JSON.stringify({ ok: true, training: true }) };
     var recordId = body.recordId;
     var agentName = body.agentName || body.picName || "";
     var brand = body.brand || "";

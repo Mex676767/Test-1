@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { isTrainingWrite } from "./_lib/training.js";
 import { createRecord, updateRecord, deleteRecord, listFields, toDisplay, TABLE_HALLOWEEN } from "./_lib/lark.js";
 import {
   F, brandKey, normalizeTier, readProgress, readTopups, malaysiaToday, testDateFor, planClaim, planUnclaim, checkFields, shapeFields,
@@ -43,6 +44,7 @@ export async function handler(event) {
     let body;
     try { body = JSON.parse(event.body || "{}"); } catch (_) { return reply(400, { ok: false, error: "The request was not valid JSON." }); }
     if (!body || typeof body !== "object" || Array.isArray(body)) return reply(400, { ok: false, error: "The request body must be a JSON object." });
+    if (isTrainingWrite(body)) return reply(200, { ok: false, training: true, error: "Training player: Halloween is not part of training. Nothing was claimed." });
     const text = (value, max) => (typeof value === "string" || typeof value === "number" ? clean(value, max) : "");
     const username = text(body.username, 200).toLowerCase();
     // Always the dropdown's form ("EZ"), whatever spelling arrives ("ez", "EZ96"), so one player can never get two rows.

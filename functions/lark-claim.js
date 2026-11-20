@@ -1,9 +1,11 @@
 import { adapt } from "./_lib/adapt.js";
+import { isTrainingWrite } from "./_lib/training.js";
 import { updateRecord, TABLE_REDEEM_CODE, TABLE_SPECIAL_RELOAD, TABLE_TELEGRAM28 } from "./_lib/lark.js";
 
 export async function handler(event) {
   try {
     const { source, recordId, chatLink } = JSON.parse(event.body || "{}");
+    if (isTrainingWrite({ recordId })) return { statusCode: 200, body: JSON.stringify({ ok: true, training: true }) };
     if (!source || !recordId) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "source and recordId are required" }) };
     }
