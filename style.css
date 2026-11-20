@@ -411,14 +411,29 @@ body {
 .unknown-toggle input { accent-color: var(--danger); width: 14px; height: 14px; cursor: pointer; }
 
 .player-info {
-  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; align-items: start; gap: 8px 14px; margin-top: 8px;
   font-size: 12px; color: var(--text-muted);
 }
+.pi-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pi-wide, .player-info .player-name-editor { grid-column: 1 / -1; }
 .pi-label {
-  text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;
-  color: var(--text-faint); margin-right: 3px;
+  text-transform: uppercase; font-size: 9.5px; font-weight: 600; letter-spacing: 0.06em; line-height: 1.2;
+  color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.player-name-line { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.pi-value { min-width: 0; color: var(--text); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.pi-muted { color: var(--text-faint); }
+.tier-pill {
+  display: inline-block; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface-2); color: var(--text); font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.player-name-line { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
+.player-name-text { min-width: 0; }
+.player-name-edit {
+  padding: 1px 7px; border: 1px solid var(--border); border-radius: 5px; background: transparent;
+  color: var(--text-muted); font: 600 10.5px/16px "Inter", sans-serif; cursor: pointer;
+}
+.player-name-edit:hover { border-color: var(--blue); color: var(--blue); }
+@media (pointer: coarse) { .player-name-edit { min-height: 32px; padding: 4px 10px; } }
 .player-name-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; }
 .player-name-editor .player-name-input { flex: 1 1 160px; width: auto; min-width: 0; max-width: 320px; }
 .player-name-action { min-height: 32px; padding: 4px 8px; font-size: 12px; }
@@ -1041,7 +1056,7 @@ body { font-size: 13px; }
 .lookup-btn { min-height: 36px; padding: 0 13px; border-radius: 9px; background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 700; }
 .lookup-btn:hover { color: #fff; filter: brightness(1.08); }
 .unknown-toggle { margin-top: 6px; font-size: 11px; }
-.player-info { padding-top: 7px; border-top: 1px solid var(--border); margin-top: 7px; font-size: 10.5px; }
+.player-info { padding-top: 9px; border-top: 1px solid var(--border); margin-top: 8px; font-size: 10.5px; }
 
 .ticket-stack { gap: 6px; margin-top: 0; }
 .ticket {

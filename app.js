@@ -2710,12 +2710,11 @@ async function savePlayerName(chatId) {
 function renderPlayerInfo(chatId) {
   const s = state[chatId];
   const parts = [];
+  const field = (label, value, extra = "") => `<div class="pi-field${extra}"><span class="pi-label">${label}</span><span class="pi-value">${value}</span></div>`;
   if (s.lastUsernameLoading) {
-    parts.push(`<span><span class="pi-label">Last username recorded</span> Checking…</span>`);
+    parts.push(field("Last username", '<span class="pi-muted">Checking…</span>'));
   } else if (s.lastUsernameChecked) {
-    parts.push(s.lastUsernameFound
-      ? `<span><span class="pi-label">Last username recorded</span> ${s.lastUsernameValue}</span>`
-      : `<span><span class="pi-label">Last username recorded</span> : N/A</span>`);
+    parts.push(field("Last username", s.lastUsernameFound ? escapeHtml(s.lastUsernameValue) : '<span class="pi-muted">N/A</span>'));
   }
   if (s.matchedRow) {
     const edit = playerNameEditor(chatId);
@@ -2731,13 +2730,13 @@ function renderPlayerInfo(chatId) {
         ${edit.error ? `<span class="player-name-error" role="alert">${escapeHtml(edit.error)}</span>` : ""}
       </div>`);
     } else if (hasName || canEditName) {
-      parts.push(`<span class="player-name-line"><span><span class="pi-label">Name</span> ${escapeHtml(hasName ? s.matchedRow.customerName : "—")}</span>${hasName ? `<button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button>` : ""}${canEditName ? `<button type="button" class="secondary-btn player-name-action" data-action="editPlayerName" data-chat="${escapeHtml(chatId)}">${hasName ? "Edit" : "Add name"}</button>` : ""}</span>`);
+      parts.push(field("Name", `<span class="player-name-line"><span class="player-name-text">${hasName ? escapeHtml(s.matchedRow.customerName) : '<span class="pi-muted">—</span>'}</span>${hasName ? `<button type="button" class="player-name-copy" data-action="copyPlayerName" data-chat="${escapeHtml(chatId)}" title="Copy full name" aria-label="Copy full name">${COPY_ICON_SVG}</button>` : ""}${canEditName ? `<button type="button" class="player-name-edit" data-action="editPlayerName" data-chat="${escapeHtml(chatId)}">${hasName ? "Edit" : "Add name"}</button>` : ""}</span>`, " pi-name"));
     }
     const tier = String(s.matchedRow.tier || "—").trim();
     const tierDisplay = tier === "—" || /^tier\b/i.test(tier) ? tier : `Tier ${tier}`;
-    parts.push(`<span>${escapeHtml(tierDisplay)}</span>`);
+    parts.push(field("Tier", tier === "—" ? '<span class="pi-muted">—</span>' : `<span class="tier-pill">${escapeHtml(tierDisplay)}</span>`, " pi-tier"));
     if (s.forcedVipFor && !s.matchedRow.tier) {
-      parts.push(`<span><span class="pi-label">Note</span> Not on the VIP list yet — force looked up</span>`);
+      parts.push(field("Note", "Not on the VIP list yet — force looked up", " pi-wide"));
     }
   }
   return parts.length ? `<div class="player-info">${parts.join("")}</div>` : "";
