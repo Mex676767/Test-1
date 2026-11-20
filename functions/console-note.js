@@ -1,4 +1,5 @@
 import { adapt } from "./_lib/adapt.js";
+import { isTrainingWrite } from "./_lib/training.js";
 import { identifyAgent } from "./_lib/livechat-identity.js";
 import { TABLE_AGENT_LOGINS } from "./_lib/lark.js";
 import { bindingFor, readBindings } from "./agent-login.js";
@@ -80,6 +81,7 @@ export async function handler(event) {
     let input;
     try { input = JSON.parse(event.body || "{}"); } catch (_) { input = null; }
     if (!input || typeof input !== "object" || Array.isArray(input)) return reply(400, { ok: false, error: "Bad request." });
+    if (isTrainingWrite(input)) return reply(200, input.list === true ? { ok: true, training: true, notes: [] } : { ok: true, training: true, saved: input.remove !== true, removed: 0 });
     const username = clean(input.username).toLowerCase();
     const brand = clean(input.brand);
     if (!username || !brand || brand.length > 60) return reply(400, { ok: false, error: "A player username and brand are needed to add a note." });

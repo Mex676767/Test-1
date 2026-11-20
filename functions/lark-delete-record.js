@@ -1,10 +1,12 @@
 import { adapt } from "./_lib/adapt.js";
+import { isTrainingWrite } from "./_lib/training.js";
 import { deleteRecord, TABLE_CUSTOMER_APPROACHING } from "./_lib/lark.js";
 import { readOwnership, ownedBy } from "./_lib/ca-row.js";
 
 export async function handler(event) {
   try {
     const { recordId, agentName } = JSON.parse(event.body || "{}");
+    if (isTrainingWrite({ recordId })) return { statusCode: 200, body: JSON.stringify({ ok: true, training: true }) };
     if (!recordId || !String(agentName || "").trim()) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "recordId and agentName are required" }) };
     }

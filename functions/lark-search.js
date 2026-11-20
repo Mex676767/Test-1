@@ -13,6 +13,7 @@ import { halloweenStatus, malaysiaToday, dayNumber, brandKey, testDateFor } from
 import { readHalloweenRow, readOptionMaps } from "./_lib/halloween-io.js";
 import { birthdayGivenThisYearFrom, epochOf, malaysiaDateOf } from "./_lib/birthday.js";
 import { lookupChatAccess } from "./_lib/chat-access.js";
+import { isTrainingPlayer, trainingLookupBody } from "./_lib/training.js";
 
 const FIRST_PASS_TIMEOUT_MS = 22_000;
 const RETRY_MIN_MS = 3_000;
@@ -170,6 +171,8 @@ async function lookupHandler(event, hardEnd) {
     const brandVal = brand.trim();
     const agentVal = (picName || "").trim();
     const chatLink = String(link || "").trim();
+    // Training player: sample bonuses only. No Lark reads, no case row, no LiveChat role check.
+    if (isTrainingPlayer(uname, brandVal)) return { statusCode: 200, body: JSON.stringify(trainingLookupBody()) };
     // Start role checks before the bonus reads contend for outgoing connections.
     const accessP = !preview && chatAccess !== undefined
       ? lookupChatAccess(event.env, chatAccess, chatLink)

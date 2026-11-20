@@ -424,6 +424,7 @@ body {
 .player-name-action { min-height: 32px; padding: 4px 8px; font-size: 12px; }
 .player-name-help, .player-name-error { flex-basis: 100%; }
 .player-name-error { color: var(--danger); }
+.supervision-notice.training-notice { border-color: #d4a017; color: var(--text); }
 .supervision-notice { margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); background: var(--surface-2); font-size: 12px; }
 .supervision-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
 @media (pointer: coarse) { .player-name-action { min-height: 48px; } }
