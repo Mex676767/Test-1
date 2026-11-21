@@ -64,6 +64,10 @@ export function runWithRequestStart(fn, startedAt = Date.now()) {
   return requestContext.run({ startedAt, id: ++requestSeq }, fn);
 }
 const currentRequestStart = () => requestContext.getStore()?.startedAt;
+// Cloudflare (handle_cross_request_promise_resolution) never settles a promise for a request other than the one that
+// created it, so a shared in-flight promise may only be reused inside the request that started it. Cached VALUES
+// (a token, a field list) are still shared between requests.
+export const requestScopeId = () => requestContext.getStore()?.id ?? 0;
 const startForQueue = () => { const startedAt = currentRequestStart(); if (startedAt === undefined) noteCounter("noRequestStart"); return startedAt; };
 
 const larkQueueResponses = new WeakMap();
@@ -400,6 +404,8 @@ function larkApiError(message, res, data) {
 let cachedToken = null;
 let cachedExpiry = 0;
 let inFlightTokenRequest = null;
+let inFlightTokenScope = -1;
+export function resetTokenCache() { cachedToken = null; cachedExpiry = 0; inFlightTokenRequest = null; inFlightTokenScope = -1; }
 
 const MAX_CONCURRENT_LARK_SEARCHES = 3;
 let activeLarkSearches = 0;
@@ -489,9 +495,10 @@ async function waitForLarkSearchCooldown(signal) {
 export async function getTenantToken() {
   const now = Date.now();
   if (cachedToken && now < cachedExpiry - 60_000) return cachedToken;
-  if (inFlightTokenRequest) return inFlightTokenRequest;
+  if (inFlightTokenRequest && inFlightTokenScope === requestScopeId()) return inFlightTokenRequest;
   if (!APP_ID || !APP_SECRET) throw new Error("LARK_APP_ID / LARK_APP_SECRET not set.");
-  inFlightTokenRequest = (async () => {
+  const scope = requestScopeId();
+  const tokenRequest = (async () => {
     try {
       const res = await larkFetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
         method: "POST",
@@ -507,10 +514,12 @@ export async function getTenantToken() {
       cachedExpiry = Date.now() + data.expire * 1000;
       return cachedToken;
     } finally {
-      inFlightTokenRequest = null;
+      if (inFlightTokenRequest === tokenRequest) { inFlightTokenRequest = null; inFlightTokenScope = -1; }
     }
   })();
-  return inFlightTokenRequest;
+  inFlightTokenRequest = tokenRequest;
+  inFlightTokenScope = scope;
+  return tokenRequest;
 }
 
 function isFieldNameProblem(error) {
@@ -848,7 +857,8 @@ export async function listFields(tableId, baseToken, { force = false } = {}) {
   const key = (baseToken || BASE_APP_TOKEN) + "::" + tableId;
   const cached = fieldsCache.get(key);
   if (!force && cached && Date.now() - cached.at < FIELDS_TTL_MS) return cached.items;
-  const pending = fieldsInFlight.get(key);
+  const flightKey = `${requestScopeId()}::${key}`;
+  const pending = fieldsInFlight.get(flightKey);
   if (pending) return pending;
   const request = (async () => {
     try {
@@ -870,10 +880,10 @@ export async function listFields(tableId, baseToken, { force = false } = {}) {
       }
       throw error;
     } finally {
-      fieldsInFlight.delete(key);
+      fieldsInFlight.delete(flightKey);
     }
   })();
-  fieldsInFlight.set(key, request);
+  fieldsInFlight.set(flightKey, request);
   return request;
 }
 
