@@ -1,3 +1,4 @@
+import { requestScopeId } from "./lark.js";
 const DEFAULT_BASE_URL = "https://tickets.96ghq.com/api/v1";
 
 export function readKeys(env = {}) {
@@ -123,7 +124,8 @@ export async function ticketGet(env, path, { ttlMs = 0, fresh = false } = {}) {
   const key = `${baseUrl}|${apiKey}|${path}`;
   const stored = readCache.get(key);
   if (!fresh && ttlMs > 0 && stored && Date.now() - stored.at < ttlMs) return stored.data;
-  if (readsInFlight.has(key)) return readsInFlight.get(key);
+  const flightKey = `${requestScopeId()}::${key}`;
+  if (readsInFlight.has(flightKey)) return readsInFlight.get(flightKey);
   const pending = ticketRequest(env, path, { reads: true })
     .then((data) => {
       if (ttlMs > 0) {
@@ -132,8 +134,8 @@ export async function ticketGet(env, path, { ttlMs = 0, fresh = false } = {}) {
       }
       return data;
     })
-    .finally(() => readsInFlight.delete(key));
-  readsInFlight.set(key, pending);
+    .finally(() => readsInFlight.delete(flightKey));
+  readsInFlight.set(flightKey, pending);
   return pending;
 }
 
