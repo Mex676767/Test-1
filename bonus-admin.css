@@ -24,3 +24,9 @@
 .bonus-admin-page.embedded { min-height: 0; background: transparent; }
 .bonus-admin-page.embedded .bonus-admin-shell { width: 100%; margin: 0; padding: 14px; box-sizing: border-box; }
 .bonus-admin-page.embedded .bonus-admin-head { display: none; }
+.bonus-group-logins { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.bonus-admin-card h3 { margin: 14px 0 6px; font: 600 13px "Space Grotesk", sans-serif; }
+.bonus-admin-card h3 small { color: var(--text-faint); font-weight: 400; }
+.bonus-group-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bonus-group-table th, .bonus-group-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.bonus-group-table .mono { font-family: "IBM Plex Mono", monospace; color: var(--text-muted); }

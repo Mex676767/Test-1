@@ -53,6 +53,14 @@
     </section>
 
     <section class="bonus-admin-card">
+      <div class="bonus-admin-section-head"><h2>LiveChat groups</h2><button id="loadGroups" class="secondary-btn" type="button">Load groups</button></div>
+      <p class="bonus-admin-help">Every group (not only Priority Support) in each LiveChat license. Sign in with LiveChat for each license you want to see.</p>
+      <div id="groupLogins" class="bonus-group-logins"></div>
+      <p id="groupStatus" class="bonus-admin-status"></p>
+      <div id="groupList"></div>
+    </section>
+
+    <section class="bonus-admin-card">
       <h2>One-time Lark setup</h2>
       <p class="bonus-admin-help">Create a table named <strong>Bonus Config</strong> in the main base, add the fields below, then set its table ID as <code>LARK_TABLE_BONUS_CONFIG</code> in Cloudflare.</p>
       <pre>Key, Label, Source Table ID, Source Base Token,
