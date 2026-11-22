@@ -52,6 +52,36 @@
       <div id="configList" class="bonus-config-list"></div>
     </section>
 
+    <section class="bonus-admin-card" id="transferCountCard">
+      <div class="bonus-admin-section-head"><h2>Chat transfer count</h2></div>
+      <p class="bonus-admin-help">Counts chats moved from a tracked group to a different group, read from LiveChat's archive. Each license is counted on its own. Needs the admin key (the same value as <code>SCAN_KEY</code> in Cloudflare). Nothing is saved or changed in LiveChat or Lark.</p>
+      <div class="tc-form">
+        <label>Admin key<input id="tcKey" class="input mono" type="password" autocomplete="off" placeholder="Not stored; asked again after a reload" /></label>
+        <label>First day<input id="tcFrom" class="input" type="date" value="2026-10-01" /></label>
+        <label>Last day (included)<input id="tcTo" class="input" type="date" value="2026-10-31" /></label>
+        <div class="tc-licenses">
+          <label class="bonus-checkbox"><input id="tc_lc1" type="checkbox" checked /> License 1</label>
+          <label class="bonus-checkbox"><input id="tc_lc2" type="checkbox" checked /> License 2</label>
+        </div>
+      </div>
+      <div class="tc-actions">
+        <button id="tcRun" class="submit-btn" type="button">Count transfers</button>
+        <button id="tcStop" class="secondary-btn" type="button" disabled>Stop</button>
+      </div>
+      <p id="tcStatus" class="bonus-admin-status">Dates are Kuala Lumpur time. A whole month can take several minutes; leave this page open.</p>
+      <div id="tcResults"></div>
+      <details class="tc-check">
+        <summary>Check one chat first</summary>
+        <p class="bonus-admin-help">Paste the ID of a chat you know was transferred. This shows the raw transfer messages LiveChat stored and how they were read, so you can confirm the counting before running a whole month. Message text is not shown.</p>
+        <div class="bonus-admin-inline">
+          <input id="tcChat" class="input mono" placeholder="Chat ID, e.g. PJ0MRSHTDG" />
+          <select id="tcChatLicense" class="input settings-select"><option value="lc1">License 1</option><option value="lc2">License 2</option></select>
+          <button id="tcProbe" class="secondary-btn" type="button">Check</button>
+        </div>
+        <pre id="tcProbeOut" class="tc-probe"></pre>
+      </details>
+    </section>
+
     <section class="bonus-admin-card">
       <h2>One-time Lark setup</h2>
       <p class="bonus-admin-help">Create a table named <strong>Bonus Config</strong> in the main base, add the fields below, then set its table ID as <code>LARK_TABLE_BONUS_CONFIG</code> in Cloudflare.</p>
@@ -62,5 +92,6 @@ Active, Amount Eligible                           → Checkbox fields</pre>
     </section>
   </main>
   <script src="bonus-admin.js"></script>
+  <script src="transfer-count-admin.js?v=20261122-2"></script>
 </body>
 </html>
