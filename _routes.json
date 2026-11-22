@@ -13,6 +13,7 @@
     "/qa/*",
     "/bonus-admin.html",
     "/bonus-admin.css",
-    "/bonus-admin.js"
+    "/bonus-admin.js",
+    "/transfer-count-admin.js"
   ]
 }

@@ -21,6 +21,23 @@
 .bonus-config-actions { display: flex; align-items: center; gap: 6px; }
 .bonus-admin-card pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: var(--surface-2); color: var(--text-muted); font: 11px/1.55 "IBM Plex Mono", monospace; }
 @media (max-width: 680px) { .bonus-config-grid { grid-template-columns: 1fr; } .bonus-admin-inline { align-items: stretch; flex-direction: column; } }
+.tc-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.tc-form label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: 11px; }
+.tc-form > label:first-child { grid-column: 1 / -1; }
+.tc-licenses { display: flex; gap: 14px; }
+.tc-actions { display: flex; gap: 8px; margin-top: 12px; }
+.tc-actions .submit-btn, .tc-actions .secondary-btn { width: auto; padding-left: 22px; padding-right: 22px; }
+.tc-result { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.tc-result h3 { margin: 0 0 6px; font: 600 15px "Space Grotesk", sans-serif; }
+.tc-result h4 { margin: 14px 0 6px; font-size: 12px; color: var(--text-muted); }
+.tc-big { margin: 8px 0 10px; font-size: 14px; } .tc-big strong { font: 700 28px "Space Grotesk", sans-serif; color: var(--teal); }
+.tc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tc-table th, .tc-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.tc-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tc-table .tc-open td { color: var(--text-muted); }
+.tc-warn, .tc-bad { color: var(--danger); font-size: 12px; line-height: 1.5; }
+.tc-check { margin-top: 16px; }
+.tc-probe { max-height: 380px; overflow: auto; white-space: pre-wrap; }
 .bonus-admin-page.embedded { min-height: 0; background: transparent; }
 .bonus-admin-page.embedded .bonus-admin-shell { width: 100%; margin: 0; padding: 14px; box-sizing: border-box; }
 .bonus-admin-page.embedded .bonus-admin-head { display: none; }
