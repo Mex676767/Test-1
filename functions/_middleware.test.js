@@ -66,7 +66,7 @@ test("every committed top-level path is classified: served as the widget, hidden
   try { tracked = execFileSync("git", ["ls-files"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter(Boolean); }
   catch (_) { return; }
   const widget = new Set(["index.html", "app.js", "style.css", "deployment-refresh.js", "vendor", "blast", "knowledge", "qa",
-    "bonus-admin.html", "bonus-admin.css", "bonus-admin.js"]);
+    "bonus-admin.html", "bonus-admin.css", "bonus-admin.js", "transfer-count-admin.js"]);
   const config = new Set(["_headers", "_routes.json", ".gitignore", "functions"]);
   const unclassified = new Set();
   for (const file of tracked) {
