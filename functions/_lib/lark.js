@@ -948,12 +948,13 @@ export function malaysiaMidnight(nowMs = Date.now()) {
   return Date.parse(`${new Date(nowMs + 8 * 3600_000).toISOString().slice(0, 10)}T00:00:00+08:00`);
 }
 
-// A promotion row is shown only from its Time of Inspection's day onwards: rows inspected before today
-// (Malaysia time) are hidden even if their status still says Pass, unless the row has an expiry date that
-// has not passed yet. Rows with no inspection time are kept.
+// A promotion row is hidden until its inspection time has arrived. Once today starts in Malaysia,
+// rows from earlier days are hidden even if their status still says Pass, unless their expiry is active.
+// Rows with no inspection time are kept.
 export function inspectedToday(fields, notBefore, dateFieldName, nowMs = Date.now()) {
-  if (!notBefore) return true;
   const at = inspectionEpoch(fields, dateFieldName);
+  if (at !== null && at > nowMs) return false;
+  if (!notBefore) return true;
   if (at === null || at >= notBefore) return true;
   const expiry = expiryEpoch(fields);
   return expiry !== null && expiry > nowMs;

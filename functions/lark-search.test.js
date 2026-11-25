@@ -361,7 +361,7 @@ test("lookup completes the first pass for every bonus table, then retries only f
   }
 });
 
-test("promotions inspected before today's Malaysia midnight are hidden even with a Pass status; today's and later rows show", async () => {
+test("promotions inspected before today or in the future are hidden; today's rows show", async () => {
   initEnv({
     LARK_APP_ID: "app-id", LARK_APP_SECRET: "app-secret", LARK_BASE_APP_TOKEN: "base-token",
     LARK_TABLE_CUSTOMER_APPROACHING: "customer-table", LARK_TABLE_REDEEM_CODE: "redeem-table",
@@ -400,7 +400,7 @@ test("promotions inspected before today's Malaysia midnight are hidden even with
     assert.equal(row.ltvTest, "Pass RM28", "a row inspected at today's 12AM shows");
     assert.equal(row.gracePeriod, "Pass - 88", "an old inspection whose Expired date has not passed still shows");
     assert.equal(row.riskPlayer, "7D 20% Reload", "Risk Player has no Time of Inspection; its own expiry applies");
-    assert.equal(row.vipBooster, "Eligible", "a later inspection date shows");
+    assert.equal(row.vipBooster, "", "a future inspection date is hidden");
     assert.equal(row.telegram28, null);
     assert.equal(row.redeemCode, null);
     assert.equal(row.mooncake, "");
@@ -418,7 +418,9 @@ test("Malaysia midnight and inspection-day checks use GMT+8", () => {
   assert.equal(inspectedToday({ "Time of Inspection": Date.parse("2026-11-19T00:00:00+08:00") }, notBefore), true);
   assert.equal(inspectedToday({ "Time of Inspection": Date.parse("2026-11-18T23:59:00+08:00") }, notBefore), false);
   assert.equal(inspectedToday({ "Time of Inspection": "2026-11-18 23:59" }, notBefore), false);
-  assert.equal(inspectedToday({ "Time of Inspection": { value: [Date.parse("2026-11-20T08:00:00+08:00")] } }, notBefore), true);
+  const future = Date.parse("2026-11-20T08:00:00+08:00");
+  assert.equal(inspectedToday({ "Time of Inspection": { value: [future] } }, notBefore, undefined, at), false);
+  assert.equal(inspectedToday({ Date: future }, 0, "Date", at), false, "future dates are hidden even when an older date is otherwise allowed");
   assert.equal(inspectedToday({}, notBefore), true);
   const old = { "Time of Inspection": Date.parse("2026-11-10T00:00:00+08:00") };
   assert.equal(inspectedToday({ ...old, Expired: Date.parse("2026-11-25T00:00:00+08:00") }, notBefore, undefined, at), true, "expiry not passed: still shown");
