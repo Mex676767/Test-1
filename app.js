@@ -1309,6 +1309,12 @@ function renderGraceInstant(chatId, display, entered, otherClaimActive) {
       </div>`;
 }
 
+// "Informed": the agent marks that this customer was already told about their Risk Player bonus. Kept only in the app's
+// per-chat state (never in CASE_CONTENT_KEYS), so it is not saved to Lark and never makes a case look changed.
+// It is tied to the username, so a different player looked up in the same chat starts as not informed.
+function riskInformedUser(s) { return String(s?.username || "").trim().toLowerCase(); }
+function isRiskInformed(s) { return !!s?.riskInformedFor && s.riskInformedFor === riskInformedUser(s); }
+
 const RISK_PLAYER_CAPS = { 20: 188, 30: 288, 40: 388 };
 
 function riskPlayerCalculation(display, reloadAmount) {
@@ -3532,11 +3538,12 @@ function renderTickets(chatId) {
     const freeGivenToday = !claimed && FREE_BONUS_PROGRAMS.has(d.key) ? freeBonusGivenToday(s) : "";
     const birthdayBlocked = d.key === "birthday" && !birthdayReady(s);
     const claimDisabled = !claimed && (locked || !feedbackComplete || !riskComplete || !depositComplete || birthdayBlocked);
+    const riskInformed = d.key === "riskPlayer" && isRiskInformed(s);
     const claimLabel = d.claimLabel || "Claim";
     const doneLabel = d.doneLabel || "✓ Claimed";
     const cardMark = BONUS_CARD_MARKS[d.key] || escapeHtml(String(d.label || "•").trim().slice(0, 1).toUpperCase());
     return `
-    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${needsDeposit ? "ticket-reload-deposit" : ""} ${freeGivenToday ? "free-given-today" : ""} ${d.key === "birthday" ? "ticket-birthday" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
+    <div class="ticket bonus-tone-${bonusCardTone(d.key)} ${d.kind === "special" ? "ticket-special" : ""} ${locked ? "locked" : ""} ${d.reactivatable || d.key === "riskPlayer" ? "ticket-has-reactivate" : ""} ${d.requiresFeedback ? "ticket-vs96" : ""} ${d.key === "riskPlayer" ? "ticket-risk-player" : ""} ${needsDeposit ? "ticket-reload-deposit" : ""} ${freeGivenToday ? "free-given-today" : ""} ${d.key === "birthday" ? "ticket-birthday" : ""} ${d.graceInstant ? "ticket-grace-instant" : ""} ${feedbackComplete ? "feedback-complete" : ""}">
       <div class="ticket-main">
         <div class="ticket-icon" aria-hidden="true">${cardMark}</div>
         <div class="ticket-body">
@@ -3553,6 +3560,11 @@ function renderTickets(chatId) {
         ${
           d.reactivatable
             ? `<button class="claim-btn reactivate-btn" data-action="reactivateGracePeriod" data-chat="${chatId}" ${locked ? "disabled" : ""} title="Customer didn't complete the challenge — give them another attempt today">Reactivate</button>`
+            : ""
+        }
+        ${
+          d.key === "riskPlayer"
+            ? `<button class="claim-btn informed-btn ${riskInformed ? "informed" : ""}" data-action="toggleRiskInformed" data-chat="${chatId}" title="${riskInformed ? "Customer already informed about this bonus — click to undo" : "Mark that the customer has been told about this bonus (only shown in this app, not saved)"}">${riskInformed ? "✓ Informed" : "Informed"}</button>`
             : ""
         }
       </div>
@@ -6348,7 +6360,7 @@ chatListEl.addEventListener("click", async (e) => {
 
   try {
 
-  if (s?.lookupReadOnly && ["claim", "unclaim", "submit", "saveCase", "addCase", "editCase", "saveNote", "editPlayerName", "savePlayerName", "birthdayCheck", "birthdayRemovePicture", "reactivateGracePeriod"].includes(btn.dataset.action)) {
+  if (s?.lookupReadOnly && ["claim", "unclaim", "submit", "saveCase", "addCase", "editCase", "saveNote", "editPlayerName", "savePlayerName", "birthdayCheck", "birthdayRemovePicture", "reactivateGracePeriod", "toggleRiskInformed"].includes(btn.dataset.action)) {
     setStatus("This chat is read-only. Look up again after the customer replies and you're handling the chat to make changes.", "info");
     return;
   }
@@ -6976,6 +6988,12 @@ chatListEl.addEventListener("click", async (e) => {
       const extra = programKey === "halloween" ? await removeHalloweenActionNote(chatId) : "";
       await voidClaimTickets(chatId, programKey === "halloween" ? "Halloween" : AUTO_TICKET_PROGRAMS[programKey]?.label || "Bonus", extra);
     }
+  }
+
+  if (btn.dataset.action === "toggleRiskInformed") {
+    s.riskInformedFor = isRiskInformed(s) ? "" : riskInformedUser(s);
+    card.querySelector(".ticket-slot").innerHTML = renderTickets(chatId);
+    return;
   }
 
   if (btn.dataset.action === "reactivateGracePeriod") {
