@@ -1337,10 +1337,21 @@ function riskPlayerCalculation(display, reloadAmount) {
   };
 }
 
+// Grace Period / Risk Player whose expiry was on an earlier day are not offered any more. They stay visible on the expiry day
+// itself (so Reactivate keeps working), and an agent who already activated or claimed one in this chat keeps seeing it.
+function bonusExpiredEarlier(key, r, s) {
+  const ms = key === "gracePeriod" ? r?.graceExpiryMs : key === "riskPlayer" ? r?.riskExpiryMs : null;
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return false;
+  if (s?.claimedPrograms?.[key] || (key === "gracePeriod" && s?.gracePeriodActivated)) return false;
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  return ms < startOfToday.getTime();
+}
+
 function hasAnyBonus(chatId) {
   const r = state[chatId].matchedRow;
   if (!r) return false;
-  if (allBonusPrograms().some((p) => isClaimableValue(r[p.key]))) return true;
+  if (allBonusPrograms().some((p) => isClaimableValue(r[p.key]) && !bonusExpiredEarlier(p.key, r, state[chatId]))) return true;
   if (r.telegram28 && !isHiddenStatus(r.telegram28.status)) return true;
   if (r.redeemCode && !isHiddenStatus(r.redeemCode.status)) return true;
   if (r.specialReload) return true;
@@ -3481,6 +3492,7 @@ function renderTickets(chatId) {
   allBonusPrograms().forEach((p) => {
     if (usedElsewhere.has(p.key)) return;
     if (!isClaimableValue(r[p.key])) return;
+    if (bonusExpiredEarlier(p.key, r, s)) return;
     const def = { key: p.key, kind: "regular", label: p.label, display: r[p.key] };
     if (p.key === "vs96Feedback") def.requiresFeedback = true;
     if (p.key === "gracePeriod") {
