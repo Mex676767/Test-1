@@ -500,6 +500,9 @@ body {
   border-color: var(--teal); color: var(--teal); background: none;
 }
 .claim-btn.reactivate-btn:hover { background: var(--teal); color: var(--surface); }
+.claim-btn.informed-btn { border-color: var(--teal); color: var(--teal); background: none; }
+.claim-btn.informed-btn:hover { background: var(--teal); color: var(--surface); }
+.claim-btn.informed-btn.informed { background: var(--teal); border-color: var(--teal); color: var(--surface); cursor: pointer; }
 .ticket.empty {
   border-style: solid; color: var(--text-faint); font-size: 12px; justify-content: center;
   background: var(--surface-2); margin-top: 16px;
@@ -1102,7 +1105,7 @@ body { font-size: 13px; }
   background: color-mix(in srgb, var(--bonus-accent) 17%, var(--surface));
   color: var(--bonus-accent); font-size: 12px; font-weight: 800;
 }
-.ca-bonus-section .ticket[class*="bonus-tone-"] .claim-btn:not(.reactivate-btn):not(.claimed) {
+.ca-bonus-section .ticket[class*="bonus-tone-"] .claim-btn:not(.reactivate-btn):not(.informed-btn):not(.claimed) {
   border-color: var(--bonus-accent); color: var(--bonus-accent);
 }
 .ca-bonus-section .ticket[class*="bonus-tone-"] .ticket-meta .amount,
